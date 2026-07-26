@@ -60,3 +60,12 @@
   `.env.production.local`, mode `0600`.
 - Their values were not printed or written to `.conduct`.
 - Railway, Hyperdrive, and Turnstile provider values remain absent.
+
+## Source revision continuation
+
+- The initial 702-file Skillplane commit was created only after staged
+  whitespace, ignored-path, and generated-secret-value checks passed.
+- The production clean-source guard returned the committed revision and
+  `clean: true`.
+- The source revision prerequisite is closed; provider inputs remain the only
+  pre-deployment dependency.

@@ -70,3 +70,18 @@ agent record, and OAuth authorization used by the MCP gate.
 `auth.skillplane.dev` Email Sending and actual inbox delivery were already
 proven in the successful Phase 3 re-verification. Phase 16 still requires a
 real OTP through the deployed app.
+
+## Clean source revision
+
+Recorded at `2026-07-26T17:11:35Z`:
+
+- staged boundary: 702 files, 100,677 inserted lines;
+- whitespace check: pass;
+- generated production values: absent from the staged index;
+- ignored secret/runtime paths: absent from the staged index;
+- initial commit: `13c2d3c3c6234505af6289f564e93418c643881c`;
+- commit subject: `feat: implement Skillplane platform`;
+- `requireCleanSourceRevision()`: `{ clean: true }`.
+
+The source-commit blocker is closed. Deployment remains blocked only on
+provider values and live interaction.
