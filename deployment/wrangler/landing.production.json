@@ -1,0 +1,25 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "skillplane-landing",
+  "main": ".svelte-kit/cloudflare/_worker.js",
+  "compatibility_date": "2026-05-03",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "assets": {
+    "binding": "ASSETS",
+    "directory": ".svelte-kit/cloudflare"
+  },
+  "routes": [
+    {
+      "pattern": "skillplane.dev",
+      "custom_domain": true
+    }
+  ],
+  "vars": {
+    "SKILLPLANE_APP_ORIGIN": "https://app.skillplane.dev"
+  },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  }
+}

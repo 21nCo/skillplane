@@ -1,0 +1,49 @@
+{
+  "name": "@skillplane/api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "development": "./src/index.ts",
+      "default": "./dist/index.js"
+    },
+    "./health": {
+      "types": "./src/health.ts",
+      "development": "./src/health.ts",
+      "default": "./dist/health.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc --project tsconfig.json",
+    "typecheck": "tsc --project tsconfig.json --noEmit",
+    "test:unit": "vitest run --exclude 'dist/**' src",
+    "test:integration": "vitest run --exclude 'dist/**' tests/integration",
+    "test:security": "vitest run --exclude 'dist/**' tests/security"
+  },
+  "dependencies": {
+    "@authfn/core": "catalog:",
+    "@datafn/server": "catalog:",
+    "@skillplane/auth": "workspace:*",
+    "@skillplane/config": "workspace:*",
+    "@skillplane/datafn": "workspace:*",
+    "@skillplane/db": "workspace:*",
+    "@skillplane/domain": "workspace:*",
+    "@skillplane/email": "workspace:*",
+    "@skillplane/observability": "workspace:*",
+    "@skillplane/storage": "workspace:*",
+    "hono": "catalog:",
+    "pg": "catalog:"
+  },
+  "devDependencies": {
+    "@skillplane/testing": "workspace:*",
+    "@types/pg": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

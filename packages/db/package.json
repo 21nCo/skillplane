@@ -1,0 +1,46 @@
+{
+  "name": "@skillplane/db",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "development": "./src/index.ts",
+      "default": "./dist/src/index.js"
+    },
+    "./schema": {
+      "types": "./src/schema/index.ts",
+      "development": "./src/schema/index.ts",
+      "default": "./dist/src/schema/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "migrations"
+  ],
+  "scripts": {
+    "build": "tsc --project tsconfig.json",
+    "typecheck": "tsc --project tsconfig.json --noEmit",
+    "test:unit": "vitest run --exclude 'dist/**' src",
+    "test:integration": "vitest run --exclude 'dist/**' tests/integration",
+    "test:security": "vitest run --passWithNoTests",
+    "migrate": "pnpm run build && node --enable-source-maps dist/src/migrate-cli.js",
+    "verify": "pnpm run build && node --enable-source-maps dist/src/verify-cli.js"
+  },
+  "dependencies": {
+    "@authfn/core": "catalog:",
+    "@skillplane/config": "workspace:*",
+    "@skillplane/domain": "workspace:*",
+    "@superfunctions/db": "catalog:",
+    "drizzle-orm": "catalog:",
+    "pg": "catalog:"
+  },
+  "devDependencies": {
+    "@types/pg": "catalog:",
+    "drizzle-kit": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "skillplane-app",
+  "main": ".svelte-kit/cloudflare/_worker.js",
+  "compatibility_date": "2026-05-03",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "binding": "ASSETS",
+    "directory": ".svelte-kit/cloudflare",
+  },
+  "r2_buckets": [
+    {
+      "binding": "SKILL_BUNDLES",
+      "bucket_name": "skillplane-skill-bundles",
+      "preview_bucket_name": "skillplane-skill-bundles-preview",
+    },
+  ],
+  "send_email": [
+    {
+      "name": "SEND_EMAIL",
+      "allowed_sender_addresses": ["no-reply@auth.skillplane.dev"],
+      "remote": true,
+    },
+  ],
+  "observability": {
+    "enabled": true,
+  },
+}

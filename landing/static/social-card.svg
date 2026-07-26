@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-labelledby="title description">
+  <title id="title">Skillplane</title>
+  <desc id="description">Versioned skills for accountable AI agents</desc>
+  <rect width="1200" height="630" fill="#0b0c0f"/>
+  <defs>
+    <radialGradient id="glow" cx="50%" cy="0%" r="80%">
+      <stop offset="0%" stop-color="#5b49d6" stop-opacity=".46"/>
+      <stop offset="100%" stop-color="#5b49d6" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="grid" width="64" height="64" patternUnits="userSpaceOnUse">
+      <path d="M64 0H0V64" fill="none" stroke="#2a2c33" stroke-width="1"/>
+    </pattern>
+  </defs>
+  <rect width="1200" height="630" fill="url(#grid)" opacity=".5"/>
+  <rect width="1200" height="630" fill="url(#glow)"/>
+  <g transform="translate(88 74)">
+    <rect width="48" height="48" rx="12" fill="#f6f6f7"/>
+    <path d="M14 17h20v5H14zm0 8h20v5H14z" fill="#0b0c0f"/>
+    <text x="64" y="36" fill="#f6f6f7" font-family="Inter,system-ui,sans-serif" font-size="30" font-weight="650">Skillplane</text>
+  </g>
+  <text x="88" y="304" fill="#f6f6f7" font-family="Inter,system-ui,sans-serif" font-size="76" font-weight="650" letter-spacing="-4">
+    <tspan x="88" dy="0">Skills that improve</tspan>
+    <tspan x="88" dy="84">without losing control.</tspan>
+  </text>
+  <text x="88" y="514" fill="#b0b3bc" font-family="Inter,system-ui,sans-serif" font-size="28">
+    Versioned skills · Durable context · Auditable learning
+  </text>
+</svg>

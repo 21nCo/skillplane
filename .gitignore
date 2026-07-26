@@ -1,0 +1,47 @@
+# Dependencies and package-manager state
+node_modules/
+.pnpm-store/
+
+# Build and framework output
+.turbo/
+.svelte-kit/
+.vercel/
+.output/
+build/
+dist/
+dist-worker/
+coverage/
+
+# Cloudflare local and generated state
+.wrangler/
+.dev.vars
+.dev.vars.*
+wrangler.generated.json
+wrangler.generated.jsonc
+wrangler.production-self-test.json
+
+# Environment secrets
+.env
+.env.*
+!.env.example
+
+# Local database and service state
+.data/
+postgres-data/
+
+# Test output
+playwright-report/
+test-results/
+blob-report/
+
+# Editors and operating systems
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+
+# Logs and transient files
+*.log
+*.pid
+*.tmp

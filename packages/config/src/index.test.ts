@@ -1,0 +1,216 @@
+import { describe, expect, it } from "vitest";
+import {
+  ConfigError,
+  parseRuntimeConfig,
+  safeConfigDiagnostic,
+  type RuntimeBindings,
+} from "./index.js";
+
+const objectStorage = {
+  async head() {
+    return null;
+  },
+  async get() {
+    return null;
+  },
+  async put() {
+    return null;
+  },
+  delete() {
+    return Promise.resolve();
+  },
+  async list() {
+    return { objects: [] };
+  },
+};
+
+const email = {
+  async send() {
+    return { messageId: "fixture-message" };
+  },
+};
+
+const fixtureSecret = "fixture-only-secret-material-32-bytes";
+
+function productionBindings(overrides: Partial<RuntimeBindings> = {}): RuntimeBindings {
+  return {
+    RUNTIME_ENV: "production",
+    DATABASE_ADAPTER: "postgres",
+    EMAIL_PROVIDER: "cloudflare-email",
+    HYPERDRIVE: {
+      connectionString: "postgresql://fixture:fixture@database.invalid:5432/skillplane",
+    },
+    SKILL_BUNDLES: objectStorage,
+    SEND_EMAIL: email,
+    AUTHFN_SECRET: fixtureSecret,
+    OAUTH_TOKEN_PEPPER: fixtureSecret,
+    TURNSTILE_SECRET_KEY: fixtureSecret,
+    TURNSTILE_ALLOWED_HOSTNAMES: "app.skillplane.dev,skillplane.dev",
+    PUBLIC_TURNSTILE_SITE_KEY: "fixture-site-key",
+    SKILLPLANE_OTP_FROM: "Skillplane <no-reply@auth.skillplane.dev>",
+    ...overrides,
+  };
+}
+
+describe("parseRuntimeConfig", () => {
+  it("accepts a complete local Postgres and R2 runtime", () => {
+    const config = parseRuntimeConfig({
+      RUNTIME_ENV: "local",
+      DATABASE_ADAPTER: "postgres",
+      DATABASE_URL: "postgresql://skillplane:fixture@127.0.0.1:5432/skillplane",
+      SKILL_BUNDLES: objectStorage,
+    });
+
+    expect(config.environment).toBe("local");
+    expect(config.database.source).toBe("direct-postgres");
+    expect(config.diagnostics).toEqual({
+      environment: "local",
+      database: "direct-postgres",
+      objectStorage: "r2",
+      email: "not-required-local",
+      secretPresence: { authfn: false, turnstile: false, oauth: true },
+    });
+  });
+
+  it("accepts complete production bindings without exposing secrets", () => {
+    const config = parseRuntimeConfig(productionBindings());
+
+    expect(config.environment).toBe("production");
+    expect(config.database.source).toBe("hyperdrive");
+    expect(JSON.stringify(config.diagnostics)).not.toContain(fixtureSecret);
+    expect(JSON.stringify(config.diagnostics)).not.toContain("database.invalid");
+  });
+
+  it("accepts an OAuth-only production runtime without email or Turnstile", () => {
+    const config = parseRuntimeConfig(
+      productionBindings({
+        EMAIL_PROVIDER: undefined,
+        SEND_EMAIL: undefined,
+        AUTHFN_SECRET: undefined,
+        TURNSTILE_SECRET_KEY: undefined,
+        TURNSTILE_ALLOWED_HOSTNAMES: undefined,
+        PUBLIC_TURNSTILE_SITE_KEY: undefined,
+        SKILLPLANE_OTP_FROM: undefined,
+      }),
+      { authentication: "oauth-only" },
+    );
+
+    expect(config.email).toBeNull();
+    expect(config.auth).toBeNull();
+    expect(config.diagnostics).toMatchObject({
+      email: "not-required-oauth-only",
+      secretPresence: { authfn: false, turnstile: false, oauth: true },
+    });
+  });
+
+  it("requires a distinct production OAuth token pepper", () => {
+    expect(() =>
+      parseRuntimeConfig(productionBindings({ OAUTH_TOKEN_PEPPER: undefined })),
+    ).toThrowError(
+      expect.objectContaining({
+        code: "PRODUCTION_BINDING_MISSING",
+        fields: ["OAUTH_TOKEN_PEPPER"],
+      }),
+    );
+  });
+
+  it("rejects a production capture email provider", () => {
+    expect(() =>
+      parseRuntimeConfig(
+        productionBindings({
+          EMAIL_PROVIDER: "capture",
+        }),
+      ),
+    ).toThrowError(
+      expect.objectContaining({
+        code: "PRODUCTION_ADAPTER_INVALID",
+        fields: ["EMAIL_PROVIDER"],
+      }),
+    );
+  });
+
+  it("rejects a partially configured local authentication runtime", () => {
+    expect(() =>
+      parseRuntimeConfig({
+        RUNTIME_ENV: "local",
+        DATABASE_ADAPTER: "postgres",
+        DATABASE_URL: "postgresql://skillplane:fixture@127.0.0.1:5432/skillplane",
+        SKILL_BUNDLES: objectStorage,
+        EMAIL_PROVIDER: "cloudflare-email",
+      }),
+    ).toThrowError(
+      expect.objectContaining({
+        code: "PRODUCTION_BINDING_MISSING",
+        fields: expect.arrayContaining([
+          "AUTHFN_SECRET",
+          "PUBLIC_TURNSTILE_SITE_KEY",
+          "SEND_EMAIL",
+          "SKILLPLANE_OTP_FROM",
+          "TURNSTILE_ALLOWED_HOSTNAMES",
+          "TURNSTILE_SECRET_KEY",
+        ]),
+      }),
+    );
+  });
+
+  it("rejects an in-memory database adapter in every runtime", () => {
+    expect(() =>
+      parseRuntimeConfig({
+        RUNTIME_ENV: "local",
+        DATABASE_ADAPTER: "memory",
+        DATABASE_URL: "postgresql://skillplane:fixture@127.0.0.1:5432/skillplane",
+        SKILL_BUNDLES: objectStorage,
+      }),
+    ).toThrowError(
+      expect.objectContaining({
+        code: "DATABASE_ADAPTER_INVALID",
+        fields: ["DATABASE_ADAPTER"],
+      }),
+    );
+  });
+
+  it("rejects a production runtime without R2 before reading secrets", () => {
+    expect(() =>
+      parseRuntimeConfig(
+        productionBindings({
+          SKILL_BUNDLES: undefined,
+        }),
+      ),
+    ).toThrowError(
+      expect.objectContaining({
+        code: "PRODUCTION_BINDING_MISSING",
+        fields: ["SKILL_BUNDLES"],
+      }),
+    );
+  });
+
+  it("rejects direct production database URLs", () => {
+    expect(() =>
+      parseRuntimeConfig(
+        productionBindings({
+          DATABASE_URL: "postgresql://fixture:fixture@railway.invalid:5432/skillplane",
+        }),
+      ),
+    ).toThrowError(
+      expect.objectContaining({
+        code: "CONFIG_INVALID",
+        fields: ["DATABASE_URL"],
+      }),
+    );
+  });
+
+  it("redacts unexpected errors into a stable diagnostic", () => {
+    expect(safeConfigDiagnostic(new Error("contains-sensitive-detail"))).toEqual({
+      code: "CONFIG_UNKNOWN",
+      fields: [],
+    });
+    expect(
+      safeConfigDiagnostic(
+        new ConfigError("CONFIG_INVALID", "private detail", ["RUNTIME_ENV"]),
+      ),
+    ).toEqual({
+      code: "CONFIG_INVALID",
+      fields: ["RUNTIME_ENV"],
+    });
+  });
+});

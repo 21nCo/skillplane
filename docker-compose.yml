@@ -1,0 +1,30 @@
+name: skillplane
+
+services:
+  postgres:
+    image: postgres:17-alpine@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193
+    container_name: skillplane-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${SKILLPLANE_POSTGRES_DATABASE:?required}
+      POSTGRES_PASSWORD: ${SKILLPLANE_POSTGRES_PASSWORD:?required}
+      POSTGRES_USER: ${SKILLPLANE_POSTGRES_USER:?required}
+    ports:
+      - "${SKILLPLANE_POSTGRES_PORT:?required}:5432"
+    volumes:
+      - skillplane_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 15s
+
+volumes:
+  skillplane_postgres_data:
+    name: skillplane_postgres_data

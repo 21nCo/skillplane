@@ -1,0 +1,67 @@
+packages:
+  - app
+  - landing
+  - mcp
+  - packages/*
+
+allowBuilds:
+  esbuild: true
+  protobufjs: true
+  sharp: true
+  workerd: true
+
+overrides:
+  # sendfn's APNs transport is not used by Skillplane, but it remains in the
+  # production dependency graph. Pin its JWT implementation above all known
+  # algorithm/cache/empty-secret advisories.
+  fast-jwt: 6.2.4
+
+catalog:
+  "@axe-core/playwright": 4.12.1
+  "@authfn/core": 0.1.1
+  "@cloudflare/workers-types": 4.20260702.1
+  "@datafn/client": 0.0.3
+  "@datafn/core": 0.0.3
+  "@datafn/server": 0.0.3
+  "@sveltejs/adapter-cloudflare": 7.2.9
+  "@sveltejs/kit": 2.70.1
+  "@sveltejs/vite-plugin-svelte": 7.2.0
+  "@tailwindcss/vite": 4.3.3
+  "@superfunctions/db": 0.1.4
+  "@types/pg": 8.20.0
+  "@playwright/test": 1.62.0
+  "@modelcontextprotocol/sdk": 1.29.0
+  drizzle-kit: 0.31.10
+  drizzle-orm: 0.45.2
+  diff: 9.0.0
+  fast-check: 4.9.0
+  fflate: 0.8.3
+  hono: 4.12.32
+  marked: 18.0.7
+  pg: 8.22.0
+  phosphor-svelte: 3.1.0
+  sendfn: 0.0.2
+  svelte: 5.56.8
+  svelte-check: 4.7.3
+  tailwindcss: 4.3.3
+  typescript: 6.0.3
+  vite: 8.1.5
+  vitest: 4.1.10
+  wrangler: 4.86.0
+  zod: 4.4.3
+
+minimumReleaseAgeExclude:
+  - "@authfn/core@0.1.1"
+  - "@datafn/client@0.0.3"
+  - "@datafn/core@0.0.3"
+  - "@datafn/server@0.0.3"
+  - "@playwright/test@1.62.0"
+  - "@superfunctions/db@0.1.4"
+  - "@turbo/darwin-64@2.10.7"
+  - "@turbo/darwin-arm64@2.10.7"
+  - "@turbo/linux-64@2.10.7"
+  - "@turbo/linux-arm64@2.10.7"
+  - "@turbo/windows-64@2.10.7"
+  - "@turbo/windows-arm64@2.10.7"
+  - turbo@2.10.7
+  - sendfn@0.0.2

@@ -1,0 +1,129 @@
+#!/usr/bin/env node
+
+import {
+  activeVersionFromDeployments,
+  parseRailwayDatabaseUrl,
+  requireHyperdriveId,
+  sanitizeDeploymentRecord,
+} from "./lib/production-deployment.mjs";
+import { assertHyperdriveOriginRecord } from "./lib/cloudflare-production.mjs";
+import { renderDeploymentConfigs } from "./render-deploy-config.mjs";
+
+function assert(condition, message) {
+  if (!condition) throw new Error(message);
+}
+
+let missingIdRejected = false;
+try {
+  requireHyperdriveId("");
+} catch {
+  missingIdRejected = true;
+}
+assert(missingIdRejected, "A missing Hyperdrive ID was accepted");
+
+const rendered = await renderDeploymentConfigs({
+  hyperdriveId: "a".repeat(32),
+  siteKey: "turnstile-self-test-site-key",
+  write: false,
+});
+assert(Object.keys(rendered.configs).length === 3, "Three configs were not rendered");
+
+const railway = parseRailwayDatabaseUrl(
+  "postgresql://skillplane:secret@roundhouse.proxy.rlwy.net:12345/skillplane",
+  "self-test Railway URL",
+);
+assert(
+  new URL(railway.url).searchParams.get("sslmode") === "require",
+  "Railway SSL was not forced",
+);
+assert(
+  !JSON.stringify({
+    fingerprint: railway.fingerprint,
+    identity: railway.identity,
+  }).includes("secret"),
+  "The sanitized Railway identity retained a password",
+);
+
+const hyperdrive = assertHyperdriveOriginRecord(
+  {
+    id: "a".repeat(32),
+    origin: {
+      host: railway.identity.host,
+      port: Number(railway.identity.port),
+      database: railway.identity.database,
+      user: railway.identity.username,
+    },
+  },
+  railway.identity,
+);
+assert(hyperdrive.railwayOriginMatched, "Hyperdrive origin matching failed");
+let unrelatedHyperdriveRejected = false;
+try {
+  assertHyperdriveOriginRecord(
+    {
+      id: "a".repeat(32),
+      origin: {
+        host: "unrelated.proxy.rlwy.net",
+        port: Number(railway.identity.port),
+        database: railway.identity.database,
+        user: railway.identity.username,
+      },
+    },
+    railway.identity,
+  );
+} catch {
+  unrelatedHyperdriveRejected = true;
+}
+assert(
+  unrelatedHyperdriveRejected,
+  "A Hyperdrive configuration for another Railway origin was accepted",
+);
+
+const version = activeVersionFromDeployments([
+  {
+    versions: [
+      {
+        version_id: "00000000-0000-4000-8000-000000000000",
+        percentage: 100,
+      },
+    ],
+  },
+  {
+    versions: [
+      {
+        version_id: "12345678-1234-1234-1234-123456789abc",
+        percentage: 100,
+      },
+    ],
+  },
+]);
+assert(
+  version === "12345678-1234-1234-1234-123456789abc",
+  "Active deployment parsing failed",
+);
+
+const sanitized = sanitizeDeploymentRecord({
+  token: "sensitive",
+  nested: { databaseUrl: "sensitive", safe: "retained" },
+});
+assert(
+  sanitized.token === "[redacted]" &&
+    sanitized.nested.databaseUrl === "[redacted]" &&
+    sanitized.nested.safe === "retained",
+  "Deployment record redaction failed",
+);
+
+process.stdout.write(
+  `${JSON.stringify({
+    ok: true,
+    checks: {
+      missingHyperdriveFailsClosed: true,
+      inMemoryConfigRendering: true,
+      railwaySslForced: true,
+      hyperdriveOriginMatched: true,
+      unrelatedHyperdriveRejected: true,
+      activeVersionParsing: true,
+      deploymentRedaction: true,
+    },
+  })}\n`,
+);

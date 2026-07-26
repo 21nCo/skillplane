@@ -1,0 +1,37 @@
+{
+  "name": "@skillplane/auth",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "development": "./src/index.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc --project tsconfig.json",
+    "typecheck": "tsc --project tsconfig.json --noEmit",
+    "test:unit": "vitest run --exclude 'dist/**' src",
+    "test:integration": "vitest run --exclude 'dist/**' tests/integration",
+    "test:security": "vitest run --exclude 'dist/**' tests/security"
+  },
+  "dependencies": {
+    "@authfn/core": "catalog:",
+    "@skillplane/authfn-mcp-oauth": "workspace:*",
+    "@skillplane/db": "workspace:*",
+    "hono": "catalog:",
+    "pg": "catalog:"
+  },
+  "devDependencies": {
+    "@skillplane/email": "workspace:*",
+    "@types/pg": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

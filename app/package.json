@@ -1,0 +1,35 @@
+{
+  "name": "@skillplane/app",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "sync": "svelte-kit sync",
+    "dev": "vite dev --host 127.0.0.1 --port 5173",
+    "dev:worker": "pnpm run build && wrangler dev --config wrangler.jsonc --port 5173 --persist-to ../.data/wrangler/app",
+    "build": "vite build",
+    "typecheck": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+    "test:unit": "vitest run tests/unit",
+    "deploy:check": "wrangler deploy --config wrangler.jsonc --dry-run --outdir dist-worker"
+  },
+  "dependencies": {
+    "@skillplane/api": "workspace:*",
+    "@skillplane/config": "workspace:*",
+    "@skillplane/ui": "workspace:*",
+    "fflate": "catalog:",
+    "phosphor-svelte": "catalog:"
+  },
+  "devDependencies": {
+    "@sveltejs/adapter-cloudflare": "catalog:",
+    "@sveltejs/kit": "catalog:",
+    "@sveltejs/vite-plugin-svelte": "catalog:",
+    "@tailwindcss/vite": "catalog:",
+    "svelte": "catalog:",
+    "svelte-check": "catalog:",
+    "typescript": "catalog:",
+    "tailwindcss": "catalog:",
+    "vite": "catalog:",
+    "vitest": "catalog:",
+    "wrangler": "catalog:"
+  }
+}

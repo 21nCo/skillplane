@@ -1,0 +1,101 @@
+@import "tailwindcss";
+@import "./tokens.css";
+
+@source "../components";
+@source "../../../../app/src";
+@source "../../../../landing/src";
+
+@theme inline {
+  --color-canvas: var(--sp-color-canvas);
+  --color-surface: var(--sp-color-surface);
+  --color-raised: var(--sp-color-surface-raised);
+  --color-muted: var(--sp-color-surface-muted);
+  --color-hover: var(--sp-color-surface-hover);
+  --color-border: var(--sp-color-border);
+  --color-border-strong: var(--sp-color-border-strong);
+  --color-content: var(--sp-color-text);
+  --color-content-muted: var(--sp-color-text-muted);
+  --color-content-subtle: var(--sp-color-text-subtle);
+  --color-accent: var(--sp-color-accent);
+  --color-accent-hover: var(--sp-color-accent-hover);
+  --color-accent-soft: var(--sp-color-accent-soft);
+  --color-accent-content: var(--sp-color-accent-text);
+  --color-success: var(--sp-color-success);
+  --color-success-soft: var(--sp-color-success-soft);
+  --color-warning: var(--sp-color-warning);
+  --color-warning-soft: var(--sp-color-warning-soft);
+  --color-danger: var(--sp-color-danger);
+  --color-danger-soft: var(--sp-color-danger-soft);
+  --font-sans: var(--sp-font-sans);
+  --font-mono: var(--sp-font-mono);
+  --radius-sm: var(--sp-radius-sm);
+  --radius-md: var(--sp-radius-md);
+  --radius-lg: var(--sp-radius-lg);
+}
+
+@layer base {
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+  }
+
+  html {
+    min-width: 20rem;
+    min-height: 100%;
+    background: var(--sp-color-canvas);
+    color: var(--sp-color-text);
+    font-family: var(--sp-font-sans);
+    font-size: 100%;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    min-width: 20rem;
+    min-height: 100vh;
+    margin: 0;
+    background: var(--sp-color-canvas);
+  }
+
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+  }
+
+  button,
+  a,
+  input,
+  select,
+  textarea,
+  [tabindex]:not([tabindex="-1"]) {
+    outline: none;
+  }
+
+  button:focus-visible,
+  a:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible,
+  [tabindex]:not([tabindex="-1"]):focus-visible {
+    outline: 2px solid var(--sp-color-focus);
+    outline-offset: 2px;
+  }
+
+  ::selection {
+    background: var(--sp-color-accent-soft);
+    color: var(--sp-color-text);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "skillplane-mcp",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-05-03",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "routes": [
+    {
+      "pattern": "mcp.skillplane.dev",
+      "custom_domain": true
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "SKILL_BUNDLES",
+      "bucket_name": "skillplane-skill-bundles"
+    }
+  ],
+  "vars": {
+    "RUNTIME_ENV": "production",
+    "DATABASE_ADAPTER": "postgres",
+    "OAUTH_ISSUER": "https://app.skillplane.dev"
+  },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  }
+}

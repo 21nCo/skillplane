@@ -1,0 +1,37 @@
+{
+  "name": "@skillplane/ui",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "sideEffects": [
+    "./src/styles/*.css"
+  ],
+  "exports": {
+    ".": "./src/index.ts",
+    "./styles/tokens.css": "./src/styles/tokens.css",
+    "./styles/tailwind.css": "./src/styles/tailwind.css"
+  },
+  "scripts": {
+    "build": "svelte-check --tsconfig ./tsconfig.json && vite build --config vite.config.ts --outDir dist",
+    "typecheck": "svelte-check --tsconfig ./tsconfig.json",
+    "test:unit": "vitest run tests/unit",
+    "test:a11y": "playwright test --config playwright.config.ts tests/a11y",
+    "test:visual": "playwright test --config playwright.config.ts tests/visual"
+  },
+  "dependencies": {
+    "marked": "catalog:",
+    "phosphor-svelte": "catalog:"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "catalog:",
+    "@playwright/test": "catalog:",
+    "@sveltejs/vite-plugin-svelte": "catalog:",
+    "@tailwindcss/vite": "catalog:",
+    "svelte": "catalog:",
+    "svelte-check": "catalog:",
+    "tailwindcss": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vitest": "catalog:"
+  }
+}
