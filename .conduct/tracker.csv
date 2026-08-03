@@ -1,2 +1,3 @@
 id, desc, status, completedAt, completionDoc
 2026-07-25-new-17dd6c3e-spec,Build production Skillplane skill management with versioned context-aware MCP retrieval and amendment,0,,
+2026-08-03-dhu1z1rz-issue,"DataFn is mounted and secure but bypassed by Skillplane first-party application data flows",0,,
