@@ -1,5 +1,6 @@
 import type { SkillsSearchOutput } from "@skillplane/mcp-schema";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { SKILLPLANE_MCP_SERVER_INFO } from "../../src/server.js";
 import {
   parseStructured,
   startMcpTestEnvironment,
@@ -48,11 +49,7 @@ describe("MCP Streamable HTTP conformance", () => {
     expect(connection.client.getServerCapabilities()).toMatchObject({
       tools: { listChanged: true },
     });
-    expect(connection.client.getServerVersion()).toEqual({
-      name: "skillplane",
-      title: "Skillplane",
-      version: "1.0.0",
-    });
+    expect(connection.client.getServerVersion()).toEqual(SKILLPLANE_MCP_SERVER_INFO);
     await expect(connection.client.ping()).resolves.toEqual({});
   });
 

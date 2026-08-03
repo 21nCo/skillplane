@@ -1,6 +1,7 @@
 <script lang="ts">
   import { env } from "$env/dynamic/public";
   import { resolve } from "$app/paths";
+  import { BrandMark } from "@skillplane/ui";
   import {
     AuthClientError,
     clearOtpContext,
@@ -209,7 +210,7 @@
 <main class="verify-page">
   <header>
     <a class="brand" href={resolve("/")} aria-label="Skillplane home">
-      <span class="brand-mark" aria-hidden="true">S</span>
+      <BrandMark />
       <span>Skillplane</span>
     </a>
     <button
@@ -361,18 +362,6 @@
     font-size: 0.9rem;
     font-weight: 680;
     text-decoration: none;
-  }
-
-  .brand-mark {
-    display: grid;
-    width: 1.75rem;
-    height: 1.75rem;
-    place-items: center;
-    border: 1px solid color-mix(in srgb, var(--accent) 70%, var(--border));
-    border-radius: 0.48rem;
-    background: var(--accent-soft);
-    color: var(--accent-text);
-    font-size: 0.76rem;
   }
 
   .theme-toggle {

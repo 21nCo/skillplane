@@ -16,7 +16,7 @@
   <meta name="author" content="Skillplane" />
   <meta property="og:site_name" content="Skillplane" />
   <meta property="og:type" content="website" />
-  <meta property="og:image" content={`${SITE_ORIGIN}/social-card.svg`} />
+  <meta property="og:image" content={`${SITE_ORIGIN}/social-card.png`} />
   <meta property="og:image:width" content="1200" />
   <meta property="og:image:height" content="630" />
   <meta
@@ -24,7 +24,7 @@
     content="Skillplane — versioned skills for accountable AI agents"
   />
   <meta name="twitter:card" content="summary_large_image" />
-  <meta name="twitter:image" content={`${SITE_ORIGIN}/social-card.svg`} />
+  <meta name="twitter:image" content={`${SITE_ORIGIN}/social-card.png`} />
 </svelte:head>
 
 <a class="skip-link" href="#main-content">Skip to main content</a>

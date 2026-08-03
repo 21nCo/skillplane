@@ -1,6 +1,7 @@
 <script lang="ts">
   import { goto } from "$app/navigation";
   import { resolve } from "$app/paths";
+  import { BrandMark } from "@skillplane/ui";
   import { page } from "$app/state";
   import { apiRequest, SkillplaneApiError } from "$lib/api/client.js";
   import { getSession } from "$lib/auth/client.js";
@@ -94,7 +95,7 @@
 
 <main>
   <a class="brand" href={resolve("/")} aria-label="Skillplane home">
-    <span aria-hidden="true">S</span>
+    <BrandMark size="1.7rem" />
     Skillplane
   </a>
 
@@ -188,18 +189,6 @@
     font-size: 0.85rem;
     font-weight: 680;
     text-decoration: none;
-  }
-
-  .brand span {
-    display: grid;
-    width: 1.7rem;
-    height: 1.7rem;
-    place-items: center;
-    border: 1px solid var(--accent);
-    border-radius: 0.45rem;
-    background: var(--accent-soft);
-    color: var(--accent-text);
-    font-size: 0.7rem;
   }
 
   .card {

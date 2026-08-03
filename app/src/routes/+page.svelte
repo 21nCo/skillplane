@@ -1,5 +1,6 @@
 <script lang="ts">
   import { resolve } from "$app/paths";
+  import { BrandMark } from "@skillplane/ui";
   import { onMount } from "svelte";
 
   interface CheckState {
@@ -62,7 +63,7 @@
 <main>
   <header>
     <a class="brand" href={resolve("/")} aria-label="Skillplane home">
-      <span class="brand-mark" aria-hidden="true">S</span>
+      <BrandMark />
       <span>Skillplane</span>
     </a>
     <span class="phase">Runtime foundation</span>
@@ -163,18 +164,6 @@
     font-size: 0.9rem;
     font-weight: 650;
     text-decoration: none;
-  }
-
-  .brand-mark {
-    display: grid;
-    width: 1.75rem;
-    height: 1.75rem;
-    place-items: center;
-    border: 1px solid var(--sp-color-accent);
-    border-radius: 0.5rem;
-    background: var(--sp-color-accent-soft);
-    color: var(--sp-color-accent-text);
-    font-size: 0.78rem;
   }
 
   .phase,

@@ -4,6 +4,13 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-05-03",
   "compatibility_flags": ["nodejs_compat"],
+  "rules": [
+    {
+      "type": "Data",
+      "globs": ["**/*.png", "**/*.ico"],
+      "fallthrough": true
+    }
+  ],
   "workers_dev": false,
   "routes": [
     {

@@ -9,6 +9,11 @@ import type { RuntimeBindings } from "@skillplane/config";
 import { McpToolError } from "@skillplane/mcp-schema";
 import { normalizeBundlePath } from "@skillplane/storage";
 import { Hono } from "hono";
+import appleTouchIcon from "./assets/apple-touch-icon.png";
+import favicon from "./assets/favicon.ico";
+import favicon32 from "./assets/favicon-32x32.png";
+import icon192 from "./assets/icon-192.png";
+import icon512 from "./assets/icon-512.png";
 import {
   authenticateMcpRequest,
   McpAuthenticationError,
@@ -34,6 +39,43 @@ import {
 
 const MCP_ISSUER = "https://app.skillplane.dev";
 const MCP_RESOURCE = "https://mcp.skillplane.dev/mcp";
+
+const BRAND_CACHE_CONTROL = "public, max-age=604800, immutable";
+
+const MCP_HOME = `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#0b0c0f">
+    <title>Skillplane MCP</title>
+    <link rel="icon" href="/favicon.ico" sizes="32x32">
+    <link rel="icon" href="/favicon-32x32.png" type="image/png" sizes="32x32">
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" sizes="180x180">
+    <link rel="manifest" href="/site.webmanifest">
+  </head>
+  <body>
+    <main>
+      <img src="/icon-192.png" width="96" height="96" alt="">
+      <h1>Skillplane MCP</h1>
+      <p>Connect at <code>https://mcp.skillplane.dev/mcp</code>.</p>
+      <p><a href="https://skillplane.dev">Open Skillplane</a></p>
+    </main>
+  </body>
+</html>`;
+
+const MCP_MANIFEST = JSON.stringify({
+  name: "Skillplane MCP",
+  short_name: "Skillplane",
+  start_url: "/",
+  display: "standalone",
+  background_color: "#0b0c0f",
+  theme_color: "#0b0c0f",
+  icons: [
+    { src: "/icon-192.png", sizes: "192x192", type: "image/png" },
+    { src: "/icon-512.png", sizes: "512x512", type: "image/png" },
+  ],
+});
 
 interface McpEnvironment {
   Bindings: RuntimeBindings;
@@ -73,6 +115,16 @@ function secureProtocolResponse(response: Response): Response {
     status: response.status,
     statusText: response.statusText,
     headers,
+  });
+}
+
+function brandAssetResponse(body: ArrayBuffer, contentType: string): Response {
+  return new Response(body, {
+    headers: {
+      "cache-control": BRAND_CACHE_CONTROL,
+      "content-type": contentType,
+      "x-content-type-options": "nosniff",
+    },
   });
 }
 
@@ -247,6 +299,35 @@ export function createMcpApp(options: CreateMcpAppOptions = {}) {
   app.get("/.well-known/oauth-protected-resource", () => metadataResponse(metadata));
   app.get("/.well-known/oauth-protected-resource/mcp", () =>
     metadataResponse(metadata),
+  );
+  app.get(
+    "/",
+    () =>
+      new Response(MCP_HOME, {
+        headers: {
+          "cache-control": "public, max-age=3600",
+          "content-type": "text/html; charset=utf-8",
+          "x-content-type-options": "nosniff",
+        },
+      }),
+  );
+  app.get("/favicon.ico", () => brandAssetResponse(favicon, "image/x-icon"));
+  app.get("/favicon-32x32.png", () => brandAssetResponse(favicon32, "image/png"));
+  app.get("/apple-touch-icon.png", () =>
+    brandAssetResponse(appleTouchIcon, "image/png"),
+  );
+  app.get("/icon-192.png", () => brandAssetResponse(icon192, "image/png"));
+  app.get("/icon-512.png", () => brandAssetResponse(icon512, "image/png"));
+  app.get(
+    "/site.webmanifest",
+    () =>
+      new Response(MCP_MANIFEST, {
+        headers: {
+          "cache-control": BRAND_CACHE_CONTROL,
+          "content-type": "application/manifest+json",
+          "x-content-type-options": "nosniff",
+        },
+      }),
   );
 
   app.all("/mcp", async (context) => {

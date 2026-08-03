@@ -1,6 +1,7 @@
 <script lang="ts">
   import { page } from "$app/state";
   import { resolve } from "$app/paths";
+  import { BrandMark } from "@skillplane/ui";
   import {
     ArrowSquareOutIcon as ArrowSquareOut,
     CheckCircleIcon as CheckCircle,
@@ -164,7 +165,7 @@
 <main>
   <header>
     <a class="brand" href={resolve("/")} aria-label="Skillplane home">
-      <span aria-hidden="true">S</span>
+      <BrandMark size="1.8rem" radius="0.45rem" />
       Skillplane
     </a>
     <button
@@ -333,7 +334,6 @@
     text-decoration: none;
   }
 
-  .brand span,
   .client-avatar {
     display: grid;
     place-items: center;
@@ -342,12 +342,6 @@
     background: var(--sp-color-accent-soft);
     color: var(--sp-color-accent-text);
     font-weight: var(--sp-weight-bold);
-  }
-
-  .brand span {
-    width: 1.8rem;
-    height: 1.8rem;
-    font-size: 0.72rem;
   }
 
   .theme-toggle {

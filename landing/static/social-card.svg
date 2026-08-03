@@ -14,8 +14,7 @@
   <rect width="1200" height="630" fill="url(#grid)" opacity=".5"/>
   <rect width="1200" height="630" fill="url(#glow)"/>
   <g transform="translate(88 74)">
-    <rect width="48" height="48" rx="12" fill="#f6f6f7"/>
-    <path d="M14 17h20v5H14zm0 8h20v5H14z" fill="#0b0c0f"/>
+    <image href="skillplane-logo.png" width="48" height="48"/>
     <text x="64" y="36" fill="#f6f6f7" font-family="Inter,system-ui,sans-serif" font-size="30" font-weight="650">Skillplane</text>
   </g>
   <text x="88" y="304" fill="#f6f6f7" font-family="Inter,system-ui,sans-serif" font-size="76" font-weight="650" letter-spacing="-4">

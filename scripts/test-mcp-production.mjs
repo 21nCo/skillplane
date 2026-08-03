@@ -59,7 +59,18 @@ export async function testProductionMcp() {
       throw new Error("The production MCP server negotiated an unexpected protocol");
     }
     const server = client.getServerVersion();
-    if (server?.name !== "skillplane" || server.version !== "1.0.0") {
+    if (
+      server?.name !== "skillplane" ||
+      server.title !== "Skillplane" ||
+      server.version !== "1.0.0" ||
+      server.websiteUrl !== "https://skillplane.dev" ||
+      !server.icons?.some(
+        (icon) =>
+          icon.src === "https://mcp.skillplane.dev/icon-512.png" &&
+          icon.mimeType === "image/png" &&
+          icon.sizes?.includes("512x512"),
+      )
+    ) {
       throw new Error("The production MCP server identity is inconsistent");
     }
     const listed = await client.listTools();

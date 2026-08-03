@@ -8,6 +8,7 @@
     ShieldCheckIcon,
   } from "phosphor-svelte";
   import Badge from "../components/Badge.svelte";
+  import BrandMark from "../components/BrandMark.svelte";
   import Button from "../components/Button.svelte";
   import CommandMenu, { type CommandItem } from "../components/CommandMenu.svelte";
   import DataTable, { type DataTableColumn } from "../components/DataTable.svelte";
@@ -151,7 +152,7 @@
 
 <header class="workbench-header">
   <div>
-    <span class="mark" aria-hidden="true">S</span>
+    <BrandMark />
     <div>
       <strong>Skillplane UI</strong>
       <small>Component workbench</small>
@@ -426,19 +427,6 @@
 
   .workbench-header nav :global(select) {
     min-width: 7rem;
-  }
-
-  .mark {
-    display: grid;
-    width: 1.75rem;
-    height: 1.75rem;
-    place-items: center;
-    border: 1px solid var(--sp-color-accent);
-    border-radius: var(--sp-radius-md);
-    background: var(--sp-color-accent-soft);
-    color: var(--sp-color-accent-text);
-    font-size: var(--sp-font-size-1);
-    font-weight: var(--sp-weight-bold);
   }
 
   .workbench-header strong,

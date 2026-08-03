@@ -2,6 +2,7 @@
   import { resolve } from "$app/paths";
   import {
     applyAppearance,
+    BrandMark,
     isTheme,
     THEME_STORAGE_KEY,
     type Theme,
@@ -9,7 +10,6 @@
   import {
     ListIcon as List,
     MoonIcon as Moon,
-    StackIcon as Stack,
     SunIcon as Sun,
     XIcon as X,
   } from "phosphor-svelte";
@@ -49,9 +49,7 @@
 <header class="site-header">
   <div class="header-inner">
     <a class="brand" href={resolve("/")} aria-label="Skillplane home">
-      <span class="brand-mark" aria-hidden="true"
-        ><Stack size={17} weight="fill" /></span
-      >
+      <BrandMark size="1.8rem" radius="0.45rem" />
       <span>Skillplane</span>
     </a>
 
@@ -140,18 +138,6 @@
     font-weight: var(--sp-weight-semibold);
     letter-spacing: -0.01em;
     text-decoration: none;
-  }
-
-  .brand-mark {
-    display: grid;
-    width: 1.8rem;
-    height: 1.8rem;
-    place-items: center;
-    border: 1px solid var(--sp-color-border-strong);
-    border-radius: var(--sp-radius-md);
-    background: var(--sp-color-text);
-    color: var(--sp-color-canvas);
-    box-shadow: var(--sp-shadow-sm);
   }
 
   .desktop-nav {

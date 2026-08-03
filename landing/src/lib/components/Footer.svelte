@@ -1,6 +1,7 @@
 <script lang="ts">
   import { resolve } from "$app/paths";
-  import { ArrowRightIcon as ArrowRight, StackIcon as Stack } from "phosphor-svelte";
+  import { BrandMark } from "@skillplane/ui";
+  import { ArrowRightIcon as ArrowRight } from "phosphor-svelte";
   import { PRIMARY_NAVIGATION } from "$lib/content.js";
 </script>
 
@@ -16,7 +17,7 @@
   </div>
   <div class="footer-row">
     <a class="brand" href={resolve("/")} aria-label="Skillplane home">
-      <span aria-hidden="true"><Stack size={15} weight="fill" /></span>
+      <BrandMark size="1.6rem" radius="0.4rem" />
       Skillplane
     </a>
     <nav aria-label="Footer navigation">
@@ -102,16 +103,6 @@
     font-size: var(--sp-font-size-4);
     font-weight: var(--sp-weight-semibold);
     text-decoration: none;
-  }
-
-  .brand span {
-    display: grid;
-    width: 1.6rem;
-    height: 1.6rem;
-    place-items: center;
-    border-radius: var(--sp-radius-sm);
-    background: var(--sp-color-text);
-    color: var(--sp-color-canvas);
   }
 
   nav {

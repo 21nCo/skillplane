@@ -9,7 +9,7 @@
     XIcon,
   } from "phosphor-svelte";
   import { resolve } from "$app/paths";
-  import { IconButton } from "@skillplane/ui";
+  import { BrandMark, IconButton } from "@skillplane/ui";
   import type { WorkspaceStore } from "$lib/workspaces/store.svelte.js";
   import WorkspaceSwitcher from "./WorkspaceSwitcher.svelte";
 
@@ -47,7 +47,7 @@
 <aside class:open aria-label="Application navigation">
   <div class="brand-row">
     <a class="brand" href={resolve("/workspaces")} aria-label="Skillplane workspaces">
-      <span aria-hidden="true">S</span>
+      <BrandMark size="1.625rem" radius="0.4rem" />
       <strong>Skillplane</strong>
     </a>
     <span class="mobile-close">
@@ -154,19 +154,6 @@
     color: var(--sp-color-text);
     font-size: var(--sp-font-size-3);
     text-decoration: none;
-  }
-
-  .brand > span {
-    display: grid;
-    width: 1.625rem;
-    height: 1.625rem;
-    place-items: center;
-    border: 1px solid var(--sp-color-accent);
-    border-radius: var(--sp-radius-md);
-    background: var(--sp-color-accent-soft);
-    color: var(--sp-color-accent-text);
-    font-size: var(--sp-font-size-1);
-    font-weight: var(--sp-weight-bold);
   }
 
   nav {

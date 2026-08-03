@@ -69,6 +69,12 @@ function validateRenderedConfig(name, config, hyperdriveId) {
     if (
       name === "mcp" &&
       (config.send_email !== undefined ||
+        !config.rules?.some(
+          (rule) =>
+            rule.type === "Data" &&
+            rule.globs?.includes("**/*.png") &&
+            rule.globs?.includes("**/*.ico"),
+        ) ||
         "AUTH_MODE" in (config.vars ?? {}) ||
         "EMAIL_PROVIDER" in (config.vars ?? {}) ||
         "PUBLIC_TURNSTILE_SITE_KEY" in (config.vars ?? {}) ||

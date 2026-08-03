@@ -1,4 +1,5 @@
 export { default as Badge } from "./components/Badge.svelte";
+export { default as BrandMark } from "./components/BrandMark.svelte";
 export { default as Button } from "./components/Button.svelte";
 export { default as CommandMenu } from "./components/CommandMenu.svelte";
 export { default as DataTable } from "./components/DataTable.svelte";

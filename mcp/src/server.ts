@@ -1,4 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { Implementation } from "@modelcontextprotocol/sdk/types.js";
 import {
   contextCreateInputSchema,
   contextCreateOutputSchema,
@@ -93,21 +94,35 @@ const MUTATION_ANNOTATIONS = {
   openWorldHint: false,
 } as const;
 
+export const SKILLPLANE_MCP_SERVER_INFO: Implementation = {
+  name: "skillplane",
+  title: "Skillplane",
+  version: "1.0.0",
+  description:
+    "Discover, retrieve, and manage versioned Skillplane skills and authorized context knowledge.",
+  websiteUrl: "https://skillplane.dev",
+  icons: [
+    {
+      src: "https://mcp.skillplane.dev/icon-192.png",
+      mimeType: "image/png",
+      sizes: ["192x192"],
+    },
+    {
+      src: "https://mcp.skillplane.dev/icon-512.png",
+      mimeType: "image/png",
+      sizes: ["512x512"],
+    },
+  ],
+};
+
 export function createSkillplaneMcpServer(runtime: McpToolRuntime): McpServer {
-  const server = new McpServer(
-    {
-      name: "skillplane",
-      title: "Skillplane",
-      version: "1.0.0",
+  const server = new McpServer(SKILLPLANE_MCP_SERVER_INFO, {
+    capabilities: {
+      tools: { listChanged: false },
     },
-    {
-      capabilities: {
-        tools: { listChanged: false },
-      },
-      instructions:
-        "Discover, retrieve, and manage versioned Skillplane skills and their authorized context knowledge. Start with workspaces_list, skills_list, and contexts_list when identifiers are unknown. All caller identity fields are declared metadata; authentication remains server-derived.",
-    },
-  );
+    instructions:
+      "Discover, retrieve, and manage versioned Skillplane skills and their authorized context knowledge. Start with workspaces_list, skills_list, and contexts_list when identifiers are unknown. All caller identity fields are declared metadata; authentication remains server-derived.",
+  });
 
   server.registerTool(
     "workspaces_list",

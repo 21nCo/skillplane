@@ -1,8 +1,7 @@
 <script lang="ts">
   import { resolve } from "$app/paths";
   import { page } from "$app/state";
-  import { Badge, Button } from "@skillplane/ui";
-  import { SafeMarkdown } from "@skillplane/ui";
+  import { Badge, BrandMark, Button, SafeMarkdown } from "@skillplane/ui";
   import SkillState from "$lib/skills/SkillState.svelte";
   import { getPublicSkill, getPublicSkillFile } from "$lib/skills/api.js";
   import type { PublicSkill } from "$lib/skills/types.js";
@@ -74,7 +73,7 @@
 <div class="public-shell">
   <header class="site-header">
     <a class="brand" href={resolve("/")}>
-      <span aria-hidden="true">S</span>
+      <BrandMark />
       <strong>Skillplane</strong>
     </a>
     <Button variant="secondary" size="sm" href={resolve("/sign-in")}>Sign in</Button>
@@ -183,19 +182,6 @@
     color: var(--sp-color-text);
     font-size: var(--sp-font-size-3);
     text-decoration: none;
-  }
-
-  .brand > span {
-    display: grid;
-    width: 1.75rem;
-    height: 1.75rem;
-    place-items: center;
-    border: 1px solid var(--sp-color-accent);
-    border-radius: var(--sp-radius-md);
-    background: var(--sp-color-accent-soft);
-    color: var(--sp-color-accent-text);
-    font-size: var(--sp-font-size-1);
-    font-weight: var(--sp-weight-bold);
   }
 
   main {

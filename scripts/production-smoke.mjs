@@ -121,6 +121,47 @@ export async function productionSmoke(options = {}) {
     "A digest-named landing asset is missing immutable caching",
   );
 
+  const brandOrigins = [endpoints.landing, endpoints.app, endpoints.mcp];
+  const brandIcons = await Promise.all(
+    brandOrigins.map(async (origin) => {
+      const response = await request(
+        `${origin}/icon-512.png`,
+        {},
+        { attempts, acceptStatus: [200] },
+      );
+      assert(
+        response.headers.get("content-type")?.includes("image/png"),
+        `${origin} did not serve the Skillplane PNG icon`,
+      );
+      const bytes = Buffer.from(await response.arrayBuffer());
+      assert(bytes.byteLength > 1_000, `${origin} served an empty brand icon`);
+      return bytes;
+    }),
+  );
+  assert(
+    brandIcons.every((icon) => icon.equals(brandIcons[0])),
+    "Landing, app, and MCP hosts do not serve the same Skillplane icon",
+  );
+
+  const mcpHome = await request(endpoints.mcp, {}, { attempts, acceptStatus: [200] });
+  assertTls(mcpHome, "mcp.skillplane.dev");
+  const mcpHomeHtml = await mcpHome.text();
+  assert(
+    mcpHomeHtml.includes("Skillplane MCP") &&
+      mcpHomeHtml.includes('href="/favicon.ico"'),
+    "The MCP origin omitted its Skillplane favicon discovery page",
+  );
+  const mcpFavicon = await request(
+    `${endpoints.mcp}/favicon.ico`,
+    {},
+    { attempts, acceptStatus: [200] },
+  );
+  assert(
+    mcpFavicon.headers.get("content-type")?.includes("image/x-icon") &&
+      (await mcpFavicon.arrayBuffer()).byteLength > 100,
+    "The MCP origin omitted its Skillplane favicon",
+  );
+
   const live = await request(
     `${endpoints.app}/api/v1/health/live`,
     {},
