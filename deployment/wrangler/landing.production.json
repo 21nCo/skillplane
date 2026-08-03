@@ -11,8 +11,8 @@
   },
   "routes": [
     {
-      "pattern": "skillplane.dev",
-      "custom_domain": true
+      "pattern": "skillplane.dev/*",
+      "zone_name": "skillplane.dev"
     }
   ],
   "vars": {

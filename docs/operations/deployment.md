@@ -106,8 +106,11 @@ The commands enforce these boundaries:
 - Deployment order is app, MCP, then landing. On a first deployment, each
   Worker receives an identical rollback baseline followed by a distinct
   release version.
-- Custom Domains are declared in the production source templates with
-  `workers_dev: false`; Wrangler provisions the routes and TLS certificates.
+- The app and MCP Workers use Custom Domains with `workers_dev: false`.
+  Landing uses the proxied zone route `skillplane.dev/*` because the apex has
+  an externally managed DNS origin record that Cloudflare Custom Domains will
+  not replace. The route covers every apex request at the edge while preserving
+  the existing DNS record; Cloudflare provides TLS for all three hosts.
 
 The successful command writes a sanitized, append-only manifest under
 `.conduct/deployments/`. It records Worker release/prior versions, Hyperdrive

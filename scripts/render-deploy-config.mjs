@@ -34,12 +34,18 @@ function runtimeConfig(template, hyperdriveId, variables = {}) {
 
 function validateRenderedConfig(name, config, hyperdriveId) {
   const serialized = JSON.stringify(config);
+  const route = config.routes?.[0];
+  const routeIsValid =
+    name === "landing"
+      ? route?.pattern === `${workers[name].host}/*` &&
+        route.zone_name === workers[name].host &&
+        route.custom_domain === undefined
+      : route?.pattern === workers[name].host && route.custom_domain === true;
   if (
     config.name !== workers[name].name ||
     config.workers_dev !== false ||
     config.routes?.length !== 1 ||
-    config.routes[0]?.pattern !== workers[name].host ||
-    config.routes[0]?.custom_domain !== true ||
+    !routeIsValid ||
     /placeholder|replace[-_ ]?me|your[-_ ]?(?:id|key|token)/iu.test(serialized)
   ) {
     throw new Error(`The ${name} production template violates the deployment contract`);
@@ -109,7 +115,11 @@ export async function renderDeploymentConfigs(options = {}) {
           path: portablePath(options.outputPaths?.[name] ?? workers[name].config),
           sha256: sha256(JSON.stringify(config)),
           worker: config.name,
-          host: config.routes[0].pattern,
+          host: workers[name].host,
+          routing: {
+            type: name === "landing" ? "zone-route" : "custom-domain",
+            pattern: config.routes[0].pattern,
+          },
         },
       ]),
     ),

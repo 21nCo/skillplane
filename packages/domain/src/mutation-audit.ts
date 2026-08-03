@@ -60,9 +60,7 @@ function isRetryableAuditError(value: unknown): value is RetryableAuditError {
   );
 }
 
-function retryableAuditCause(
-  error: AuditWriteError,
-): RetryableAuditError | undefined {
+function retryableAuditCause(error: AuditWriteError): RetryableAuditError | undefined {
   let cause: unknown = error.cause;
   while (cause instanceof AuditWriteError) cause = cause.cause;
   return isRetryableAuditError(cause) ? cause : undefined;

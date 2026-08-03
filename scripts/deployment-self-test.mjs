@@ -30,6 +30,13 @@ const rendered = await renderDeploymentConfigs({
   write: false,
 });
 assert(Object.keys(rendered.configs).length === 3, "Three configs were not rendered");
+assert(
+  rendered.configs.landing.routing.type === "zone-route" &&
+    rendered.configs.landing.routing.pattern === "skillplane.dev/*" &&
+    rendered.configs.app.routing.type === "custom-domain" &&
+    rendered.configs.mcp.routing.type === "custom-domain",
+  "Production routing modes were not rendered correctly",
+);
 
 const railway = parseRailwayDatabaseUrl(
   "postgresql://skillplane:secret@roundhouse.proxy.rlwy.net:12345/skillplane",
@@ -152,6 +159,7 @@ process.stdout.write(
     checks: {
       missingHyperdriveFailsClosed: true,
       inMemoryConfigRendering: true,
+      productionRoutingModes: true,
       railwaySslForced: true,
       approvedRailwayAliasAccepted: true,
       unrelatedAliasRejected: true,

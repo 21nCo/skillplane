@@ -1008,3 +1008,22 @@ This ledger is append-only. Every substantial implementation step MUST add a dat
   runs.
 - Next action: create the clean production source revision, refresh the encrypted
   Railway backup, run migrations, and deploy the three production Workers.
+
+## 2026-08-03T04:43:11Z — Phase 16 database and routing checkpoint
+
+- Status: in progress.
+- Fresh encrypted Railway backup passed restore-list round-trip verification over
+  TLS 1.3; migrations `0001` through `0015` applied and the production schema
+  verified with 31 tables and the required indexed query plans.
+- Created the private production R2 bucket and deployed baseline plus release
+  versions of the app and MCP Workers.
+- Landing Worker code uploaded, but Cloudflare rejected its initial Custom
+  Domain trigger because the apex contains an externally managed DNS origin
+  record. No DNS record was deleted.
+- Decision: preserve that record and use the full-path proxied Worker zone route
+  `skillplane.dev/*`; app and MCP retain Custom Domains.
+- Updated route validation, strict dry-run coverage, manifest metadata, and the
+  deployment runbook. The 19 Worker deployment checks and all three production
+  configuration dry runs pass with the revised topology.
+- Evidence: `.conduct/logs/engineering/2026-08-03-production-deployment.md`.
+- Next action: commit the route repair and resume the three-Worker release.

@@ -188,11 +188,18 @@ async function validateGeneratedConfig(kind) {
     );
   }
   const config = JSON.parse(await readFile(worker.config, "utf8"));
+  const route = config.routes?.[0];
+  const routeIsValid =
+    kind === "landing"
+      ? route?.pattern === `${worker.host}/*` &&
+        route.zone_name === worker.host &&
+        route.custom_domain === undefined
+      : route?.pattern === worker.host && route.custom_domain === true;
   if (
     config.name !== worker.name ||
     config.workers_dev !== false ||
-    config.routes?.[0]?.pattern !== worker.host ||
-    config.routes?.[0]?.custom_domain !== true
+    config.routes?.length !== 1 ||
+    !routeIsValid
   ) {
     throw new Error(`${worker.name} generated configuration is invalid`);
   }
