@@ -93,10 +93,34 @@ const hyperdrive = assertHyperdriveOriginRecord(
       database: railway.identity.database,
       user: railway.identity.username,
     },
+    caching: { disabled: true },
   },
   railway.identity,
 );
 assert(hyperdrive.railwayOriginMatched, "Hyperdrive origin matching failed");
+assert(hyperdrive.queryCacheDisabled, "Hyperdrive query caching was accepted");
+let cachedHyperdriveRejected = false;
+try {
+  assertHyperdriveOriginRecord(
+    {
+      id: "a".repeat(32),
+      origin: {
+        host: railway.identity.host,
+        port: Number(railway.identity.port),
+        database: railway.identity.database,
+        user: railway.identity.username,
+      },
+      caching: { disabled: false },
+    },
+    railway.identity,
+  );
+} catch {
+  cachedHyperdriveRejected = true;
+}
+assert(
+  cachedHyperdriveRejected,
+  "A cache-enabled Hyperdrive configuration was accepted",
+);
 let unrelatedHyperdriveRejected = false;
 try {
   assertHyperdriveOriginRecord(
@@ -108,6 +132,7 @@ try {
         database: railway.identity.database,
         user: railway.identity.username,
       },
+      caching: { disabled: true },
     },
     railway.identity,
   );
@@ -165,6 +190,7 @@ process.stdout.write(
       unrelatedAliasRejected: true,
       wranglerBannerJsonParsed: true,
       hyperdriveOriginMatched: true,
+      cachedHyperdriveRejected: true,
       unrelatedHyperdriveRejected: true,
       activeVersionParsing: true,
       deploymentRedaction: true,

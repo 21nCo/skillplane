@@ -50,7 +50,7 @@ symlinks, and enforces mode `0600`.
 | Variable                           | Purpose                                                                             |
 | ---------------------------------- | ----------------------------------------------------------------------------------- |
 | `RAILWAY_DATABASE_URL`             | Direct Railway public Postgres URL used only by backup, migration, and verification |
-| `CLOUDFLARE_HYPERDRIVE_ID`         | Existing Hyperdrive configuration bound to `HYPERDRIVE`                             |
+| `CLOUDFLARE_HYPERDRIVE_ID`         | Existing cache-disabled Hyperdrive configuration bound to `HYPERDRIVE`              |
 | `SKILLPLANE_BACKUP_ENCRYPTION_KEY` | At least 32 characters; encrypts logical backups before they reach disk             |
 | `AUTHFN_SECRET`                    | AuthFn signing and tenancy secret, at least 32 characters                           |
 | `OAUTH_TOKEN_PEPPER`               | OAuth token hashing pepper, at least 32 characters                                  |
@@ -64,6 +64,11 @@ forced to `sslmode=require`. Because the approved alias presents the Railway
 self-signed PostgreSQL certificate chain, node-postgres uses explicit
 libpq-compatible `require` semantics for that alias. Both backup and migration
 query `pg_stat_ssl` and fail if the connection is not encrypted.
+
+The production Hyperdrive configuration must have SQL response caching disabled.
+Skillplane is an authorization and mutation control plane, so stale cached reads
+can violate permission checks and read-after-write guarantees. Deployment checks
+the live configuration and stops before upload if query caching is enabled.
 
 The complete Skillplane source must also be committed with a clean worktree.
 The application commit and a digest of all runtime, deployment, package, and

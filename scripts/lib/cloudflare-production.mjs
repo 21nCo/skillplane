@@ -49,9 +49,15 @@ export function assertHyperdriveOriginRecord(database, expectedIdentity) {
       "CLOUDFLARE_HYPERDRIVE_ID does not target the configured Railway database",
     );
   }
+  if (database.caching?.disabled !== true) {
+    throw new Error(
+      "The production Hyperdrive configuration must disable query caching for read-after-write and authorization consistency",
+    );
+  }
   return {
     id: database.id,
     railwayOriginMatched: true,
+    queryCacheDisabled: true,
   };
 }
 

@@ -122,6 +122,7 @@ export async function deployAll() {
         binding: "HYPERDRIVE",
         id: hyperdriveId,
         railwayOriginMatched: hyperdrive.railwayOriginMatched,
+        queryCacheDisabled: hyperdrive.queryCacheDisabled,
       },
       r2: { binding: "SKILL_BUNDLES", ...r2 },
       email: {
