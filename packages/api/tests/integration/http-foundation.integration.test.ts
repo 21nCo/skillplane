@@ -128,6 +128,7 @@ describe("Hono API foundation", () => {
     });
 
     expect(response.status).toBe(401);
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
     expect(await response.json()).toMatchObject({
       ok: false,
       error: {

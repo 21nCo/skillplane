@@ -3,7 +3,7 @@ import { secureHeaders } from "hono/secure-headers";
 import type { ApiEnvironment } from "../context.js";
 
 export function securityMiddleware(): MiddlewareHandler<ApiEnvironment> {
-  return secureHeaders({
+  const applySecureHeaders = secureHeaders({
     contentSecurityPolicy: {
       defaultSrc: ["'none'"],
       frameAncestors: ["'none'"],
@@ -14,4 +14,10 @@ export function securityMiddleware(): MiddlewareHandler<ApiEnvironment> {
     xContentTypeOptions: "nosniff",
     xFrameOptions: "DENY",
   });
+  return async (context, next) => {
+    await applySecureHeaders(context, next);
+    if (!context.res.headers.has("cache-control")) {
+      context.header("cache-control", "private, no-store");
+    }
+  };
 }
