@@ -4,6 +4,7 @@ export * from "./caller.js";
 export * from "./catalog.js";
 export * from "./common.js";
 export * from "./context-mutations.js";
+export * from "./context-lifecycle.js";
 export * from "./contexts.js";
 export * from "./errors.js";
 export * from "./retrieve.js";

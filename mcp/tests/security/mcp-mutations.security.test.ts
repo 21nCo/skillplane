@@ -115,6 +115,28 @@ describe("MCP mutation authorization and isolation", () => {
     expect(noteResponse.headers.get("www-authenticate")).toContain(
       'scope="contexts:write"',
     );
+
+    const contextResponse = await environment.rawMcp(environment.skillsOnlyToken, {
+      jsonrpc: "2.0",
+      id: 72,
+      method: "tools/call",
+      params: {
+        name: "context_create",
+        arguments: {
+          skill: { id: environment.skill.skill.id },
+          slug: "scope-denied-context",
+          name: "Denied context",
+          type: "custom",
+          initialKnowledge: "This context must not be created.",
+          idempotencyKey: "scope-denied-context",
+          caller: TEST_CALLER,
+        },
+      },
+    });
+    expect(contextResponse.status).toBe(403);
+    expect(contextResponse.headers.get("www-authenticate")).toContain(
+      'scope="contexts:write"',
+    );
   });
 
   it("enforces workspace role even when the credential carries mutation scopes", async () => {
@@ -221,6 +243,18 @@ describe("MCP mutation authorization and isolation", () => {
       idempotencyKey: "other-context-note",
       requestId: "fixture:other-context-note",
     });
+    const crossSkillContext = await service.client.callTool({
+      name: "context_update",
+      arguments: {
+        skill: { id: environment.skill.skill.id },
+        context: { id: otherContext.context.id },
+        expectedUpdatedAt: otherContext.context.updatedAt,
+        patch: { description: "Cross-skill overwrite" },
+        idempotencyKey: "cross-skill-context",
+        caller: TEST_CALLER,
+      },
+    });
+    expect(parseToolError(crossSkillContext).error.code).toBe("CONTEXT_NOT_FOUND");
     const result = await service.client.callTool({
       name: "context_note_upsert",
       arguments: {
@@ -262,7 +296,8 @@ describe("MCP mutation authorization and isolation", () => {
          IF NEW.actor_id = '${actorId.replaceAll("'", "''")}'
             AND NEW.event_type IN (
               'skill.amendment.created',
-              'context.knowledge.revised'
+              'context.knowledge.revised',
+              'context.created'
             ) THEN
            RAISE EXCEPTION 'forced mutation audit failure';
          END IF;
@@ -326,6 +361,34 @@ describe("MCP mutation authorization and isolation", () => {
       expect(currentAfter.rows[0]?.current_knowledge_revision_id).toBe(
         currentBefore.rows[0]?.current_knowledge_revision_id,
       );
+
+      const contextsBefore = await environment.services.database.pool.query<{
+        count: string;
+      }>("SELECT count(*)::text AS count FROM skill_contexts WHERE skill_id = $1", [
+        environment.skill.skill.id,
+      ]);
+      const failedContext = await service.client.callTool({
+        name: "context_create",
+        arguments: {
+          skill: { id: environment.skill.skill.id },
+          slug: `audit-failure-${crypto.randomUUID().slice(0, 8)}`,
+          name: "Audit failure context",
+          type: "custom",
+          initialKnowledge: "This context must roll back with its audit.",
+          idempotencyKey: "audit-failure-context",
+          caller: TEST_CALLER,
+        },
+      });
+      expect(parseToolError(failedContext).error).toMatchObject({
+        code: "AUDIT_WRITE_FAILED",
+        retryable: true,
+      });
+      const contextsAfter = await environment.services.database.pool.query<{
+        count: string;
+      }>("SELECT count(*)::text AS count FROM skill_contexts WHERE skill_id = $1", [
+        environment.skill.skill.id,
+      ]);
+      expect(contextsAfter.rows[0]?.count).toBe(contextsBefore.rows[0]?.count);
     } finally {
       await environment.services.database.pool.query(
         `DROP TRIGGER IF EXISTS ${triggerName} ON audit_events;

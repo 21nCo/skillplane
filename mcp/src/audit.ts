@@ -65,6 +65,10 @@ export async function persistMcpAuditBatch(
 function auditInput(event: McpAuditRecord): AuditWriteInput {
   const mutation = [
     "skill_amend",
+    "context_create",
+    "context_update",
+    "context_archive",
+    "context_restore",
     "context_knowledge_update",
     "context_note_upsert",
   ].includes(event.tool);

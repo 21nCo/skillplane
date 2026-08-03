@@ -123,10 +123,16 @@ function scopesForToolCall(message: unknown): readonly McpScope[] {
       return hasContext ? ["contexts:read", "skills:read"] : ["skills:read"];
     }
     case "context_get":
+    case "contexts_list":
+    case "context_knowledge_history":
     case "context_notes_list":
       return ["contexts:read"];
     case "skill_amend":
       return ["skills:amend"];
+    case "context_create":
+    case "context_update":
+    case "context_archive":
+    case "context_restore":
     case "context_knowledge_update":
     case "context_note_upsert":
       return ["contexts:write"];

@@ -242,7 +242,11 @@ export class ContextKnowledgeService {
         );
         await client.query(
           `UPDATE skill_contexts
-                SET current_knowledge_revision_id = $2, updated_at = now()
+                SET current_knowledge_revision_id = $2,
+                    updated_at = GREATEST(
+                      clock_timestamp(),
+                      updated_at + interval '1 millisecond'
+                    )
               WHERE id = $1 AND workspace_id = $3`,
           [options.contextId, revisionId, options.principal.workspaceId],
         );

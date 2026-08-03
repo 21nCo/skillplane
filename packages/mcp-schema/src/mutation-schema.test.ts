@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  contextCreateInputSchema,
+  contextKnowledgeHistoryInputSchema,
   contextKnowledgeUpdateInputSchema,
+  contextStateMutationInputSchema,
   contextNoteUpsertInputSchema,
+  contextsListInputSchema,
+  contextUpdateInputSchema,
   skillAmendInputSchema,
 } from "./index.js";
 
@@ -99,6 +104,78 @@ describe("MCP amendment schemas", () => {
 });
 
 describe("MCP context mutation schemas", () => {
+  it("supports discovery, creation, metadata concurrency, lifecycle, and history", () => {
+    expect(
+      contextsListInputSchema.parse({
+        skill: { id: "skill:review" },
+        caller,
+      }),
+    ).toMatchObject({ state: "active", cursor: null, limit: 20 });
+    expect(
+      contextCreateInputSchema.parse({
+        skill: { id: "skill:review" },
+        slug: "repository-main",
+        name: "Repository main",
+        type: "repository",
+        initialKnowledge: "# Repository\n\nUse pnpm validation.",
+        idempotencyKey: "context-create-run-123",
+        caller,
+      }),
+    ).toMatchObject({
+      externalReference: null,
+      description: "",
+      metadata: {},
+      learningMetadata: {},
+    });
+    expect(
+      contextUpdateInputSchema.parse({
+        skill: { id: "skill:review" },
+        context: { slug: "repository-main" },
+        expectedUpdatedAt: "2026-08-03T12:00:00.000Z",
+        patch: { description: "Main repository context" },
+        idempotencyKey: "context-update-run-123",
+        caller,
+      }).patch,
+    ).toEqual({ description: "Main repository context" });
+    expect(
+      contextStateMutationInputSchema.parse({
+        skill: { id: "skill:review" },
+        context: { id: "context:repo" },
+        expectedUpdatedAt: "2026-08-03T12:00:00.000Z",
+        idempotencyKey: "context-archive-run-123",
+        caller,
+      }).expectedUpdatedAt,
+    ).toBe("2026-08-03T12:00:00.000Z");
+    expect(
+      contextKnowledgeHistoryInputSchema.parse({
+        skill: { id: "skill:review" },
+        context: { id: "context:repo" },
+        caller,
+      }),
+    ).toMatchObject({ cursor: null, limit: 20 });
+  });
+
+  it("rejects empty metadata patches and missing concurrency tokens", () => {
+    expect(
+      contextUpdateInputSchema.safeParse({
+        skill: { id: "skill:review" },
+        context: { id: "context:repo" },
+        expectedUpdatedAt: "2026-08-03T12:00:00.000Z",
+        patch: {},
+        idempotencyKey: "context-update-run-123",
+        caller,
+      }).success,
+    ).toBe(false);
+    expect(
+      contextStateMutationInputSchema.safeParse({
+        skill: { id: "skill:review" },
+        context: { id: "context:repo" },
+        idempotencyKey: "context-archive-run-123",
+        caller,
+      }).success,
+    ).toBe(false);
+  });
+
   it("bounds context knowledge and note mutations with replay keys", () => {
     expect(
       contextKnowledgeUpdateInputSchema.parse({

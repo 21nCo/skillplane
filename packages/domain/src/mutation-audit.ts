@@ -31,7 +31,10 @@ export interface MutationAuditEvent {
   readonly action: "skills:amend" | "contexts:write";
   readonly requestId: string;
   readonly resourceType:
-    "skill_version" | "context_knowledge_revision" | "context_note_revision";
+    | "skill_version"
+    | "context"
+    | "context_knowledge_revision"
+    | "context_note_revision";
   readonly resourceId: string;
   readonly contextId?: string;
   readonly metadata: Readonly<Record<string, unknown>>;

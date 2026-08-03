@@ -3,6 +3,11 @@ import type { Pool } from "pg";
 import { authorize } from "./authorization.js";
 import { DomainError } from "./errors.js";
 import { hashIdempotentRequest, type IdempotencyStore } from "./idempotency.js";
+import {
+  insertMutationAudit,
+  mutationAttribution,
+  type MutationAuditContext,
+} from "./mutation-audit.js";
 import { principalAuditActor, type Principal } from "./principal.js";
 import { withDomainTransaction as withTransaction } from "./transactions.js";
 
@@ -284,6 +289,37 @@ export function parseContextArchiveFilter(value: unknown): ContextArchiveFilter 
   return value as ContextArchiveFilter;
 }
 
+function normalizeExpectedUpdatedAt(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) {
+    throw new DomainError(
+      "VALIDATION_FAILED",
+      "expectedUpdatedAt must be an ISO 8601 timestamp",
+      400,
+      { field: "expectedUpdatedAt" },
+    );
+  }
+  return new Date(timestamp).toISOString();
+}
+
+function assertExpectedUpdatedAt(
+  row: ContextRow,
+  expectedUpdatedAt: string | undefined,
+): void {
+  if (
+    expectedUpdatedAt !== undefined &&
+    row.updated_at.toISOString() !== expectedUpdatedAt
+  ) {
+    throw new DomainError(
+      "CONTEXT_METADATA_CONFLICT",
+      "Context metadata changed after it was read",
+      409,
+      { currentUpdatedAt: row.updated_at.toISOString() },
+    );
+  }
+}
+
 export function normalizeRevisionBody(
   value: unknown,
   options: { readonly field: string; readonly maxBytes: number },
@@ -481,6 +517,7 @@ export class ContextService {
     readonly learningMetadata?: Readonly<Record<string, unknown>>;
     readonly idempotencyKey: string;
     readonly requestId: string;
+    readonly auditContext?: MutationAuditContext;
   }): Promise<ContextCreateResult> {
     authorize(options.principal, "contexts:write");
     const slug = normalizeContextSlug(options.slug);
@@ -522,6 +559,7 @@ export class ContextService {
     const contextId = id("context");
     const revisionId = id("context-knowledge");
     const actor = principalAuditActor(options.principal);
+    const attribution = mutationAttribution(options.auditContext);
     try {
       return await withTransaction(this.pool, options.requestId, async ({ client }) => {
         const skill = await client.query<{ archived_at: Date | null }>(
@@ -576,8 +614,9 @@ export class ContextService {
           `INSERT INTO context_knowledge_revisions
                (id, workspace_id, context_id, revision, base_revision_id,
                 knowledge, body_digest, learning_metadata,
-                created_by_actor_type, created_by_actor_id, created_for_user_id)
-             VALUES ($1, $2, $3, 1, NULL, $4, $5, $6, $7, $8, $9)`,
+                created_by_actor_type, created_by_actor_id, created_by_agent,
+                created_by_model, created_for_user_id)
+             VALUES ($1, $2, $3, 1, NULL, $4, $5, $6, $7, $8, $9, $10, $11)`,
           [
             revisionId,
             options.principal.workspaceId,
@@ -587,6 +626,8 @@ export class ContextService {
             learningMetadata,
             actor.actorType,
             actor.actorId,
+            attribution.agent,
+            attribution.model,
             options.principal.kind === "user"
               ? options.principal.userId
               : (options.principal.delegatedUserId ?? null),
@@ -594,7 +635,11 @@ export class ContextService {
         );
         await client.query(
           `UPDATE skill_contexts
-                SET current_knowledge_revision_id = $2, updated_at = now()
+                SET current_knowledge_revision_id = $2,
+                    updated_at = GREATEST(
+                      clock_timestamp(),
+                      updated_at + interval '1 millisecond'
+                    )
               WHERE id = $1`,
           [contextId, revisionId],
         );
@@ -620,6 +665,21 @@ export class ContextService {
           context: toContextRecord(contextRow),
           knowledge: toContextKnowledgeRevisionRecord(knowledgeRow),
         };
+        await insertMutationAudit(client, options.principal, options.auditContext, {
+          eventType: "context.created",
+          action: "contexts:write",
+          requestId: options.requestId,
+          resourceType: "context",
+          resourceId: response.context.id,
+          contextId: response.context.id,
+          metadata: {
+            skillId: options.skillId,
+            slug: response.context.slug,
+            type: response.context.type,
+            knowledgeRevisionId: response.knowledge.id,
+            knowledgeDigest: response.knowledge.bodyDigest,
+          },
+        });
         await this.idempotency.complete(client, claim.identity, 201, {
           context: response.context,
           knowledge: response.knowledge,
@@ -650,8 +710,10 @@ export class ContextService {
       readonly description?: string;
       readonly metadata?: Readonly<Record<string, unknown>>;
     };
+    readonly expectedUpdatedAt?: string;
     readonly idempotencyKey: string;
     readonly requestId: string;
+    readonly auditContext?: MutationAuditContext;
   }): Promise<ContextRecord> {
     authorize(options.principal, "contexts:write");
     if (Object.keys(options.patch).length === 0) {
@@ -682,9 +744,11 @@ export class ContextService {
         ? { metadata: normalizeMetadata(options.patch.metadata) }
         : {}),
     };
+    const expectedUpdatedAt = normalizeExpectedUpdatedAt(options.expectedUpdatedAt);
     const requestHash = await hashIdempotentRequest({
       operation: "context.update",
       contextId: options.contextId,
+      expectedUpdatedAt: expectedUpdatedAt ?? null,
       patch,
     });
     const claim = await this.idempotency.claim<{ context: ContextRecord }>({
@@ -707,6 +771,7 @@ export class ContextService {
         if (!row) {
           throw new DomainError("CONTEXT_NOT_FOUND", "Context was not found", 404);
         }
+        assertExpectedUpdatedAt(row, expectedUpdatedAt);
         if (row.archived_at) {
           throw new DomainError(
             "CONTEXT_ARCHIVED",
@@ -717,7 +782,11 @@ export class ContextService {
         await client.query(
           `UPDATE skill_contexts
                 SET name = $3, context_type = $4, external_reference = $5,
-                    description = $6, metadata = $7, updated_at = now()
+                    description = $6, metadata = $7,
+                    updated_at = GREATEST(
+                      clock_timestamp(),
+                      updated_at + interval '1 millisecond'
+                    )
               WHERE id = $1 AND workspace_id = $2`,
           [
             options.contextId,
@@ -740,6 +809,19 @@ export class ContextService {
           throw new DomainError("CONTEXT_NOT_FOUND", "Context was not found", 404);
         }
         const context = toContextRecord(updatedRow);
+        await insertMutationAudit(client, options.principal, options.auditContext, {
+          eventType: "context.updated",
+          action: "contexts:write",
+          requestId: options.requestId,
+          resourceType: "context",
+          resourceId: context.id,
+          contextId: context.id,
+          metadata: {
+            changedFields: Object.keys(patch).sort(),
+            previousUpdatedAt: row.updated_at.toISOString(),
+            updatedAt: context.updatedAt,
+          },
+        });
         await this.idempotency.complete(client, claim.identity, 200, { context });
         return context;
       });
@@ -753,14 +835,18 @@ export class ContextService {
     readonly contextId: string;
     readonly principal: Principal;
     readonly archived: boolean;
+    readonly expectedUpdatedAt?: string;
     readonly idempotencyKey: string;
     readonly requestId: string;
+    readonly auditContext?: MutationAuditContext;
   }): Promise<ContextRecord> {
     authorize(options.principal, "contexts:write");
+    const expectedUpdatedAt = normalizeExpectedUpdatedAt(options.expectedUpdatedAt);
     const requestHash = await hashIdempotentRequest({
       operation: "context.archive",
       contextId: options.contextId,
       archived: options.archived,
+      expectedUpdatedAt: expectedUpdatedAt ?? null,
     });
     const claim = await this.idempotency.claim<{ context: ContextRecord }>({
       workspaceId: options.principal.workspaceId,
@@ -772,24 +858,28 @@ export class ContextService {
     if (claim.state === "replay") return claim.responseBody.context;
     try {
       return await withTransaction(this.pool, options.requestId, async ({ client }) => {
-        const updated = await client.query<ContextRow>(
-          `UPDATE skill_contexts context
-                SET archived_at = CASE WHEN $3 THEN COALESCE(archived_at, now())
-                                       ELSE NULL END,
-                    updated_at = now()
-              WHERE context.id = $1 AND context.workspace_id = $2
-              RETURNING context.id, context.workspace_id, context.skill_id,
-                        context.slug, context.name, context.context_type,
-                        context.external_reference, context.description,
-                        context.metadata, context.current_knowledge_revision_id,
-                        NULL::integer AS current_knowledge_revision,
-                        context.archived_at, context.created_at, context.updated_at`,
-          [options.contextId, options.principal.workspaceId, options.archived],
+        const current = await client.query<ContextRow>(
+          `${contextSelect}
+             WHERE context.id = $1 AND context.workspace_id = $2
+             FOR UPDATE OF context`,
+          [options.contextId, options.principal.workspaceId],
         );
-        const row = updated.rows[0];
+        const row = current.rows[0];
         if (!row) {
           throw new DomainError("CONTEXT_NOT_FOUND", "Context was not found", 404);
         }
+        assertExpectedUpdatedAt(row, expectedUpdatedAt);
+        await client.query(
+          `UPDATE skill_contexts
+              SET archived_at = CASE WHEN $3 THEN COALESCE(archived_at, now())
+                                     ELSE NULL END,
+                  updated_at = GREATEST(
+                    clock_timestamp(),
+                    updated_at + interval '1 millisecond'
+                  )
+            WHERE id = $1 AND workspace_id = $2`,
+          [options.contextId, options.principal.workspaceId, options.archived],
+        );
         const reread = await client.query<ContextRow>(
           `${contextSelect} WHERE context.id = $1 AND context.workspace_id = $2`,
           [options.contextId, options.principal.workspaceId],
@@ -799,6 +889,19 @@ export class ContextService {
           throw new DomainError("CONTEXT_NOT_FOUND", "Context was not found", 404);
         }
         const context = toContextRecord(contextRow);
+        await insertMutationAudit(client, options.principal, options.auditContext, {
+          eventType: options.archived ? "context.archived" : "context.restored",
+          action: "contexts:write",
+          requestId: options.requestId,
+          resourceType: "context",
+          resourceId: context.id,
+          contextId: context.id,
+          metadata: {
+            archived: options.archived,
+            previousUpdatedAt: row.updated_at.toISOString(),
+            updatedAt: context.updatedAt,
+          },
+        });
         await this.idempotency.complete(client, claim.identity, 200, { context });
         return context;
       });

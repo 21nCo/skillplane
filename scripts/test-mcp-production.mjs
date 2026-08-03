@@ -64,10 +64,16 @@ export async function testProductionMcp() {
     }
     const listed = await client.listTools();
     const expected = [
+      "context_archive",
+      "context_create",
       "context_get",
+      "context_knowledge_history",
       "context_knowledge_update",
       "context_note_upsert",
       "context_notes_list",
+      "context_restore",
+      "context_update",
+      "contexts_list",
       "skill_amend",
       "skill_asset_retrieve",
       "skill_retrieve",
@@ -160,6 +166,14 @@ export async function testProductionMcp() {
         resultCount: catalog.skills.length,
         paginationContract: true,
         queryRequired: false,
+      },
+      contextLifecycle: {
+        discovery: names.includes("contexts_list"),
+        creation: names.includes("context_create"),
+        metadataConcurrency: names.includes("context_update"),
+        archiveRestore:
+          names.includes("context_archive") && names.includes("context_restore"),
+        knowledgeHistory: names.includes("context_knowledge_history"),
       },
       search: {
         workspaceId,

@@ -9,13 +9,13 @@ import {
   timestampSchema,
 } from "./common.js";
 
-const idempotencyKeySchema = z
+export const idempotencyKeySchema = z
   .string()
   .trim()
   .min(1)
   .max(255)
   .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,254}$/u);
-const learningMetadataSchema = z.record(z.string(), z.unknown()).default({});
+export const learningMetadataSchema = z.record(z.string(), z.unknown()).default({});
 
 export const contextKnowledgeUpdateInputSchema = z
   .object({

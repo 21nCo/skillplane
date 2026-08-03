@@ -285,6 +285,7 @@ export async function resolveContext(
   execution: ToolExecution,
   skill: ResolvedSkill,
   selector: ContextSelector,
+  options: { readonly allowArchived?: boolean } = {},
 ): Promise<ContextRow> {
   if (!skill.principal) {
     throw new McpToolError("CONTEXT_NOT_FOUND", "The context was not found", {
@@ -303,7 +304,7 @@ export async function resolveContext(
     [skill.workspaceId, skill.id, byId ? selector.id : selector.slug],
   );
   const row = result.rows[0];
-  if (!row || row.archived_at) {
+  if (!row || (row.archived_at && !options.allowArchived)) {
     throw new McpToolError("CONTEXT_NOT_FOUND", "The context was not found", {
       status: 404,
     });

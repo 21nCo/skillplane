@@ -1,13 +1,22 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
+  contextCreateInputSchema,
+  contextCreateOutputSchema,
+  contextKnowledgeHistoryInputSchema,
+  contextKnowledgeHistoryOutputSchema,
   contextKnowledgeMutationOutputSchema,
   contextKnowledgeUpdateInputSchema,
+  contextLifecycleMutationOutputSchema,
   contextGetInputSchema,
   contextGetOutputSchema,
   contextNoteMutationOutputSchema,
   contextNoteUpsertInputSchema,
   contextNotesListInputSchema,
   contextNotesListOutputSchema,
+  contextsListInputSchema,
+  contextsListOutputSchema,
+  contextStateMutationInputSchema,
+  contextUpdateInputSchema,
   skillsListInputSchema,
   skillsListOutputSchema,
   skillAmendInputSchema,
@@ -26,6 +35,14 @@ import {
 import { skillAmend } from "./tools/amend.js";
 import { skillAssetRetrieve } from "./tools/assets.js";
 import { skillsList, workspacesList } from "./tools/catalog.js";
+import {
+  contextArchive,
+  contextCreate,
+  contextKnowledgeHistory,
+  contextRestore,
+  contextsList,
+  contextUpdate,
+} from "./tools/context-lifecycle.js";
 import {
   contextKnowledgeUpdate,
   contextNoteUpsert,
@@ -62,7 +79,7 @@ export function createSkillplaneMcpServer(runtime: McpToolRuntime): McpServer {
         tools: { listChanged: false },
       },
       instructions:
-        "Search and retrieve versioned Skillplane skills and their authorized context knowledge. All caller identity fields are declared metadata; authentication remains server-derived.",
+        "Discover, retrieve, and manage versioned Skillplane skills and their authorized context knowledge. Start with workspaces_list, skills_list, and contexts_list when identifiers are unknown. All caller identity fields are declared metadata; authentication remains server-derived.",
     },
   );
 
@@ -145,6 +162,19 @@ export function createSkillplaneMcpServer(runtime: McpToolRuntime): McpServer {
   );
 
   server.registerTool(
+    "contexts_list",
+    {
+      title: "List skill contexts",
+      description:
+        "Discover authorized active or archived contexts for one skill in deterministic latest-update order with current knowledge revision identity and an opaque filter-bound cursor.",
+      inputSchema: contextsListInputSchema,
+      outputSchema: contextsListOutputSchema,
+      annotations: READ_ONLY_ANNOTATIONS,
+    },
+    (input) => contextsList(runtime, input),
+  );
+
+  server.registerTool(
     "context_get",
     {
       title: "Get skill context",
@@ -155,6 +185,19 @@ export function createSkillplaneMcpServer(runtime: McpToolRuntime): McpServer {
       annotations: READ_ONLY_ANNOTATIONS,
     },
     (input) => contextGet(runtime, input),
+  );
+
+  server.registerTool(
+    "context_knowledge_history",
+    {
+      title: "List context knowledge history",
+      description:
+        "List immutable knowledge revisions for one authorized context with Markdown, digests, learning metadata, safe agent/model provenance, and an opaque filter-bound cursor.",
+      inputSchema: contextKnowledgeHistoryInputSchema,
+      outputSchema: contextKnowledgeHistoryOutputSchema,
+      annotations: READ_ONLY_ANNOTATIONS,
+    },
+    (input) => contextKnowledgeHistory(runtime, input),
   );
 
   server.registerTool(
@@ -181,6 +224,58 @@ export function createSkillplaneMcpServer(runtime: McpToolRuntime): McpServer {
       annotations: MUTATION_ANNOTATIONS,
     },
     (input) => skillAmend(runtime, input),
+  );
+
+  server.registerTool(
+    "context_create",
+    {
+      title: "Create a skill context",
+      description:
+        "Atomically create one authorized skill context and its first immutable knowledge revision with bounded metadata, caller attribution, durable audit, and replay-safe idempotency.",
+      inputSchema: contextCreateInputSchema,
+      outputSchema: contextCreateOutputSchema,
+      annotations: MUTATION_ANNOTATIONS,
+    },
+    (input) => contextCreate(runtime, input),
+  );
+
+  server.registerTool(
+    "context_update",
+    {
+      title: "Update context metadata",
+      description:
+        "Update authorized context metadata without changing knowledge, requiring the exact previously observed updatedAt value for optimistic concurrency and replay-safe idempotency.",
+      inputSchema: contextUpdateInputSchema,
+      outputSchema: contextLifecycleMutationOutputSchema,
+      annotations: MUTATION_ANNOTATIONS,
+    },
+    (input) => contextUpdate(runtime, input),
+  );
+
+  server.registerTool(
+    "context_archive",
+    {
+      title: "Archive a context",
+      description:
+        "Archive one authorized context using the exact previously observed updatedAt value, durable transactional audit, and replay-safe idempotency.",
+      inputSchema: contextStateMutationInputSchema,
+      outputSchema: contextLifecycleMutationOutputSchema,
+      annotations: MUTATION_ANNOTATIONS,
+    },
+    (input) => contextArchive(runtime, input),
+  );
+
+  server.registerTool(
+    "context_restore",
+    {
+      title: "Restore a context",
+      description:
+        "Restore one authorized archived context using the exact previously observed updatedAt value, durable transactional audit, and replay-safe idempotency.",
+      inputSchema: contextStateMutationInputSchema,
+      outputSchema: contextLifecycleMutationOutputSchema,
+      annotations: MUTATION_ANNOTATIONS,
+    },
+    (input) => contextRestore(runtime, input),
   );
 
   server.registerTool(

@@ -56,12 +56,12 @@ describe("MCP Streamable HTTP conformance", () => {
     await expect(connection.client.ping()).resolves.toEqual({});
   });
 
-  it("advertises eleven complete tool contracts as JSON Schema", async () => {
+  it("advertises seventeen complete tool contracts as JSON Schema", async () => {
     const result = await connection.client.listTools();
-    expect(result.tools).toHaveLength(11);
+    expect(result.tools).toHaveLength(17);
     for (const tool of result.tools) {
       expect(tool.name).toMatch(
-        /^(workspaces_list|skills_list|skills_search|skill_retrieve|skill_asset_retrieve|skill_versions_list|context_get|context_notes_list|skill_amend|context_knowledge_update|context_note_upsert)$/u,
+        /^(workspaces_list|skills_list|skills_search|skill_retrieve|skill_asset_retrieve|skill_versions_list|contexts_list|context_get|context_knowledge_history|context_notes_list|skill_amend|context_create|context_update|context_archive|context_restore|context_knowledge_update|context_note_upsert)$/u,
       );
       expect(tool.description?.length).toBeGreaterThan(40);
       expect(tool.inputSchema).toMatchObject({
@@ -71,6 +71,10 @@ describe("MCP Streamable HTTP conformance", () => {
       expect(tool.outputSchema).toMatchObject({ type: "object" });
       const mutating = [
         "skill_amend",
+        "context_create",
+        "context_update",
+        "context_archive",
+        "context_restore",
         "context_knowledge_update",
         "context_note_upsert",
       ].includes(tool.name);

@@ -143,7 +143,13 @@ Skillplane currently exposes:
 - `skill_asset_retrieve`
 - `skill_versions_list`
 - `skill_amend`
+- `contexts_list`
 - `context_get`
+- `context_create`
+- `context_update`
+- `context_archive`
+- `context_restore`
+- `context_knowledge_history`
 - `context_notes_list`
 - `context_knowledge_update`
 - `context_note_upsert`
@@ -152,6 +158,14 @@ To retrieve all of the authenticated principal's skills without already knowing
 a workspace ID, call `workspaces_list`, then call `skills_list` for each returned
 workspace until `nextCursor` is `null`. `skills_search` remains the ranked
 full-text operation and intentionally requires a non-empty query.
+
+To manage contextual knowledge without out-of-band identifiers, continue from a
+listed skill with `contexts_list`. Authorized agents with `contexts:write` can
+then use `context_create`, `context_update`, `context_archive`, and
+`context_restore`. Metadata and lifecycle writes require the exact `updatedAt`
+returned by the latest context read/list/mutation. Knowledge remains immutable:
+use `context_knowledge_update` to append a revision and
+`context_knowledge_history` to exhaust its history.
 
 Tool calls require caller-declared agent, model, client, run, session, and
 conversation metadata. Authenticated user or service-principal identity is

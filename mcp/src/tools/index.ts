@@ -3,6 +3,7 @@ export * from "./assets.js";
 export * from "./catalog.js";
 export * from "./context-mutations.js";
 export * from "./contexts.js";
+export * from "./context-lifecycle.js";
 export * from "./resolve.js";
 export * from "./retrieve.js";
 export * from "./search.js";

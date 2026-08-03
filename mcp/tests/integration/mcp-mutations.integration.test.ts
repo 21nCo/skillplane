@@ -1,6 +1,10 @@
 import type {
+  ContextCreateOutput,
+  ContextKnowledgeHistoryOutput,
   ContextKnowledgeMutationOutput,
+  ContextLifecycleMutationOutput,
   ContextNoteMutationOutput,
+  ContextsListOutput,
   SkillAmendOutput,
 } from "@skillplane/mcp-schema";
 import type { UserPrincipal } from "@skillplane/domain";
@@ -280,6 +284,301 @@ describe("MCP skill amendments", () => {
 });
 
 describe("MCP context mutations", () => {
+  it("manages the complete context lifecycle with discovery, concurrency, history, and audit", async () => {
+    const slug = `agent-context-${crypto.randomUUID().slice(0, 8)}`;
+    const createArguments = {
+      skill: { id: environment.skill.skill.id },
+      slug,
+      name: "Agent-managed repository",
+      type: "repository",
+      externalReference: "https://example.test/agent-managed",
+      description: "Created through the MCP context lifecycle",
+      metadata: { branch: "main", owner: "agent" },
+      initialKnowledge:
+        "# Agent-managed knowledge\n\nStart from the current repository state.\n",
+      learningMetadata: { source: TEST_CALLER.runId },
+      idempotencyKey: "mcp-context-lifecycle-create",
+      caller: TEST_CALLER,
+    } as const;
+    const created = parseStructured<ContextCreateOutput>(
+      await service.client.callTool({
+        name: "context_create",
+        arguments: createArguments,
+      }),
+    );
+    const replay = parseStructured<ContextCreateOutput>(
+      await service.client.callTool({
+        name: "context_create",
+        arguments: createArguments,
+      }),
+    );
+    expect(replay.context.id).toBe(created.context.id);
+    expect(created).toMatchObject({
+      skillId: environment.skill.skill.id,
+      context: {
+        slug,
+        currentKnowledge: { revision: 1 },
+        archivedAt: null,
+      },
+      knowledge: {
+        revision: 1,
+        baseRevisionId: null,
+        createdBy: {
+          actorType: "service_principal",
+          agent: TEST_CALLER.agentName,
+          model: TEST_CALLER.modelName,
+        },
+      },
+    });
+    const changedReplay = await service.client.callTool({
+      name: "context_create",
+      arguments: {
+        ...createArguments,
+        name: "Changed replay payload",
+      },
+    });
+    expect(parseToolError(changedReplay).error.code).toBe("IDEMPOTENCY_KEY_REUSED");
+    const duplicateSlug = await service.client.callTool({
+      name: "context_create",
+      arguments: {
+        ...createArguments,
+        idempotencyKey: "mcp-context-lifecycle-duplicate-slug",
+      },
+    });
+    expect(parseToolError(duplicateSlug).error.code).toBe("CONTEXT_SLUG_CONFLICT");
+
+    const discovered: ContextsListOutput["contexts"] = [];
+    let contextCursor: string | null = null;
+    do {
+      const page = parseStructured<ContextsListOutput>(
+        await service.client.callTool({
+          name: "contexts_list",
+          arguments: {
+            skill: { id: environment.skill.skill.id },
+            state: "all",
+            limit: 1,
+            cursor: contextCursor,
+            caller: TEST_CALLER,
+          },
+        }),
+      );
+      discovered.push(...page.contexts);
+      contextCursor = page.nextCursor;
+    } while (contextCursor);
+    expect(discovered.some((context) => context.id === created.context.id)).toBe(true);
+
+    const updated = parseStructured<ContextLifecycleMutationOutput>(
+      await service.client.callTool({
+        name: "context_update",
+        arguments: {
+          skill: { id: environment.skill.skill.id },
+          context: { slug },
+          expectedUpdatedAt: created.context.updatedAt,
+          patch: {
+            name: "Agent-managed main repository",
+            description: "Updated safely through MCP",
+            metadata: { branch: "main", owner: "agent", verified: true },
+          },
+          idempotencyKey: "mcp-context-lifecycle-update",
+          caller: TEST_CALLER,
+        },
+      }),
+    );
+    expect(updated.context).toMatchObject({
+      id: created.context.id,
+      name: "Agent-managed main repository",
+      metadata: { verified: true },
+    });
+    expect(Date.parse(updated.context.updatedAt)).toBeGreaterThan(
+      Date.parse(created.context.updatedAt),
+    );
+    const updateReplay = parseStructured<ContextLifecycleMutationOutput>(
+      await service.client.callTool({
+        name: "context_update",
+        arguments: {
+          skill: { id: environment.skill.skill.id },
+          context: { slug },
+          expectedUpdatedAt: created.context.updatedAt,
+          patch: {
+            name: "Agent-managed main repository",
+            description: "Updated safely through MCP",
+            metadata: { branch: "main", owner: "agent", verified: true },
+          },
+          idempotencyKey: "mcp-context-lifecycle-update",
+          caller: TEST_CALLER,
+        },
+      }),
+    );
+    expect(updateReplay.context.updatedAt).toBe(updated.context.updatedAt);
+    const changedUpdateReplay = await service.client.callTool({
+      name: "context_update",
+      arguments: {
+        skill: { id: environment.skill.skill.id },
+        context: { slug },
+        expectedUpdatedAt: created.context.updatedAt,
+        patch: { description: "Changed replay payload" },
+        idempotencyKey: "mcp-context-lifecycle-update",
+        caller: TEST_CALLER,
+      },
+    });
+    expect(parseToolError(changedUpdateReplay).error.code).toBe(
+      "IDEMPOTENCY_KEY_REUSED",
+    );
+    const staleUpdate = await service.client.callTool({
+      name: "context_update",
+      arguments: {
+        skill: { id: environment.skill.skill.id },
+        context: { id: created.context.id },
+        expectedUpdatedAt: created.context.updatedAt,
+        patch: { description: "Stale overwrite" },
+        idempotencyKey: "mcp-context-lifecycle-update-stale",
+        caller: TEST_CALLER,
+      },
+    });
+    expect(parseToolError(staleUpdate).error).toMatchObject({
+      code: "CONTEXT_METADATA_CONFLICT",
+      details: { currentUpdatedAt: updated.context.updatedAt },
+    });
+
+    const revised = parseStructured<ContextKnowledgeMutationOutput>(
+      await service.client.callTool({
+        name: "context_knowledge_update",
+        arguments: {
+          skill: { id: environment.skill.skill.id },
+          context: { id: created.context.id },
+          expectedRevision: 1,
+          markdown:
+            "# Agent-managed knowledge\n\nUse the verified production context lifecycle.\n",
+          learningMetadata: { source: "lifecycle-verification" },
+          idempotencyKey: "mcp-context-lifecycle-knowledge",
+          caller: TEST_CALLER,
+        },
+      }),
+    );
+    expect(revised.knowledge.revision).toBe(2);
+
+    const revisions: ContextKnowledgeHistoryOutput["revisions"] = [];
+    let historyCursor: string | null = null;
+    do {
+      const page = parseStructured<ContextKnowledgeHistoryOutput>(
+        await service.client.callTool({
+          name: "context_knowledge_history",
+          arguments: {
+            skill: { id: environment.skill.skill.id },
+            context: { id: created.context.id },
+            limit: 1,
+            cursor: historyCursor,
+            caller: TEST_CALLER,
+          },
+        }),
+      );
+      revisions.push(...page.revisions);
+      historyCursor = page.nextCursor;
+    } while (historyCursor);
+    expect(revisions.map((revision) => revision.revision)).toEqual([2, 1]);
+    expect(revisions[0]).toMatchObject({
+      id: revised.knowledge.id,
+      createdBy: {
+        actorType: "service_principal",
+        agent: TEST_CALLER.agentName,
+      },
+    });
+
+    const latest = parseStructured<ContextsListOutput>(
+      await service.client.callTool({
+        name: "contexts_list",
+        arguments: {
+          skill: { id: environment.skill.skill.id },
+          state: "all",
+          limit: 100,
+          caller: TEST_CALLER,
+        },
+      }),
+    ).contexts.find((context) => context.id === created.context.id);
+    if (!latest) throw new Error("Created context was not discoverable");
+    expect(Date.parse(latest.updatedAt)).toBeGreaterThan(
+      Date.parse(updated.context.updatedAt),
+    );
+    const archived = parseStructured<ContextLifecycleMutationOutput>(
+      await service.client.callTool({
+        name: "context_archive",
+        arguments: {
+          skill: { id: environment.skill.skill.id },
+          context: { id: created.context.id },
+          expectedUpdatedAt: latest.updatedAt,
+          idempotencyKey: "mcp-context-lifecycle-archive",
+          caller: TEST_CALLER,
+        },
+      }),
+    );
+    expect(archived.context.archivedAt).toEqual(expect.any(String));
+    const staleRestore = await service.client.callTool({
+      name: "context_restore",
+      arguments: {
+        skill: { id: environment.skill.skill.id },
+        context: { id: created.context.id },
+        expectedUpdatedAt: latest.updatedAt,
+        idempotencyKey: "mcp-context-lifecycle-restore-stale",
+        caller: TEST_CALLER,
+      },
+    });
+    expect(parseToolError(staleRestore).error).toMatchObject({
+      code: "CONTEXT_METADATA_CONFLICT",
+      details: { currentUpdatedAt: archived.context.updatedAt },
+    });
+    const restored = parseStructured<ContextLifecycleMutationOutput>(
+      await service.client.callTool({
+        name: "context_restore",
+        arguments: {
+          skill: { id: environment.skill.skill.id },
+          context: { id: created.context.id },
+          expectedUpdatedAt: archived.context.updatedAt,
+          idempotencyKey: "mcp-context-lifecycle-restore",
+          caller: TEST_CALLER,
+        },
+      }),
+    );
+    expect(restored.context.archivedAt).toBeNull();
+
+    const audit = await environment.services.database.pool.query<{
+      event_type: string;
+      agent: string;
+      model: string;
+    }>(
+      `SELECT event_type, agent, model
+         FROM audit_events
+        WHERE context_id = $1
+          AND event_type IN (
+            'context.created', 'context.updated',
+            'context.archived', 'context.restored'
+          )
+        ORDER BY event_type`,
+      [created.context.id],
+    );
+    expect(audit.rows).toEqual([
+      {
+        event_type: "context.archived",
+        agent: TEST_CALLER.agentName,
+        model: TEST_CALLER.modelName,
+      },
+      {
+        event_type: "context.created",
+        agent: TEST_CALLER.agentName,
+        model: TEST_CALLER.modelName,
+      },
+      {
+        event_type: "context.restored",
+        agent: TEST_CALLER.agentName,
+        model: TEST_CALLER.modelName,
+      },
+      {
+        event_type: "context.updated",
+        agent: TEST_CALLER.agentName,
+        model: TEST_CALLER.modelName,
+      },
+    ]);
+  });
+
   it("updates context knowledge once, replays safely, and returns current conflict data", async () => {
     const args = {
       skill: { id: environment.skill.skill.id },

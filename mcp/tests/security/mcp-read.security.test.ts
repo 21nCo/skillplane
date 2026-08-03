@@ -1,12 +1,14 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type {
   ContextNotesListOutput,
+  ContextsListOutput,
   SkillAssetRetrieveOutput,
   SkillRetrieveOutput,
   SkillsListOutput,
   SkillVersionsListOutput,
   WorkspacesListOutput,
 } from "@skillplane/mcp-schema";
+import type { UserPrincipal } from "@skillplane/domain";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createMcpApp } from "../../src/index.js";
 import {
@@ -291,6 +293,50 @@ describe("MCP caller and tenant boundaries", () => {
 });
 
 describe("MCP content and pagination defenses", () => {
+  it("binds context discovery cursors to the skill and state filters", async () => {
+    const owner: UserPrincipal = {
+      kind: "user",
+      actorId: environment.owner.userId,
+      userId: environment.owner.userId,
+      sessionId: "mcp-context-cursor-fixture",
+      workspaceId: environment.owner.workspaceId,
+      role: "owner",
+    };
+    await environment.services.contextService.create({
+      skillId: environment.skill.skill.id,
+      principal: owner,
+      slug: `cursor-${crypto.randomUUID().slice(0, 8)}`,
+      name: "Cursor binding context",
+      type: "custom",
+      initialKnowledge: "Cursor binding knowledge.",
+      idempotencyKey: "context-cursor-binding",
+      requestId: "fixture:context-cursor-binding",
+    });
+    const first = parseStructured<ContextsListOutput>(
+      await service.client.callTool({
+        name: "contexts_list",
+        arguments: {
+          skill: { id: environment.skill.skill.id },
+          state: "all",
+          limit: 1,
+          caller: TEST_CALLER,
+        },
+      }),
+    );
+    expect(first.nextCursor).toEqual(expect.any(String));
+    const mismatch = await service.client.callTool({
+      name: "contexts_list",
+      arguments: {
+        skill: { id: environment.skill.skill.id },
+        state: "active",
+        limit: 1,
+        cursor: first.nextCursor,
+        caller: TEST_CALLER,
+      },
+    });
+    expect(parseToolError(mismatch).error.code).toBe("CURSOR_FILTER_MISMATCH");
+  });
+
   it("binds queryless skill cursors to workspace and filters", async () => {
     const first = parseStructured<SkillsListOutput>(
       await service.client.callTool({
