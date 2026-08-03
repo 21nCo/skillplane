@@ -8,6 +8,8 @@ import {
   contextNoteUpsertInputSchema,
   contextNotesListInputSchema,
   contextNotesListOutputSchema,
+  skillsListInputSchema,
+  skillsListOutputSchema,
   skillAmendInputSchema,
   skillAmendOutputSchema,
   skillAssetRetrieveInputSchema,
@@ -16,11 +18,14 @@ import {
   skillRetrieveOutputSchema,
   skillsSearchInputSchema,
   skillsSearchOutputSchema,
+  workspacesListInputSchema,
+  workspacesListOutputSchema,
   skillVersionsListInputSchema,
   skillVersionsListOutputSchema,
 } from "@skillplane/mcp-schema";
 import { skillAmend } from "./tools/amend.js";
 import { skillAssetRetrieve } from "./tools/assets.js";
+import { skillsList, workspacesList } from "./tools/catalog.js";
 import {
   contextKnowledgeUpdate,
   contextNoteUpsert,
@@ -59,6 +64,32 @@ export function createSkillplaneMcpServer(runtime: McpToolRuntime): McpServer {
       instructions:
         "Search and retrieve versioned Skillplane skills and their authorized context knowledge. All caller identity fields are declared metadata; authentication remains server-derived.",
     },
+  );
+
+  server.registerTool(
+    "workspaces_list",
+    {
+      title: "List my workspaces",
+      description:
+        "Discover every workspace available to the authenticated OAuth user, or the single workspace bound to an agent credential, using an opaque cursor. No workspace identifier is required.",
+      inputSchema: workspacesListInputSchema,
+      outputSchema: workspacesListOutputSchema,
+      annotations: READ_ONLY_ANNOTATIONS,
+    },
+    (input) => workspacesList(runtime, input),
+  );
+
+  server.registerTool(
+    "skills_list",
+    {
+      title: "List workspace skills",
+      description:
+        "Enumerate authorized skills in one workspace without a search query. Includes active unpublished skill records, supports visibility and archive filters, and returns an opaque cursor until every matching skill has been listed.",
+      inputSchema: skillsListInputSchema,
+      outputSchema: skillsListOutputSchema,
+      annotations: READ_ONLY_ANNOTATIONS,
+    },
+    (input) => skillsList(runtime, input),
   );
 
   server.registerTool(

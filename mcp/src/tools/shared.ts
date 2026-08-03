@@ -21,6 +21,7 @@ import type { McpIdentity } from "../auth.js";
 import {
   emitMcpOperationalEvent,
   persistMcpAudit,
+  persistMcpAuditBatch,
   type McpAuditWriter,
 } from "../audit.js";
 import type { McpCursorCodec } from "../pagination.js";
@@ -53,6 +54,8 @@ export interface ToolExecution {
 
 export interface ToolSuccess<T extends object> {
   readonly output: T;
+  readonly auditScopes?: readonly ToolAuditScope[];
+  readonly allowEmptyAuditScopes?: boolean;
 }
 
 export function mutationAuditContext(
@@ -201,7 +204,11 @@ export async function executeReadTool<T extends object>(
   };
   try {
     const success = await operation(execution);
-    if (!scope.workspaceId) {
+    const auditScopes = success.auditScopes ?? (scope.workspaceId ? [scope] : []);
+    if (
+      (auditScopes.length === 0 && !success.allowEmptyAuditScopes) ||
+      auditScopes.some((item) => !item.workspaceId)
+    ) {
       throw new McpToolError(
         "INTERNAL_ERROR",
         "The MCP request could not be attributed",
@@ -209,21 +216,38 @@ export async function executeReadTool<T extends object>(
       );
     }
     const latencyMs = Math.max(0, performance.now() - startedAt);
-    await persistMcpAudit(runtime.audit, {
-      workspaceId: scope.workspaceId,
-      requestId,
-      tool,
-      outcome: "success",
-      identity: runtime.identity,
-      caller,
-      ...(scope.resourceType ? { resourceType: scope.resourceType } : {}),
-      ...(scope.resourceId ? { resourceId: scope.resourceId } : {}),
-      ...(scope.skillId ? { skillId: scope.skillId } : {}),
-      ...(scope.versionId ? { versionId: scope.versionId } : {}),
-      ...(scope.versionDigest ? { versionDigest: scope.versionDigest } : {}),
-      ...(scope.contextId ? { contextId: scope.contextId } : {}),
-      latencyMs,
+    const auditEvents = auditScopes.map((auditScope) => {
+      const workspaceId = auditScope.workspaceId;
+      if (!workspaceId) {
+        throw new McpToolError(
+          "INTERNAL_ERROR",
+          "The MCP request could not be attributed",
+          { status: 500, retryable: true },
+        );
+      }
+      return {
+        workspaceId,
+        requestId,
+        tool,
+        outcome: "success" as const,
+        identity: runtime.identity,
+        caller,
+        ...(auditScope.resourceType ? { resourceType: auditScope.resourceType } : {}),
+        ...(auditScope.resourceId ? { resourceId: auditScope.resourceId } : {}),
+        ...(auditScope.skillId ? { skillId: auditScope.skillId } : {}),
+        ...(auditScope.versionId ? { versionId: auditScope.versionId } : {}),
+        ...(auditScope.versionDigest
+          ? { versionDigest: auditScope.versionDigest }
+          : {}),
+        ...(auditScope.contextId ? { contextId: auditScope.contextId } : {}),
+        latencyMs,
+      };
     });
+    if (auditEvents.length === 1 && auditEvents[0]) {
+      await persistMcpAudit(runtime.audit, auditEvents[0]);
+    } else if (auditEvents.length > 1) {
+      await persistMcpAuditBatch(runtime.audit, auditEvents);
+    }
     emitMcpOperationalEvent({
       requestId,
       tool,

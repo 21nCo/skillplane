@@ -1,6 +1,11 @@
 import type { CallerDeclaration } from "@skillplane/mcp-schema";
 import { McpToolError, type McpErrorCode } from "@skillplane/mcp-schema";
-import { AuditWriteError, PostgresAuditWriter } from "@skillplane/observability";
+import {
+  AuditWriteError,
+  PostgresAuditWriter,
+  writeAuditEvent,
+  type AuditWriteInput,
+} from "@skillplane/observability";
 import type { Pool } from "pg";
 import type { McpIdentity } from "./auth.js";
 
@@ -24,6 +29,7 @@ export interface McpAuditRecord {
 
 export interface McpAuditWriter {
   record(event: McpAuditRecord): Promise<void>;
+  recordBatch(events: readonly McpAuditRecord[]): Promise<void>;
 }
 
 export async function persistMcpAudit(
@@ -41,50 +47,67 @@ export async function persistMcpAudit(
   }
 }
 
+export async function persistMcpAuditBatch(
+  writer: McpAuditWriter,
+  events: readonly McpAuditRecord[],
+): Promise<void> {
+  try {
+    await writer.recordBatch(events);
+  } catch {
+    throw new McpToolError(
+      "AUDIT_WRITE_FAILED",
+      "The access event could not be recorded",
+      { status: 503, retryable: true },
+    );
+  }
+}
+
+function auditInput(event: McpAuditRecord): AuditWriteInput {
+  const mutation = [
+    "skill_amend",
+    "context_knowledge_update",
+    "context_note_upsert",
+  ].includes(event.tool);
+  return {
+    workspaceId: event.workspaceId,
+    eventType: `mcp.${event.tool}.${event.outcome}`,
+    action: event.tool,
+    outcome: event.outcome,
+    actorType: event.identity.actorType,
+    actorId: event.identity.actorId,
+    userId: event.identity.userId,
+    requestId: event.requestId,
+    agent: event.caller.agentName,
+    model: event.caller.modelName,
+    caller: event.caller,
+    credential: {
+      kind: event.identity.credentialKind,
+      id: event.identity.credentialId,
+      ...(event.identity.kind === "oauth" ? { clientId: event.identity.clientId } : {}),
+    },
+    channel: "mcp",
+    retentionClass: mutation ? "permanent" : "detailed_read_90d",
+    ...(event.resourceType ? { resourceType: event.resourceType } : {}),
+    ...(event.resourceId ? { resourceId: event.resourceId } : {}),
+    ...(event.skillId ? { skillId: event.skillId } : {}),
+    ...(event.versionId ? { versionId: event.versionId } : {}),
+    ...(event.versionDigest ? { versionDigest: event.versionDigest } : {}),
+    ...(event.contextId ? { contextId: event.contextId } : {}),
+    ...(event.errorCode ? { errorCode: event.errorCode } : {}),
+    latencyMs: event.latencyMs,
+  };
+}
+
 export class PostgresMcpAuditWriter implements McpAuditWriter {
   readonly #writer: PostgresAuditWriter;
 
-  constructor(pool: Pool) {
+  constructor(private readonly pool: Pool) {
     this.#writer = new PostgresAuditWriter(pool);
   }
 
   async record(event: McpAuditRecord): Promise<void> {
-    const mutation = [
-      "skill_amend",
-      "context_knowledge_update",
-      "context_note_upsert",
-    ].includes(event.tool);
     try {
-      await this.#writer.record({
-        workspaceId: event.workspaceId,
-        eventType: `mcp.${event.tool}.${event.outcome}`,
-        action: event.tool,
-        outcome: event.outcome,
-        actorType: event.identity.actorType,
-        actorId: event.identity.actorId,
-        userId: event.identity.userId,
-        requestId: event.requestId,
-        agent: event.caller.agentName,
-        model: event.caller.modelName,
-        caller: event.caller,
-        credential: {
-          kind: event.identity.credentialKind,
-          id: event.identity.credentialId,
-          ...(event.identity.kind === "oauth"
-            ? { clientId: event.identity.clientId }
-            : {}),
-        },
-        channel: "mcp",
-        retentionClass: mutation ? "permanent" : "detailed_read_90d",
-        ...(event.resourceType ? { resourceType: event.resourceType } : {}),
-        ...(event.resourceId ? { resourceId: event.resourceId } : {}),
-        ...(event.skillId ? { skillId: event.skillId } : {}),
-        ...(event.versionId ? { versionId: event.versionId } : {}),
-        ...(event.versionDigest ? { versionDigest: event.versionDigest } : {}),
-        ...(event.contextId ? { contextId: event.contextId } : {}),
-        ...(event.errorCode ? { errorCode: event.errorCode } : {}),
-        latencyMs: event.latencyMs,
-      });
+      await this.#writer.record(auditInput(event));
     } catch (error) {
       if (!(error instanceof AuditWriteError)) throw error;
       throw new McpToolError(
@@ -92,6 +115,34 @@ export class PostgresMcpAuditWriter implements McpAuditWriter {
         "The access event could not be recorded",
         { status: 503, retryable: true },
       );
+    }
+  }
+
+  async recordBatch(events: readonly McpAuditRecord[]): Promise<void> {
+    if (events.length === 0) return;
+    const client = await this.pool.connect().catch(() => null);
+    if (!client) {
+      throw new McpToolError(
+        "AUDIT_WRITE_FAILED",
+        "The access event could not be recorded",
+        { status: 503, retryable: true },
+      );
+    }
+    try {
+      await client.query("BEGIN");
+      for (const event of events) {
+        await writeAuditEvent(client, auditInput(event));
+      }
+      await client.query("COMMIT");
+    } catch {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw new McpToolError(
+        "AUDIT_WRITE_FAILED",
+        "The access event could not be recorded",
+        { status: 503, retryable: true },
+      );
+    } finally {
+      client.release();
     }
   }
 }

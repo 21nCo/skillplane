@@ -42,7 +42,6 @@ export async function testProductionMcp() {
       "SKILLPLANE_PRODUCTION_MCP_ACCESS_TOKEN must be an OAuth access token, not a service-principal credential",
     );
   }
-  const workspaceId = requireEnvironment("SKILLPLANE_PRODUCTION_WORKSPACE_ID");
   const caller = callerDeclaration();
   const transport = new StreamableHTTPClientTransport(new URL(productionResource), {
     requestInit: {
@@ -73,11 +72,57 @@ export async function testProductionMcp() {
       "skill_asset_retrieve",
       "skill_retrieve",
       "skill_versions_list",
+      "skills_list",
       "skills_search",
+      "workspaces_list",
     ];
     const names = listed.tools.map((tool) => tool.name).sort();
     if (JSON.stringify(names) !== JSON.stringify(expected)) {
       throw new Error("The production MCP tool inventory is incomplete");
+    }
+    const discovered = parseStructured(
+      await client.callTool({
+        name: "workspaces_list",
+        arguments: {
+          cursor: null,
+          limit: 100,
+          caller,
+        },
+      }),
+    );
+    if (
+      !Array.isArray(discovered.workspaces) ||
+      discovered.workspaces.length === 0 ||
+      !("nextCursor" in discovered)
+    ) {
+      throw new Error("The production workspaces_list output is invalid");
+    }
+    const configuredWorkspaceId =
+      process.env.SKILLPLANE_PRODUCTION_WORKSPACE_ID?.trim();
+    const selectedWorkspace = configuredWorkspaceId
+      ? discovered.workspaces.find(
+          (workspace) => workspace?.id === configuredWorkspaceId,
+        )
+      : discovered.workspaces[0];
+    if (!selectedWorkspace || typeof selectedWorkspace.id !== "string") {
+      throw new Error("The configured production workspace was not discovered");
+    }
+    const workspaceId = selectedWorkspace.id;
+    const catalog = parseStructured(
+      await client.callTool({
+        name: "skills_list",
+        arguments: {
+          workspace: { id: workspaceId },
+          visibility: ["private", "workspace", "public"],
+          state: "active",
+          cursor: null,
+          limit: 100,
+          caller,
+        },
+      }),
+    );
+    if (!Array.isArray(catalog.skills) || !("nextCursor" in catalog)) {
+      throw new Error("The production skills_list output is invalid");
     }
     const search = parseStructured(
       await client.callTool({
@@ -106,6 +151,16 @@ export async function testProductionMcp() {
       server,
       toolCount: names.length,
       tools: names,
+      discovery: {
+        workspaceCount: discovered.workspaces.length,
+        selectedWorkspaceId: workspaceId,
+        paginationContract: true,
+      },
+      catalog: {
+        resultCount: catalog.skills.length,
+        paginationContract: true,
+        queryRequired: false,
+      },
       search: {
         workspaceId,
         resultCount: search.skills.length,

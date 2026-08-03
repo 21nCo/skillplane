@@ -1,6 +1,7 @@
 export * from "./assets.js";
 export * from "./amend.js";
 export * from "./caller.js";
+export * from "./catalog.js";
 export * from "./common.js";
 export * from "./context-mutations.js";
 export * from "./contexts.js";

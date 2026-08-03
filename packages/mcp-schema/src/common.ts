@@ -43,6 +43,11 @@ export const skillSelectorSchema = z.union([
     .strict(),
 ]);
 
+export const workspaceSelectorSchema = z.union([
+  z.object({ id: stableIdSchema }).strict(),
+  z.object({ slug: slugSchema }).strict(),
+]);
+
 export const versionSelectorSchema = z.discriminatedUnion("selector", [
   z.object({ selector: z.literal("current") }).strict(),
   z

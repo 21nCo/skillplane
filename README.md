@@ -136,6 +136,8 @@ cloud-hosted client can connect to it.
 
 Skillplane currently exposes:
 
+- `workspaces_list`
+- `skills_list`
 - `skills_search`
 - `skill_retrieve`
 - `skill_asset_retrieve`
@@ -145,6 +147,11 @@ Skillplane currently exposes:
 - `context_notes_list`
 - `context_knowledge_update`
 - `context_note_upsert`
+
+To retrieve all of the authenticated principal's skills without already knowing
+a workspace ID, call `workspaces_list`, then call `skills_list` for each returned
+workspace until `nextCursor` is `null`. `skills_search` remains the ranked
+full-text operation and intentionally requires a non-empty query.
 
 Tool calls require caller-declared agent, model, client, run, session, and
 conversation metadata. Authenticated user or service-principal identity is

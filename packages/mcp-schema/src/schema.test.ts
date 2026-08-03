@@ -7,8 +7,10 @@ import {
   mcpErrorSchema,
   skillAssetRetrieveInputSchema,
   skillRetrieveInputSchema,
+  skillsListInputSchema,
   skillsSearchInputSchema,
   skillVersionsListInputSchema,
+  workspacesListInputSchema,
 } from "./index.js";
 
 const caller = {
@@ -72,6 +74,31 @@ describe("MCP caller declaration", () => {
 });
 
 describe("MCP read schemas", () => {
+  it("supports workspace discovery and queryless skill enumeration defaults", () => {
+    expect(workspacesListInputSchema.parse({ caller })).toMatchObject({
+      cursor: null,
+      limit: 20,
+    });
+    expect(
+      skillsListInputSchema.parse({
+        workspace: { slug: "acme" },
+        caller,
+      }),
+    ).toMatchObject({
+      workspace: { slug: "acme" },
+      visibility: ["private", "workspace", "public"],
+      state: "active",
+      cursor: null,
+      limit: 20,
+    });
+    expect(
+      skillsListInputSchema.safeParse({
+        workspace: { id: "workspace:one", slug: "acme" },
+        caller,
+      }).success,
+    ).toBe(false);
+  });
+
   it("applies bounded search defaults", () => {
     expect(
       skillsSearchInputSchema.parse({

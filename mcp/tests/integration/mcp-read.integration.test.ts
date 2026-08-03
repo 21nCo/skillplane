@@ -3,8 +3,10 @@ import type {
   ContextNotesListOutput,
   SkillAssetRetrieveOutput,
   SkillRetrieveOutput,
+  SkillsListOutput,
   SkillsSearchOutput,
   SkillVersionsListOutput,
+  WorkspacesListOutput,
 } from "@skillplane/mcp-schema";
 import { readAnalytics, rollupUtcDay } from "@skillplane/observability";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -61,7 +63,9 @@ describe("MCP read surface", () => {
       "skill_asset_retrieve",
       "skill_retrieve",
       "skill_versions_list",
+      "skills_list",
       "skills_search",
+      "workspaces_list",
     ]);
     for (const tool of listed.tools) {
       expect(tool.annotations).toMatchObject({
@@ -79,6 +83,148 @@ describe("MCP read surface", () => {
         additionalProperties: false,
       });
       expect(tool.outputSchema).toBeDefined();
+    }
+  });
+
+  it("discovers OAuth memberships, binds service credentials, and audits every disclosed workspace", async () => {
+    const membershipId = `membership:mcp-discovery-${crypto.randomUUID()}`;
+    await environment.services.database.pool.query(
+      `INSERT INTO workspace_memberships
+         (id, workspace_id, user_id, role)
+       VALUES ($1, $2, $3, 'viewer')`,
+      [membershipId, environment.outsider.workspaceId, environment.owner.userId],
+    );
+    try {
+      const expected = await environment.services.database.pool.query<{
+        workspace_id: string;
+      }>(
+        `SELECT workspace_id
+           FROM workspace_memberships
+          WHERE user_id = $1
+          ORDER BY workspace_id`,
+        [environment.owner.userId],
+      );
+      const discovered: WorkspacesListOutput["workspaces"] = [];
+      let cursor: string | null = null;
+      do {
+        const page = parseStructured<WorkspacesListOutput>(
+          await oauth.client.callTool({
+            name: "workspaces_list",
+            arguments: { limit: 1, cursor, caller: TEST_CALLER },
+          }),
+        );
+        discovered.push(...page.workspaces);
+        cursor = page.nextCursor;
+      } while (cursor);
+      expect(discovered.map((workspace) => workspace.id).sort()).toEqual(
+        expected.rows.map((row) => row.workspace_id),
+      );
+
+      const complete = parseStructured<WorkspacesListOutput>(
+        await oauth.client.callTool({
+          name: "workspaces_list",
+          arguments: { limit: 20, caller: TEST_CALLER },
+        }),
+      );
+      const audited = await environment.services.database.pool.query<{
+        workspace_id: string;
+      }>(
+        `SELECT workspace_id
+           FROM audit_events
+          WHERE request_id = $1 AND event_type = 'mcp.workspaces_list.success'
+          ORDER BY workspace_id`,
+        [complete.requestId],
+      );
+      expect(audited.rows.map((row) => row.workspace_id)).toEqual(
+        expected.rows.map((row) => row.workspace_id),
+      );
+
+      const serviceWorkspaces = parseStructured<WorkspacesListOutput>(
+        await service.client.callTool({
+          name: "workspaces_list",
+          arguments: { caller: TEST_CALLER },
+        }),
+      );
+      expect(serviceWorkspaces.workspaces.map((workspace) => workspace.id)).toEqual([
+        environment.owner.workspaceId,
+      ]);
+    } finally {
+      await environment.services.database.pool.query(
+        "DELETE FROM workspace_memberships WHERE id = $1",
+        [membershipId],
+      );
+    }
+  });
+
+  it("enumerates every authorized skill without a query, including unpublished records", async () => {
+    const workspace = parseStructured<WorkspacesListOutput>(
+      await service.client.callTool({
+        name: "workspaces_list",
+        arguments: { caller: TEST_CALLER },
+      }),
+    ).workspaces[0];
+    if (!workspace) throw new Error("Expected the service workspace");
+    const unpublishedId = `skill:unpublished-${crypto.randomUUID()}`;
+    const unpublishedSlug = `unpublished-${crypto.randomUUID().slice(0, 8)}`;
+    await environment.services.database.pool.query(
+      `INSERT INTO skills
+         (id, workspace_id, slug, name, description, tags, visibility,
+          created_by_user_id)
+       VALUES ($1, $2, $3, 'Unpublished MCP skill', 'No published version yet',
+               ARRAY['unpublished'], 'private', $4)`,
+      [
+        unpublishedId,
+        environment.owner.workspaceId,
+        unpublishedSlug,
+        environment.owner.userId,
+      ],
+    );
+    try {
+      const skills: SkillsListOutput["skills"] = [];
+      let cursor: string | null = null;
+      do {
+        const page = parseStructured<SkillsListOutput>(
+          await service.client.callTool({
+            name: "skills_list",
+            arguments: {
+              workspace: { slug: workspace.slug },
+              limit: 1,
+              cursor,
+              caller: TEST_CALLER,
+            },
+          }),
+        );
+        expect(page.workspace).toMatchObject({
+          id: environment.owner.workspaceId,
+          slug: workspace.slug,
+        });
+        skills.push(...page.skills);
+        cursor = page.nextCursor;
+      } while (cursor);
+
+      expect(skills.map((skill) => skill.id).sort()).toEqual(
+        [
+          environment.skill.skill.id,
+          environment.privateSkill.skill.id,
+          environment.owner.skillId,
+          unpublishedId,
+        ].sort(),
+      );
+      expect(skills.find((skill) => skill.id === unpublishedId)).toMatchObject({
+        currentVersion: null,
+        visibility: "private",
+      });
+      expect(
+        skills.find((skill) => skill.id === environment.skill.skill.id)?.currentVersion,
+      ).toEqual({
+        id: environment.skill.version.id,
+        semanticVersion: "1.0.0",
+      });
+    } finally {
+      await environment.services.database.pool.query(
+        "DELETE FROM skills WHERE id = $1",
+        [unpublishedId],
+      );
     }
   });
 

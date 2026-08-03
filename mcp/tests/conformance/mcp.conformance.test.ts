@@ -56,12 +56,12 @@ describe("MCP Streamable HTTP conformance", () => {
     await expect(connection.client.ping()).resolves.toEqual({});
   });
 
-  it("advertises nine complete tool contracts as JSON Schema", async () => {
+  it("advertises eleven complete tool contracts as JSON Schema", async () => {
     const result = await connection.client.listTools();
-    expect(result.tools).toHaveLength(9);
+    expect(result.tools).toHaveLength(11);
     for (const tool of result.tools) {
       expect(tool.name).toMatch(
-        /^(skills_search|skill_retrieve|skill_asset_retrieve|skill_versions_list|context_get|context_notes_list|skill_amend|context_knowledge_update|context_note_upsert)$/u,
+        /^(workspaces_list|skills_list|skills_search|skill_retrieve|skill_asset_retrieve|skill_versions_list|context_get|context_notes_list|skill_amend|context_knowledge_update|context_note_upsert)$/u,
       );
       expect(tool.description?.length).toBeGreaterThan(40);
       expect(tool.inputSchema).toMatchObject({

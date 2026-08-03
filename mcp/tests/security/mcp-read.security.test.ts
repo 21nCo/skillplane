@@ -3,7 +3,9 @@ import type {
   ContextNotesListOutput,
   SkillAssetRetrieveOutput,
   SkillRetrieveOutput,
+  SkillsListOutput,
   SkillVersionsListOutput,
+  WorkspacesListOutput,
 } from "@skillplane/mcp-schema";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createMcpApp } from "../../src/index.js";
@@ -21,6 +23,7 @@ let environment: McpTestEnvironment;
 let service: ConnectedMcpClient;
 let outsider: ConnectedMcpClient;
 let skillsOnly: ConnectedMcpClient;
+let oauthToken: string;
 
 function toolCall(name: string, args: Record<string, unknown>) {
   return {
@@ -47,6 +50,7 @@ beforeAll(async () => {
   service = await environment.connect(environment.serviceToken);
   outsider = await environment.connect(environment.outsiderServiceToken);
   skillsOnly = await environment.connect(environment.skillsOnlyToken);
+  oauthToken = await environment.issueOAuthToken("skills:read");
 }, 60_000);
 
 afterAll(async () => {
@@ -175,6 +179,28 @@ describe("MCP authentication and protocol security", () => {
 });
 
 describe("MCP caller and tenant boundaries", () => {
+  it("limits discovery and queryless enumeration to authenticated workspace access", async () => {
+    const outsiderWorkspaces = parseStructured<WorkspacesListOutput>(
+      await outsider.client.callTool({
+        name: "workspaces_list",
+        arguments: { caller: TEST_CALLER },
+      }),
+    );
+    expect(outsiderWorkspaces.workspaces.map((workspace) => workspace.id)).toEqual([
+      environment.outsider.workspaceId,
+    ]);
+
+    const denied = await outsider.client.callTool({
+      name: "skills_list",
+      arguments: {
+        workspace: { id: environment.owner.workspaceId },
+        caller: TEST_CALLER,
+      },
+    });
+    expect(parseToolError(denied).error.code).toBe("WORKSPACE_FORBIDDEN");
+    expect(JSON.stringify(denied)).not.toContain(environment.privateSkill.skill.name);
+  });
+
   it("rejects incomplete or identity-selecting caller declarations before any R2 read", async () => {
     const readsBefore = environment.storage.getCalls;
     const missingModelVersion = { ...TEST_CALLER } as Record<string, unknown>;
@@ -265,6 +291,32 @@ describe("MCP caller and tenant boundaries", () => {
 });
 
 describe("MCP content and pagination defenses", () => {
+  it("binds queryless skill cursors to workspace and filters", async () => {
+    const first = parseStructured<SkillsListOutput>(
+      await service.client.callTool({
+        name: "skills_list",
+        arguments: {
+          workspace: { id: environment.owner.workspaceId },
+          visibility: ["private", "public"],
+          limit: 1,
+          caller: TEST_CALLER,
+        },
+      }),
+    );
+    expect(first.nextCursor).toEqual(expect.any(String));
+    const mismatch = await service.client.callTool({
+      name: "skills_list",
+      arguments: {
+        workspace: { id: environment.owner.workspaceId },
+        visibility: ["public"],
+        limit: 1,
+        cursor: first.nextCursor,
+        caller: TEST_CALLER,
+      },
+    });
+    expect(parseToolError(mismatch).error.code).toBe("CURSOR_FILTER_MISMATCH");
+  });
+
   it.each(["../secret.txt", "/etc/passwd", "references\\checklist.md"])(
     "rejects unsafe asset path %s before reading R2",
     async (path) => {
@@ -404,11 +456,68 @@ describe("MCP content and pagination defenses", () => {
 });
 
 describe("MCP audit fail-closed behavior", () => {
+  it("withholds multi-workspace discovery when the atomic audit batch fails", async () => {
+    const membershipId = `membership:audit-failure-${crypto.randomUUID()}`;
+    await environment.services.database.pool.query(
+      `INSERT INTO workspace_memberships
+         (id, workspace_id, user_id, role)
+       VALUES ($1, $2, $3, 'viewer')`,
+      [membershipId, environment.outsider.workspaceId, environment.owner.userId],
+    );
+    try {
+      const auditFailureApp = createMcpApp({
+        getServices: async () => environment.services,
+        createAuditWriter: () => ({
+          record: () => Promise.resolve(),
+          recordBatch: () =>
+            Promise.reject(
+              new Error("postgres://internal-user:internal-password@database"),
+            ),
+        }),
+      });
+      const response = await auditFailureApp.fetch(
+        new Request(TEST_MCP_RESOURCE, {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${oauthToken}`,
+            "content-type": "application/json",
+            accept: "application/json, text/event-stream",
+            "mcp-protocol-version": "2025-11-25",
+          },
+          body: JSON.stringify(
+            toolCall("workspaces_list", {
+              limit: 20,
+              caller: TEST_CALLER,
+            }),
+          ),
+        }),
+      );
+      expect(response.status).toBe(200);
+      const result = await rawToolResult(response);
+      expect(parseToolError(result).error).toMatchObject({
+        code: "AUDIT_WRITE_FAILED",
+        retryable: true,
+      });
+      const serialized = JSON.stringify(result);
+      expect(serialized).not.toContain(environment.outsider.workspaceId);
+      expect(serialized).not.toContain("internal-password");
+    } finally {
+      await environment.services.database.pool.query(
+        "DELETE FROM workspace_memberships WHERE id = $1",
+        [membershipId],
+      );
+    }
+  });
+
   it("withholds private content when the durable audit write fails", async () => {
     const auditFailureApp = createMcpApp({
       getServices: async () => environment.services,
       createAuditWriter: () => ({
         record: () =>
+          Promise.reject(
+            new Error("postgres://internal-user:internal-password@database"),
+          ),
+        recordBatch: () =>
           Promise.reject(
             new Error("postgres://internal-user:internal-password@database"),
           ),

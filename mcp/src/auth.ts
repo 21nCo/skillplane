@@ -106,6 +106,8 @@ function scopesForToolCall(message: unknown): readonly McpScope[] {
     return [];
   }
   switch (record.params.name) {
+    case "workspaces_list":
+    case "skills_list":
     case "skills_search":
     case "skill_asset_retrieve":
     case "skill_versions_list":

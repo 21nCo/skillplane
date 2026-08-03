@@ -1,5 +1,6 @@
 export * from "./amend.js";
 export * from "./assets.js";
+export * from "./catalog.js";
 export * from "./context-mutations.js";
 export * from "./contexts.js";
 export * from "./resolve.js";
