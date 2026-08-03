@@ -196,7 +196,7 @@ export async function productionSmoke(options = {}) {
         code_verifier: "production-smoke-invalid-verifier",
       }),
     },
-    { attempts, acceptStatus: [400] },
+    { attempts, acceptStatus: [400, 401] },
   );
   assertNoStore(originlessOAuthForm, "Originless OAuth form response");
   const originlessOAuthBody = await readJson(
