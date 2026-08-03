@@ -69,3 +69,21 @@
   `clean: true`.
 - The source revision prerequisite is closed; provider inputs remain the only
   pre-deployment dependency.
+
+## Production continuation — 2026-08-03
+
+- The dependencies described above were supplied and all live gates passed.
+- Railway runtime access is exclusively through the verified Hyperdrive
+  binding; the direct origin URL exists only in operator-side migration and
+  backup tooling.
+- The production R2 bucket is private, has no public development URL or custom
+  domain, and aborts only incomplete multipart uploads after seven days.
+- App and MCP Custom Domains terminate correctly. The apex uses a full-path
+  zone route to preserve an existing externally managed DNS origin record.
+- Cloudflare Email accepted and delivered a real authentication OTP; the
+  production browser consumed it and established an auditable AuthFn session.
+- OAuth authorization-code plus PKCE `S256` works for a dynamically registered
+  MCP client, and the MCP resource exposes all nine audited tools.
+- The rollback/roll-forward rehearsal completed without schema, migration, or
+  durable row drift. Only the operational rate-limit counter table advanced
+  under the intentional smoke traffic.

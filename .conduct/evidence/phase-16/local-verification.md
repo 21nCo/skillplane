@@ -85,3 +85,24 @@ Recorded at `2026-07-26T17:11:35Z`:
 
 The source-commit blocker is closed. Deployment remains blocked only on
 provider values and live interaction.
+
+## Production continuation — 2026-08-03T05:31:28Z
+
+The earlier blocked state above is retained as historical preflight evidence.
+Provider inputs and the controlled user interaction were subsequently supplied,
+and every required production command passed:
+
+| Required command | Final result |
+|---|---:|
+| `pnpm deploy:check` | PASS — 19 workspace checks and three strict Wrangler dry-runs |
+| `pnpm db:backup:production` | PASS — encrypted backup, restore-list round trip, Railway TLS 1.3 |
+| `pnpm db:migrate:production` | PASS — migrations `0001`-`0015`, 31 tables, required constraints/triggers/query plans |
+| `pnpm deploy:all` | PASS — app, MCP, and landing release versions active |
+| `pnpm smoke:production` | PASS — hosts, readiness, OAuth metadata, cache/CORS/auth boundaries |
+| `pnpm test:mcp:production` | PASS — OAuth audience, protocol `2025-11-25`, nine tools, complete caller attribution |
+| `pnpm verify:email:production` | PASS — real provider delivery, consumed OTP, active AuthFn session, database SSL |
+| `pnpm verify:rollback:production` | PASS — prior versions, smoke, roll-forward, smoke, durable database invariants |
+
+Sanitized manifests and production screenshots are linked from the final Phase
+16 report. Secrets, OTP values, bearer tokens, database credentials, and the
+controlled recipient are absent from tracked evidence.

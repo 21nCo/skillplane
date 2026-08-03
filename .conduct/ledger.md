@@ -1027,3 +1027,43 @@ This ledger is append-only. Every substantial implementation step MUST add a dat
   configuration dry runs pass with the revised topology.
 - Evidence: `.conduct/logs/engineering/2026-08-03-production-deployment.md`.
 - Next action: commit the route repair and resume the three-Worker release.
+
+## 2026-08-03T05:31:28Z — Phase 16 production release completed
+
+- Status: PASS.
+- Created and restore-list verified a fresh encrypted Railway backup over TLS
+  1.3, then applied migrations `0001` through `0015`; the resulting production
+  schema has 31 tables and the required constraints, triggers, and indexed
+  query plans.
+- Verified the supplied Hyperdrive origin match, private R2 posture, Cloudflare
+  Email binding, Turnstile hostname restriction, secret minimization, and mixed
+  Worker routing topology.
+- Deployed release `phase16-2026-08-03T05-09-46-594Z`:
+  - app `10796137-167d-43b6-a664-17efa8036c3d`;
+  - MCP `009fb9c5-bda4-476c-b819-a227dbbe987d`;
+  - landing `5858f9fe-273a-4468-a17e-79e8ad418ca7`.
+- Production smoke passed before and after rollback with configuration,
+  Railway-through-Hyperdrive, R2, OAuth metadata/PKCE, DataFn authentication,
+  cache, CORS, and MCP bearer boundaries healthy.
+- A real Cloudflare Email OTP was delivered and consumed by the controlled
+  production account, producing an active audited AuthFn session over database
+  SSL.
+- The official MCP SDK negotiated protocol `2025-11-25`, validated the resource
+  audience and all caller-attribution dimensions, and enumerated the complete
+  nine-tool read/amend/context surface.
+- Rolled all three Workers back to their exact prior versions, passed smoke,
+  restored the intended release, passed smoke again, and proved schema,
+  migration ledger, and durable table state unchanged. Only the explicitly
+  operational `api_rate_limits` table advanced under smoke traffic.
+- Captured sanitized landing and authenticated app screenshots. Browser
+  full-page capture is not valid for the app's fixed shell, so its evidence uses
+  a normal `1440x900` viewport.
+- Evidence:
+  - report:
+    `.conduct/specs/2026-07-25-new-17dd6c3e-spec/phase-reports/PHASE_16-2026-08-03-c7970a47-report.md`;
+  - release and rollback manifests: `.conduct/deployments/`;
+  - screenshots: `.conduct/screenshots/phase-16/`;
+  - engineering log:
+    `.conduct/logs/engineering/2026-08-03-production-deployment.md`.
+- Superfunctions changes: none.
+- PHASE_17 was not started or modified.

@@ -94,3 +94,23 @@ passed, and the initial commit
 
 The production clean-source guard passed against that revision. Source
 commitment is no longer a live deployment blocker.
+
+## Production continuation — 2026-08-03T05:31:28Z
+
+Phase 16 is complete and PASS. The provider inputs were supplied through the
+ignored mode-`0600` production environment, a fresh encrypted Railway backup
+was verified, migrations `0001` through `0015` were applied, and all three
+Cloudflare Workers were deployed.
+
+The final release passed TLS/content/readiness/cache/CORS/OAuth/DataFn smoke,
+real Cloudflare Email OTP delivery and AuthFn session verification, official
+MCP SDK OAuth/conformance with all nine tools and full caller attribution, and
+a three-Worker rollback/roll-forward rehearsal with exact durable database
+invariants. The authoritative completion report is
+`PHASE_16-2026-08-03-c7970a47-report.md`.
+
+The apex landing host uses the Cloudflare zone route `skillplane.dev/*` because
+the existing externally managed apex record conflicts with a Worker Custom
+Domain trigger. The record was preserved; app and MCP use Custom Domains.
+
+No Superfunctions source was changed.
