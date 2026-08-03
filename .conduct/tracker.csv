@@ -2,4 +2,4 @@ id, desc, status, completedAt, completionDoc
 2026-07-25-new-17dd6c3e-spec,Build production Skillplane skill management with versioned context-aware MCP retrieval and amendment,0,,
 2026-08-03-dhu1z1rz-issue,"DataFn is mounted and secure but bypassed by Skillplane first-party application data flows",0,,
 2026-08-03-231305c7-issue,"MCP cannot discover workspaces or enumerate every accessible skill",1,2026-08-03T12:37:56Z,2026-08-03-8f6c2a1d-completion
-2026-08-03-7e4b9a2c-issue,"MCP agents cannot manage the complete skill-context lifecycle",0,,
+2026-08-03-7e4b9a2c-issue,"MCP agents cannot manage the complete skill-context lifecycle",1,2026-08-03T13:25:25Z,2026-08-03-4c9d1e7b-completion
