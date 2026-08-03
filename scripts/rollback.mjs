@@ -23,6 +23,7 @@ import { productionSmoke } from "./production-smoke.mjs";
 
 const releasePath = resolve(productionStateDirectory, "release.json");
 const lockPath = resolve(productionStateDirectory, "rollback.lock");
+const operationalTables = new Set(["api_rate_limits"]);
 
 function workerRelease(release, kind) {
   const record = release.workers?.[kind];
@@ -96,15 +97,51 @@ async function databaseSnapshot() {
     const migrations = await pool.query(
       "SELECT id, sha256 FROM skillplane_schema_migrations ORDER BY id",
     );
+    const columns = await pool.query(
+      `SELECT table_name, column_name, ordinal_position, data_type, udt_name,
+              is_nullable, column_default
+         FROM information_schema.columns
+        WHERE table_schema = 'public'
+        ORDER BY table_name, ordinal_position`,
+    );
+    const immutableTableState = Object.fromEntries(
+      Object.entries(tableState).filter(([table]) => !operationalTables.has(table)),
+    );
     return {
       databaseFingerprint: database.fingerprint,
       tableState,
       migrationLedgerDigest: sha256(JSON.stringify(migrations.rows)),
+      schemaDigest: sha256(JSON.stringify(columns.rows)),
+      immutableTableStateDigest: sha256(JSON.stringify(immutableTableState)),
       stateDigest: sha256(JSON.stringify({ tableState, migrations: migrations.rows })),
     };
   } finally {
     await pool.end();
   }
+}
+
+export function assertDatabaseRollbackSafe(before, after) {
+  if (before.databaseFingerprint !== after.databaseFingerprint) {
+    throw new Error("The rollback verification database identity changed");
+  }
+  if (before.migrationLedgerDigest !== after.migrationLedgerDigest) {
+    throw new Error("The database migration ledger changed during rollback");
+  }
+  if (before.schemaDigest !== after.schemaDigest) {
+    throw new Error("The database schema changed during rollback");
+  }
+  if (before.immutableTableStateDigest !== after.immutableTableStateDigest) {
+    throw new Error("Durable database row state changed during rollback");
+  }
+  return {
+    immutableTableStateUnchanged: true,
+    operationalTablesAllowedToChange: [...operationalTables].sort(),
+    operationalTableStateChanged: [...operationalTables].some(
+      (table) =>
+        JSON.stringify(before.tableState?.[table] ?? null) !==
+        JSON.stringify(after.tableState?.[table] ?? null),
+    ),
+  };
 }
 
 function rollbackWorker(kind, version, message) {
@@ -196,12 +233,7 @@ export async function verifyProductionRollback() {
       forwardErrors.push(error);
     }
     const databaseAfter = await databaseSnapshot();
-    if (
-      databaseBefore.databaseFingerprint !== databaseAfter.databaseFingerprint ||
-      databaseBefore.stateDigest !== databaseAfter.stateDigest
-    ) {
-      throw new Error("Database row or migration state changed during rollback");
-    }
+    const databaseSafety = assertDatabaseRollbackSafe(databaseBefore, databaseAfter);
     if (forwardErrors.length > 0) {
       throw new AggregateError(
         forwardErrors,
@@ -224,7 +256,9 @@ export async function verifyProductionRollback() {
         fingerprint: databaseAfter.databaseFingerprint,
         stateDigest: databaseAfter.stateDigest,
         migrationLedgerDigest: databaseAfter.migrationLedgerDigest,
-        tableStateUnchanged: true,
+        schemaDigest: databaseAfter.schemaDigest,
+        immutableTableStateDigest: databaseAfter.immutableTableStateDigest,
+        ...databaseSafety,
       },
     });
     const artifactPath = resolve(
