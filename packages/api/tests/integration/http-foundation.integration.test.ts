@@ -114,4 +114,26 @@ describe("Hono API foundation", () => {
     expect(serialized).toContain(tenantA.skillId);
     expect(serialized).not.toContain(tenantB.skillId);
   });
+
+  it("rejects unauthenticated DataFn access before entering the DataFn router", async () => {
+    const response = await app.request("/datafn/query", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        resource: "skills",
+        version: 1,
+        select: ["id"],
+        limit: 1,
+      }),
+    });
+
+    expect(response.status).toBe(401);
+    expect(await response.json()).toMatchObject({
+      ok: false,
+      error: {
+        code: "AUTHENTICATION_REQUIRED",
+        requestId: "req_api_integration",
+      },
+    });
+  });
 });

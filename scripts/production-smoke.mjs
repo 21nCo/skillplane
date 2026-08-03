@@ -55,6 +55,13 @@ function assertNoStore(response, label) {
   );
 }
 
+export function immutableAssetUrl(html, documentUrl) {
+  const reference = /(?:src|href)="((?:\.\/|\/)_app\/immutable\/[^"]+)"/u.exec(
+    html,
+  )?.[1];
+  return reference ? new URL(reference, documentUrl).toString() : undefined;
+}
+
 async function readJson(response, label) {
   const contentType = response.headers.get("content-type") ?? "";
   assert(contentType.includes("application/json"), `${label} is not JSON`);
@@ -99,12 +106,10 @@ export async function productionSmoke(options = {}) {
     (landing.headers.get("cache-control") ?? "").startsWith("public,"),
     "The public landing page is not explicitly cacheable",
   );
-  const immutablePath = /(?:src|href)="(\/_app\/immutable\/[^"]+)"/u.exec(
-    landingHtml,
-  )?.[1];
-  assert(immutablePath, "The landing page omitted immutable assets");
+  const immutableUrl = immutableAssetUrl(landingHtml, landing.url);
+  assert(immutableUrl, "The landing page omitted immutable assets");
   const immutableAsset = await request(
-    `${endpoints.landing}${immutablePath}`,
+    immutableUrl,
     {},
     {
       attempts,

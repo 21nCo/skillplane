@@ -46,6 +46,12 @@ export function authorizationMiddleware(): MiddlewareHandler<ApiEnvironment> {
     if (context.req.path.startsWith("/api/v1/workspaces") && !context.get("session")) {
       throw new AuthenticationRequiredError();
     }
+    if (context.req.path.startsWith("/datafn/")) {
+      const principal = await resolveWorkspaceRequestContext(context);
+      context.set("principal", principal);
+      await next();
+      return;
+    }
     const action = requiredAction(context.req.path, context.req.method);
     if (action) {
       const explicitPublicSkillRead =
