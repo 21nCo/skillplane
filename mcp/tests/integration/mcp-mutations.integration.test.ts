@@ -285,6 +285,7 @@ describe("MCP skill amendments", () => {
 
 describe("MCP context mutations", () => {
   it("manages the complete context lifecycle with discovery, concurrency, history, and audit", async () => {
+    await service.client.listTools();
     const slug = `agent-context-${crypto.randomUUID().slice(0, 8)}`;
     const createArguments = {
       skill: { id: environment.skill.skill.id },

@@ -181,7 +181,6 @@ function errorResult(error: McpToolError, requestId: string): CallToolResult {
   };
   return {
     content: [{ type: "text", text: JSON.stringify(body) }],
-    structuredContent: body,
     isError: true,
   };
 }
