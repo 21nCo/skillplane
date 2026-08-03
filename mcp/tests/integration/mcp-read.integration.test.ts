@@ -6,6 +6,7 @@ import type {
   SkillsSearchOutput,
   SkillVersionsListOutput,
 } from "@skillplane/mcp-schema";
+import { readAnalytics, rollupUtcDay } from "@skillplane/observability";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   parseStructured,
@@ -407,16 +408,28 @@ describe("MCP read surface", () => {
     expect(serialized).not.toContain(environment.serviceToken);
     expect(serialized).not.toContain(environment.skill.markdown);
 
-    const metrics = await environment.services.database.pool.query<{
-      retrieval_count: string;
-    }>(
-      `SELECT retrieval_count::text
-         FROM analytics_daily
-        WHERE workspace_id = $1 AND agent = $2 AND model = $3`,
-      [environment.owner.workspaceId, TEST_CALLER.agentName, TEST_CALLER.modelName],
+    const day = new Date().toISOString().slice(0, 10);
+    await rollupUtcDay(environment.services.database.pool, {
+      day,
+      workspaceId: environment.owner.workspaceId,
+    });
+    const analytics = await readAnalytics(environment.services.database.pool, {
+      workspaceId: environment.owner.workspaceId,
+      from: day,
+      to: day,
+    });
+    expect(analytics.totals.retrievalCount).toBeGreaterThanOrEqual(10);
+    const agentMetric = analytics.dimensions.find(
+      (dimension) =>
+        dimension.type === "agent" && dimension.value === TEST_CALLER.agentName,
     );
-    expect(
-      metrics.rows.reduce((total, row) => total + Number(row.retrieval_count), 0),
-    ).toBeGreaterThanOrEqual(10);
+    const modelMetric = analytics.dimensions.find(
+      (dimension) =>
+        dimension.type === "model" && dimension.value === TEST_CALLER.modelName,
+    );
+    expect(agentMetric).toMatchObject({ trust: "caller-declared" });
+    expect(agentMetric?.eventCount).toBeGreaterThanOrEqual(10);
+    expect(modelMetric).toMatchObject({ trust: "caller-declared" });
+    expect(modelMetric?.eventCount).toBeGreaterThanOrEqual(10);
   });
 });

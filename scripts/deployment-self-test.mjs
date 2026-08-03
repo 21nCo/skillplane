@@ -6,7 +6,10 @@ import {
   requireHyperdriveId,
   sanitizeDeploymentRecord,
 } from "./lib/production-deployment.mjs";
-import { assertHyperdriveOriginRecord } from "./lib/cloudflare-production.mjs";
+import {
+  assertHyperdriveOriginRecord,
+  parseWranglerJson,
+} from "./lib/cloudflare-production.mjs";
 import { renderDeploymentConfigs } from "./render-deploy-config.mjs";
 
 function assert(condition, message) {
@@ -42,6 +45,36 @@ assert(
     identity: railway.identity,
   }).includes("secret"),
   "The sanitized Railway identity retained a password",
+);
+
+const railwayAlias = parseRailwayDatabaseUrl(
+  "postgresql://skillplane:secret@insouth.db.21n.dev:47273/skillplane",
+  "self-test approved Railway alias",
+);
+assert(
+  railwayAlias.identity.host === "insouth.db.21n.dev" &&
+    new URL(railwayAlias.url).searchParams.get("sslmode") === "require" &&
+    new URL(railwayAlias.url).searchParams.get("uselibpqcompat") === "true",
+  "The approved Railway alias was not accepted with encrypted libpq-compatible SSL",
+);
+let unrelatedAliasRejected = false;
+try {
+  parseRailwayDatabaseUrl(
+    "postgresql://skillplane:secret@other.db.21n.dev:47273/skillplane",
+    "self-test unrelated alias",
+  );
+} catch {
+  unrelatedAliasRejected = true;
+}
+assert(unrelatedAliasRejected, "An unrelated database alias was accepted");
+
+const bannerWrappedJson = parseWranglerJson(
+  `Wrangler 4.115.0\n${JSON.stringify({ id: "a".repeat(32) })}\n`,
+  "self-test Wrangler response",
+);
+assert(
+  bannerWrappedJson.id === "a".repeat(32),
+  "Wrangler banner-prefixed JSON parsing failed",
 );
 
 const hyperdrive = assertHyperdriveOriginRecord(
@@ -120,6 +153,9 @@ process.stdout.write(
       missingHyperdriveFailsClosed: true,
       inMemoryConfigRendering: true,
       railwaySslForced: true,
+      approvedRailwayAliasAccepted: true,
+      unrelatedAliasRejected: true,
+      wranglerBannerJsonParsed: true,
       hyperdriveOriginMatched: true,
       unrelatedHyperdriveRejected: true,
       activeVersionParsing: true,

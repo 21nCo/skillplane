@@ -67,6 +67,7 @@ export async function startOAuthTestEnvironment(
   const services = await buildApiServices({
     RUNTIME_ENV: "local",
     DATABASE_ADAPTER: "postgres",
+    AUTH_MODE: "disabled",
     DATABASE_URL: databaseUrl,
     SKILL_BUNDLES: new TestObjectStorage(),
     OAUTH_ISSUER,

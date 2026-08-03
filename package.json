@@ -7,7 +7,7 @@
   "type": "module",
   "packageManager": "pnpm@11.9.0",
   "engines": {
-    "node": ">=20.20.0 <25",
+    "node": ">=22.0.0 <25",
     "pnpm": "11.9.0"
   },
   "workspaces": [
@@ -42,6 +42,7 @@
     "lint:design-system": "node scripts/lint-design-system.mjs --self-test",
     "db:up": "node scripts/db-up.mjs",
     "db:down": "node scripts/db-down.mjs",
+    "local:init": "node scripts/local-init.mjs",
     "db:migrate": "pnpm --filter @skillplane/db migrate",
     "db:verify": "pnpm --filter @skillplane/db verify",
     "db:reset:test": "pnpm --filter @skillplane/testing db:reset:test",
@@ -58,6 +59,7 @@
     "services:wait": "node scripts/wait-for-services.mjs",
     "dev:app": "pnpm --filter @skillplane/app dev",
     "dev:app:worker": "pnpm --filter @skillplane/app dev:worker",
+    "dev:app:auth": "pnpm --filter @skillplane/app dev:worker:auth",
     "dev:landing": "pnpm --filter @skillplane/landing dev",
     "dev:mcp": "pnpm --filter @skillplane/mcp dev",
     "deploy:render": "node --env-file-if-exists=.env.production.local scripts/render-deploy-config.mjs",
@@ -71,7 +73,7 @@
     "verify:rollback:production": "node --env-file-if-exists=.env.production.local scripts/rollback.mjs"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "4.20260702.1",
+    "@cloudflare/workers-types": "5.20260722.1",
     "@eslint/js": "10.0.1",
     "@modelcontextprotocol/sdk": "catalog:",
     "@playwright/test": "catalog:",
@@ -90,6 +92,6 @@
     "typescript": "6.0.3",
     "typescript-eslint": "8.65.0",
     "vitest": "4.1.10",
-    "wrangler": "4.86.0"
+    "wrangler": "4.115.0"
   }
 }

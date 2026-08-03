@@ -148,6 +148,7 @@ export function createTestRuntimeBindings(
   return {
     RUNTIME_ENV: "local",
     DATABASE_ADAPTER: "postgres",
+    AUTH_MODE: "disabled",
     DATABASE_URL: "postgresql://skillplane:fixture@127.0.0.1:5432/skillplane_test",
     SKILL_BUNDLES: new TestObjectStorage(),
     ...overrides,

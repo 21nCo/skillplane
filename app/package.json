@@ -6,11 +6,12 @@
   "scripts": {
     "sync": "svelte-kit sync",
     "dev": "vite dev --host 127.0.0.1 --port 5173",
-    "dev:worker": "pnpm run build && wrangler dev --config wrangler.jsonc --port 5173 --persist-to ../.data/wrangler/app",
+    "dev:worker": "pnpm --dir .. exec turbo run build --filter='...@skillplane/app' && wrangler dev --config wrangler.jsonc --port 5173 --persist-to ../.data/wrangler/app",
+    "dev:worker:auth": "pnpm --dir .. exec turbo run build --filter='...@skillplane/app' && wrangler dev --config wrangler.auth.jsonc --port 5173 --persist-to ../.data/wrangler/app-auth",
     "build": "vite build",
     "typecheck": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "test:unit": "vitest run tests/unit",
-    "deploy:check": "wrangler deploy --config wrangler.jsonc --dry-run --outdir dist-worker"
+    "deploy:check": "wrangler deploy --config wrangler.jsonc --dry-run --outdir dist-worker/local && wrangler deploy --config wrangler.auth.jsonc --dry-run --outdir dist-worker/auth"
   },
   "dependencies": {
     "@skillplane/api": "workspace:*",

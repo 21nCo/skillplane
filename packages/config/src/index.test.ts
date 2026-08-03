@@ -36,6 +36,7 @@ function productionBindings(overrides: Partial<RuntimeBindings> = {}): RuntimeBi
   return {
     RUNTIME_ENV: "production",
     DATABASE_ADAPTER: "postgres",
+    AUTH_MODE: "otp",
     EMAIL_PROVIDER: "cloudflare-email",
     HYPERDRIVE: {
       connectionString: "postgresql://fixture:fixture@database.invalid:5432/skillplane",
@@ -58,6 +59,7 @@ describe("parseRuntimeConfig", () => {
       RUNTIME_ENV: "local",
       DATABASE_ADAPTER: "postgres",
       DATABASE_URL: "postgresql://skillplane:fixture@127.0.0.1:5432/skillplane",
+      AUTH_MODE: "disabled",
       SKILL_BUNDLES: objectStorage,
     });
 
@@ -136,6 +138,7 @@ describe("parseRuntimeConfig", () => {
         DATABASE_ADAPTER: "postgres",
         DATABASE_URL: "postgresql://skillplane:fixture@127.0.0.1:5432/skillplane",
         SKILL_BUNDLES: objectStorage,
+        AUTH_MODE: "otp",
         EMAIL_PROVIDER: "cloudflare-email",
       }),
     ).toThrowError(
@@ -153,12 +156,54 @@ describe("parseRuntimeConfig", () => {
     );
   });
 
+  it("does not infer local authentication from an unused email binding", () => {
+    const config = parseRuntimeConfig({
+      RUNTIME_ENV: "local",
+      DATABASE_ADAPTER: "postgres",
+      DATABASE_URL: "postgresql://skillplane:fixture@127.0.0.1:5432/skillplane",
+      SKILL_BUNDLES: objectStorage,
+      AUTH_MODE: "disabled",
+      SEND_EMAIL: email,
+    });
+
+    expect(config.auth).toBeNull();
+    expect(config.email).toBeNull();
+  });
+
+  it("requires an explicit authentication mode for the application", () => {
+    expect(() =>
+      parseRuntimeConfig({
+        RUNTIME_ENV: "local",
+        DATABASE_ADAPTER: "postgres",
+        DATABASE_URL: "postgresql://skillplane:fixture@127.0.0.1:5432/skillplane",
+        SKILL_BUNDLES: objectStorage,
+      }),
+    ).toThrowError(
+      expect.objectContaining({
+        code: "CONFIG_INVALID",
+        fields: ["AUTH_MODE"],
+      }),
+    );
+  });
+
+  it("prevents production authentication from being disabled", () => {
+    expect(() =>
+      parseRuntimeConfig(productionBindings({ AUTH_MODE: "disabled" })),
+    ).toThrowError(
+      expect.objectContaining({
+        code: "PRODUCTION_ADAPTER_INVALID",
+        fields: ["AUTH_MODE"],
+      }),
+    );
+  });
+
   it("rejects an in-memory database adapter in every runtime", () => {
     expect(() =>
       parseRuntimeConfig({
         RUNTIME_ENV: "local",
         DATABASE_ADAPTER: "memory",
         DATABASE_URL: "postgresql://skillplane:fixture@127.0.0.1:5432/skillplane",
+        AUTH_MODE: "disabled",
         SKILL_BUNDLES: objectStorage,
       }),
     ).toThrowError(

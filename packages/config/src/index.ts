@@ -34,6 +34,7 @@ export interface RuntimeBindings {
   readonly RUNTIME_ENV?: string;
   readonly DATABASE_ADAPTER?: string;
   readonly DATABASE_URL?: string;
+  readonly AUTH_MODE?: string;
   readonly EMAIL_PROVIDER?: string;
   readonly AUTHFN_SECRET?: string;
   readonly OAUTH_TOKEN_PEPPER?: string;
@@ -117,6 +118,7 @@ export interface RuntimeConfigOptions {
 }
 
 const environmentSchema = z.enum(["local", "preview", "production"]);
+const authModeSchema = z.enum(["disabled", "otp"]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -186,11 +188,14 @@ function validateDatabaseAdapter(bindings: RuntimeBindings): void {
   }
 }
 
-function validateProductionEmailProvider(bindings: RuntimeBindings): void {
+function validateCloudflareEmailProvider(
+  bindings: RuntimeBindings,
+  environment: RuntimeEnvironment,
+): void {
   if (bindings.EMAIL_PROVIDER !== "cloudflare-email") {
     throw new ConfigError(
-      "PRODUCTION_ADAPTER_INVALID",
-      "Production requires the Cloudflare Email Service provider",
+      environment === "local" ? "CONFIG_INVALID" : "PRODUCTION_ADAPTER_INVALID",
+      "OTP authentication requires the Cloudflare Email Service provider",
       ["EMAIL_PROVIDER"],
     );
   }
@@ -242,26 +247,37 @@ function parseAllowedHostnames(
   return [...new Set(hostnames)].sort();
 }
 
-function hasLocalAuthConfiguration(bindings: RuntimeBindings): boolean {
-  return [
-    bindings.EMAIL_PROVIDER,
-    bindings.AUTHFN_SECRET,
-    bindings.TURNSTILE_SECRET_KEY,
-    bindings.TURNSTILE_ALLOWED_HOSTNAMES,
-    bindings.PUBLIC_TURNSTILE_SITE_KEY,
-    bindings.SKILLPLANE_OTP_FROM,
-    bindings.SEND_EMAIL,
-  ].some((value) => value !== undefined);
+function readAuthMode(
+  bindings: RuntimeBindings,
+  environment: RuntimeEnvironment,
+): "disabled" | "otp" {
+  const result = authModeSchema.safeParse(bindings.AUTH_MODE);
+  if (!result.success) {
+    throw new ConfigError(
+      environment === "local" ? "CONFIG_INVALID" : "PRODUCTION_ADAPTER_INVALID",
+      "Authentication mode must be explicit",
+      ["AUTH_MODE"],
+    );
+  }
+  if (environment !== "local" && result.data !== "otp") {
+    throw new ConfigError(
+      "PRODUCTION_ADAPTER_INVALID",
+      "Preview and production require OTP authentication",
+      ["AUTH_MODE"],
+    );
+  }
+  return result.data;
 }
 
 function parseAuthConfiguration(
   bindings: RuntimeBindings,
   environment: RuntimeEnvironment,
 ): Pick<RuntimeConfig, "auth" | "email"> {
-  if (environment === "local" && !hasLocalAuthConfiguration(bindings)) {
+  const authMode = readAuthMode(bindings, environment);
+  if (authMode === "disabled") {
     return { auth: null, email: null };
   }
-  validateProductionEmailProvider(bindings);
+  validateCloudflareEmailProvider(bindings, environment);
   const missing: string[] = [];
   if (!isEmailServiceBinding(bindings.SEND_EMAIL)) {
     missing.push("SEND_EMAIL");

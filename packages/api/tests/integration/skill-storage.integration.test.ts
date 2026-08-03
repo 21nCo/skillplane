@@ -41,6 +41,7 @@ beforeAll(async () => {
   services = await buildApiServices({
     RUNTIME_ENV: "local",
     DATABASE_ADAPTER: "postgres",
+    AUTH_MODE: "disabled",
     DATABASE_URL: databaseUrl,
     SKILL_BUNDLES: objectStorage,
   });
@@ -113,7 +114,7 @@ describe("skill storage integration", () => {
         body: uploadBody(bundle, { visibility: "workspace" }),
       });
     const created = await request();
-    expect(created.status).toBe(201);
+    expect(created.status, await created.clone().text()).toBe(201);
     const body = (await created.json()) as {
       data: {
         skill: { id: string; currentSemanticVersion: string };

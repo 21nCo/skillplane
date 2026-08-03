@@ -61,6 +61,7 @@ export async function buildApiServices(
               secretKey: runtime.auth.turnstile.secretKey,
               expectedAction: runtime.auth.turnstile.action,
               allowedHostnames: runtime.auth.turnstile.allowedHostnames,
+              allowTestingKeyResponse: runtime.environment === "local",
             }),
           }
         : {}),
@@ -178,25 +179,34 @@ export async function buildApiServices(
   }
 }
 
+export async function closeApiServices(services: ApiServices): Promise<void> {
+  let firstError: unknown;
+  const close = async (operation: () => Promise<void>): Promise<void> => {
+    try {
+      await operation();
+    } catch (error) {
+      firstError ??= error;
+    }
+  };
+
+  await close(() => services.datafn.close());
+  const email = services.email;
+  if (email) {
+    await close(() => email.close());
+  }
+  await close(() => services.database.close());
+
+  if (firstError instanceof Error) throw firstError;
+  if (firstError !== undefined) {
+    throw new Error("API service cleanup failed", { cause: firstError });
+  }
+}
+
 export function createApiServiceProvider(
   options: BuildApiServicesOptions = {},
 ): ApiServiceProvider {
-  let active:
-    | { readonly connectionString: string; readonly services: Promise<ApiServices> }
-    | undefined;
-  return (bindings) => {
-    const runtime = parseRuntimeConfig(bindings, options);
-    if (active?.connectionString === runtime.database.connectionString) {
-      return active.services;
-    }
-    const services = buildApiServices(bindings, options).catch((error: unknown) => {
-      active = undefined;
-      throw error;
-    });
-    active = {
-      connectionString: runtime.database.connectionString,
-      services,
-    };
-    return services;
-  };
+  return Object.assign(
+    (bindings: RuntimeBindings) => buildApiServices(bindings, options),
+    { release: closeApiServices },
+  );
 }

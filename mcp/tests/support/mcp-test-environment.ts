@@ -317,6 +317,7 @@ export async function startMcpTestEnvironment(
   const services = await buildApiServices({
     RUNTIME_ENV: "local",
     DATABASE_ADAPTER: "postgres",
+    AUTH_MODE: "disabled",
     DATABASE_URL: databaseUrl,
     SKILL_BUNDLES: storage,
     OAUTH_ISSUER: TEST_OAUTH_ISSUER,

@@ -6,6 +6,11 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  rebindLocalRuntimePort,
+  selectLocalPostgresPort,
+} from "./lib/local-postgres-port.mjs";
+import { updateWorkerDevelopmentVariables } from "./lib/local-worker-vars.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const dataDirectory = join(repoRoot, ".data");
@@ -107,7 +112,7 @@ async function readRuntime() {
   }
 }
 
-async function createRuntime(port) {
+function createRuntime(port) {
   const user = "skillplane_app";
   const database = "skillplane";
   const password = randomBytes(32).toString("base64url");
@@ -118,7 +123,7 @@ async function createRuntime(port) {
   const testDatabaseUrl = `postgresql://${encodeURIComponent(user)}:${encodeURIComponent(
     password,
   )}@127.0.0.1:${port}/${testDatabase}`;
-  const runtime = {
+  return {
     port,
     database,
     testDatabase,
@@ -127,46 +132,45 @@ async function createRuntime(port) {
     databaseUrl,
     testDatabaseUrl,
   };
+}
 
+async function writeRuntime(runtime) {
   await mkdir(dataDirectory, { recursive: true, mode: 0o700 });
   await writeFile(runtimePath, `${JSON.stringify(runtime, null, 2)}\n`, {
     encoding: "utf8",
     mode: 0o600,
   });
-  return runtime;
 }
 
 async function writeWorkerDevelopmentVariables(runtime) {
-  const value = [
-    "RUNTIME_ENV=local",
-    "DATABASE_ADAPTER=postgres",
-    `DATABASE_URL=${runtime.databaseUrl}`,
-    "",
-  ].join("\n");
-
   for (const workspace of ["app", "mcp"]) {
-    await writeFile(join(repoRoot, workspace, ".dev.vars"), value, {
-      encoding: "utf8",
-      mode: 0o600,
+    await updateWorkerDevelopmentVariables(join(repoRoot, workspace, ".dev.vars"), {
+      RUNTIME_ENV: "local",
+      DATABASE_ADAPTER: "postgres",
+      DATABASE_URL: runtime.databaseUrl,
     });
   }
 }
 
 let runtime = await readRuntime();
 const requestedPort = parsePort(
-  process.env.SKILLPLANE_POSTGRES_PORT ?? String(runtime?.port ?? 5432),
+  selectLocalPostgresPort(process.env.SKILLPLANE_POSTGRES_PORT, runtime?.port),
 );
+const persistedPort = runtime?.port;
 
 if (runtime && runtime.port !== requestedPort) {
-  fail(
-    "POSTGRES_PORT_CONFIG_MISMATCH",
-    "Configured port differs from the persisted Skillplane runtime",
-    25,
-    { variable: "SKILLPLANE_POSTGRES_PORT", persistedPort: runtime.port },
-  );
+  if (process.env.SKILLPLANE_POSTGRES_PORT !== undefined) {
+    fail(
+      "POSTGRES_PORT_CONFIG_MISMATCH",
+      "Configured port differs from the persisted Skillplane runtime",
+      25,
+      { variable: "SKILLPLANE_POSTGRES_PORT", persistedPort: runtime.port },
+    );
+  }
+  runtime = rebindLocalRuntimePort(runtime, requestedPort);
 }
 
-runtime ??= await createRuntime(requestedPort);
+runtime ??= createRuntime(requestedPort);
 
 try {
   run("docker", ["version", "--format", "{{.Server.Version}}"]);
@@ -174,7 +178,8 @@ try {
   fail("DOCKER_UNAVAILABLE", "Docker engine is unavailable", 21);
 }
 
-if (!containerIsRunning() && !(await isPortAvailable(runtime.port))) {
+const portChanged = persistedPort !== undefined && persistedPort !== runtime.port;
+if ((portChanged || !containerIsRunning()) && !(await isPortAvailable(runtime.port))) {
   fail(
     "POSTGRES_PORT_OCCUPIED",
     `SKILLPLANE_POSTGRES_PORT ${runtime.port} is occupied`,
@@ -211,6 +216,7 @@ try {
   fail("POSTGRES_START_FAILED", "Postgres did not become healthy", 26);
 }
 
+await writeRuntime(runtime);
 await writeWorkerDevelopmentVariables(runtime);
 
 emit({

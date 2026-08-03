@@ -63,8 +63,8 @@ export interface AuditQueryable {
 }
 
 export class AuditWriteError extends Error {
-  constructor() {
-    super("The audit event could not be recorded");
+  constructor(cause?: unknown) {
+    super("The audit event could not be recorded", { cause });
     this.name = "AuditWriteError";
   }
 }
@@ -142,8 +142,8 @@ export async function writeAuditEvent(
       ],
     );
     return id;
-  } catch {
-    throw new AuditWriteError();
+  } catch (error) {
+    throw new AuditWriteError(error);
   }
 }
 
@@ -158,9 +158,9 @@ export class PostgresAuditWriter {
       const id = await writeAuditEvent(client, input);
       await client.query("COMMIT");
       return id;
-    } catch {
+    } catch (error) {
       await client.query("ROLLBACK").catch(() => undefined);
-      throw new AuditWriteError();
+      throw error instanceof AuditWriteError ? error : new AuditWriteError(error);
     } finally {
       client.release();
     }

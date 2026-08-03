@@ -53,12 +53,17 @@ function validateRenderedConfig(name, config, hyperdriveId) {
     ) {
       throw new Error(`The ${name} production binding inventory is incomplete`);
     }
-    if (name === "app" && config.send_email?.[0]?.name !== "SEND_EMAIL") {
+    if (
+      name === "app" &&
+      (config.send_email?.[0]?.name !== "SEND_EMAIL" ||
+        config.vars?.AUTH_MODE !== "otp")
+    ) {
       throw new Error("The app production email binding is incomplete");
     }
     if (
       name === "mcp" &&
       (config.send_email !== undefined ||
+        "AUTH_MODE" in (config.vars ?? {}) ||
         "EMAIL_PROVIDER" in (config.vars ?? {}) ||
         "PUBLIC_TURNSTILE_SITE_KEY" in (config.vars ?? {}) ||
         "TURNSTILE_ALLOWED_HOSTNAMES" in (config.vars ?? {}) ||

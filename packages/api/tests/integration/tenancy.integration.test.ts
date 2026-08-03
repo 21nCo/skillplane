@@ -41,6 +41,7 @@ beforeAll(async () => {
   services = await buildApiServices({
     RUNTIME_ENV: "local",
     DATABASE_ADAPTER: "postgres",
+    AUTH_MODE: "otp",
     DATABASE_URL: databaseUrl,
     SKILL_BUNDLES: new TestObjectStorage(),
     EMAIL_PROVIDER: "cloudflare-email",

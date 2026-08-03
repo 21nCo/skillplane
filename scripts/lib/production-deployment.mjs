@@ -43,6 +43,7 @@ export const workers = Object.freeze({
 });
 
 const railwayHostPattern = /(?:^|\.)(?:rlwy\.net|railway\.app)$/iu;
+const approvedRailwayAliasHosts = new Set(["insouth.db.21n.dev"]);
 const hyperdriveIdPattern = /^[a-f0-9]{32}$/u;
 const versionIdPattern =
   /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/iu;
@@ -145,15 +146,19 @@ export function parseRailwayDatabaseUrl(raw, source = "Railway database URL") {
     throw new Error(`${source} is not a valid URL`);
   }
   const database = decodeURIComponent(parsed.pathname.slice(1));
+  const normalizedHost = parsed.hostname.toLowerCase();
   if (
     !["postgres:", "postgresql:"].includes(parsed.protocol) ||
-    !railwayHostPattern.test(parsed.hostname) ||
+    (!railwayHostPattern.test(normalizedHost) &&
+      !approvedRailwayAliasHosts.has(normalizedHost)) ||
     !parsed.username ||
     !parsed.password ||
     !database ||
     parsed.hash
   ) {
-    throw new Error(`${source} must be a complete public Railway Postgres URL`);
+    throw new Error(
+      `${source} must be a complete public Railway Postgres URL or an approved Railway alias`,
+    );
   }
   if (
     ["disable", "allow", "prefer"].includes(parsed.searchParams.get("sslmode") ?? "")
@@ -161,8 +166,11 @@ export function parseRailwayDatabaseUrl(raw, source = "Railway database URL") {
     throw new Error(`${source} must not weaken SSL`);
   }
   parsed.searchParams.set("sslmode", "require");
+  if (approvedRailwayAliasHosts.has(normalizedHost)) {
+    parsed.searchParams.set("uselibpqcompat", "true");
+  }
   const identity = {
-    host: parsed.hostname.toLowerCase(),
+    host: normalizedHost,
     port: parsed.port || "5432",
     database,
     username: decodeURIComponent(parsed.username),

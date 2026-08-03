@@ -17,17 +17,29 @@ interface TurnstileSiteverifyResponse {
   readonly success?: boolean;
   readonly action?: string;
   readonly hostname?: string;
+  readonly metadata?: {
+    readonly result_with_testing_key?: boolean;
+  };
 }
 
 export interface CloudflareTurnstileVerifierOptions {
   readonly secretKey: string;
   readonly expectedAction: string;
   readonly allowedHostnames: readonly string[];
+  readonly allowTestingKeyResponse?: boolean;
   readonly fetcher?: typeof fetch;
   readonly timeoutMs?: number;
 }
 
 const SITEVERIFY_URL = "https://challenges.cloudflare.com/turnstile/v0/siteverify";
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+
+function siteverifyIdempotencyKey(value: string | undefined): string {
+  if (value && UUID_PATTERN.test(value)) return value;
+  const prefixed = value?.startsWith("req_") ? value.slice(4) : undefined;
+  return prefixed && UUID_PATTERN.test(prefixed) ? prefixed : crypto.randomUUID();
+}
 
 function isSiteverifyResponse(value: unknown): value is TurnstileSiteverifyResponse {
   return typeof value === "object" && value !== null;
@@ -37,6 +49,7 @@ export class CloudflareTurnstileVerifier implements TurnstileVerifier {
   readonly #secretKey: string;
   readonly #expectedAction: string;
   readonly #allowedHostnames: ReadonlySet<string>;
+  readonly #allowTestingKeyResponse: boolean;
   readonly #fetcher: typeof fetch;
   readonly #timeoutMs: number;
 
@@ -53,7 +66,8 @@ export class CloudflareTurnstileVerifier implements TurnstileVerifier {
     this.#secretKey = options.secretKey;
     this.#expectedAction = options.expectedAction;
     this.#allowedHostnames = new Set(options.allowedHostnames);
-    this.#fetcher = options.fetcher ?? fetch;
+    this.#allowTestingKeyResponse = options.allowTestingKeyResponse ?? false;
+    this.#fetcher = options.fetcher ?? globalThis.fetch.bind(globalThis);
     this.#timeoutMs = options.timeoutMs ?? 8_000;
   }
 
@@ -71,7 +85,7 @@ export class CloudflareTurnstileVerifier implements TurnstileVerifier {
           secret: this.#secretKey,
           response: input.token,
           ...(input.remoteIp ? { remoteip: input.remoteIp } : {}),
-          idempotency_key: input.idempotencyKey ?? crypto.randomUUID(),
+          idempotency_key: siteverifyIdempotencyKey(input.idempotencyKey),
         }),
         signal: controller.signal,
       });
@@ -81,6 +95,12 @@ export class CloudflareTurnstileVerifier implements TurnstileVerifier {
       const result: unknown = await response.json();
       if (!isSiteverifyResponse(result) || !result.success) {
         return { success: false, reason: "invalid" };
+      }
+      if (
+        this.#allowTestingKeyResponse &&
+        result.metadata?.result_with_testing_key === true
+      ) {
+        return { success: true, reason: "verified" };
       }
       if (
         result.action !== this.#expectedAction ||

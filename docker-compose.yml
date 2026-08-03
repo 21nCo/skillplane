@@ -10,7 +10,7 @@ services:
       POSTGRES_PASSWORD: ${SKILLPLANE_POSTGRES_PASSWORD:?required}
       POSTGRES_USER: ${SKILLPLANE_POSTGRES_USER:?required}
     ports:
-      - "${SKILLPLANE_POSTGRES_PORT:?required}:5432"
+      - "${SKILLPLANE_POSTGRES_PORT:-55432}:5432"
     volumes:
       - skillplane_postgres_data:/var/lib/postgresql/data
     healthcheck:

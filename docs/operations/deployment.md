@@ -9,8 +9,8 @@ database through Hyperdrive and one private R2 bucket. The production hosts are
 Before the first release:
 
 1. Create the production Railway Postgres service, enable its managed backup
-   policy, and retain its public TCP-proxy URL for migration and backup
-   processes only.
+   policy, and retain its public TCP-proxy URL or the explicitly approved
+   `insouth.db.21n.dev` Railway alias for migration and backup processes only.
 2. Create a Cloudflare Hyperdrive configuration whose origin is that Railway
    database. Record its 32-character ID. Do not put the Railway URL into a
    Worker variable.
@@ -58,9 +58,12 @@ symlinks, and enforces mode `0600`.
 | `PUBLIC_TURNSTILE_SITE_KEY`        | Public site key for the production widget                                           |
 | `SKILLPLANE_RELEASE_TAG`           | Optional stable release label; generated when omitted                               |
 
-The Railway URL must use a Railway TCP-proxy hostname and is forced to
-`sslmode=require`. Both backup and migration query `pg_stat_ssl` and fail if
-the connection is not encrypted.
+The Railway URL must use a Railway TCP-proxy hostname or the exact controlled
+alias `insouth.db.21n.dev`; arbitrary aliases remain rejected. The connection is
+forced to `sslmode=require`. Because the approved alias presents the Railway
+self-signed PostgreSQL certificate chain, node-postgres uses explicit
+libpq-compatible `require` semantics for that alias. Both backup and migration
+query `pg_stat_ssl` and fail if the connection is not encrypted.
 
 The complete Skillplane source must also be committed with a clean worktree.
 The application commit and a digest of all runtime, deployment, package, and

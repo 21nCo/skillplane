@@ -53,4 +53,7 @@ export interface ApiEnvironment {
   Variables: ApiVariables;
 }
 
-export type ApiServiceProvider = (bindings: RuntimeBindings) => Promise<ApiServices>;
+export interface ApiServiceProvider {
+  (bindings: RuntimeBindings): Promise<ApiServices>;
+  readonly release?: (services: ApiServices) => Promise<void>;
+}

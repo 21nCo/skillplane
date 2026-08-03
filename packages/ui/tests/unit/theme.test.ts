@@ -74,8 +74,18 @@ describe("appearance contract", () => {
 
   test("every exported component compiles for the browser", async () => {
     const directory = join(packageRoot, "src/components");
-    const files = (await readdir(directory)).filter((file) => file.endsWith(".svelte"));
-    expect(files).toHaveLength(15);
+    const files = (await readdir(directory))
+      .filter((file) => file.endsWith(".svelte"))
+      .sort();
+    const publicEntryPoint = await readFile(join(packageRoot, "src/index.ts"), "utf8");
+    const exportedFiles = [
+      ...new Set(
+        [...publicEntryPoint.matchAll(/from "\.\/components\/([^"]+\.svelte)"/gu)]
+          .map((match) => match[1])
+          .filter((file): file is string => file !== undefined),
+      ),
+    ].sort();
+    expect(files).toEqual(exportedFiles);
     for (const file of files) {
       const source = await readFile(join(directory, file), "utf8");
       const output = compile(source, {

@@ -15,8 +15,18 @@
       "preview_bucket_name": "skillplane-skill-bundles-preview",
     },
   ],
+  "send_email": [
+    {
+      "name": "SEND_EMAIL",
+      "allowed_sender_addresses": ["no-reply@auth.skillplane.dev"],
+      "remote": true,
+    },
+  ],
   "vars": {
-    "AUTH_MODE": "disabled",
+    "AUTH_MODE": "otp",
+    "EMAIL_PROVIDER": "cloudflare-email",
+    "SKILLPLANE_OTP_FROM": "Skillplane <no-reply@auth.skillplane.dev>",
+    "TURNSTILE_ALLOWED_HOSTNAMES": "localhost,127.0.0.1",
   },
   "observability": {
     "enabled": true,

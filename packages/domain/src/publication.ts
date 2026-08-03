@@ -66,11 +66,12 @@ export function nextSemanticVersion(current: string, bump: SemanticBump): string
   return `${String(major)}.${String(minor)}.${String(patch)}`;
 }
 
-function isSemverConflict(error: unknown): boolean {
+function isPublicationConflict(error: unknown): boolean {
+  if (typeof error !== "object" || error === null || !("code" in error)) {
+    return false;
+  }
+  if (error.code === "40001" || error.code === "40P01") return true;
   return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
     error.code === "23505" &&
     "constraint" in error &&
     error.constraint === "skill_versions_skill_semver_unique"
@@ -141,18 +142,15 @@ export class PublicationService {
       const instructions = new TextDecoder("utf-8", { fatal: true }).decode(
         skillMarkdown,
       );
-      return await withTransaction(
-        this.pool,
-        options.requestId,
-        async ({ client }) => {
-          const locked = await client.query<
-            PublicationRow & {
-              readonly current_published_version_id: string | null;
-              readonly current_semantic_version: string | null;
-              readonly archived_at: Date | null;
-            }
-          >(
-            `SELECT candidate.id, candidate.workspace_id, candidate.skill_id,
+      return await withTransaction(this.pool, options.requestId, async ({ client }) => {
+        const locked = await client.query<
+          PublicationRow & {
+            readonly current_published_version_id: string | null;
+            readonly current_semantic_version: string | null;
+            readonly archived_at: Date | null;
+          }
+        >(
+          `SELECT candidate.id, candidate.workspace_id, candidate.skill_id,
                     candidate.revision, candidate.semantic_version,
                     candidate.status, candidate.base_version_id,
                     candidate.proposed_bump, candidate.source,
@@ -169,46 +167,39 @@ export class PublicationService {
                  ON current.id = skill.current_published_version_id
               WHERE skill.id = $1 AND skill.workspace_id = $3
               FOR UPDATE OF skill, candidate`,
-            [
-              options.skillId,
-              options.candidateVersionId,
-              options.principal.workspaceId,
-            ],
+          [options.skillId, options.candidateVersionId, options.principal.workspaceId],
+        );
+        const row = locked.rows[0];
+        if (row?.status !== "pending_review") {
+          throw new DomainError(
+            "SKILL_PUBLISH_CONFLICT",
+            "The candidate is no longer publishable",
+            409,
           );
-          const row = locked.rows[0];
-          if (row?.status !== "pending_review") {
-            throw new DomainError(
-              "SKILL_PUBLISH_CONFLICT",
-              "The candidate is no longer publishable",
-              409,
-            );
-          }
-          if (row.archived_at) {
-            throw new DomainError(
-              "SKILL_ARCHIVED",
-              "Archived skills cannot publish candidates",
-              409,
-            );
-          }
-          if (
-            !row.current_published_version_id ||
-            !row.current_semantic_version ||
-            row.base_version_id !== row.current_published_version_id
-          ) {
-            throw new DomainError(
-              "SKILL_PUBLISH_CONFLICT",
-              "The published version changed after this candidate was created",
-              409,
-              { currentVersionId: row.current_published_version_id },
-            );
-          }
-          const bump = parseSemanticBump(row.proposed_bump);
-          const semanticVersion = nextSemanticVersion(
-            row.current_semantic_version,
-            bump,
+        }
+        if (row.archived_at) {
+          throw new DomainError(
+            "SKILL_ARCHIVED",
+            "Archived skills cannot publish candidates",
+            409,
           );
-          const updated = await client.query<PublicationRow>(
-            `UPDATE skill_versions
+        }
+        if (
+          !row.current_published_version_id ||
+          !row.current_semantic_version ||
+          row.base_version_id !== row.current_published_version_id
+        ) {
+          throw new DomainError(
+            "SKILL_PUBLISH_CONFLICT",
+            "The published version changed after this candidate was created",
+            409,
+            { currentVersionId: row.current_published_version_id },
+          );
+        }
+        const bump = parseSemanticBump(row.proposed_bump);
+        const semanticVersion = nextSemanticVersion(row.current_semantic_version, bump);
+        const updated = await client.query<PublicationRow>(
+          `UPDATE skill_versions
                 SET semantic_version = $2, status = 'published',
                     published_at = now()
               WHERE id = $1 AND status = 'pending_review'
@@ -216,49 +207,47 @@ export class PublicationService {
                         status, base_version_id, proposed_bump, source,
                         content_digest, r2_object_key, bundle_byte_size,
                         manifest, change_summary, published_at, created_at`,
-            [options.candidateVersionId, semanticVersion],
+          [options.candidateVersionId, semanticVersion],
+        );
+        const version = updated.rows[0];
+        if (!version) {
+          throw new DomainError(
+            "SKILL_PUBLISH_CONFLICT",
+            "The candidate is no longer publishable",
+            409,
           );
-          const version = updated.rows[0];
-          if (!version) {
-            throw new DomainError(
-              "SKILL_PUBLISH_CONFLICT",
-              "The candidate is no longer publishable",
-              409,
-            );
-          }
-          await client.query(
-            `UPDATE skills
+        }
+        await client.query(
+          `UPDATE skills
                 SET current_published_version_id = $2,
                     published_search_text = $3,
                     updated_at = now()
               WHERE id = $1`,
-            [options.skillId, options.candidateVersionId, instructions],
-          );
-          await insertPrincipalAudit(client, options.principal, {
-            eventType: "skill.version.published",
-            action: "skills:publish",
-            requestId: options.requestId,
-            resourceType: "skill_version",
-            resourceId: options.candidateVersionId,
-            skillId: options.skillId,
-            versionId: options.candidateVersionId,
-            metadata: {
-              semanticVersion,
-              bump,
-              previousVersionId: row.current_published_version_id,
-            },
-          });
-          const record = toSkillVersionRecord(version);
-          await this.idempotency.complete(client, claim.identity, 200, {
-            version: record,
-          });
-          return record;
-        },
-        { maxRetries: 0 },
-      );
+          [options.skillId, options.candidateVersionId, instructions],
+        );
+        await insertPrincipalAudit(client, options.principal, {
+          eventType: "skill.version.published",
+          action: "skills:publish",
+          requestId: options.requestId,
+          resourceType: "skill_version",
+          resourceId: options.candidateVersionId,
+          skillId: options.skillId,
+          versionId: options.candidateVersionId,
+          metadata: {
+            semanticVersion,
+            bump,
+            previousVersionId: row.current_published_version_id,
+          },
+        });
+        const record = toSkillVersionRecord(version);
+        await this.idempotency.complete(client, claim.identity, 200, {
+          version: record,
+        });
+        return record;
+      });
     } catch (error) {
       await this.idempotency.release(claim.identity).catch(() => undefined);
-      if (isSemverConflict(error)) {
+      if (isPublicationConflict(error)) {
         throw new DomainError(
           "SKILL_PUBLISH_CONFLICT",
           "Another candidate won this semantic version",
@@ -336,7 +325,7 @@ export class PublicationService {
           resourceId: options.candidateVersionId,
           skillId: options.skillId,
           versionId: options.candidateVersionId,
-          metadata: { decisionReasonProvided: reason.trim().length > 0 },
+          metadata: { reason, decisionReasonProvided: true },
         });
         const version = toSkillVersionRecord(row);
         await this.idempotency.complete(client, claim.identity, 200, {

@@ -279,6 +279,19 @@ export function createMcpApp(options: CreateMcpAppOptions = {}) {
         return mcpAuthenticationResponse(services, error);
       }
       return jsonError(500, "INTERNAL_ERROR", "The MCP request could not be completed");
+    } finally {
+      if (services) {
+        try {
+          await getServices.release?.(services);
+        } catch {
+          console.error(
+            JSON.stringify({
+              component: "mcp",
+              event: "mcp.services.release.failed",
+            }),
+          );
+        }
+      }
     }
   });
 
@@ -302,6 +315,19 @@ export function createMcpApp(options: CreateMcpAppOptions = {}) {
         return mcpAuthenticationResponse(services, error);
       }
       return jsonError(500, "INTERNAL_ERROR", "The download could not be completed");
+    } finally {
+      if (services) {
+        try {
+          await getServices.release?.(services);
+        } catch {
+          console.error(
+            JSON.stringify({
+              component: "mcp",
+              event: "mcp.services.release.failed",
+            }),
+          );
+        }
+      }
     }
   });
 

@@ -38,6 +38,7 @@ beforeAll(async () => {
   services = await buildApiServices({
     RUNTIME_ENV: "local",
     DATABASE_ADAPTER: "postgres",
+    AUTH_MODE: "disabled",
     DATABASE_URL: databaseUrl,
     SKILL_BUNDLES: new TestObjectStorage(),
   });

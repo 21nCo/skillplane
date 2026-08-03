@@ -50,6 +50,24 @@ export interface PrincipalAuditEvent {
   readonly metadata?: Readonly<Record<string, unknown>>;
 }
 
+type RetryableAuditError = Error & { readonly code: "40001" | "40P01" };
+
+function isRetryableAuditError(value: unknown): value is RetryableAuditError {
+  return (
+    value instanceof Error &&
+    "code" in value &&
+    (value.code === "40001" || value.code === "40P01")
+  );
+}
+
+function retryableAuditCause(
+  error: AuditWriteError,
+): RetryableAuditError | undefined {
+  let cause: unknown = error.cause;
+  while (cause instanceof AuditWriteError) cause = cause.cause;
+  return isRetryableAuditError(cause) ? cause : undefined;
+}
+
 export function mutationAttribution(audit: MutationAuditContext | undefined): {
   readonly agent: string | null;
   readonly model: string | null;
@@ -97,6 +115,8 @@ export async function insertMutationAudit(
     });
   } catch (error) {
     if (!(error instanceof AuditWriteError)) throw error;
+    const retryable = retryableAuditCause(error);
+    if (retryable) throw retryable;
     throw new DomainError(
       "AUDIT_WRITE_FAILED",
       "The mutation audit event could not be recorded",
@@ -135,6 +155,8 @@ export async function insertPrincipalAudit(
     });
   } catch (error) {
     if (!(error instanceof AuditWriteError)) throw error;
+    const retryable = retryableAuditCause(error);
+    if (retryable) throw retryable;
     throw new DomainError(
       "AUDIT_WRITE_FAILED",
       "The audit event could not be recorded",

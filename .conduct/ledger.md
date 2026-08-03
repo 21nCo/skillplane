@@ -942,3 +942,69 @@ This ledger is append-only. Every substantial implementation step MUST add a dat
 - Superseding preflight report:
   `.conduct/specs/2026-07-25-new-17dd6c3e-spec/phase-reports/PHASE_16-2026-07-26-1fe3ea35-report.md`.
 - No Cloudflare or Superfunctions mutation occurred.
+
+## 2026-07-29T11:41:47Z — Local runtime configuration hardening started
+
+- Status: in progress.
+- Scope: prevent database lifecycle commands from deleting unrelated Worker
+  variables; make local authentication intent explicit; separate local and
+  production email bindings; add initialization and restart regression
+  coverage.
+- Evidence:
+  `.conduct/logs/engineering/2026-07-29-local-runtime-configuration.md`.
+- Confirmed cause: `db:up` replaced both `.dev.vars` files, while the app's
+  always-present `SEND_EMAIL` binding activated partial-auth validation.
+- Excluded cause: both Wrangler `4.86.0` and `4.115.0` reproduce the same
+  configuration failure; Postgres is healthy on port `55432`.
+- Decision: database tooling will own only database assignments, and
+  authentication will use an explicit mode with production remaining
+  fail-closed.
+- Risk: local OTP mode must not weaken production provider, secret, sender, or
+  Turnstile validation.
+- Next action: implement the configuration and lifecycle changes, then verify
+  unit, deployment, and live local restart/readiness gates.
+
+## 2026-07-29T11:57:43Z — Local runtime configuration hardening completed
+
+- Status: complete for the requested local runtime improvements.
+- `db:up` now updates only database-owned Worker variables and preserves
+  authentication, OAuth, Turnstile, comments, and custom settings.
+- Added idempotent `local:init`, explicit local authentication modes, separate
+  default/authenticated Wrangler configurations, and transitive workspace
+  builds before Worker development startup.
+- Kept production fail-closed: the app requires explicit OTP configuration;
+  MCP remains OAuth-only and receives no email or AuthFn OTP authority.
+- Verification passed:
+  - 15 local runtime regression tests;
+  - 13 configuration tests;
+  - formatting, lint, and all 29 typecheck tasks;
+  - 19 deployment checks and three strict production dry-runs;
+  - byte-for-byte `.dev.vars` preservation across `db:up`;
+  - HTTP 200 readiness for default and authenticated local Worker modes;
+  - conduct append-only and portability checks.
+- The default app Worker is running on port `5173` with configuration,
+  Postgres, and R2 ready.
+- Aggregate unit testing still exposes an unrelated existing migration
+  inventory mismatch: the test expects `0001`-`0012`, while committed
+  migrations `0013`-`0015` are also loaded. This scope did not change database
+  migration source.
+- Evidence:
+  `.conduct/logs/engineering/2026-07-29-local-runtime-configuration.md`.
+- Superfunctions changes: none.
+
+## 2026-08-03T04:29:13Z — Phase 16 production release resumed
+
+- Status: in progress.
+- Recovered and verified the controlled Railway origin, matching Hyperdrive
+  configuration, production secret inventory, and the encrypted pre-migration
+  backup created during the interrupted deployment task.
+- Audited all inherited local changes before publication; no Superfunctions
+  repository was modified.
+- Corrected the retryable audit-cause type boundary found by the full lint gate
+  and incorporated migrations `0013` through `0015` into the existing migration
+  inventory test.
+- Verification passed: formatting, lint, 29 typecheck tasks, 29 unit-test tasks,
+  19 Worker deployment checks, and three strict production configuration dry
+  runs.
+- Next action: create the clean production source revision, refresh the encrypted
+  Railway backup, run migrations, and deploy the three production Workers.

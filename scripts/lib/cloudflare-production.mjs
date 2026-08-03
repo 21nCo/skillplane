@@ -55,15 +55,23 @@ export function assertHyperdriveOriginRecord(database, expectedIdentity) {
   };
 }
 
+export function parseWranglerJson(output, label = "Wrangler response") {
+  const start = output.indexOf("{");
+  const end = output.lastIndexOf("}");
+  if (start === -1 || end < start) {
+    throw new Error(`${label} did not contain a JSON object`);
+  }
+  try {
+    return JSON.parse(output.slice(start, end + 1));
+  } catch {
+    throw new Error(`${label} did not contain a valid JSON object`);
+  }
+}
+
 export function verifyProductionHyperdrive(expectedIdentity) {
   const hyperdriveId = requireHyperdriveId();
   const output = captureWrangler(["hyperdrive", "get", hyperdriveId]).stdout;
-  let database;
-  try {
-    database = JSON.parse(output);
-  } catch {
-    throw new Error("Cloudflare did not return a valid Hyperdrive configuration");
-  }
+  const database = parseWranglerJson(output, "Cloudflare Hyperdrive response");
   return assertHyperdriveOriginRecord(database, expectedIdentity);
 }
 
@@ -201,6 +209,7 @@ async function validateGeneratedConfig(kind) {
     if (
       kind === "app" &&
       (config.send_email?.[0]?.name !== "SEND_EMAIL" ||
+        config.vars?.AUTH_MODE !== "otp" ||
         config.vars?.PUBLIC_TURNSTILE_SITE_KEY !== publicTurnstileSiteKey())
     ) {
       throw new Error(`${worker.name} generated auth bindings are invalid`);
@@ -208,6 +217,7 @@ async function validateGeneratedConfig(kind) {
     if (
       kind === "mcp" &&
       (config.send_email !== undefined ||
+        "AUTH_MODE" in (config.vars ?? {}) ||
         "EMAIL_PROVIDER" in (config.vars ?? {}) ||
         "PUBLIC_TURNSTILE_SITE_KEY" in (config.vars ?? {}) ||
         "TURNSTILE_ALLOWED_HOSTNAMES" in (config.vars ?? {}) ||

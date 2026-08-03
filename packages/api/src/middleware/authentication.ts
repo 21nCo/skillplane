@@ -113,20 +113,33 @@ export function authenticationMiddleware(
       return;
     }
     const services = await getServices(context.env);
-    context.set("services", services);
-    const servicePrincipal = await authenticateServicePrincipal(
-      context.req.header("authorization"),
-      services,
-    );
-    context.set("servicePrincipal", servicePrincipal);
-    const session = servicePrincipal
-      ? null
-      : await services.auth.provider.authenticate(context.req.raw);
-    context.set("session", session);
-    if (session) {
-      await ensurePersonalWorkspace(services.database.pool, session);
+    try {
+      context.set("services", services);
+      const servicePrincipal = await authenticateServicePrincipal(
+        context.req.header("authorization"),
+        services,
+      );
+      context.set("servicePrincipal", servicePrincipal);
+      const session = servicePrincipal
+        ? null
+        : await services.auth.provider.authenticate(context.req.raw);
+      context.set("session", session);
+      if (session) {
+        await ensurePersonalWorkspace(services.database.pool, session);
+      }
+      enforceCookieCsrf(context.req.raw, Boolean(session), Boolean(servicePrincipal));
+      await next();
+    } finally {
+      try {
+        await getServices.release?.(services);
+      } catch {
+        console.error(
+          JSON.stringify({
+            component: "api",
+            event: "api.services.release.failed",
+          }),
+        );
+      }
     }
-    enforceCookieCsrf(context.req.raw, Boolean(session), Boolean(servicePrincipal));
-    await next();
   };
 }

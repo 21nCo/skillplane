@@ -444,7 +444,6 @@ export class AmendmentReviewService {
           await this.idempotency.complete(client, claim.identity, 200, { detail });
           return detail;
         },
-        { maxRetries: 0 },
       );
     } catch (error) {
       await this.idempotency.release(claim.identity).catch(() => undefined);

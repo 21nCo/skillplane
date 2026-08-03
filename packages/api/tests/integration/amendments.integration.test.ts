@@ -126,6 +126,7 @@ beforeAll(async () => {
   services = await buildApiServices({
     RUNTIME_ENV: "local",
     DATABASE_ADAPTER: "postgres",
+    AUTH_MODE: "disabled",
     DATABASE_URL: databaseUrl,
     SKILL_BUNDLES: storage,
   });
@@ -174,7 +175,7 @@ describe("amendments, learning provenance, policy, and review", () => {
         visibility: "workspace",
       }),
     });
-    expect(create.status).toBe(201);
+    expect(create.status, await create.clone().text()).toBe(201);
     const created = await data<{
       skill: { id: string };
       version: {

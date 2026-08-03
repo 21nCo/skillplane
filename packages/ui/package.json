@@ -19,6 +19,7 @@
     "test:visual": "playwright test --config playwright.config.ts tests/visual"
   },
   "dependencies": {
+    "@fontsource-variable/dm-sans": "catalog:",
     "marked": "catalog:",
     "phosphor-svelte": "catalog:"
   },

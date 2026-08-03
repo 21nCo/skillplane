@@ -7,6 +7,7 @@ import { access, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { DEFAULT_SKILLPLANE_POSTGRES_PORT } from "./lib/local-postgres-port.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const workspaceRoot = resolve(repoRoot, "../../..");
@@ -492,7 +493,9 @@ async function main() {
   }
 
   const docker = dockerVersions();
-  const port = parsePostgresPort(process.env.SKILLPLANE_POSTGRES_PORT ?? "5432");
+  const port = parsePostgresPort(
+    process.env.SKILLPLANE_POSTGRES_PORT ?? String(DEFAULT_SKILLPLANE_POSTGRES_PORT),
+  );
   await assertPortAvailable(port);
 
   const definitions = dependencyDefinitions();

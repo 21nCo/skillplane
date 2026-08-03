@@ -31,6 +31,7 @@
   "vars": {
     "RUNTIME_ENV": "production",
     "DATABASE_ADAPTER": "postgres",
+    "AUTH_MODE": "otp",
     "EMAIL_PROVIDER": "cloudflare-email",
     "OAUTH_ISSUER": "https://app.skillplane.dev",
     "TURNSTILE_ALLOWED_HOSTNAMES": "app.skillplane.dev",

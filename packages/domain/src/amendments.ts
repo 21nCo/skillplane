@@ -765,7 +765,6 @@ export class AmendmentService {
           });
           return response;
         },
-        { maxRetries: 0 },
       );
       return result;
     } catch (error) {
