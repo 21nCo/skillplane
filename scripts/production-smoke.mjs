@@ -179,6 +179,35 @@ export async function productionSmoke(options = {}) {
     "OAuth authorization server metadata is inconsistent",
   );
 
+  const originlessOAuthForm = await request(
+    `${endpoints.app}/auth/oauth/token`,
+    {
+      method: "POST",
+      headers: {
+        accept: "application/json",
+        "content-type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({
+        grant_type: "authorization_code",
+        client_id: "production-smoke-unregistered-client",
+        redirect_uri: `${endpoints.app}/oauth/callback`,
+        resource: productionResource,
+        code: "production-smoke-invalid-code",
+        code_verifier: "production-smoke-invalid-verifier",
+      }),
+    },
+    { attempts, acceptStatus: [400] },
+  );
+  assertNoStore(originlessOAuthForm, "Originless OAuth form response");
+  const originlessOAuthBody = await readJson(
+    originlessOAuthForm,
+    "Originless OAuth form response",
+  );
+  assert(
+    originlessOAuthBody.error === "invalid_client",
+    "The OAuth token endpoint rejected a standards-compliant originless form post",
+  );
+
   for (const origin of [endpoints.app, endpoints.mcp]) {
     const metadata = await request(
       `${origin}/.well-known/oauth-protected-resource/mcp`,
@@ -270,6 +299,7 @@ export async function productionSmoke(options = {}) {
       publicAssetImmutable: true,
       datafnAuthenticationRequired: true,
       mcpBearerChallenge: true,
+      originlessOAuthFormAccepted: true,
     },
   };
 }

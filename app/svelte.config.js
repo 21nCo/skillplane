@@ -6,6 +6,12 @@ const config = {
   preprocess: vitePreprocess(),
   kit: {
     adapter: adapter(),
+    // OAuth token and revocation endpoints must accept originless form posts from
+    // native and server-side MCP clients. Cookie-authorized mutations remain
+    // protected by AuthFn consent CSRF and the API's cookie-CSRF middleware.
+    csrf: {
+      trustedOrigins: ["*"],
+    },
     csp: {
       mode: "hash",
       directives: {
