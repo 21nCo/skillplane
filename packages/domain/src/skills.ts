@@ -16,7 +16,11 @@ import {
 } from "./idempotency.js";
 import { principalAuditActor, type Principal } from "./principal.js";
 import { withDomainTransaction as withTransaction } from "./transactions.js";
-import { insertPrincipalAudit } from "./mutation-audit.js";
+import {
+  insertMutationAudit,
+  mutationAttribution,
+  type MutationAuditContext,
+} from "./mutation-audit.js";
 
 export const SKILL_VISIBILITIES = ["private", "workspace", "public"] as const;
 export type SkillVisibility = (typeof SKILL_VISIBILITIES)[number];
@@ -227,6 +231,37 @@ function safeSkill(row: SkillRow): SkillRecord {
   };
 }
 
+function normalizeExpectedUpdatedAt(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) {
+    throw new DomainError(
+      "VALIDATION_FAILED",
+      "expectedUpdatedAt must be an ISO 8601 timestamp",
+      400,
+      { field: "expectedUpdatedAt" },
+    );
+  }
+  return new Date(timestamp).toISOString();
+}
+
+function assertExpectedUpdatedAt(
+  row: SkillRow,
+  expectedUpdatedAt: string | undefined,
+): void {
+  if (
+    expectedUpdatedAt !== undefined &&
+    row.updated_at.toISOString() !== expectedUpdatedAt
+  ) {
+    throw new DomainError(
+      "SKILL_METADATA_CONFLICT",
+      "Skill metadata changed after it was read",
+      409,
+      { currentUpdatedAt: row.updated_at.toISOString() },
+    );
+  }
+}
+
 function isUniqueViolation(error: unknown, constraint: string): boolean {
   return (
     typeof error === "object" &&
@@ -273,6 +308,7 @@ export class SkillService {
     readonly visibility: SkillVisibility;
     readonly idempotencyKey: string;
     readonly requestId: string;
+    readonly auditContext?: MutationAuditContext;
   }): Promise<{ readonly skill: SkillRecord; readonly version: SkillVersionRecord }> {
     if (options.principal.workspaceId !== options.workspaceId) {
       throw new DomainError("SKILL_NOT_FOUND", "Workspace resource was not found", 404);
@@ -325,6 +361,7 @@ export class SkillService {
         );
       }
       const actor = principalAuditActor(options.principal);
+      const attribution = mutationAttribution(options.auditContext);
       const response = await withTransaction(
         this.pool,
         options.requestId,
@@ -352,10 +389,12 @@ export class SkillService {
                (id, workspace_id, skill_id, revision, semantic_version, status,
                 source, content_digest, r2_object_key, bundle_byte_size,
                 manifest, learning_metadata, change_summary,
-                created_by_actor_type, created_by_actor_id, published_at)
+                created_by_actor_type, created_by_actor_id, created_by_agent,
+                created_by_model, created_for_user_id, published_at)
              VALUES (
                $1, $2, $3, 1, '1.0.0', 'published', $4, $5, $6, $7,
-               $8, '{}'::jsonb, 'Initial published version', $9, $10, now()
+               $8, '{}'::jsonb, 'Initial published version', $9, $10, $11,
+               $12, $13, now()
              )`,
             [
               versionId,
@@ -368,6 +407,11 @@ export class SkillService {
               canonical.manifest,
               actor.actorType,
               actor.actorId,
+              attribution.agent,
+              attribution.model,
+              options.principal.kind === "user"
+                ? options.principal.userId
+                : (options.principal.delegatedUserId ?? null),
             ],
           );
           const fileIds = canonical.manifest.files.map(() => id("skill-file"));
@@ -403,7 +447,7 @@ export class SkillService {
               new TextDecoder("utf-8", { fatal: true }).decode(skillMarkdown),
             ],
           );
-          await insertPrincipalAudit(client, options.principal, {
+          await insertMutationAudit(client, options.principal, options.auditContext, {
             eventType: "skill.created",
             action: "skills:write",
             requestId: options.requestId,
@@ -418,7 +462,30 @@ export class SkillService {
               visibility,
             },
           });
-          const now = new Date().toISOString();
+          const timestamps = await client.query<{
+            skill_created_at: Date;
+            skill_updated_at: Date;
+            version_created_at: Date;
+            version_published_at: Date;
+          }>(
+            `SELECT skill.created_at AS skill_created_at,
+                    skill.updated_at AS skill_updated_at,
+                    version.created_at AS version_created_at,
+                    version.published_at AS version_published_at
+               FROM skills skill
+               JOIN skill_versions version
+                 ON version.id = skill.current_published_version_id
+              WHERE skill.id = $1 AND skill.workspace_id = $2`,
+            [skillId, options.workspaceId],
+          );
+          const persisted = timestamps.rows[0];
+          if (!persisted) {
+            throw new DomainError(
+              "SKILL_NOT_FOUND",
+              "Created skill could not be read",
+              500,
+            );
+          }
           const responseBody = {
             skill: {
               id: skillId,
@@ -431,8 +498,8 @@ export class SkillService {
               currentPublishedVersionId: versionId,
               currentSemanticVersion: "1.0.0",
               archivedAt: null,
-              createdAt: now,
-              updatedAt: now,
+              createdAt: persisted.skill_created_at.toISOString(),
+              updatedAt: persisted.skill_updated_at.toISOString(),
             } satisfies SkillRecord,
             version: {
               id: versionId,
@@ -455,11 +522,14 @@ export class SkillService {
               changeSummary: "Initial published version",
               createdByActorType: actor.actorType,
               createdByActorId: actor.actorId,
-              createdByAgent: null,
-              createdByModel: null,
-              createdForUserId: null,
-              publishedAt: now,
-              createdAt: now,
+              createdByAgent: attribution.agent,
+              createdByModel: attribution.model,
+              createdForUserId:
+                options.principal.kind === "user"
+                  ? options.principal.userId
+                  : (options.principal.delegatedUserId ?? null),
+              publishedAt: persisted.version_published_at.toISOString(),
+              createdAt: persisted.version_created_at.toISOString(),
             } satisfies SkillVersionRecord,
           };
           await this.idempotency.complete(client, claim.identity, 201, responseBody);
@@ -668,15 +738,19 @@ export class SkillService {
     readonly skillId: string;
     readonly principal: Principal;
     readonly visibility: SkillVisibility;
+    readonly expectedUpdatedAt?: string;
     readonly idempotencyKey: string;
     readonly requestId: string;
+    readonly auditContext?: MutationAuditContext;
   }): Promise<SkillRecord> {
     authorize(options.principal, "skills:write");
     const visibility = parseSkillVisibility(options.visibility);
+    const expectedUpdatedAt = normalizeExpectedUpdatedAt(options.expectedUpdatedAt);
     const requestHash = await hashIdempotentRequest({
       operation: "skill.visibility",
       skillId: options.skillId,
       visibility,
+      expectedUpdatedAt: expectedUpdatedAt ?? null,
     });
     const claim = await this.idempotency.claim<{ skill: SkillRecord }>({
       workspaceId: options.principal.workspaceId,
@@ -688,9 +762,30 @@ export class SkillService {
     if (claim.state === "replay") return claim.responseBody.skill;
     try {
       return await withTransaction(this.pool, options.requestId, async ({ client }) => {
+        const current = await client.query<SkillRow>(
+          `SELECT s.id, s.workspace_id, s.slug, s.name, s.description, s.tags,
+                  s.visibility, s.current_published_version_id,
+                  version.semantic_version, s.archived_at, s.created_at,
+                  s.updated_at
+             FROM skills s
+             LEFT JOIN skill_versions version
+               ON version.id = s.current_published_version_id
+            WHERE s.id = $1 AND s.workspace_id = $2
+            FOR UPDATE OF s`,
+          [options.skillId, options.principal.workspaceId],
+        );
+        const previous = current.rows[0];
+        if (!previous) {
+          throw new DomainError("SKILL_NOT_FOUND", "Skill was not found", 404);
+        }
+        assertExpectedUpdatedAt(previous, expectedUpdatedAt);
         const result = await client.query<SkillRow>(
           `UPDATE skills s
-              SET visibility = $3, updated_at = now()
+              SET visibility = $3,
+                  updated_at = GREATEST(
+                    clock_timestamp(),
+                    s.updated_at + interval '1 millisecond'
+                  )
              FROM skill_versions version
             WHERE s.id = $1 AND s.workspace_id = $2
               AND version.id = s.current_published_version_id
@@ -702,14 +797,18 @@ export class SkillService {
         );
         const row = result.rows[0];
         if (!row) throw new DomainError("SKILL_NOT_FOUND", "Skill was not found", 404);
-        await insertPrincipalAudit(client, options.principal, {
+        await insertMutationAudit(client, options.principal, options.auditContext, {
           eventType: "skill.visibility_changed",
           action: "skills:write",
           requestId: options.requestId,
           resourceType: "skill",
           resourceId: options.skillId,
           skillId: options.skillId,
-          metadata: { visibility },
+          metadata: {
+            visibility,
+            previousUpdatedAt: previous.updated_at.toISOString(),
+            updatedAt: row.updated_at.toISOString(),
+          },
         });
         const skill = safeSkill(row);
         await this.idempotency.complete(client, claim.identity, 200, { skill });
@@ -725,13 +824,17 @@ export class SkillService {
     readonly skillId: string;
     readonly principal: Principal;
     readonly archived: boolean;
+    readonly expectedUpdatedAt?: string;
     readonly idempotencyKey: string;
     readonly requestId: string;
+    readonly auditContext?: MutationAuditContext;
   }): Promise<SkillRecord> {
     authorize(options.principal, "skills:write");
+    const expectedUpdatedAt = normalizeExpectedUpdatedAt(options.expectedUpdatedAt);
     const requestHash = await hashIdempotentRequest({
       operation: options.archived ? "skill.archive" : "skill.restore",
       skillId: options.skillId,
+      expectedUpdatedAt: expectedUpdatedAt ?? null,
     });
     const claim = await this.idempotency.claim<{ skill: SkillRecord }>({
       workspaceId: options.principal.workspaceId,
@@ -745,11 +848,31 @@ export class SkillService {
     if (claim.state === "replay") return claim.responseBody.skill;
     try {
       return await withTransaction(this.pool, options.requestId, async ({ client }) => {
+        const current = await client.query<SkillRow>(
+          `SELECT s.id, s.workspace_id, s.slug, s.name, s.description, s.tags,
+                  s.visibility, s.current_published_version_id,
+                  version.semantic_version, s.archived_at, s.created_at,
+                  s.updated_at
+             FROM skills s
+             LEFT JOIN skill_versions version
+               ON version.id = s.current_published_version_id
+            WHERE s.id = $1 AND s.workspace_id = $2
+            FOR UPDATE OF s`,
+          [options.skillId, options.principal.workspaceId],
+        );
+        const previous = current.rows[0];
+        if (!previous) {
+          throw new DomainError("SKILL_NOT_FOUND", "Skill was not found", 404);
+        }
+        assertExpectedUpdatedAt(previous, expectedUpdatedAt);
         const result = await client.query<SkillRow>(
           `UPDATE skills s
             SET archived_at = CASE WHEN $3 THEN COALESCE(archived_at, now())
                                    ELSE NULL END,
-                updated_at = now()
+                updated_at = GREATEST(
+                  clock_timestamp(),
+                  s.updated_at + interval '1 millisecond'
+                )
            FROM skill_versions version
           WHERE s.id = $1 AND s.workspace_id = $2
             AND version.id = s.current_published_version_id
@@ -761,13 +884,18 @@ export class SkillService {
         );
         const row = result.rows[0];
         if (!row) throw new DomainError("SKILL_NOT_FOUND", "Skill was not found", 404);
-        await insertPrincipalAudit(client, options.principal, {
+        await insertMutationAudit(client, options.principal, options.auditContext, {
           eventType: options.archived ? "skill.archived" : "skill.restored",
           action: "skills:write",
           requestId: options.requestId,
           resourceType: "skill",
           resourceId: options.skillId,
           skillId: options.skillId,
+          metadata: {
+            archived: options.archived,
+            previousUpdatedAt: previous.updated_at.toISOString(),
+            updatedAt: row.updated_at.toISOString(),
+          },
         });
         const skill = safeSkill(row);
         await this.idempotency.complete(client, claim.identity, 200, { skill });

@@ -221,7 +221,9 @@ export async function productionSmoke(options = {}) {
         body.authorization_servers?.length === 1 &&
         body.authorization_servers[0] === productionIssuer &&
         body.scopes_supported?.includes("skills:read") &&
+        body.scopes_supported?.includes("skills:write") &&
         body.scopes_supported?.includes("skills:amend") &&
+        body.scopes_supported?.includes("skills:publish") &&
         body.scopes_supported?.includes("contexts:write"),
       `${origin} protected-resource metadata is inconsistent`,
     );

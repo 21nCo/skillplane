@@ -28,14 +28,19 @@ export interface MutationAuditContext {
 
 export interface MutationAuditEvent {
   readonly eventType: string;
-  readonly action: "skills:amend" | "contexts:write";
+  readonly action:
+    "skills:write" | "skills:amend" | "skills:publish" | "contexts:write";
   readonly requestId: string;
   readonly resourceType:
+    | "skill"
     | "skill_version"
+    | "amendment_review"
     | "context"
     | "context_knowledge_revision"
     | "context_note_revision";
   readonly resourceId: string;
+  readonly skillId?: string;
+  readonly versionId?: string;
   readonly contextId?: string;
   readonly metadata: Readonly<Record<string, unknown>>;
 }
@@ -101,6 +106,8 @@ export async function insertMutationAudit(
       requestId: event.requestId,
       resourceType: event.resourceType,
       resourceId: event.resourceId,
+      ...(event.skillId ? { skillId: event.skillId } : {}),
+      ...(event.versionId ? { versionId: event.versionId } : {}),
       ...(event.contextId ? { contextId: event.contextId } : {}),
       ...(audit
         ? {

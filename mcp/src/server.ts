@@ -31,6 +31,20 @@ import {
   workspacesListOutputSchema,
   skillVersionsListInputSchema,
   skillVersionsListOutputSchema,
+  skillCreateInputSchema,
+  skillCreateOutputSchema,
+  skillVisibilityUpdateInputSchema,
+  skillStateMutationInputSchema,
+  skillLifecycleMutationOutputSchema,
+  skillCandidatesListInputSchema,
+  skillCandidatesListOutputSchema,
+  skillCandidateDecisionInputSchema,
+  skillCandidateDecisionOutputSchema,
+  skillAmendmentPolicyGetInputSchema,
+  skillAmendmentPolicyUpdateInputSchema,
+  skillAmendmentPolicyOutputSchema,
+  skillVersionsDiffInputSchema,
+  skillVersionsDiffOutputSchema,
 } from "@skillplane/mcp-schema";
 import { skillAmend } from "./tools/amend.js";
 import { skillAssetRetrieve } from "./tools/assets.js";
@@ -50,6 +64,18 @@ import {
 import { contextGet, contextNotesList } from "./tools/contexts.js";
 import { skillRetrieve } from "./tools/retrieve.js";
 import { skillsSearch } from "./tools/search.js";
+import {
+  skillAmendmentPolicyGet,
+  skillAmendmentPolicyUpdate,
+  skillArchive,
+  skillCandidateApprove,
+  skillCandidateReject,
+  skillCandidatesList,
+  skillCreate,
+  skillRestore,
+  skillVersionsDiff,
+  skillVisibilityUpdate,
+} from "./tools/skill-lifecycle.js";
 import type { McpToolRuntime } from "./tools/shared.js";
 import { skillVersionsList } from "./tools/versions.js";
 
@@ -162,6 +188,45 @@ export function createSkillplaneMcpServer(runtime: McpToolRuntime): McpServer {
   );
 
   server.registerTool(
+    "skill_versions_diff",
+    {
+      title: "Diff skill versions",
+      description:
+        "Compare two exact authorized immutable skill versions by file digest, with bounded line-level text changes when safe.",
+      inputSchema: skillVersionsDiffInputSchema,
+      outputSchema: skillVersionsDiffOutputSchema,
+      annotations: READ_ONLY_ANNOTATIONS,
+    },
+    (input) => skillVersionsDiff(runtime, input),
+  );
+
+  server.registerTool(
+    "skill_candidates_list",
+    {
+      title: "List skill candidates",
+      description:
+        "List authorized amendment review candidates and their immutable proposed versions using status filters and an opaque filter-bound cursor.",
+      inputSchema: skillCandidatesListInputSchema,
+      outputSchema: skillCandidatesListOutputSchema,
+      annotations: READ_ONLY_ANNOTATIONS,
+    },
+    (input) => skillCandidatesList(runtime, input),
+  );
+
+  server.registerTool(
+    "skill_amendment_policy_get",
+    {
+      title: "Get skill amendment policy",
+      description:
+        "Read one authorized skill's review or trusted auto-publication policy together with the skill metadata concurrency token.",
+      inputSchema: skillAmendmentPolicyGetInputSchema,
+      outputSchema: skillAmendmentPolicyOutputSchema,
+      annotations: READ_ONLY_ANNOTATIONS,
+    },
+    (input) => skillAmendmentPolicyGet(runtime, input),
+  );
+
+  server.registerTool(
     "contexts_list",
     {
       title: "List skill contexts",
@@ -224,6 +289,97 @@ export function createSkillplaneMcpServer(runtime: McpToolRuntime): McpServer {
       annotations: MUTATION_ANNOTATIONS,
     },
     (input) => skillAmend(runtime, input),
+  );
+
+  server.registerTool(
+    "skill_create",
+    {
+      title: "Create a skill",
+      description:
+        "Create one authorized skill and immutable published 1.0.0 version from a bounded canonical file set with caller attribution, durable audit, and replay-safe idempotency.",
+      inputSchema: skillCreateInputSchema,
+      outputSchema: skillCreateOutputSchema,
+      annotations: MUTATION_ANNOTATIONS,
+    },
+    (input) => skillCreate(runtime, input),
+  );
+
+  server.registerTool(
+    "skill_visibility_update",
+    {
+      title: "Update skill visibility",
+      description:
+        "Change authorized skill visibility using the exact previously observed updatedAt value, durable audit, and replay-safe idempotency.",
+      inputSchema: skillVisibilityUpdateInputSchema,
+      outputSchema: skillLifecycleMutationOutputSchema,
+      annotations: MUTATION_ANNOTATIONS,
+    },
+    (input) => skillVisibilityUpdate(runtime, input),
+  );
+
+  server.registerTool(
+    "skill_archive",
+    {
+      title: "Archive a skill",
+      description:
+        "Archive one authorized skill while preserving immutable versions and contexts, using optimistic concurrency and replay-safe idempotency.",
+      inputSchema: skillStateMutationInputSchema,
+      outputSchema: skillLifecycleMutationOutputSchema,
+      annotations: MUTATION_ANNOTATIONS,
+    },
+    (input) => skillArchive(runtime, input),
+  );
+
+  server.registerTool(
+    "skill_restore",
+    {
+      title: "Restore a skill",
+      description:
+        "Restore one authorized archived skill using optimistic concurrency, durable audit, and replay-safe idempotency.",
+      inputSchema: skillStateMutationInputSchema,
+      outputSchema: skillLifecycleMutationOutputSchema,
+      annotations: MUTATION_ANNOTATIONS,
+    },
+    (input) => skillRestore(runtime, input),
+  );
+
+  server.registerTool(
+    "skill_candidate_approve",
+    {
+      title: "Approve a skill candidate",
+      description:
+        "Approve one pending authorized amendment review using its exact updatedAt value, publish the immutable candidate, and record durable reviewer attribution.",
+      inputSchema: skillCandidateDecisionInputSchema,
+      outputSchema: skillCandidateDecisionOutputSchema,
+      annotations: MUTATION_ANNOTATIONS,
+    },
+    (input) => skillCandidateApprove(runtime, input),
+  );
+
+  server.registerTool(
+    "skill_candidate_reject",
+    {
+      title: "Reject a skill candidate",
+      description:
+        "Reject one pending authorized amendment review using its exact updatedAt value, preserving its immutable candidate and recording durable reviewer attribution.",
+      inputSchema: skillCandidateDecisionInputSchema,
+      outputSchema: skillCandidateDecisionOutputSchema,
+      annotations: MUTATION_ANNOTATIONS,
+    },
+    (input) => skillCandidateReject(runtime, input),
+  );
+
+  server.registerTool(
+    "skill_amendment_policy_update",
+    {
+      title: "Update skill amendment policy",
+      description:
+        "Replace one authorized skill's review or trusted auto-publication policy as a workspace owner using optimistic concurrency and replay-safe durable audit.",
+      inputSchema: skillAmendmentPolicyUpdateInputSchema,
+      outputSchema: skillAmendmentPolicyOutputSchema,
+      annotations: MUTATION_ANNOTATIONS,
+    },
+    (input) => skillAmendmentPolicyUpdate(runtime, input),
   );
 
   server.registerTool(

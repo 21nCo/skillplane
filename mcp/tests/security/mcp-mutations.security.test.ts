@@ -137,6 +137,61 @@ describe("MCP mutation authorization and isolation", () => {
     expect(contextResponse.headers.get("www-authenticate")).toContain(
       'scope="contexts:write"',
     );
+
+    const skillCreate = await environment.rawMcp(environment.skillsOnlyToken, {
+      jsonrpc: "2.0",
+      id: 73,
+      method: "tools/call",
+      params: {
+        name: "skill_create",
+        arguments: {
+          workspace: { id: environment.owner.workspaceId },
+          slug: "scope-denied-skill",
+          name: "Scope denied skill",
+          instructions: "# Scope denied\n\nThis must not be created.",
+          idempotencyKey: "scope-denied-skill",
+          caller: TEST_CALLER,
+        },
+      },
+    });
+    expect(skillCreate.status).toBe(403);
+    expect(skillCreate.headers.get("www-authenticate")).toContain(
+      'scope="skills:write"',
+    );
+
+    for (const name of [
+      "skill_candidate_approve",
+      "skill_candidate_reject",
+      "skill_amendment_policy_update",
+    ]) {
+      const publish = await environment.rawMcp(environment.skillsOnlyToken, {
+        jsonrpc: "2.0",
+        id: crypto.randomUUID(),
+        method: "tools/call",
+        params: {
+          name,
+          arguments: {
+            skill: { id: environment.skill.skill.id },
+            reviewId: "amendment-review:denied",
+            expectedUpdatedAt: new Date().toISOString(),
+            reason: "Denied",
+            policy: { mode: "review_required" },
+            idempotencyKey: `scope-denied-${name}`,
+            caller: TEST_CALLER,
+          },
+        },
+      });
+      expect(publish.status).toBe(403);
+      expect(publish.headers.get("www-authenticate")).toContain(
+        'scope="skills:publish"',
+      );
+    }
+
+    const deniedSkill = await environment.services.database.pool.query(
+      "SELECT 1 FROM skills WHERE workspace_id = $1 AND slug = $2",
+      [environment.owner.workspaceId, "scope-denied-skill"],
+    );
+    expect(deniedSkill.rowCount).toBe(0);
   });
 
   it("enforces workspace role even when the credential carries mutation scopes", async () => {

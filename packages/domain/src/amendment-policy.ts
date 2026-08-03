@@ -5,7 +5,7 @@ import { hashIdempotentRequest, type IdempotencyStore } from "./idempotency.js";
 import type { Principal, ServicePrincipalScope } from "./principal.js";
 import type { SemanticBump } from "./skill-versions.js";
 import { withDomainTransaction } from "./transactions.js";
-import { insertPrincipalAudit } from "./mutation-audit.js";
+import { insertMutationAudit, type MutationAuditContext } from "./mutation-audit.js";
 
 export interface ReviewRequiredPolicy {
   readonly mode: "review_required";
@@ -259,11 +259,26 @@ export class AmendmentPolicyService {
     readonly skillId: string;
     readonly principal: Principal;
     readonly policy: unknown;
+    readonly expectedUpdatedAt?: string;
     readonly idempotencyKey: string;
     readonly requestId: string;
+    readonly auditContext?: MutationAuditContext;
   }): Promise<AmendmentPolicy> {
     authorize(options.principal, "skills:publish");
     const policy = parseAmendmentPolicy(options.policy);
+    const expectedUpdatedAt = (() => {
+      if (options.expectedUpdatedAt === undefined) return undefined;
+      const timestamp = Date.parse(options.expectedUpdatedAt);
+      if (!Number.isFinite(timestamp)) {
+        throw new DomainError(
+          "VALIDATION_FAILED",
+          "expectedUpdatedAt must be an ISO 8601 timestamp",
+          400,
+          { field: "expectedUpdatedAt" },
+        );
+      }
+      return new Date(timestamp).toISOString();
+    })();
     await this.validateReferences(
       options.principal.workspaceId,
       options.skillId,
@@ -273,6 +288,7 @@ export class AmendmentPolicyService {
       operation: "skill.amendment-policy.update",
       skillId: options.skillId,
       policy,
+      expectedUpdatedAt: expectedUpdatedAt ?? null,
     });
     const claim = await this.idempotency.claim<{ policy: AmendmentPolicy }>({
       workspaceId: options.principal.workspaceId,
@@ -287,9 +303,35 @@ export class AmendmentPolicyService {
         this.pool,
         options.requestId,
         async ({ client }) => {
+          const current = await client.query<{ updated_at: Date }>(
+            `SELECT updated_at
+               FROM skills
+              WHERE id = $1 AND workspace_id = $2
+              FOR UPDATE`,
+            [options.skillId, options.principal.workspaceId],
+          );
+          const currentUpdatedAt = current.rows[0]?.updated_at;
+          if (!currentUpdatedAt) {
+            throw new DomainError("SKILL_NOT_FOUND", "Skill was not found", 404);
+          }
+          if (
+            expectedUpdatedAt !== undefined &&
+            currentUpdatedAt.toISOString() !== expectedUpdatedAt
+          ) {
+            throw new DomainError(
+              "SKILL_METADATA_CONFLICT",
+              "Skill metadata changed after it was read",
+              409,
+              { currentUpdatedAt: currentUpdatedAt.toISOString() },
+            );
+          }
           const updated = await client.query(
             `UPDATE skills
-                SET amendment_policy = $3, updated_at = now()
+                SET amendment_policy = $3,
+                    updated_at = GREATEST(
+                      clock_timestamp(),
+                      updated_at + interval '1 millisecond'
+                    )
               WHERE id = $1 AND workspace_id = $2
               RETURNING id`,
             [options.skillId, options.principal.workspaceId, policy],
@@ -297,14 +339,17 @@ export class AmendmentPolicyService {
           if (!updated.rows[0]) {
             throw new DomainError("SKILL_NOT_FOUND", "Skill was not found", 404);
           }
-          await insertPrincipalAudit(client, options.principal, {
+          await insertMutationAudit(client, options.principal, options.auditContext, {
             eventType: "skill.amendment_policy.updated",
             action: "skills:publish",
             requestId: options.requestId,
             resourceType: "skill",
             resourceId: options.skillId,
             skillId: options.skillId,
-            metadata: { policy },
+            metadata: {
+              policy,
+              previousUpdatedAt: currentUpdatedAt.toISOString(),
+            },
           });
           await this.idempotency.complete(client, claim.identity, 200, { policy });
           return policy;

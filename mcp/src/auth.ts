@@ -17,7 +17,12 @@ import {
 } from "@skillplane/domain";
 
 export type McpScope =
-  "skills:read" | "skills:amend" | "contexts:read" | "contexts:write";
+  | "skills:read"
+  | "skills:write"
+  | "skills:amend"
+  | "skills:publish"
+  | "contexts:read"
+  | "contexts:write";
 
 export interface OAuthMcpIdentity {
   readonly kind: "oauth";
@@ -85,7 +90,9 @@ function normalizeRequiredScopes(values: readonly string[]): readonly McpScope[]
       values.filter(
         (value): value is McpScope =>
           value === "skills:read" ||
+          value === "skills:write" ||
           value === "skills:amend" ||
+          value === "skills:publish" ||
           value === "contexts:read" ||
           value === "contexts:write",
       ),
@@ -111,6 +118,9 @@ function scopesForToolCall(message: unknown): readonly McpScope[] {
     case "skills_search":
     case "skill_asset_retrieve":
     case "skill_versions_list":
+    case "skill_versions_diff":
+    case "skill_candidates_list":
+    case "skill_amendment_policy_get":
       return ["skills:read"];
     case "skill_retrieve": {
       const args = record.params.arguments;
@@ -129,6 +139,15 @@ function scopesForToolCall(message: unknown): readonly McpScope[] {
       return ["contexts:read"];
     case "skill_amend":
       return ["skills:amend"];
+    case "skill_create":
+    case "skill_visibility_update":
+    case "skill_archive":
+    case "skill_restore":
+      return ["skills:write"];
+    case "skill_candidate_approve":
+    case "skill_candidate_reject":
+    case "skill_amendment_policy_update":
+      return ["skills:publish"];
     case "context_create":
     case "context_update":
     case "context_archive":
@@ -209,7 +228,8 @@ export function assertMcpScopes(
   identity: McpIdentity,
   requiredScopes: readonly McpScope[],
 ): void {
-  const missing = requiredScopes.filter((scope) => !identity.scopes.includes(scope));
+  const scopes = identity.scopes as readonly string[];
+  const missing = requiredScopes.filter((scope) => !scopes.includes(scope));
   if (missing.length > 0) {
     throw new McpAuthenticationError(
       403,

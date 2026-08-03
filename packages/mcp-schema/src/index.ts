@@ -9,4 +9,5 @@ export * from "./contexts.js";
 export * from "./errors.js";
 export * from "./retrieve.js";
 export * from "./search.js";
+export * from "./skill-lifecycle.js";
 export * from "./versions.js";

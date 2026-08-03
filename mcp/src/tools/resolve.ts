@@ -24,6 +24,10 @@ export interface ResolvedSkill {
   readonly tags: readonly string[];
   readonly visibility: "private" | "workspace" | "public";
   readonly currentPublishedVersionId: string | null;
+  readonly currentSemanticVersion: string | null;
+  readonly archivedAt: string | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
   readonly principal: Principal | null;
 }
 
@@ -37,7 +41,10 @@ interface SkillRow {
   readonly tags: string[];
   readonly visibility: ResolvedSkill["visibility"];
   readonly current_published_version_id: string | null;
+  readonly semantic_version: string | null;
   readonly archived_at: Date | null;
+  readonly created_at: Date;
+  readonly updated_at: Date;
 }
 
 export interface ResolvedVersion {
@@ -123,7 +130,12 @@ export async function resolveSkill(
   selector: SkillSelector,
   options: {
     readonly action:
-      "skills:read" | "skills:amend" | "contexts:read" | "contexts:write";
+      | "skills:read"
+      | "skills:write"
+      | "skills:amend"
+      | "skills:publish"
+      | "contexts:read"
+      | "contexts:write";
     readonly allowPublic: boolean;
     readonly includeArchived?: boolean;
   },
@@ -134,9 +146,12 @@ export async function resolveSkill(
     `SELECT skill.id, skill.workspace_id, workspace.slug AS workspace_slug,
             skill.slug, skill.name, skill.description, skill.tags,
             skill.visibility, skill.current_published_version_id,
-            skill.archived_at
+            version.semantic_version, skill.archived_at, skill.created_at,
+            skill.updated_at
        FROM skills skill
        JOIN workspaces workspace ON workspace.id = skill.workspace_id
+       LEFT JOIN skill_versions version
+         ON version.id = skill.current_published_version_id
       WHERE ${byId ? "skill.id = $1" : "workspace.slug = $1 AND skill.slug = $2"}
       LIMIT 1`,
     values,
@@ -183,6 +198,10 @@ export async function resolveSkill(
     tags: row.tags,
     visibility: row.visibility,
     currentPublishedVersionId: row.current_published_version_id,
+    currentSemanticVersion: row.semantic_version,
+    archivedAt: row.archived_at?.toISOString() ?? null,
+    createdAt: row.created_at.toISOString(),
+    updatedAt: row.updated_at.toISOString(),
     principal,
   };
 }

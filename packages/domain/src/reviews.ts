@@ -13,7 +13,7 @@ import {
 } from "./skill-versions.js";
 import { mapSkillInfrastructureError, type SkillVersionRecord } from "./skills.js";
 import { withDomainTransaction } from "./transactions.js";
-import { insertPrincipalAudit } from "./mutation-audit.js";
+import { insertMutationAudit, type MutationAuditContext } from "./mutation-audit.js";
 
 export type AmendmentReviewStatus = "pending" | "approved" | "rejected" | "superseded";
 
@@ -230,8 +230,10 @@ export class AmendmentReviewService {
     readonly reviewId: string;
     readonly principal: Principal;
     readonly reason: unknown;
+    readonly expectedUpdatedAt?: string;
     readonly idempotencyKey: string;
     readonly requestId: string;
+    readonly auditContext?: MutationAuditContext;
   }): Promise<AmendmentReviewDetail> {
     authorize(options.principal, "skills:publish");
     const reason = decisionReason(options.reason);
@@ -243,8 +245,10 @@ export class AmendmentReviewService {
     readonly reviewId: string;
     readonly principal: Principal;
     readonly reason: unknown;
+    readonly expectedUpdatedAt?: string;
     readonly idempotencyKey: string;
     readonly requestId: string;
+    readonly auditContext?: MutationAuditContext;
   }): Promise<AmendmentReviewDetail> {
     authorize(options.principal, "skills:publish");
     const reason = decisionReason(options.reason);
@@ -257,14 +261,30 @@ export class AmendmentReviewService {
     readonly principal: Principal;
     readonly reason: string;
     readonly decision: "approved" | "rejected";
+    readonly expectedUpdatedAt?: string;
     readonly idempotencyKey: string;
     readonly requestId: string;
+    readonly auditContext?: MutationAuditContext;
   }): Promise<AmendmentReviewDetail> {
+    const expectedUpdatedAt = (() => {
+      if (options.expectedUpdatedAt === undefined) return undefined;
+      const timestamp = Date.parse(options.expectedUpdatedAt);
+      if (!Number.isFinite(timestamp)) {
+        throw new DomainError(
+          "VALIDATION_FAILED",
+          "expectedUpdatedAt must be an ISO 8601 timestamp",
+          400,
+          { field: "expectedUpdatedAt" },
+        );
+      }
+      return new Date(timestamp).toISOString();
+    })();
     const requestHash = await hashIdempotentRequest({
       operation: `amendment.review.${options.decision}`,
       skillId: options.skillId,
       reviewId: options.reviewId,
       reason: options.reason,
+      expectedUpdatedAt: expectedUpdatedAt ?? null,
     });
     const claim = await this.idempotency.claim<{ detail: AmendmentReviewDetail }>({
       workspaceId: options.principal.workspaceId,
@@ -334,6 +354,17 @@ export class AmendmentReviewService {
               "SKILL_PUBLISH_CONFLICT",
               "The amendment review is no longer pending",
               409,
+            );
+          }
+          if (
+            expectedUpdatedAt !== undefined &&
+            row.review_updated_at.toISOString() !== expectedUpdatedAt
+          ) {
+            throw new DomainError(
+              "SKILL_PUBLISH_CONFLICT",
+              "The amendment review changed after it was read",
+              409,
+              { currentUpdatedAt: row.review_updated_at.toISOString() },
             );
           }
           let semanticVersion: string | null = null;
@@ -413,7 +444,7 @@ export class AmendmentReviewService {
               options.principal.kind === "user" ? options.principal.userId : null,
             ],
           );
-          await insertPrincipalAudit(client, options.principal, {
+          await insertMutationAudit(client, options.principal, options.auditContext, {
             eventType: `amendment.review.${options.decision}`,
             action: "skills:publish",
             requestId: options.requestId,

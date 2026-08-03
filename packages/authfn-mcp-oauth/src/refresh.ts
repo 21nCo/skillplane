@@ -19,7 +19,7 @@ interface RefreshTokenRow {
 export interface RefreshTokenExchange {
   readonly refreshToken: string;
   readonly clientId: string;
-  readonly resource: string;
+  readonly resource?: string;
   readonly scope?: string;
   readonly request: Request;
 }
@@ -109,7 +109,8 @@ export async function exchangeRefreshToken(
         token.revoked_at ||
         token.expires_at.getTime() <= runtime.now().getTime() ||
         token.client_id !== input.clientId ||
-        token.resource !== input.resource
+        token.resource !== runtime.resource ||
+        (input.resource !== undefined && token.resource !== input.resource)
       ) {
         throw new OAuthError("invalid_grant", "The refresh token is invalid");
       }

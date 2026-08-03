@@ -133,6 +133,94 @@ describe("OAuth attack and leakage defenses", () => {
     await expect(replay.json()).resolves.toMatchObject({ error: "invalid_grant" });
   });
 
+  it("keeps authorization-code resource strict and rejects duplicate token resources", async () => {
+    const missingGrant = await environment.authorize(client, "skills:read");
+    const missingBody = new URLSearchParams({
+      grant_type: "authorization_code",
+      client_id: client.clientId,
+      code: missingGrant.code,
+      redirect_uri: client.redirectUri,
+      code_verifier: missingGrant.verifier,
+    });
+    const missingResource = await environment.app.fetch(
+      new Request(`${OAUTH_ISSUER}/auth/oauth/token`, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: missingBody,
+      }),
+    );
+    expect(missingResource.status).toBe(400);
+    await expect(missingResource.json()).resolves.toMatchObject({
+      error: "invalid_request",
+    });
+
+    const duplicateGrant = await environment.authorize(client, "skills:read");
+    const body = new URLSearchParams({
+      grant_type: "authorization_code",
+      client_id: client.clientId,
+      code: duplicateGrant.code,
+      redirect_uri: client.redirectUri,
+      resource: OAUTH_RESOURCE,
+      code_verifier: duplicateGrant.verifier,
+    });
+    body.append("resource", OAUTH_RESOURCE);
+    const duplicate = await environment.app.fetch(
+      new Request(`${OAUTH_ISSUER}/auth/oauth/token`, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body,
+      }),
+    );
+    expect(duplicate.status).toBe(400);
+    await expect(duplicate.json()).resolves.toMatchObject({
+      error: "invalid_request",
+    });
+  });
+
+  it("rejects explicit refresh audience mismatches without consuming the grant", async () => {
+    const grant = await environment.authorize(client, "skills:read");
+    const exchange = await environment.exchangeCode(grant);
+    const tokens = (await exchange.json()) as { readonly refresh_token: string };
+    const refresh = (resource?: string) =>
+      environment.app.fetch(
+        new Request(
+          `${OAUTH_ISSUER}/auth/oauth/token`,
+          oauthForm({
+            grant_type: "refresh_token",
+            client_id: client.clientId,
+            refresh_token: tokens.refresh_token,
+            ...(resource !== undefined ? { resource } : {}),
+          }),
+        ),
+      );
+
+    const duplicateBody = new URLSearchParams({
+      grant_type: "refresh_token",
+      client_id: client.clientId,
+      refresh_token: tokens.refresh_token,
+      resource: OAUTH_RESOURCE,
+    });
+    duplicateBody.append("resource", OAUTH_RESOURCE);
+    const duplicate = await environment.app.fetch(
+      new Request(`${OAUTH_ISSUER}/auth/oauth/token`, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: duplicateBody,
+      }),
+    );
+    expect(duplicate.status).toBe(400);
+    await expect(duplicate.json()).resolves.toMatchObject({
+      error: "invalid_request",
+    });
+
+    const mismatched = await refresh("https://attacker.example.test/mcp");
+    expect(mismatched.status).toBe(400);
+    await expect(mismatched.json()).resolves.toMatchObject({
+      error: "invalid_target",
+    });
+    expect((await refresh()).status).toBe(200);
+  });
+
   it("requires AuthFn CSRF verification for a consent decision", async () => {
     const start = await environment.app.fetch(
       new Request(authorizationUrl(client), {

@@ -77,13 +77,18 @@ pnpm dev:mcp
 ```
 
 Create an agent credential from **Skillplane → Settings → Agent credentials**.
-For complete read, amendment, and context testing, use an `Editor` credential
+For complete read, creation, amendment, and context testing, use an `Editor` credential
 with these scopes:
 
 - `skills:read`
+- `skills:write`
 - `skills:amend`
 - `contexts:read`
 - `contexts:write`
+
+Candidate approval, rejection, and amendment-policy changes require a user OAuth
+token with `skills:publish` and an `Admin` or `Owner` workspace role. Service
+credentials deliberately cannot publish or change review policy.
 
 The credential is displayed only once. In clients whose request-header field
 uses `key=value` syntax, enter:
@@ -142,7 +147,17 @@ Skillplane currently exposes:
 - `skill_retrieve`
 - `skill_asset_retrieve`
 - `skill_versions_list`
+- `skill_versions_diff`
+- `skill_create`
+- `skill_visibility_update`
+- `skill_archive`
+- `skill_restore`
 - `skill_amend`
+- `skill_candidates_list`
+- `skill_candidate_approve`
+- `skill_candidate_reject`
+- `skill_amendment_policy_get`
+- `skill_amendment_policy_update`
 - `contexts_list`
 - `context_get`
 - `context_create`
@@ -166,6 +181,21 @@ then use `context_create`, `context_update`, `context_archive`, and
 returned by the latest context read/list/mutation. Knowledge remains immutable:
 use `context_knowledge_update` to append a revision and
 `context_knowledge_history` to exhaust its history.
+
+The skill lifecycle follows the same discovery-first model. OAuth users with
+`skills:write` can create skills, change visibility, and archive or restore them.
+Agents propose immutable versions through `skill_amend`; authorized reviewers
+use `skill_candidates_list` and approve or reject each proposal. Workspace
+owners can inspect or update per-skill amendment policy, and
+`skill_versions_diff` compares any two visible versions without downloading the
+entire bundles. Every state-changing tool requires an idempotency key and the
+latest `updatedAt` concurrency token.
+
+OAuth refresh requests may omit the RFC 8707 `resource` parameter for clients
+that do not repeat it during refresh, including affected Codex releases. In
+that case Skillplane derives the audience from the stored refresh token and
+still rejects duplicate or explicitly mismatched resources. Authorization-code
+exchange continues to require the exact MCP resource.
 
 Tool calls require caller-declared agent, model, client, run, session, and
 conversation metadata. Authenticated user or service-principal identity is

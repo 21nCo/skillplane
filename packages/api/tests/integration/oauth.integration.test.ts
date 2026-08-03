@@ -243,6 +243,62 @@ describe("OAuth 2.1 authorization server integration", () => {
     ).rejects.toMatchObject({ code: "invalid_grant", status: 401 });
   });
 
+  it("rotates a Codex refresh request without resource while preserving its stored audience", async () => {
+    const grant = await environment.authorize(client, "skills:read contexts:read");
+    const exchange = await environment.exchangeCode(grant);
+    expect(exchange.status).toBe(200);
+    const tokens = (await exchange.json()) as {
+      readonly refresh_token: string;
+    };
+
+    const refresh = await environment.app.fetch(
+      new Request(
+        `${OAUTH_ISSUER}/auth/oauth/token`,
+        oauthForm({
+          grant_type: "refresh_token",
+          client_id: client.clientId,
+          refresh_token: tokens.refresh_token,
+          scope: "skills:read",
+        }),
+      ),
+    );
+    expect(refresh.status).toBe(200);
+    const rotated = (await refresh.json()) as {
+      readonly access_token: string;
+      readonly refresh_token: string;
+      readonly scope: string;
+    };
+    expect(rotated.refresh_token).not.toBe(tokens.refresh_token);
+    expect(rotated.scope).toBe("skills:read");
+    await expect(
+      verifyTestAccessToken(environment, rotated.access_token),
+    ).resolves.toMatchObject({
+      clientId: client.clientId,
+      resource: OAUTH_RESOURCE,
+      scopes: ["skills:read"],
+    });
+
+    const audit = await environment.services.database.pool.query<{
+      event_type: string;
+      metadata: Record<string, unknown>;
+    }>(
+      `SELECT event_type, metadata
+         FROM audit_events
+        WHERE user_id = $1
+          AND event_type = 'oauth.refresh.rotated'
+        ORDER BY occurred_at DESC
+        LIMIT 1`,
+      [environment.fixture.userId],
+    );
+    expect(audit.rows[0]).toMatchObject({
+      event_type: "oauth.refresh.rotated",
+      metadata: {
+        resource: OAUTH_RESOURCE,
+        scopes: ["skills:read"],
+      },
+    });
+  });
+
   it("stores no authorization code, access token, or refresh token plaintext", async () => {
     const grant = await environment.authorize(client, "skills:read");
     const exchange = await environment.exchangeCode(grant);

@@ -289,6 +289,44 @@ describe("MCP caller and tenant boundaries", () => {
       environment.skill.version.id,
     ]);
     expect(JSON.stringify(history)).not.toContain(environment.skill.candidate.id);
+
+    const candidates = await skillsOnly.client.callTool({
+      name: "skill_candidates_list",
+      arguments: {
+        skill: { id: environment.skill.skill.id },
+        caller: TEST_CALLER,
+      },
+    });
+    expect(parseToolError(candidates).error.code).toBe("WORKSPACE_FORBIDDEN");
+  });
+
+  it("conceals private skill lifecycle reads across workspaces", async () => {
+    for (const [name, arguments_] of [
+      [
+        "skill_versions_diff",
+        {
+          skill: { id: environment.privateSkill.skill.id },
+          fromVersionId: environment.privateSkill.version.id,
+          toVersionId: environment.privateSkill.version.id,
+          caller: TEST_CALLER,
+        },
+      ],
+      [
+        "skill_amendment_policy_get",
+        { skill: { id: environment.privateSkill.skill.id }, caller: TEST_CALLER },
+      ],
+      [
+        "skill_candidates_list",
+        { skill: { id: environment.privateSkill.skill.id }, caller: TEST_CALLER },
+      ],
+    ] as const) {
+      const result = await outsider.client.callTool({
+        name,
+        arguments: arguments_,
+      });
+      expect(parseToolError(result).error.code).toBe("SKILL_NOT_FOUND");
+      expect(JSON.stringify(result)).not.toContain(environment.privateSkill.skill.name);
+    }
   });
 });
 

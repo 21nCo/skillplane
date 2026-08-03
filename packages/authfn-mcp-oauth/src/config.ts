@@ -6,7 +6,9 @@ export const MCP_RESOURCE = "https://mcp.skillplane.dev/mcp";
 export const PRODUCTION_ISSUER = "https://app.skillplane.dev";
 export const OAUTH_SCOPES = [
   "skills:read",
+  "skills:write",
   "skills:amend",
+  "skills:publish",
   "contexts:read",
   "contexts:write",
   "audit:read",

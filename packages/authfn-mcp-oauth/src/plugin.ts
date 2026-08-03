@@ -153,11 +153,11 @@ async function token(runtime: OAuthRuntime, request: Request): Promise<Response>
     );
   }
   await resolveClient(runtime, clientId);
-  const resource = requiredFormValue(form, "resource");
-  if (resource !== runtime.resource) {
-    throw new OAuthError("invalid_target", "The token resource is invalid");
-  }
   if (grantType === "authorization_code") {
+    const resource = requiredFormValue(form, "resource");
+    if (resource !== runtime.resource) {
+      throw new OAuthError("invalid_target", "The token resource is invalid");
+    }
     return json(
       await exchangeAuthorizationCode(runtime, {
         code: requiredFormValue(form, "code"),
@@ -169,12 +169,16 @@ async function token(runtime: OAuthRuntime, request: Request): Promise<Response>
     );
   }
   if (grantType === "refresh_token") {
+    const resource = formValue(form, "resource", false);
+    if (resource !== undefined && resource !== runtime.resource) {
+      throw new OAuthError("invalid_target", "The token resource is invalid");
+    }
     const scope = formValue(form, "scope", false);
     return json(
       await exchangeRefreshToken(runtime, {
         refreshToken: requiredFormValue(form, "refresh_token"),
         clientId,
-        resource,
+        ...(resource !== undefined ? { resource } : {}),
         ...(scope !== undefined ? { scope } : {}),
         request,
       }),

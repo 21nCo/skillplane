@@ -75,9 +75,19 @@ export async function testProductionMcp() {
       "context_update",
       "contexts_list",
       "skill_amend",
+      "skill_amendment_policy_get",
+      "skill_amendment_policy_update",
+      "skill_archive",
       "skill_asset_retrieve",
+      "skill_candidate_approve",
+      "skill_candidate_reject",
+      "skill_candidates_list",
+      "skill_create",
+      "skill_restore",
       "skill_retrieve",
+      "skill_versions_diff",
       "skill_versions_list",
+      "skill_visibility_update",
       "skills_list",
       "skills_search",
       "workspaces_list",
@@ -174,6 +184,20 @@ export async function testProductionMcp() {
         archiveRestore:
           names.includes("context_archive") && names.includes("context_restore"),
         knowledgeHistory: names.includes("context_knowledge_history"),
+      },
+      skillLifecycle: {
+        creation: names.includes("skill_create"),
+        visibility: names.includes("skill_visibility_update"),
+        archiveRestore:
+          names.includes("skill_archive") && names.includes("skill_restore"),
+        candidateReview:
+          names.includes("skill_candidates_list") &&
+          names.includes("skill_candidate_approve") &&
+          names.includes("skill_candidate_reject"),
+        amendmentPolicy:
+          names.includes("skill_amendment_policy_get") &&
+          names.includes("skill_amendment_policy_update"),
+        versionDiff: names.includes("skill_versions_diff"),
       },
       search: {
         workspaceId,
