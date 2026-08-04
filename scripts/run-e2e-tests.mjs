@@ -56,21 +56,11 @@ const files = readdirSync(resolve(root, "packages", "testing", "e2e"))
   .sort();
 const visual = files.filter((name) => name.includes(".visual."));
 const nonVisual = files.filter((name) => !name.includes(".visual."));
-const landing = nonVisual.filter((name) => name.startsWith("landing."));
-const application = nonVisual.filter((name) => !name.startsWith("landing."));
-const applicationVisual = visual
-  .filter((name) => !name.startsWith("landing."))
-  .map((name) => [name]);
-const landingVisual = visual
-  .filter((name) => name.startsWith("landing."))
-  .map((name) => [name]);
+const visualGroups = visual.map((name) => [name]);
 
-// App and landing harnesses both embed SvelteKit through Vite. Keep them in
-// separate worker processes so Vite's process-level SSR/config module cache
-// cannot resolve one project's lazy route modules through the other's root.
-// Visual suites also run one file per process so rasterization is not affected
-// by fonts, icons, and browser state loaded by preceding functional suites.
-for (const group of [application, ...applicationVisual, landing, ...landingVisual]) {
+// Visual suites run one file per process so rasterization is not affected by
+// fonts, icons, and browser state loaded by preceding functional suites.
+for (const group of [nonVisual, ...visualGroups]) {
   if (group.length === 0) continue;
   const status = run(group, forwarded);
   if (status !== 0) process.exit(status);

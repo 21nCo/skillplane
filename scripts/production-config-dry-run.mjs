@@ -20,7 +20,7 @@ export async function productionConfigDryRun() {
       outputPaths,
     });
     const results = {};
-    for (const kind of ["app", "mcp", "landing"]) {
+    for (const kind of ["app", "mcp"]) {
       run(
         "pnpm",
         [

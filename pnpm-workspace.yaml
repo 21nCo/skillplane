@@ -1,6 +1,5 @@
 packages:
   - app
-  - landing
   - mcp
   - packages/*
 

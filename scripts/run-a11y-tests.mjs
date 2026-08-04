@@ -13,7 +13,6 @@ const filters = args.flatMap((argument, index) =>
 const focusedSpecs = new Map([
   ["skill-pages", "skill-pages.a11y.spec.ts"],
   ["context-pages", "context-pages.a11y.spec.ts"],
-  ["landing", "landing.a11y.spec.ts"],
 ]);
 const focusedSpec = filters.length === 1 ? focusedSpecs.get(filters[0]) : undefined;
 
@@ -45,7 +44,7 @@ if (focusedSpec) {
 
 if (filters.length > 0) {
   process.stderr.write(
-    `Unknown accessibility suite "${filters.join(", ")}". Available suites: context-pages, landing, skill-pages\n`,
+    `Unknown accessibility suite "${filters.join(", ")}". Available suites: context-pages, skill-pages\n`,
   );
   process.exit(2);
 }
@@ -68,9 +67,6 @@ const workbench = spawnSync("pnpm", ["--filter", "@skillplane/ui", "test:a11y"],
 });
 if (workbench.status !== 0) process.exit(workbench.status ?? 1);
 
-// Each SvelteKit harness changes cwd while its Vite server is active. Running
-// app and landing specs in separate workers prevents Vite's process-level
-// config/module cache from resolving one project through the other's root.
 for (const spec of focusedSpecs.values()) {
   const result = spawnSync(
     "pnpm",

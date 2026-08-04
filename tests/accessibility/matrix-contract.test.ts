@@ -7,7 +7,6 @@ const specifications = [
   "packages/ui/tests/a11y/workbench.spec.ts",
   "packages/testing/e2e/skill-pages.a11y.spec.ts",
   "packages/testing/e2e/context-pages.a11y.spec.ts",
-  "packages/testing/e2e/landing.a11y.spec.ts",
 ] as const;
 
 describe("WCAG 2.2 AA release matrix contract", () => {

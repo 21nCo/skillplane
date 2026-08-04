@@ -37,7 +37,6 @@ async function releaseSourceDigest() {
   const listed = capture("rg", [
     "--files",
     "app",
-    "landing",
     "mcp",
     "packages",
     "scripts",
@@ -72,7 +71,7 @@ export async function deployAll() {
   const r2 = ensureProductionBucket();
   const progressPath = resolve(root, ".data", "production", "release-in-progress.json");
   const workerDeployments = {};
-  for (const kind of ["app", "mcp", "landing"]) {
+  for (const kind of ["app", "mcp"]) {
     workerDeployments[kind] = await deployNamedWorker(kind, {
       build: false,
       tag,
@@ -133,7 +132,6 @@ export async function deployAll() {
       secretNames: {
         app: ["AUTHFN_SECRET", "OAUTH_TOKEN_PEPPER", "TURNSTILE_SECRET_KEY"],
         mcp: ["OAUTH_TOKEN_PEPPER"],
-        landing: [],
       },
       turnstile: {
         siteKeyConfigured: true,

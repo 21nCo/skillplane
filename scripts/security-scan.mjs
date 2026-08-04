@@ -41,12 +41,10 @@ const ignoredDirectories = new Set([
   "playwright-report",
   "test-results",
 ]);
-const sourceRoots = ["app/src", "landing/src", "mcp/src", "packages"];
+const sourceRoots = ["app/src", "mcp/src", "packages"];
 const bundleRoots = [
   "app/.svelte-kit/output/client",
   "app/.svelte-kit/output/server",
-  "landing/.svelte-kit/output/client",
-  "landing/.svelte-kit/output/server",
   "mcp/dist",
 ];
 const sensitiveEnvironmentKeys = [

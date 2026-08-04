@@ -4,7 +4,6 @@ import { spawnSync } from "node:child_process";
 
 const workspaceAliases = new Map([
   ["app", "@skillplane/app"],
-  ["landing", "@skillplane/landing"],
   ["mcp", "@skillplane/mcp"],
 ]);
 const input = process.argv.slice(2);

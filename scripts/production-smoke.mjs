@@ -94,7 +94,7 @@ export async function productionSmoke(options = {}) {
   assertTls(app, "app.skillplane.dev");
   const [landingHtml, appHtml] = await Promise.all([landing.text(), app.text()]);
   assert(
-    landingHtml.includes("Versioned skills for accountable AI agents"),
+    landingHtml.includes("Skills that self-improve"),
     "The landing host returned unexpected content",
   );
   assert(

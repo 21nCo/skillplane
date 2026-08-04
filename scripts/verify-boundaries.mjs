@@ -5,8 +5,8 @@ import { dirname, extname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const requiredWorkspaces = ["app", "landing", "mcp", "packages"];
-const productionRoots = ["app/src", "landing/src", "mcp/src", "packages"];
+const requiredWorkspaces = ["app", "mcp", "packages"];
+const productionRoots = ["app/src", "mcp/src", "packages"];
 const findings = [];
 
 async function exists(path) {
@@ -47,7 +47,6 @@ for (const workspace of requiredWorkspaces) {
 
 for (const forbiddenPath of [
   "app/src/lib/domain",
-  "landing/src/lib/domain",
   "mcp/src/domain",
 ]) {
   if (await exists(join(repoRoot, forbiddenPath))) {

@@ -32,15 +32,6 @@ if (localRuntimeTests.status !== 0) {
   process.exit(localRuntimeTests.status ?? 1);
 }
 
-if (filters.length === 1 && filters[0] === "landing") {
-  const result = spawnSync("pnpm", ["--filter", "@skillplane/landing", "test:unit"], {
-    cwd: repoRoot,
-    encoding: "utf8",
-    stdio: "inherit",
-  });
-  process.exit(result.status ?? 1);
-}
-
 if (filters.length === 1 && filters[0] === "app" && positional.includes("skills")) {
   const result = spawnSync(
     "pnpm",

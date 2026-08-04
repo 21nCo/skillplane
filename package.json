@@ -12,7 +12,6 @@
   },
   "workspaces": [
     "app",
-    "landing",
     "mcp",
     "packages/*"
   ],
@@ -31,7 +30,6 @@
     "test:security": "node scripts/run-security-tests.mjs",
     "test:performance": "node scripts/performance-gate.mjs",
     "test:recovery": "node scripts/recovery-test.mjs",
-    "test:crawl": "node scripts/run-crawl-tests.mjs",
     "test:mcp:conformance": "node scripts/run-mcp-conformance.mjs",
     "test:mcp:e2e": "node scripts/run-mcp-e2e.mjs",
     "test:e2e": "node scripts/run-e2e-tests.mjs",
@@ -60,12 +58,10 @@
     "dev:app": "pnpm --filter @skillplane/app dev",
     "dev:app:worker": "pnpm --filter @skillplane/app dev:worker",
     "dev:app:auth": "pnpm --filter @skillplane/app dev:worker:auth",
-    "dev:landing": "pnpm --filter @skillplane/landing dev",
     "dev:mcp": "pnpm --filter @skillplane/mcp dev",
     "deploy:render": "node --env-file-if-exists=.env.production.local scripts/render-deploy-config.mjs",
     "deploy:app": "node --env-file-if-exists=.env.production.local scripts/deploy-app.mjs",
     "deploy:mcp": "node --env-file-if-exists=.env.production.local scripts/deploy-mcp.mjs",
-    "deploy:landing": "node --env-file-if-exists=.env.production.local scripts/deploy-landing.mjs",
     "deploy:all": "node --env-file-if-exists=.env.production.local scripts/deploy-all.mjs",
     "smoke:production": "node --env-file-if-exists=.env.production.local scripts/production-smoke.mjs",
     "test:mcp:production": "node --env-file-if-exists=.env.production.local scripts/test-mcp-production.mjs",

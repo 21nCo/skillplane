@@ -36,11 +36,7 @@ function validateRenderedConfig(name, config, hyperdriveId) {
   const serialized = JSON.stringify(config);
   const route = config.routes?.[0];
   const routeIsValid =
-    name === "landing"
-      ? route?.pattern === `${workers[name].host}/*` &&
-        route.zone_name === workers[name].host &&
-        route.custom_domain === undefined
-      : route?.pattern === workers[name].host && route.custom_domain === true;
+    route?.pattern === workers[name].host && route.custom_domain === true;
   if (
     config.name !== workers[name].name ||
     config.workers_dev !== false ||
@@ -50,39 +46,37 @@ function validateRenderedConfig(name, config, hyperdriveId) {
   ) {
     throw new Error(`The ${name} production template violates the deployment contract`);
   }
-  if (name !== "landing") {
-    if (
-      config.hyperdrive?.length !== 1 ||
-      config.hyperdrive[0]?.binding !== "HYPERDRIVE" ||
-      config.hyperdrive[0]?.id !== hyperdriveId ||
-      config.r2_buckets?.[0]?.bucket_name !== "skillplane-skill-bundles"
-    ) {
-      throw new Error(`The ${name} production binding inventory is incomplete`);
-    }
-    if (
-      name === "app" &&
-      (config.send_email?.[0]?.name !== "SEND_EMAIL" ||
-        config.vars?.AUTH_MODE !== "otp")
-    ) {
-      throw new Error("The app production email binding is incomplete");
-    }
-    if (
-      name === "mcp" &&
-      (config.send_email !== undefined ||
-        !config.rules?.some(
-          (rule) =>
-            rule.type === "Data" &&
-            rule.globs?.includes("**/*.png") &&
-            rule.globs?.includes("**/*.ico"),
-        ) ||
-        "AUTH_MODE" in (config.vars ?? {}) ||
-        "EMAIL_PROVIDER" in (config.vars ?? {}) ||
-        "PUBLIC_TURNSTILE_SITE_KEY" in (config.vars ?? {}) ||
-        "TURNSTILE_ALLOWED_HOSTNAMES" in (config.vars ?? {}) ||
-        "SKILLPLANE_OTP_FROM" in (config.vars ?? {}))
-    ) {
-      throw new Error("The MCP Worker must not receive an email binding");
-    }
+  if (
+    config.hyperdrive?.length !== 1 ||
+    config.hyperdrive[0]?.binding !== "HYPERDRIVE" ||
+    config.hyperdrive[0]?.id !== hyperdriveId ||
+    config.r2_buckets?.[0]?.bucket_name !== "skillplane-skill-bundles"
+  ) {
+    throw new Error(`The ${name} production binding inventory is incomplete`);
+  }
+  if (
+    name === "app" &&
+    (config.send_email?.[0]?.name !== "SEND_EMAIL" ||
+      config.vars?.AUTH_MODE !== "otp")
+  ) {
+    throw new Error("The app production email binding is incomplete");
+  }
+  if (
+    name === "mcp" &&
+    (config.send_email !== undefined ||
+      !config.rules?.some(
+        (rule) =>
+          rule.type === "Data" &&
+          rule.globs?.includes("**/*.png") &&
+          rule.globs?.includes("**/*.ico"),
+      ) ||
+      "AUTH_MODE" in (config.vars ?? {}) ||
+      "EMAIL_PROVIDER" in (config.vars ?? {}) ||
+      "PUBLIC_TURNSTILE_SITE_KEY" in (config.vars ?? {}) ||
+      "TURNSTILE_ALLOWED_HOSTNAMES" in (config.vars ?? {}) ||
+      "SKILLPLANE_OTP_FROM" in (config.vars ?? {}))
+  ) {
+    throw new Error("The MCP Worker must not receive an email binding");
   }
 }
 
@@ -94,7 +88,6 @@ export async function renderDeploymentConfigs(options = {}) {
       PUBLIC_TURNSTILE_SITE_KEY: siteKey,
     }),
     mcp: runtimeConfig(await readTemplate("mcp"), hyperdriveId),
-    landing: await readTemplate("landing"),
   };
   for (const config of Object.values(templates)) {
     config.$schema = "../node_modules/wrangler/config-schema.json";
@@ -123,7 +116,7 @@ export async function renderDeploymentConfigs(options = {}) {
           worker: config.name,
           host: workers[name].host,
           routing: {
-            type: name === "landing" ? "zone-route" : "custom-domain",
+            type: "custom-domain",
             pattern: config.routes[0].pattern,
           },
         },

@@ -33,13 +33,6 @@ export const workers = Object.freeze({
     host: "mcp.skillplane.dev",
     secretNames: ["OAUTH_TOKEN_PEPPER"],
   },
-  landing: {
-    name: "skillplane-landing",
-    directory: resolve(root, "landing"),
-    config: resolve(root, "landing", "wrangler.generated.json"),
-    host: "skillplane.dev",
-    secretNames: [],
-  },
 });
 
 const railwayHostPattern = /(?:^|\.)(?:rlwy\.net|railway\.app)$/iu;

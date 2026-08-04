@@ -10,32 +10,6 @@ const filters = args.flatMap((argument, index) =>
   argument === "--filter" && args[index + 1] ? [args[index + 1]] : [],
 );
 
-if (filters.length === 1 && filters[0] === "landing") {
-  const result = spawnSync(
-    "pnpm",
-    [
-      "exec",
-      "playwright",
-      "test",
-      "--config",
-      "packages/testing/playwright.config.ts",
-      "landing.visual.spec.ts",
-    ],
-    {
-      cwd: repoRoot,
-      encoding: "utf8",
-      stdio: "inherit",
-      env: {
-        ...process.env,
-        NODE_OPTIONS: [process.env.NODE_OPTIONS, "--conditions=development"]
-          .filter(Boolean)
-          .join(" "),
-      },
-    },
-  );
-  process.exit(result.status ?? 1);
-}
-
 if (filters.length === 1 && filters[0] === "skill-pages") {
   const result = spawnSync(
     "pnpm",

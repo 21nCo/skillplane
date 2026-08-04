@@ -191,7 +191,7 @@ export async function verifyProductionRollback() {
     }
     databaseBefore = await databaseSnapshot();
     try {
-      for (const kind of ["landing", "mcp", "app"]) {
+      for (const kind of ["mcp", "app"]) {
         rollbackWorker(
           kind,
           inventory[kind].priorVersion,
@@ -208,7 +208,7 @@ export async function verifyProductionRollback() {
       rehearsalError = error;
     }
     const forwardErrors = [];
-    for (const kind of ["app", "mcp", "landing"]) {
+    for (const kind of ["app", "mcp"]) {
       try {
         const current = activeWorkerVersion(workers[kind]);
         if (current !== inventory[kind].releaseVersion) {

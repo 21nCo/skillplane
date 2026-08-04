@@ -1,7 +1,9 @@
 # Production deployment
 
-Skillplane deploys three Cloudflare Workers backed by one Railway Postgres
-database through Hyperdrive and one private R2 bucket. The production hosts are
+This repository deploys the Skillplane app and MCP Cloudflare Workers backed by
+one Railway Postgres database through Hyperdrive and one private R2 bucket. The
+landing Worker is maintained and deployed independently from the 21n monorepo's
+`landing/skillplane` workspace. The production hosts are
 `skillplane.dev`, `app.skillplane.dev`, and `mcp.skillplane.dev`.
 
 ## One-time provider preparation
@@ -106,16 +108,14 @@ The commands enforce these boundaries:
   `wrangler deploy --secrets-file`, and deleted in a `finally` block. They are
   never written to Wrangler source configuration or `.conduct`. The app
   receives AuthFn, OAuth, and Turnstile secrets; MCP receives only the OAuth
-  pepper; landing receives none. MCP does not receive Email Service or
-  Turnstile bindings.
-- Deployment order is app, MCP, then landing. On a first deployment, each
-  Worker receives an identical rollback baseline followed by a distinct
-  release version.
-- The app and MCP Workers use Custom Domains with `workers_dev: false`.
-  Landing uses the proxied zone route `skillplane.dev/*` because the apex has
-  an externally managed DNS origin record that Cloudflare Custom Domains will
-  not replace. The route covers every apex request at the edge while preserving
-  the existing DNS record; Cloudflare provides TLS for all three hosts.
+  pepper. MCP does not receive Email Service or Turnstile bindings.
+- Deployment order is app, then MCP. On a first deployment, each Worker receives
+  an identical rollback baseline followed by a distinct release version.
+- The app and MCP Workers use Custom Domains with `workers_dev: false`. The
+  independently deployed landing Worker uses the proxied zone route
+  `skillplane.dev/*` because the apex has an externally managed DNS origin record
+  that Cloudflare Custom Domains will not replace. The route covers every apex
+  request at the edge while preserving the existing DNS record.
 
 The successful command writes a sanitized, append-only manifest under
 `.conduct/deployments/`. It records Worker release/prior versions, Hyperdrive
@@ -173,7 +173,8 @@ pnpm verify:rollback:production
 
 Do not accept production traffic until every command passes and the provider
 dashboards show healthy Railway backups, Cloudflare Email Service onboarding,
-and all three Custom Domains as active.
+and both application Custom Domains as active. Verify the independently managed
+landing zone route from its own workspace.
 
 ## Failure handling
 

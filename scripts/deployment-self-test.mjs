@@ -29,11 +29,9 @@ const rendered = await renderDeploymentConfigs({
   siteKey: "turnstile-self-test-site-key",
   write: false,
 });
-assert(Object.keys(rendered.configs).length === 3, "Three configs were not rendered");
+assert(Object.keys(rendered.configs).length === 2, "Two configs were not rendered");
 assert(
-  rendered.configs.landing.routing.type === "zone-route" &&
-    rendered.configs.landing.routing.pattern === "skillplane.dev/*" &&
-    rendered.configs.app.routing.type === "custom-domain" &&
+  rendered.configs.app.routing.type === "custom-domain" &&
     rendered.configs.mcp.routing.type === "custom-domain",
   "Production routing modes were not rendered correctly",
 );

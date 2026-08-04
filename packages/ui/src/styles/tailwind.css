@@ -5,7 +5,6 @@
 
 @source "../components";
 @source "../../../../app/src";
-@source "../../../../landing/src";
 
 @theme inline {
   --color-canvas: var(--sp-color-canvas);

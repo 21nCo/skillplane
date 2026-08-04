@@ -196,11 +196,7 @@ async function validateGeneratedConfig(kind) {
   const config = JSON.parse(await readFile(worker.config, "utf8"));
   const route = config.routes?.[0];
   const routeIsValid =
-    kind === "landing"
-      ? route?.pattern === `${worker.host}/*` &&
-        route.zone_name === worker.host &&
-        route.custom_domain === undefined
-      : route?.pattern === worker.host && route.custom_domain === true;
+    route?.pattern === worker.host && route.custom_domain === true;
   if (
     config.name !== worker.name ||
     config.workers_dev !== false ||
@@ -209,41 +205,39 @@ async function validateGeneratedConfig(kind) {
   ) {
     throw new Error(`${worker.name} generated configuration is invalid`);
   }
-  if (kind !== "landing") {
-    if (
-      config.hyperdrive?.length !== 1 ||
-      config.hyperdrive[0]?.binding !== "HYPERDRIVE" ||
-      config.hyperdrive[0]?.id !== requireHyperdriveId() ||
-      config.r2_buckets?.[0]?.bucket_name !== productionBucket ||
-      "DATABASE_URL" in (config.vars ?? {})
-    ) {
-      throw new Error(`${worker.name} generated bindings are invalid`);
-    }
-    if (
-      kind === "app" &&
-      (config.send_email?.[0]?.name !== "SEND_EMAIL" ||
-        config.vars?.AUTH_MODE !== "otp" ||
-        config.vars?.PUBLIC_TURNSTILE_SITE_KEY !== publicTurnstileSiteKey())
-    ) {
-      throw new Error(`${worker.name} generated auth bindings are invalid`);
-    }
-    if (
-      kind === "mcp" &&
-      (config.send_email !== undefined ||
-        !config.rules?.some(
-          (rule) =>
-            rule.type === "Data" &&
-            rule.globs?.includes("**/*.png") &&
-            rule.globs?.includes("**/*.ico"),
-        ) ||
-        "AUTH_MODE" in (config.vars ?? {}) ||
-        "EMAIL_PROVIDER" in (config.vars ?? {}) ||
-        "PUBLIC_TURNSTILE_SITE_KEY" in (config.vars ?? {}) ||
-        "TURNSTILE_ALLOWED_HOSTNAMES" in (config.vars ?? {}) ||
-        "SKILLPLANE_OTP_FROM" in (config.vars ?? {}))
-    ) {
-      throw new Error(`${worker.name} has unnecessary authentication bindings`);
-    }
+  if (
+    config.hyperdrive?.length !== 1 ||
+    config.hyperdrive[0]?.binding !== "HYPERDRIVE" ||
+    config.hyperdrive[0]?.id !== requireHyperdriveId() ||
+    config.r2_buckets?.[0]?.bucket_name !== productionBucket ||
+    "DATABASE_URL" in (config.vars ?? {})
+  ) {
+    throw new Error(`${worker.name} generated bindings are invalid`);
+  }
+  if (
+    kind === "app" &&
+    (config.send_email?.[0]?.name !== "SEND_EMAIL" ||
+      config.vars?.AUTH_MODE !== "otp" ||
+      config.vars?.PUBLIC_TURNSTILE_SITE_KEY !== publicTurnstileSiteKey())
+  ) {
+    throw new Error(`${worker.name} generated auth bindings are invalid`);
+  }
+  if (
+    kind === "mcp" &&
+    (config.send_email !== undefined ||
+      !config.rules?.some(
+        (rule) =>
+          rule.type === "Data" &&
+          rule.globs?.includes("**/*.png") &&
+          rule.globs?.includes("**/*.ico"),
+      ) ||
+      "AUTH_MODE" in (config.vars ?? {}) ||
+      "EMAIL_PROVIDER" in (config.vars ?? {}) ||
+      "PUBLIC_TURNSTILE_SITE_KEY" in (config.vars ?? {}) ||
+      "TURNSTILE_ALLOWED_HOSTNAMES" in (config.vars ?? {}) ||
+      "SKILLPLANE_OTP_FROM" in (config.vars ?? {}))
+  ) {
+    throw new Error(`${worker.name} has unnecessary authentication bindings`);
   }
 }
 

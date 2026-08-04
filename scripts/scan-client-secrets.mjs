@@ -5,10 +5,7 @@ import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const clientRoots = [
-  "app/.svelte-kit/output/client",
-  "landing/.svelte-kit/output/client",
-];
+const clientRoots = ["app/.svelte-kit/output/client"];
 const forbiddenMarkers = [
   "AUTHFN_SECRET",
   "OAUTH_TOKEN_PEPPER",
