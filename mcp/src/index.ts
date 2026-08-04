@@ -39,6 +39,7 @@ import {
 
 const MCP_ISSUER = "https://app.skillplane.dev";
 const MCP_RESOURCE = "https://mcp.skillplane.dev/mcp";
+const MCP_SSE_HEARTBEAT_INTERVAL_MS = 15_000;
 
 const BRAND_CACHE_CONTROL = "public, max-age=604800, immutable";
 
@@ -118,6 +119,35 @@ function secureProtocolResponse(response: Response): Response {
   });
 }
 
+function statelessEventStreamResponse(): Response {
+  const encoder = new TextEncoder();
+  let heartbeat: ReturnType<typeof setInterval> | undefined;
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const enqueueHeartbeat = () => {
+        try {
+          controller.enqueue(encoder.encode(": skillplane heartbeat\n\n"));
+        } catch {
+          if (heartbeat !== undefined) clearInterval(heartbeat);
+        }
+      };
+      enqueueHeartbeat();
+      heartbeat = setInterval(enqueueHeartbeat, MCP_SSE_HEARTBEAT_INTERVAL_MS);
+    },
+    cancel() {
+      if (heartbeat !== undefined) clearInterval(heartbeat);
+    },
+  });
+  return secureProtocolResponse(
+    new Response(body, {
+      status: 200,
+      headers: {
+        "content-type": "text/event-stream",
+      },
+    }),
+  );
+}
+
 function statelessMethodNotAllowedResponse(): Response {
   return secureProtocolResponse(
     new Response(
@@ -132,7 +162,7 @@ function statelessMethodNotAllowedResponse(): Response {
       {
         status: 405,
         headers: {
-          allow: "POST",
+          allow: "GET, POST",
           "content-type": "application/json",
         },
       },
@@ -363,6 +393,9 @@ export function createMcpApp(options: CreateMcpAppOptions = {}) {
           "invalid_session",
           "Skillplane uses stateless Streamable HTTP sessions",
         );
+      }
+      if (context.req.raw.method === "GET") {
+        return statelessEventStreamResponse();
       }
       if (context.req.raw.method !== "POST") {
         return statelessMethodNotAllowedResponse();

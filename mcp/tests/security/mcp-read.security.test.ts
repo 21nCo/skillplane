@@ -60,7 +60,7 @@ afterAll(async () => {
 }, 30_000);
 
 describe("MCP authentication and protocol security", () => {
-  it("challenges unauthenticated standalone SSE requests before declining them", async () => {
+  it("challenges unauthenticated standalone SSE requests before opening them", async () => {
     const response = await environment.app.fetch(
       new Request(TEST_MCP_RESOURCE, {
         method: "GET",

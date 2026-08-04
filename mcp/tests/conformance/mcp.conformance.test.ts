@@ -165,14 +165,14 @@ describe("MCP Streamable HTTP conformance", () => {
 
     const method = await protocolRequest(ping, {}, "PUT");
     expect(method.status).toBe(405);
-    expect(method.headers.get("allow")).toBe("POST");
+    expect(method.headers.get("allow")).toBe("GET, POST");
     await expect(method.json()).resolves.toMatchObject({
       jsonrpc: "2.0",
       error: { code: -32000 },
     });
   });
 
-  it("declines standalone SSE streams immediately on the stateless endpoint", async () => {
+  it("keeps standalone SSE streams alive with an immediate heartbeat", async () => {
     const response = await environment.app.fetch(
       new Request(TEST_MCP_RESOURCE, {
         method: "GET",
@@ -184,17 +184,14 @@ describe("MCP Streamable HTTP conformance", () => {
       }),
     );
 
-    expect(response.status).toBe(405);
-    expect(response.headers.get("allow")).toBe("POST");
-    expect(response.headers.get("content-type")).toContain("application/json");
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("text/event-stream");
     expect(response.headers.get("cache-control")).toBe("no-store");
-    await expect(response.json()).resolves.toEqual({
-      jsonrpc: "2.0",
-      error: {
-        code: -32000,
-        message: "Method not allowed.",
-      },
-      id: null,
-    });
+    const reader = response.body?.getReader();
+    expect(reader).toBeDefined();
+    const first = await reader?.read();
+    expect(new TextDecoder().decode(first?.value)).toBe(": skillplane heartbeat\n\n");
+    expect(first?.done).toBe(false);
+    await reader?.cancel();
   });
 });
