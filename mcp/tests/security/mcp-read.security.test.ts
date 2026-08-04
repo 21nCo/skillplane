@@ -60,6 +60,23 @@ afterAll(async () => {
 }, 30_000);
 
 describe("MCP authentication and protocol security", () => {
+  it("challenges unauthenticated standalone SSE requests before declining them", async () => {
+    const response = await environment.app.fetch(
+      new Request(TEST_MCP_RESOURCE, {
+        method: "GET",
+        headers: {
+          accept: "text/event-stream",
+          "mcp-protocol-version": "2025-11-25",
+        },
+      }),
+    );
+
+    expect(response.status).toBe(401);
+    expect(response.headers.get("www-authenticate")).toContain("Bearer");
+    expect(response.headers.get("www-authenticate")).toContain("resource_metadata=");
+    expect(response.headers.get("cache-control")).toBe("no-store");
+  });
+
   it("returns standards challenges for missing, revoked, and insufficient credentials", async () => {
     const missing = await environment.rawMcp(null, {
       jsonrpc: "2.0",

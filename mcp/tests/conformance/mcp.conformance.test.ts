@@ -165,10 +165,36 @@ describe("MCP Streamable HTTP conformance", () => {
 
     const method = await protocolRequest(ping, {}, "PUT");
     expect(method.status).toBe(405);
-    expect(method.headers.get("allow")).toBe("GET, POST, DELETE");
+    expect(method.headers.get("allow")).toBe("POST");
     await expect(method.json()).resolves.toMatchObject({
       jsonrpc: "2.0",
       error: { code: -32000 },
+    });
+  });
+
+  it("declines standalone SSE streams immediately on the stateless endpoint", async () => {
+    const response = await environment.app.fetch(
+      new Request(TEST_MCP_RESOURCE, {
+        method: "GET",
+        headers: {
+          authorization: `Bearer ${environment.serviceToken}`,
+          accept: "text/event-stream",
+          "mcp-protocol-version": "2025-11-25",
+        },
+      }),
+    );
+
+    expect(response.status).toBe(405);
+    expect(response.headers.get("allow")).toBe("POST");
+    expect(response.headers.get("content-type")).toContain("application/json");
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    await expect(response.json()).resolves.toEqual({
+      jsonrpc: "2.0",
+      error: {
+        code: -32000,
+        message: "Method not allowed.",
+      },
+      id: null,
     });
   });
 });

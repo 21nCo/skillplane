@@ -118,6 +118,28 @@ function secureProtocolResponse(response: Response): Response {
   });
 }
 
+function statelessMethodNotAllowedResponse(): Response {
+  return secureProtocolResponse(
+    new Response(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        error: {
+          code: -32000,
+          message: "Method not allowed.",
+        },
+        id: null,
+      }),
+      {
+        status: 405,
+        headers: {
+          allow: "POST",
+          "content-type": "application/json",
+        },
+      },
+    ),
+  );
+}
+
 function brandAssetResponse(body: ArrayBuffer, contentType: string): Response {
   return new Response(body, {
     headers: {
@@ -341,6 +363,9 @@ export function createMcpApp(options: CreateMcpAppOptions = {}) {
           "invalid_session",
           "Skillplane uses stateless Streamable HTTP sessions",
         );
+      }
+      if (context.req.raw.method !== "POST") {
+        return statelessMethodNotAllowedResponse();
       }
       const runtime = createRuntime(
         services,
