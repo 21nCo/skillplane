@@ -119,6 +119,46 @@ function secureProtocolResponse(response: Response): Response {
   });
 }
 
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+async function compactToolCatalogResponse(response: Response): Promise<Response> {
+  if (!response.headers.get("content-type")?.includes("application/json")) {
+    return response;
+  }
+
+  const body = await response.text();
+  let payload: unknown;
+  try {
+    payload = JSON.parse(body);
+  } catch {
+    return new Response(body, response);
+  }
+
+  if (
+    !isJsonObject(payload) ||
+    !isJsonObject(payload.result) ||
+    !Array.isArray(payload.result.tools)
+  ) {
+    return new Response(body, response);
+  }
+
+  // Keep optional output contracts server-side: agent hosts only need input
+  // contracts, and forwarding the full catalog can exceed connector budgets.
+  for (const tool of payload.result.tools) {
+    if (isJsonObject(tool)) delete tool.outputSchema;
+  }
+
+  const headers = new Headers(response.headers);
+  headers.delete("content-length");
+  return new Response(JSON.stringify(payload), {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
 function statelessEventStreamResponse(): Response {
   const encoder = new TextEncoder();
   let heartbeat: ReturnType<typeof setInterval> | undefined;
@@ -412,7 +452,8 @@ export function createMcpApp(options: CreateMcpAppOptions = {}) {
         enableJsonResponse: true,
       });
       await server.connect(transport);
-      return secureProtocolResponse(await transport.handleRequest(context.req.raw));
+      const response = await transport.handleRequest(context.req.raw);
+      return secureProtocolResponse(await compactToolCatalogResponse(response));
     } catch (error) {
       if (error instanceof McpAuthenticationError) {
         return mcpAuthenticationResponse(services, error);

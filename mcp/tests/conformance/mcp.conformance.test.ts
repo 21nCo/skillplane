@@ -53,9 +53,10 @@ describe("MCP Streamable HTTP conformance", () => {
     await expect(connection.client.ping()).resolves.toEqual({});
   });
 
-  it("advertises twenty-seven complete tool contracts as JSON Schema", async () => {
+  it("advertises a compact catalog of twenty-seven input contracts", async () => {
     const result = await connection.client.listTools();
     expect(result.tools).toHaveLength(27);
+    expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThan(96 * 1_024);
     for (const tool of result.tools) {
       expect(tool.name).toMatch(
         /^(workspaces_list|skills_list|skills_search|skill_retrieve|skill_asset_retrieve|skill_versions_list|skill_versions_diff|skill_candidates_list|skill_amendment_policy_get|contexts_list|context_get|context_knowledge_history|context_notes_list|skill_amend|skill_create|skill_visibility_update|skill_archive|skill_restore|skill_candidate_approve|skill_candidate_reject|skill_amendment_policy_update|context_create|context_update|context_archive|context_restore|context_knowledge_update|context_note_upsert)$/u,
@@ -65,7 +66,7 @@ describe("MCP Streamable HTTP conformance", () => {
         type: "object",
         additionalProperties: false,
       });
-      expect(tool.outputSchema).toMatchObject({ type: "object" });
+      expect(tool.outputSchema).toBeUndefined();
       const mutating = [
         "skill_amend",
         "skill_create",
