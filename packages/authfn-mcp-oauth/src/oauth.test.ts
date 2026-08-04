@@ -23,6 +23,23 @@ const pool = {} as Pool;
 const pepper = "unit-test-only-oauth-pepper-32-characters";
 
 describe("OAuth 2.1 metadata and configuration", () => {
+  it("keeps the global fetch receiver when the runtime calls fetcher as a property", async () => {
+    const receiverSensitiveFetcher = function (this: unknown) {
+      expect(this).toBe(globalThis);
+      return Promise.resolve(new Response(null, { status: 204 }));
+    } as typeof fetch;
+    const runtime = normalizeOAuthConfig({
+      pool,
+      issuer: "https://app.skillplane.dev",
+      tokenPepper: pepper,
+      fetcher: receiverSensitiveFetcher,
+    });
+
+    const response = await runtime.fetcher("https://client.example.test/metadata");
+
+    expect(response.status).toBe(204);
+  });
+
   it("advertises only the authorization-code, refresh, public-client, and S256 surface", () => {
     const runtime = normalizeOAuthConfig({
       pool,

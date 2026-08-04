@@ -107,7 +107,7 @@ export function normalizeOAuthConfig(config: AuthFnMcpOAuthConfig): OAuthRuntime
     issuer,
     resource,
     tokenPepper: config.tokenPepper,
-    fetcher: config.fetcher ?? fetch,
+    fetcher: (config.fetcher ?? fetch).bind(globalThis),
     now: config.now ?? (() => new Date()),
     randomBytes: config.randomBytes ?? nodeRandomBytes,
     emit: async (event) => {
