@@ -1,6 +1,9 @@
 import type { SkillsSearchOutput } from "@skillplane/mcp-schema";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { compactLinearToolCatalogResponse } from "../../src/index.js";
+import {
+  compactLinearToolCatalogResponse,
+  withLinearAgentCaller,
+} from "../../src/index.js";
 import { SKILLPLANE_MCP_SERVER_INFO } from "../../src/server.js";
 import {
   parseStructured,
@@ -105,7 +108,7 @@ describe("MCP Streamable HTTP conformance", () => {
       readonly result: { readonly tools: readonly Record<string, unknown>[] };
     };
 
-    expect(Buffer.byteLength(body)).toBeLessThan(64 * 1_024);
+    expect(Buffer.byteLength(body)).toBeLessThan(32 * 1_024);
     expect(compacted.result.tools).toHaveLength(27);
     for (const tool of compacted.result.tools) {
       expect(tool).not.toHaveProperty("outputSchema");
@@ -113,7 +116,41 @@ describe("MCP Streamable HTTP conformance", () => {
       expect(tool).not.toHaveProperty("annotations");
       expect(tool).not.toHaveProperty("title");
       expect(tool.inputSchema).not.toHaveProperty("$schema");
+      expect(tool.inputSchema).not.toHaveProperty("properties.caller");
+      expect(tool.inputSchema).not.toHaveProperty(
+        "required",
+        expect.arrayContaining(["caller"]),
+      );
     }
+  });
+
+  it("restores Linear caller attribution before strict tool validation", async () => {
+    const request = await withLinearAgentCaller(
+      new Request(TEST_MCP_RESOURCE, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: { name: "workspaces_list", arguments: { limit: 20 } },
+        }),
+      }),
+      true,
+    );
+    const payload = (await request.json()) as {
+      readonly params: {
+        readonly arguments: { readonly caller: Record<string, unknown> };
+      };
+    };
+
+    expect(payload.params.arguments.caller).toMatchObject({
+      agentId: "linear-agent",
+      agentName: "Linear Agent",
+      modelProvider: "Linear",
+      clientName: "Linear",
+    });
+    expect(payload.params.arguments.caller.runId).toMatch(/^linear-run:/u);
   });
 
   it("executes a declared tool through structured and text MCP content", async () => {

@@ -124,6 +124,36 @@ function isJsonObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+const LINEAR_OMITTED_SCHEMA_KEYWORDS = new Set([
+  "$schema",
+  "default",
+  "exclusiveMaximum",
+  "exclusiveMinimum",
+  "format",
+  "maxItems",
+  "maxLength",
+  "maximum",
+  "minItems",
+  "minLength",
+  "minimum",
+  "pattern",
+]);
+
+function compactLinearInputSchema(value: unknown): void {
+  if (Array.isArray(value)) {
+    for (const item of value) compactLinearInputSchema(item);
+    return;
+  }
+  if (!isJsonObject(value)) return;
+  for (const [key, child] of Object.entries(value)) {
+    if (LINEAR_OMITTED_SCHEMA_KEYWORDS.has(key)) {
+      value[key] = undefined;
+    } else {
+      compactLinearInputSchema(child);
+    }
+  }
+}
+
 export async function compactLinearToolCatalogResponse(
   response: Response,
   isLinearAgent: boolean,
@@ -159,7 +189,17 @@ export async function compactLinearToolCatalogResponse(
     delete tool.execution;
     delete tool.annotations;
     delete tool.title;
-    if (isJsonObject(tool.inputSchema)) delete tool.inputSchema.$schema;
+    if (isJsonObject(tool.inputSchema)) {
+      if (isJsonObject(tool.inputSchema.properties)) {
+        delete tool.inputSchema.properties.caller;
+      }
+      if (Array.isArray(tool.inputSchema.required)) {
+        tool.inputSchema.required = tool.inputSchema.required.filter(
+          (name) => name !== "caller",
+        );
+      }
+      compactLinearInputSchema(tool.inputSchema);
+    }
   }
 
   const headers = new Headers(response.headers);
@@ -167,6 +207,60 @@ export async function compactLinearToolCatalogResponse(
   return new Response(JSON.stringify(payload), {
     status: response.status,
     statusText: response.statusText,
+    headers,
+  });
+}
+
+export async function withLinearAgentCaller(
+  request: Request,
+  isLinearAgent: boolean,
+): Promise<Request> {
+  if (
+    !isLinearAgent ||
+    request.method !== "POST" ||
+    !request.headers.get("content-type")?.includes("application/json")
+  ) {
+    return request;
+  }
+
+  let payload: unknown;
+  try {
+    payload = await request.clone().json();
+  } catch {
+    return request;
+  }
+  if (
+    !isJsonObject(payload) ||
+    payload.method !== "tools/call" ||
+    !isJsonObject(payload.params)
+  ) {
+    return request;
+  }
+
+  const arguments_ = isJsonObject(payload.params.arguments)
+    ? payload.params.arguments
+    : {};
+  if (!isJsonObject(arguments_.caller)) {
+    const invocationId = crypto.randomUUID();
+    arguments_.caller = {
+      agentId: "linear-agent",
+      agentName: "Linear Agent",
+      modelProvider: "Linear",
+      modelName: "Linear Agent",
+      modelVersion: "unknown",
+      clientName: "Linear",
+      clientVersion: "unknown",
+      runId: `linear-run:${invocationId}`,
+      sessionId: `linear-session:${invocationId}`,
+      conversationId: `linear-conversation:${invocationId}`,
+    };
+  }
+  payload.params.arguments = arguments_;
+
+  const headers = new Headers(request.headers);
+  headers.delete("content-length");
+  return new Request(request, {
+    body: JSON.stringify(payload),
     headers,
   });
 }
@@ -420,11 +514,17 @@ export function createMcpApp(options: CreateMcpAppOptions = {}) {
       if (context.req.raw.method !== "POST") {
         return statelessMethodNotAllowedResponse();
       }
+      const isLinearAgent =
+        identity.kind === "oauth" && identity.clientId === LINEAR_MCP_CLIENT_ID;
+      const protocolRequest = await withLinearAgentCaller(
+        context.req.raw,
+        isLinearAgent,
+      );
       const runtime = createRuntime(
         services,
         identity,
         auditFor(services),
-        context.req.raw,
+        protocolRequest,
         now,
       );
       const server = createSkillplaneMcpServer(runtime);
@@ -432,12 +532,9 @@ export function createMcpApp(options: CreateMcpAppOptions = {}) {
         enableJsonResponse: true,
       });
       await server.connect(transport);
-      const response = await transport.handleRequest(context.req.raw);
+      const response = await transport.handleRequest(protocolRequest);
       return secureProtocolResponse(
-        await compactLinearToolCatalogResponse(
-          response,
-          identity.kind === "oauth" && identity.clientId === LINEAR_MCP_CLIENT_ID,
-        ),
+        await compactLinearToolCatalogResponse(response, isLinearAgent),
       );
     } catch (error) {
       if (error instanceof McpAuthenticationError) {
