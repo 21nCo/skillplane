@@ -39,6 +39,8 @@ import {
 
 const MCP_ISSUER = "https://app.skillplane.dev";
 const MCP_RESOURCE = "https://mcp.skillplane.dev/mcp";
+const LINEAR_MCP_CLIENT_ID =
+  "https://linear.app/.well-known/oauth-client-metadata/mcp.json";
 
 const BRAND_CACHE_CONTROL = "public, max-age=604800, immutable";
 
@@ -122,8 +124,14 @@ function isJsonObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-async function compactToolCatalogResponse(response: Response): Promise<Response> {
-  if (!response.headers.get("content-type")?.includes("application/json")) {
+export async function compactLinearToolCatalogResponse(
+  response: Response,
+  isLinearAgent: boolean,
+): Promise<Response> {
+  if (
+    !isLinearAgent ||
+    !response.headers.get("content-type")?.includes("application/json")
+  ) {
     return response;
   }
 
@@ -143,10 +151,15 @@ async function compactToolCatalogResponse(response: Response): Promise<Response>
     return new Response(body, response);
   }
 
-  // Keep optional output contracts server-side: agent hosts only need input
-  // contracts, and forwarding the full catalog can exceed connector budgets.
+  // Linear only needs names, descriptions, and input contracts. Keep optional
+  // MCP presentation and output metadata server-side to stay within its budget.
   for (const tool of payload.result.tools) {
-    if (isJsonObject(tool)) delete tool.outputSchema;
+    if (!isJsonObject(tool)) continue;
+    delete tool.outputSchema;
+    delete tool.execution;
+    delete tool.annotations;
+    delete tool.title;
+    if (isJsonObject(tool.inputSchema)) delete tool.inputSchema.$schema;
   }
 
   const headers = new Headers(response.headers);
@@ -420,7 +433,12 @@ export function createMcpApp(options: CreateMcpAppOptions = {}) {
       });
       await server.connect(transport);
       const response = await transport.handleRequest(context.req.raw);
-      return secureProtocolResponse(await compactToolCatalogResponse(response));
+      return secureProtocolResponse(
+        await compactLinearToolCatalogResponse(
+          response,
+          identity.kind === "oauth" && identity.clientId === LINEAR_MCP_CLIENT_ID,
+        ),
+      );
     } catch (error) {
       if (error instanceof McpAuthenticationError) {
         return mcpAuthenticationResponse(services, error);

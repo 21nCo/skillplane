@@ -109,7 +109,7 @@ describe("MCP read surface", () => {
         type: "object",
         additionalProperties: false,
       });
-      expect(tool.outputSchema).toBeUndefined();
+      expect(tool.outputSchema).toBeDefined();
     }
   });
 

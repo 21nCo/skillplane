@@ -1,5 +1,6 @@
 import type { SkillsSearchOutput } from "@skillplane/mcp-schema";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { compactLinearToolCatalogResponse } from "../../src/index.js";
 import { SKILLPLANE_MCP_SERVER_INFO } from "../../src/server.js";
 import {
   parseStructured,
@@ -53,10 +54,9 @@ describe("MCP Streamable HTTP conformance", () => {
     await expect(connection.client.ping()).resolves.toEqual({});
   });
 
-  it("advertises a compact catalog of twenty-seven input contracts", async () => {
+  it("advertises twenty-seven complete tool contracts as JSON Schema", async () => {
     const result = await connection.client.listTools();
     expect(result.tools).toHaveLength(27);
-    expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThan(96 * 1_024);
     for (const tool of result.tools) {
       expect(tool.name).toMatch(
         /^(workspaces_list|skills_list|skills_search|skill_retrieve|skill_asset_retrieve|skill_versions_list|skill_versions_diff|skill_candidates_list|skill_amendment_policy_get|contexts_list|context_get|context_knowledge_history|context_notes_list|skill_amend|skill_create|skill_visibility_update|skill_archive|skill_restore|skill_candidate_approve|skill_candidate_reject|skill_amendment_policy_update|context_create|context_update|context_archive|context_restore|context_knowledge_update|context_note_upsert)$/u,
@@ -66,7 +66,7 @@ describe("MCP Streamable HTTP conformance", () => {
         type: "object",
         additionalProperties: false,
       });
-      expect(tool.outputSchema).toBeUndefined();
+      expect(tool.outputSchema).toMatchObject({ type: "object" });
       const mutating = [
         "skill_amend",
         "skill_create",
@@ -89,6 +89,30 @@ describe("MCP Streamable HTTP conformance", () => {
         idempotentHint: true,
         openWorldHint: false,
       });
+    }
+  });
+
+  it("keeps Linear's complete tool inventory below its catalog budget", async () => {
+    const listed = await connection.client.listTools();
+    const response = await compactLinearToolCatalogResponse(
+      new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: listed }), {
+        headers: { "content-type": "application/json" },
+      }),
+      true,
+    );
+    const body = await response.text();
+    const compacted = JSON.parse(body) as {
+      readonly result: { readonly tools: readonly Record<string, unknown>[] };
+    };
+
+    expect(Buffer.byteLength(body)).toBeLessThan(64 * 1_024);
+    expect(compacted.result.tools).toHaveLength(27);
+    for (const tool of compacted.result.tools) {
+      expect(tool).not.toHaveProperty("outputSchema");
+      expect(tool).not.toHaveProperty("execution");
+      expect(tool).not.toHaveProperty("annotations");
+      expect(tool).not.toHaveProperty("title");
+      expect(tool.inputSchema).not.toHaveProperty("$schema");
     }
   });
 
