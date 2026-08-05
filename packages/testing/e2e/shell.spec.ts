@@ -75,6 +75,33 @@ test("@shell rejects anonymous access before protected content renders", async (
   ).toBeVisible();
 });
 
+test("@shell routes the app entry to sign-in or the authenticated application", async ({
+  context,
+  page,
+}) => {
+  await page.goto(`${harness.origin}/`);
+  await expect(page).toHaveURL(
+    new RegExp(`/sign-in\\?next=${encodeURIComponent("/workspaces")}$`, "u"),
+  );
+  await expect(
+    page.getByRole("heading", { name: "Continue to Skillplane" }),
+  ).toBeVisible();
+
+  await authenticate(context);
+  await page.goto(`${harness.origin}/`);
+  await expect(page).toHaveURL(`${harness.origin}/workspaces`);
+  await expect(page.getByRole("heading", { name: "Workspaces" })).toBeVisible();
+  await expect(
+    page.getByRole("complementary", { name: "Application navigation" }),
+  ).toBeVisible();
+
+  await page.goto(`${harness.origin}/sign-in`);
+  await expect(page).toHaveURL(`${harness.origin}/workspaces`);
+
+  await page.goto(`${harness.origin}/verify`);
+  await expect(page).toHaveURL(`${harness.origin}/workspaces`);
+});
+
 test("@shell provides accessible responsive navigation, themes, commands, and sign-out", async ({
   context,
   page,

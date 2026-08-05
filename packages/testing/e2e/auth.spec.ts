@@ -85,7 +85,7 @@ test("@auth completes OTP sign-in and persists the session after reload", async 
 
   await page.getByRole("textbox", { name: "Verification code" }).fill(harness.code);
   await page.getByRole("button", { name: "Verify and continue" }).click();
-  await expect(page).toHaveURL(`${harness.origin}/`);
+  await expect(page).toHaveURL(`${harness.origin}/workspaces`);
 
   const firstSession = await page.evaluate(async () => {
     const response = await fetch("/auth/session", { credentials: "include" });
@@ -102,6 +102,7 @@ test("@auth completes OTP sign-in and persists the session after reload", async 
   });
 
   await page.reload();
+  await expect(page).toHaveURL(`${harness.origin}/workspaces`);
   const reloadedSession = await page.evaluate(async () => {
     const response = await fetch("/auth/session", { credentials: "include" });
     return response.json();

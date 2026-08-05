@@ -87,7 +87,7 @@
       await verifyOtp({ email: context.email, code });
       verifyState = { kind: "success" };
       clearOtpContext();
-      window.location.assign(takeReturnTo() ?? resolve("/"));
+      window.location.assign(takeReturnTo() ?? resolve("/workspaces"));
     } catch (error) {
       if (error instanceof AuthClientError) {
         if (error.code === "AUTH_OTP_EXPIRED") {

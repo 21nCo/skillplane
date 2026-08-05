@@ -98,7 +98,7 @@ export async function productionSmoke(options = {}) {
     "The landing host returned unexpected content",
   );
   assert(
-    appHtml.includes("Runtime · Skillplane"),
+    appHtml.includes("Sign in · Skillplane"),
     "The app host returned unexpected content",
   );
   assert(landingHtml !== appHtml, "Landing and app hosts returned identical content");
