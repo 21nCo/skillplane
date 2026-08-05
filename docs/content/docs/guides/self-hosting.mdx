@@ -1,0 +1,50 @@
+---
+title: Self-hosting
+description: Run Skillplane from source with its Postgres, Cloudflare Worker, storage, authentication, and email dependencies.
+---
+
+Skillplane is open source, but a production installation is a multi-service deployment rather than a static app. Review the repository and production configuration before exposing it to users.
+
+## Prerequisites
+
+- Node.js 22–24 and pnpm 11.9
+- Docker for the project-owned local Postgres instance
+- A Cloudflare account for Workers and R2-backed skill bundles
+- AuthFn and OAuth configuration
+- Email delivery and Turnstile configuration for authenticated sign-in
+
+## Local development
+
+Clone the repository, install dependencies, then start the database:
+
+```bash
+pnpm install
+pnpm db:up
+pnpm local:init
+```
+
+Start the app Worker with authentication disabled for readiness and public-flow development:
+
+```bash
+pnpm dev:app:worker
+```
+
+For the real email-OTP authentication flow through Cloudflare Email Service, use:
+
+```bash
+pnpm dev:app:auth
+```
+
+Start the MCP Worker separately:
+
+```bash
+pnpm dev:mcp
+```
+
+Local MCP is available at `http://127.0.0.1:8788/mcp` and still requires a bearer credential. Run the client on the same machine; a cloud-hosted client cannot reach `127.0.0.1`.
+
+## Production
+
+Production forces OTP authentication and uses separate production secrets. Before deployment, read `.env.example`, initialize production secrets, apply database migrations, run deployment checks, and configure the app, MCP, database, storage, OAuth, email, and Turnstile bindings for your own domains.
+
+The repository provides `deploy:app`, `deploy:mcp`, `deploy:all`, `smoke:production`, and production backup/restore scripts. Do not reuse local test credentials in production.

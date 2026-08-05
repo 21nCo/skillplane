@@ -1,0 +1,11 @@
+{
+  "title": "Guides",
+  "pages": [
+    "create-a-skill",
+    "connect-an-agent",
+    "add-context",
+    "review-an-improvement",
+    "publish-and-share",
+    "self-hosting"
+  ]
+}

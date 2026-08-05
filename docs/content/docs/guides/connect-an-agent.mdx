@@ -1,0 +1,32 @@
+---
+title: Connect an agent
+description: Choose OAuth or a scoped credential and follow Skillplane’s discovery-first MCP flow.
+---
+
+Connect to the hosted Streamable HTTP endpoint:
+
+```text
+https://mcp.skillplane.dev/mcp
+```
+
+Use automatic OAuth for an interactive user. Use a scoped `sps_...` credential in the `Authorization` bearer header for CI or a headless agent.
+
+## Discovery-first flow
+
+An agent should not depend on identifiers copied from the UI:
+
+1. `workspaces_list` discovers authorized workspaces.
+2. `skills_list` enumerates skills without requiring a search query.
+3. `skills_search` ranks matching skills when the agent has a non-empty query.
+4. `contexts_list` discovers the available contexts for a selected skill.
+5. `skill_retrieve` returns one exact version and can include selected context knowledge.
+
+Follow opaque cursors until `nextCursor` is `null` when a complete list is required.
+
+## Choose minimum access
+
+For retrieval only, grant `skills:read` and, when needed, `contexts:read`. Add `skills:amend` only when the agent should propose improvements. Add write scopes only when it should create skills or maintain context.
+
+Every state-changing MCP call requires a unique idempotency key and the latest concurrency token returned by the relevant read or previous mutation.
+
+See [Roles and scopes](/reference/roles-and-scopes) for the full access matrix.

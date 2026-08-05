@@ -1,0 +1,77 @@
+---
+title: Setup
+description: Create a workspace, publish a skill, and connect your first AI agent to Skillplane.
+---
+
+This guide uses hosted Skillplane. For a local deployment, see [Self-hosting](/guides/self-hosting).
+
+## 1. Create your workspace
+
+Open [app.skillplane.dev](https://app.skillplane.dev), sign in, and create or select a workspace. A workspace holds its own skills, contexts, members, credentials, analytics, and audit history.
+
+## 2. Create a skill
+
+Choose **Skills → New skill**. You can author `SKILL.md` in the browser or upload a valid skill bundle. Add a clear name, stable slug, description, tags, and visibility.
+
+The first publication becomes immutable version `1.0.0`. See [Create your first skill](/guides/create-a-skill) for writing guidance.
+
+## 3. Choose how the agent authenticates
+
+### Interactive OAuth
+
+For an MCP client operated by a person, configure the hosted URL with automatic authentication:
+
+```text
+https://mcp.skillplane.dev/mcp
+```
+
+Leave request headers empty. The client discovers Skillplane OAuth and asks the user to sign in and consent.
+
+### Agent credential
+
+For CI, headless automation, or an organization-owned agent:
+
+1. Open **Settings → Agent credentials**.
+2. Create an `Editor` credential.
+3. Select only the scopes the agent needs.
+4. Copy the `sps_...` value when it appears. It is shown once.
+
+For a full create, retrieve, context, and improvement workflow, select:
+
+- `skills:read`
+- `skills:write`
+- `skills:amend`
+- `contexts:read`
+- `contexts:write`
+
+Send it as a bearer token:
+
+```text
+Authorization=Bearer sps_your_token
+```
+
+Do not choose **No auth**. Every MCP request must carry either an OAuth access token or an agent credential.
+
+## 4. Connect Codex
+
+Keep the credential outside the Codex configuration by referencing an environment variable:
+
+```bash
+codex mcp add skillplane \
+  --url https://mcp.skillplane.dev/mcp \
+  --bearer-token-env-var SKILLPLANE_MCP_TOKEN
+```
+
+Set `SKILLPLANE_MCP_TOKEN` before starting Codex. On macOS, Codex Desktop can receive it through the launch environment:
+
+```bash
+launchctl setenv SKILLPLANE_MCP_TOKEN 'sps_your_token'
+```
+
+Fully quit and reopen Codex, then start a new task so the MCP tools are discovered.
+
+## 5. Confirm discovery
+
+Ask the client to call `workspaces_list`, then `skills_list` for the returned workspace. When it can list the skill you created, the connection is ready.
+
+Next: [Connect an agent](/guides/connect-an-agent) explains the discovery sequence and safe credential choices in more detail.

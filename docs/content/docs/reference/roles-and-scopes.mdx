@@ -1,0 +1,39 @@
+---
+title: Roles and scopes
+description: Workspace roles, agent credential scopes, and the effective access rules between them.
+---
+
+## User roles
+
+| Role   | Typical access                                                                     |
+| ------ | ---------------------------------------------------------------------------------- |
+| Viewer | Read workspace, members, skills, contexts, and analytics                           |
+| Editor | Viewer access plus create/update skills, propose amendments, and maintain contexts |
+| Admin  | Editor access plus members, publication decisions, audit, and workspace settings   |
+| Owner  | All workspace actions, including policy and workspace ownership controls           |
+
+## Agent credential roles
+
+Agent credentials can be Viewer, Editor, or Admin; they cannot be Owner. Their effective access is the intersection of the selected role and explicit scopes.
+
+| Scope            | Allows                                                         |
+| ---------------- | -------------------------------------------------------------- |
+| `skills:read`    | Discover and retrieve skills and versions                      |
+| `skills:write`   | Create skills and manage visibility or lifecycle               |
+| `skills:amend`   | Propose candidate improvements                                 |
+| `contexts:read`  | Discover and retrieve context knowledge and notes              |
+| `contexts:write` | Create, update, archive, restore, and append context knowledge |
+| `members:read`   | Read workspace membership                                      |
+| `members:write`  | Manage permitted workspace membership operations               |
+| `analytics:read` | Read analytics                                                 |
+| `audit:read`     | Read audit events                                              |
+
+Agent credentials do not have a `skills:publish` scope. Approval, rejection, and amendment-policy updates require an authorized user OAuth token. Updating policy is restricted to the workspace Owner.
+
+## Recommended sets
+
+- **Retrieval agent:** `skills:read`, plus `contexts:read` when it needs local knowledge.
+- **Learning agent:** retrieval scopes plus `skills:amend` and `contexts:write`.
+- **Creation automation:** add `skills:write`, with an Editor or Admin role.
+
+Use a separate credential for each automation and avoid broad Admin credentials when an Editor role is sufficient.

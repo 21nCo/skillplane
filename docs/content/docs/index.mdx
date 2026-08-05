@@ -1,0 +1,31 @@
+---
+title: Skillplane documentation
+description: Create reusable AI skills, add the context an agent needs, and improve them through traceable versions.
+---
+
+Skillplane is a home for reusable, versioned instructions that AI agents can discover and use through MCP. A skill starts as portable guidance in `SKILL.md`; it can include supporting files, receive project-specific context, and evolve through reviewable agent proposals.
+
+## The model
+
+1. **Compose** — create focused skills and reuse or combine them for a task.
+2. **Context** — keep project, repository, customer, or environment knowledge beside the skill instead of baking it into portable instructions.
+3. **Improve** — let agents propose evidence-backed changes. Review the exact candidate before it becomes the next published version.
+
+Published versions are immutable. That gives an agent a stable artifact to retrieve while keeping every later improvement inspectable.
+
+## Start here
+
+- [Set up Skillplane](/setup) and connect an MCP client.
+- Read [Skills](/concepts/skills) and [Contexts](/concepts/contexts) to understand the two kinds of knowledge.
+- Follow [Create your first skill](/guides/create-a-skill).
+- See [MCP tools](/reference/mcp-tools) when building an agent workflow.
+
+## Hosted endpoints
+
+| Surface        | URL                                                    | Use it for                                                      |
+| -------------- | ------------------------------------------------------ | --------------------------------------------------------------- |
+| Skillplane app | [app.skillplane.dev](https://app.skillplane.dev)       | Workspaces, skills, contexts, credentials, review, and settings |
+| MCP server     | `https://mcp.skillplane.dev/mcp`                       | Agent discovery, retrieval, context maintenance, and amendments |
+| Public skills  | [skillplane.dev/skills](https://skillplane.dev/skills) | Public skill discovery                                          |
+
+Skillplane is [open source](https://github.com/21nCo/skillplane) and can also be run from the repository. See [Self-hosting](/guides/self-hosting) for the infrastructure and local-development path.

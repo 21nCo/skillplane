@@ -5,6 +5,9 @@ node_modules/
 # Build and framework output
 .turbo/
 .svelte-kit/
+.next/
+.open-next/
+.source/
 .vercel/
 .output/
 build/
@@ -45,3 +48,4 @@ blob-report/
 *.log
 *.pid
 *.tmp
+*.tsbuildinfo

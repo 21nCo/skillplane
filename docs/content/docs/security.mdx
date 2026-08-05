@@ -1,0 +1,45 @@
+---
+title: Security
+description: How Skillplane isolates workspaces, authenticates agents, protects changes, and preserves provenance.
+---
+
+Skillplane treats reusable instructions as controlled artifacts rather than untrusted prompt text copied between agents.
+
+## Authentication
+
+Every MCP request requires one of two identities:
+
+- a user-bound OAuth access token obtained through interactive sign-in and consent; or
+- an `sps_...` agent credential bound to one workspace, role, and explicit scopes.
+
+Credentials can have an expiry, can be rotated, and can be revoked immediately. The full agent credential is displayed only at creation or rotation.
+
+## Least privilege
+
+An agent is authorized by both its workspace role and its scopes. A granted scope never raises the credential above its role. Start with read-only scopes, then add write or amendment access only when the workflow needs it.
+
+Service credentials deliberately cannot publish a candidate, reject one, change amendment policy, or act as a workspace owner. Those actions require an authorized user.
+
+## Immutable versions
+
+Published and candidate versions are immutable. Skill bundles are canonicalized, their files are described by digests, and retrieval returns an exact version rather than silently changing content in place.
+
+## Controlled improvement
+
+An amendment starts from an exact current base version and contains digest-checked add, replace, or delete operations. It records a change summary, learning evidence, declared agent/model/client/run metadata, and server-derived authenticated identity.
+
+The default policy requires review. A trusted auto-publish rule can be narrowed to one credential, required scopes, a maximum semantic bump, selected contexts, and a daily limit.
+
+## Context boundaries
+
+Contexts belong to one skill and workspace. Their knowledge history is append-only: an update creates a new immutable revision. Metadata and lifecycle mutations require the latest concurrency token, reducing accidental overwrites.
+
+## Operational safety
+
+- Treat `sps_...` values as secrets and store them outside checked-in configuration.
+- Give each automation its own credential so access and audit history remain attributable.
+- Prefer expiry and rotation for long-running integrations.
+- Review public visibility before publishing sensitive instructions.
+- Use [Roles and scopes](/reference/roles-and-scopes) to choose minimum access.
+
+To inspect or report a security concern, use the repository’s [security policy](https://github.com/21nCo/skillplane/security).

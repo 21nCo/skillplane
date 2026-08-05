@@ -1,0 +1,28 @@
+---
+title: Improvement loop
+description: How agents turn real-world learning into controlled, reviewable skill versions.
+---
+
+Skillplane improves a skill by creating a candidate, not by editing the published version in place.
+
+## 1. Use an exact base
+
+The agent retrieves the current published version and, when relevant, an exact context knowledge revision. Those identifiers become part of the proposed change’s provenance.
+
+## 2. Gather evidence
+
+During a real task, the agent records the observation that motivated the change, evidence links or summaries, validation results, confidence, and the files affected.
+
+## 3. Propose an amendment
+
+`skill_amend` submits digest-checked add, replace, or delete operations against the exact base. Replays use an idempotency key so the same request does not create duplicate candidates.
+
+## 4. Apply policy
+
+The default policy sends the candidate to human review. A narrowly configured trusted rule may auto-publish a matching amendment. The policy decision and reason are retained either way.
+
+## 5. Review and publish
+
+An authorized Admin or Owner can inspect the exact diff, evidence, identity, and provenance, then approve or reject. Approval publishes the immutable candidate as the next version. Future runs retrieve that version and can start the loop again.
+
+See [Review an improvement](/guides/review-an-improvement) for the app workflow.

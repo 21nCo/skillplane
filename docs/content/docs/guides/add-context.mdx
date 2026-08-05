@@ -1,0 +1,28 @@
+---
+title: Add project context
+description: Give a reusable skill local knowledge without copying or forking its instructions.
+---
+
+## Create in the app
+
+1. Open a skill and select **Contexts**.
+2. Choose **New context**.
+3. Name the repository, customer, project, or environment it represents.
+4. Add a stable slug, type, description, and optional external reference.
+5. Write the initial Markdown knowledge.
+
+Useful context includes architecture boundaries, commands, ownership rules, vocabulary, constraints, and lessons that are specific to that subject.
+
+## Maintain through MCP
+
+An agent with `contexts:write` can use:
+
+- `context_create` for a new context and first knowledge revision;
+- `context_update` for descriptive metadata;
+- `context_knowledge_update` to append a knowledge revision;
+- `context_note_upsert` for smaller named notes;
+- `context_archive` and `context_restore` for lifecycle changes.
+
+Before writing, retrieve the latest context and use its exact `updatedAt` value. A conflict means the context changed; refresh it, incorporate the new state, and submit a new idempotent request.
+
+Do not put secrets in context knowledge. Treat it as shared workspace content that authorized agents can retrieve.

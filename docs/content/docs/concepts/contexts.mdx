@@ -1,0 +1,25 @@
+---
+title: Contexts
+description: Project-specific knowledge that stays beside a portable skill and evolves independently.
+---
+
+A context supplies the local facts an agent needs while using a skill. It can represent a repository, project, customer, environment, or another bounded subject.
+
+For example, a portable PR-review skill can stay the same while a repository context records its architecture, test commands, ownership rules, and recurring failure modes.
+
+## Why context is separate
+
+- The skill remains reusable across projects.
+- Local knowledge can change without publishing a new skill version.
+- An agent can cite the exact context revision it used when proposing an improvement.
+- Teams avoid duplicating the same instructions for every environment.
+
+## Knowledge and notes
+
+Context knowledge is a Markdown body with immutable revision history. Updates append a new revision rather than changing an old one. Shared notes provide smaller, named pieces of durable information that can be created, updated, listed, and archived.
+
+## Concurrency
+
+Context metadata, lifecycle, knowledge, and note mutations use the latest `updatedAt` token. If another writer changed the context first, refresh it before retrying instead of overwriting newer work.
+
+Agents discover contexts with `contexts_list`, then use `context_get` to retrieve the selected knowledge revision and optional active notes.

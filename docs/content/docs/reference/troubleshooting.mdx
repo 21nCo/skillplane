@@ -1,0 +1,40 @@
+---
+title: Troubleshooting
+description: Common connection, authorization, discovery, concurrency, and local-development problems.
+---
+
+## The MCP client shows no tools
+
+- Confirm the URL is exactly `https://mcp.skillplane.dev/mcp` for hosted Skillplane.
+- Do not select **No auth**.
+- For OAuth, use automatic authentication and leave request headers empty.
+- For an agent credential, send `Authorization=Bearer sps_your_token`.
+- Restart the MCP client after changing configuration so it discovers tools again.
+
+## `401 Unauthorized`
+
+The bearer token is missing, expired, revoked, malformed, or intended for another resource. Create or rotate the credential and update the secret where the client starts—not only in the current shell after the client is already running.
+
+## `403 Forbidden` or scope required
+
+Both role and scope must allow the operation. A Viewer credential with `skills:write` is still read-only. Service credentials also cannot approve, reject, change amendment policy, or become Owner.
+
+## No skills appear
+
+Start with `workspaces_list`, then call `skills_list` for each workspace and follow the cursor until `nextCursor` is `null`. `skills_search` requires a non-empty query and is not a complete inventory operation.
+
+## A mutation reports a conflict
+
+The skill or context changed after it was read. Retrieve the latest resource, use its current `updatedAt` token and exact version/revision identifiers, then retry with a new idempotency key if the intended request changed.
+
+## A repeated mutation returns the earlier result
+
+This is expected when the same idempotency key and request are replayed. Generate a new key only for a logically new request.
+
+## Local MCP cannot be reached
+
+Start it with `pnpm dev:mcp` and connect to `http://127.0.0.1:8788/mcp`. The client must run on the same machine. Local OAuth discovery advertises the hosted authorization server, so use request headers with an agent credential for local development.
+
+## Sign-in email does not arrive locally
+
+The default `pnpm dev:app:worker` mode disables authentication. Run `pnpm local:init`, confirm Wrangler access and sender onboarding, then use `pnpm dev:app:auth` for the real Cloudflare email-OTP flow.

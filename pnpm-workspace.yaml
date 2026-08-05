@@ -1,5 +1,6 @@
 packages:
   - app
+  - docs
   - mcp
   - packages/*
 
@@ -16,6 +17,11 @@ overrides:
   fast-jwt: 6.2.4
 
 catalog:
+  "@21n/fonts": 1.0.1
+  "@opennextjs/cloudflare": 1.20.2
+  "@phosphor-icons/react": 2.1.10
+  "@tailwindcss/postcss": 4.3.3
+  "@types/mdx": 2.0.13
   "@axe-core/playwright": 4.12.1
   "@authfn/core": 0.1.1
   "@cloudflare/workers-types": 5.20260722.1
@@ -29,6 +35,8 @@ catalog:
   "@tailwindcss/vite": 4.3.3
   "@superfunctions/db": 0.1.4
   "@types/pg": 8.20.0
+  "@types/react": 19.2.14
+  "@types/react-dom": 19.2.3
   "@playwright/test": 1.62.0
   "@modelcontextprotocol/sdk": 1.29.0
   drizzle-kit: 0.31.10
@@ -36,10 +44,16 @@ catalog:
   diff: 9.0.0
   fast-check: 4.9.0
   fflate: 0.8.3
+  fumadocs-core: 16.14.0
+  fumadocs-mdx: 15.2.2
+  fumadocs-ui: 16.14.0
   hono: 4.12.32
   marked: 18.0.7
+  next: 16.3.0
   pg: 8.22.0
   phosphor-svelte: 3.1.0
+  react: 19.2.8
+  react-dom: 19.2.8
   sendfn: 0.0.2
   svelte: 5.56.8
   svelte-check: 4.7.3
@@ -68,3 +82,13 @@ minimumReleaseAgeExclude:
   - turbo@2.10.7
   - sendfn@0.0.2
   - wrangler@4.115.0
+  - "@next/env@16.3.0"
+  - "@next/swc-darwin-arm64@16.3.0"
+  - "@next/swc-darwin-x64@16.3.0"
+  - "@next/swc-linux-arm64-gnu@16.3.0"
+  - "@next/swc-linux-arm64-musl@16.3.0"
+  - "@next/swc-linux-x64-gnu@16.3.0"
+  - "@next/swc-linux-x64-musl@16.3.0"
+  - "@next/swc-win32-arm64-msvc@16.3.0"
+  - "@next/swc-win32-x64-msvc@16.3.0"
+  - next@16.3.0
