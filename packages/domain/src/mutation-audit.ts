@@ -19,7 +19,11 @@ export interface MutationCallerDeclaration {
 export interface MutationAuditContext {
   readonly channel: "mcp";
   readonly credential: {
-    readonly kind: "oauth_access_token" | "service_principal";
+    readonly kind:
+      | "oauth_access_token"
+      | "authfn_api_key"
+      | "service_principal_legacy"
+      | "service_principal";
     readonly id: string;
     readonly clientId?: string;
   };

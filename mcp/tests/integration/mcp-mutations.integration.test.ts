@@ -165,7 +165,7 @@ describe("MCP skill amendments", () => {
       model: TEST_CALLER.modelName,
       metadata: {
         channel: "mcp",
-        credential: { kind: "service_principal" },
+        credential: { kind: "authfn_api_key" },
         caller: {
           agentId: TEST_CALLER.agentId,
           modelVersion: TEST_CALLER.modelVersion,
@@ -198,9 +198,13 @@ describe("MCP skill amendments", () => {
   it("auto-publishes only after an explicit trusted credential policy decision", async () => {
     const credential = await environment.services.database.pool.query<{
       id: string;
-    }>("SELECT id FROM service_principals WHERE credential_hash = $1", [
-      createHash("sha256").update(environment.serviceToken).digest("hex"),
-    ]);
+    }>(
+      `SELECT sp.id
+         FROM service_principals sp
+         JOIN authfn_api_keys key ON key.id = sp.authfn_api_key_id
+        WHERE key.secret_hash = $1`,
+      [createHash("sha256").update(environment.serviceToken).digest("hex")],
+    );
     const credentialId = credential.rows[0]?.id;
     if (!credentialId) throw new Error("Fixture service principal was not found");
     const owner: UserPrincipal = {

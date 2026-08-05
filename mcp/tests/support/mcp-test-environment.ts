@@ -109,10 +109,6 @@ function form(values: Readonly<Record<string, string>>): string {
   return new URLSearchParams(values).toString();
 }
 
-function tokenHash(token: string): string {
-  return createHash("sha256").update(token).digest("hex");
-}
-
 async function insertServiceCredential(
   services: ApiServices,
   input: {
@@ -125,27 +121,45 @@ async function insertServiceCredential(
     readonly delegated?: boolean;
   },
 ): Promise<string> {
-  const token = `sps_${crypto.randomUUID().replaceAll("-", "")}${crypto
-    .randomUUID()
-    .replaceAll("-", "")}`;
+  const servicePrincipalId = `service-principal:${input.suffix}`;
+  const created = await services.auth.apiKeys.create({
+    ownerUserId: input.userId,
+    name: `MCP ${input.suffix}`,
+    scopes: input.scopes,
+    metadata: {
+      kind: "skillplane_service_principal",
+      servicePrincipalId,
+      workspaceId: input.workspaceId,
+      credentialVersion: 1,
+    },
+    expiresAt: null,
+    requestId: `fixture:service-principal:${input.suffix}:created`,
+  });
   await services.database.pool.query(
     `INSERT INTO service_principals
-       (id, workspace_id, name, role, scopes, credential_hash,
+       (id, workspace_id, name, role, scopes, authfn_api_key_id,
         created_by_user_id, delegated_user_id, revoked_at)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
     [
-      `service-principal:${input.suffix}`,
+      servicePrincipalId,
       input.workspaceId,
       `MCP ${input.suffix}`,
       input.role,
       input.scopes,
-      tokenHash(token),
+      created.keyId,
       input.userId,
       input.delegated ? input.userId : null,
       input.revoked ? new Date() : null,
     ],
   );
-  return token;
+  if (input.revoked) {
+    await services.auth.apiKeys.revoke({
+      keyId: created.keyId,
+      actorId: input.userId,
+      requestId: `fixture:service-principal:${input.suffix}:revoked`,
+    });
+  }
+  return created.secret;
 }
 
 async function seedSkill(

@@ -21,6 +21,7 @@ describe("migration chain", () => {
       "0013_organization_agent_attribution.sql",
       "0014_observability_analytics.sql",
       "0015_audit_redaction_hardening.sql",
+      "0016_authfn_service_principal_keys.sql",
     ]);
     expect(new Set(migrations.map((migration) => migration.sha256)).size).toBe(
       migrations.length,

@@ -20,7 +20,7 @@ const PROHIBITED_KEYS = new Set([
 
 const EMAIL_VALUE = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/iu;
 const CREDENTIAL_VALUE =
-  /(?:\bbearer\s+[A-Z0-9._~+/-]+=*|\bsps_[A-Z0-9_-]{12,}|\b(?:access|refresh|id)[_-]?token\s*[:=])/iu;
+  /(?:\bbearer\s+[A-Z0-9._~+/-]+=*|\bsp[sk]_[A-Z0-9_-]{12,}|\b(?:access|refresh|id)[_-]?token\s*[:=])/iu;
 
 export interface RedactionResult {
   readonly value: Readonly<Record<string, unknown>>;

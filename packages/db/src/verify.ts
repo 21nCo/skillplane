@@ -45,6 +45,7 @@ const REQUIRED_CONSTRAINTS = [
   "skill_contexts_current_knowledge_tenant_fk",
   "skill_versions_agent_attribution",
   "skills_current_version_tenant_fk",
+  "service_principals_single_credential_source",
   "workspaces_tenant_identity",
 ] as const;
 
@@ -183,6 +184,13 @@ export async function verifyDatabase(
           WHERE workspace_id = $1 AND skill_id = $2 AND slug = $3`,
         ["workspace:example", "skill:example", "project"],
       ),
+      servicePrincipalApiKey: await explain(
+        pool,
+        `SELECT id FROM service_principals
+          WHERE authfn_api_key_id = $1
+          LIMIT 1`,
+        ["key_example"],
+      ),
       publicSkillSearch: await explain(
         pool,
         `SELECT id FROM skills
@@ -228,9 +236,14 @@ export async function verifyDatabase(
     }
     if (
       !queryPlans.publicSkillSearch.includes("skills_public_search_idx") ||
-      !queryPlans.workspaceSkillSearch.includes("skills_workspace_search_idx")
+      !queryPlans.workspaceSkillSearch.includes("skills_workspace_search_idx") ||
+      !queryPlans.servicePrincipalApiKey.includes(
+        "service_principals_authfn_api_key_unique",
+      )
     ) {
-      throw new Error("Skill search query plans do not use the required GIN indexes");
+      throw new Error(
+        "Required query plans do not use their credential/search indexes",
+      );
     }
 
     return {

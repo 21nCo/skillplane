@@ -1,20 +1,22 @@
 import {
-  protectedResourceChallenge,
-  readBearerToken,
-  verifyAccessToken,
-} from "@skillplane/auth";
+  authenticateServicePrincipalRequest,
+  type ServiceCredentialKind,
+} from "@skillplane/api";
 import type { ApiServices } from "@skillplane/api";
 import {
-  SERVICE_PRINCIPAL_SCOPES,
-  assertServicePrincipalActive,
+  DomainError,
   authorize,
   isWorkspaceRole,
   type Principal,
   type ServicePrincipal,
-  type ServicePrincipalScope,
   type UserPrincipal,
   type WorkspaceAction,
 } from "@skillplane/domain";
+import {
+  protectedResourceChallenge,
+  readBearerToken,
+  verifyAccessToken,
+} from "@skillplane/auth";
 
 export type McpScope =
   | "skills:read"
@@ -39,27 +41,17 @@ export interface ServiceMcpIdentity {
   readonly kind: "service";
   readonly actorType: "service_principal";
   readonly actorId: string;
+  readonly servicePrincipalId: string;
   readonly userId: string | null;
   readonly credentialId: string;
-  readonly credentialKind: "service_principal";
+  readonly credentialKind: ServiceCredentialKind;
   readonly workspaceId: string;
   readonly displayName: string;
   readonly role: ServicePrincipal["role"];
-  readonly scopes: readonly ServicePrincipalScope[];
+  readonly scopes: ServicePrincipal["scopes"];
 }
 
 export type McpIdentity = OAuthMcpIdentity | ServiceMcpIdentity;
-
-interface ServicePrincipalRow {
-  readonly id: string;
-  readonly workspace_id: string;
-  readonly name: string;
-  readonly role: string;
-  readonly scopes: string[];
-  readonly delegated_user_id: string | null;
-  readonly expires_at: Date | null;
-  readonly revoked_at: Date | null;
-}
 
 interface MembershipRow {
   readonly role: string;
@@ -75,13 +67,6 @@ export class McpAuthenticationError extends Error {
     this.status = status;
     this.scopes = scopes;
   }
-}
-
-async function sha256(value: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
-  return [...new Uint8Array(digest)]
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
 }
 
 function normalizeRequiredScopes(values: readonly string[]): readonly McpScope[] {
@@ -175,52 +160,33 @@ export async function requiredScopesForRequest(
 
 async function authenticateService(
   services: ApiServices,
-  token: string,
+  request: Request,
 ): Promise<ServiceMcpIdentity> {
-  const result = await services.database.pool.query<ServicePrincipalRow>(
-    `SELECT id, workspace_id, name, role, scopes, delegated_user_id,
-            expires_at, revoked_at
-       FROM service_principals
-      WHERE credential_hash = $1
-      LIMIT 1`,
-    [await sha256(token)],
-  );
-  const row = result.rows[0];
-  const scopes = row?.scopes.filter((scope): scope is ServicePrincipalScope =>
-    (SERVICE_PRINCIPAL_SCOPES as readonly string[]).includes(scope),
-  );
-  if (
-    !row ||
-    !isWorkspaceRole(row.role) ||
-    row.role === "owner" ||
-    scopes?.length !== row.scopes.length
-  ) {
-    throw new McpAuthenticationError(401, "The bearer credential is invalid");
-  }
+  let authenticated: Awaited<ReturnType<typeof authenticateServicePrincipalRequest>>;
   try {
-    assertServicePrincipalActive({
-      revokedAt: row.revoked_at,
-      expiresAt: row.expires_at,
-      scopes,
-    });
-  } catch {
+    authenticated = await authenticateServicePrincipalRequest(request, services);
+  } catch (error) {
+    if (error instanceof DomainError && error.status === 401) {
+      throw new McpAuthenticationError(401, "The bearer credential is invalid");
+    }
+    throw error;
+  }
+  if (!authenticated) {
     throw new McpAuthenticationError(401, "The bearer credential is invalid");
   }
-  await services.database.pool.query(
-    "UPDATE service_principals SET last_used_at = now() WHERE id = $1",
-    [row.id],
-  );
+  const principal = authenticated.principal;
   return {
     kind: "service",
     actorType: "service_principal",
-    actorId: row.id,
-    userId: row.delegated_user_id,
-    credentialId: row.id,
-    credentialKind: "service_principal",
-    workspaceId: row.workspace_id,
-    displayName: row.name,
-    role: row.role,
-    scopes,
+    actorId: principal.actorId,
+    servicePrincipalId: principal.servicePrincipalId,
+    userId: principal.delegatedUserId ?? null,
+    credentialId: authenticated.credentialId,
+    credentialKind: authenticated.credentialKind,
+    workspaceId: principal.workspaceId,
+    displayName: principal.displayName ?? "Service principal",
+    role: principal.role,
+    scopes: principal.scopes,
   };
 }
 
@@ -255,8 +221,8 @@ export async function authenticateMcpRequest(
     ...additionalScopes,
   ]);
   let identity: McpIdentity;
-  if (token.startsWith("sps_")) {
-    identity = await authenticateService(services, token);
+  if (token.startsWith("sps_") || token.startsWith("spk_")) {
+    identity = await authenticateService(services, request);
   } else {
     try {
       const verified = await verifyAccessToken(services.auth.oauth, token, {
@@ -324,7 +290,7 @@ export async function principalForWorkspace(
     const principal: ServicePrincipal = {
       kind: "service",
       actorId: identity.actorId,
-      servicePrincipalId: identity.credentialId,
+      servicePrincipalId: identity.servicePrincipalId,
       workspaceId: identity.workspaceId,
       displayName: identity.displayName,
       role: identity.role,
