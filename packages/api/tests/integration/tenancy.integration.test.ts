@@ -7,7 +7,6 @@ import {
   type TenantFixture,
 } from "@skillplane/testing";
 import { Pool } from "pg";
-import { createHash } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 let databaseUrl: string;
@@ -285,12 +284,12 @@ describe("tenancy integration", () => {
     const body = await json<{
       data: {
         credential: string;
-        servicePrincipal: { id: string; credentialProvider: string };
+        servicePrincipal: { id: string; credentialAvailable: boolean };
       };
     }>(created);
     serviceCredential = body.data.credential;
     servicePrincipalId = body.data.servicePrincipal.id;
-    expect(body.data.servicePrincipal.credentialProvider).toBe("authfn_api_key");
+    expect(body.data.servicePrincipal.credentialAvailable).toBe(true);
     expect(serviceCredential).toMatch(/^spk_[A-Za-z0-9_-]+$/u);
 
     const listing = await app.request(
@@ -300,14 +299,14 @@ describe("tenancy integration", () => {
     const serializedListing = await listing.text();
     expect(serializedListing).not.toContain(serviceCredential);
     expect(serializedListing).not.toContain("credentialHash");
+    expect(serializedListing).not.toMatch(/authfn|credentialProvider/iu);
 
     const persisted = await services.database.pool.query<{
       authfn_api_key_id: string;
-      credential_hash: string | null;
       secret_hash: string;
       metadata: Record<string, unknown>;
     }>(
-      `SELECT sp.authfn_api_key_id, sp.credential_hash, key.secret_hash,
+      `SELECT sp.authfn_api_key_id, key.secret_hash,
               key.metadata
          FROM service_principals sp
          JOIN authfn_api_keys key ON key.id = sp.authfn_api_key_id
@@ -317,7 +316,6 @@ describe("tenancy integration", () => {
     const persistedCredential = persisted.rows[0];
     if (!persistedCredential) throw new Error("AuthFn credential was not persisted");
     serviceAuthFnKeyId = persistedCredential.authfn_api_key_id;
-    expect(persistedCredential.credential_hash).toBeNull();
     expect(persistedCredential.secret_hash).toMatch(/^[a-f0-9]{64}$/u);
     expect(JSON.stringify(persistedCredential)).not.toContain(serviceCredential);
     expect(persistedCredential.metadata).toMatchObject({
@@ -473,36 +471,45 @@ describe("tenancy integration", () => {
     expect(denied.status).toBe(401);
   });
 
-  it("keeps legacy sps credentials valid until rotation migrates them", async () => {
-    const legacyCredential = `sps_${crypto.randomUUID().replaceAll("-", "")}${crypto
+  it("rejects removed credentials and reissues a credential for existing principals", async () => {
+    const removedCredential = `sps_${crypto.randomUUID().replaceAll("-", "")}${crypto
       .randomUUID()
       .replaceAll("-", "")}`;
-    const legacyPrincipalId = `service-principal:legacy-${suffix}`;
+    const existingPrincipalId = `service-principal:existing-${suffix}`;
     await services.database.pool.query(
       `INSERT INTO service_principals
-         (id, workspace_id, name, role, scopes, credential_hash,
-          created_by_user_id)
-       VALUES ($1, $2, $3, 'viewer', $4, $5, $6)`,
+         (id, workspace_id, name, role, scopes, created_by_user_id)
+       VALUES ($1, $2, $3, 'viewer', $4, $5)`,
       [
-        legacyPrincipalId,
+        existingPrincipalId,
         organizationId,
-        `legacy-agent-${suffix}`,
+        `existing-agent-${suffix}`,
         ["skills:read"],
-        createHash("sha256").update(legacyCredential).digest("hex"),
         owner.userId,
       ],
     );
 
-    const legacyAccess = await app.request("/api/v1/skills/search?q=legacy", {
+    const removedAccess = await app.request("/api/v1/skills/search?q=removed", {
       headers: {
-        authorization: `Bearer ${legacyCredential}`,
+        authorization: `Bearer ${removedCredential}`,
         "x-skillplane-workspace-id": organizationId,
       },
     });
-    expect(legacyAccess.status).toBe(200);
+    expect(removedAccess.status).toBe(401);
+
+    const listing = await app.request(
+      `/api/v1/workspaces/${organizationId}/service-principals`,
+      { headers: headers(owner) },
+    );
+    const listed = await json<{
+      data: { servicePrincipals: { id: string; credentialAvailable: boolean }[] };
+    }>(listing);
+    expect(
+      listed.data.servicePrincipals.find(({ id }) => id === existingPrincipalId),
+    ).toMatchObject({ credentialAvailable: false });
 
     const rotated = await app.request(
-      `/api/v1/workspaces/${organizationId}/service-principals/${legacyPrincipalId}/rotate`,
+      `/api/v1/workspaces/${organizationId}/service-principals/${existingPrincipalId}/rotate`,
       {
         method: "POST",
         headers: {
@@ -516,24 +523,31 @@ describe("tenancy integration", () => {
     const rotation = await json<{ data: { credential: string } }>(rotated);
     expect(rotation.data.credential).toMatch(/^spk_/u);
 
-    const legacyDenied = await app.request("/api/v1/skills/search?q=legacy", {
+    const access = await app.request("/api/v1/skills/search?q=existing", {
       headers: {
-        authorization: `Bearer ${legacyCredential}`,
+        authorization: `Bearer ${rotation.data.credential}`,
         "x-skillplane-workspace-id": organizationId,
       },
     });
-    expect(legacyDenied.status).toBe(401);
-    const migrated = await services.database.pool.query<{
+    expect(access.status).toBe(200);
+    const reissued = await services.database.pool.query<{
       authfn_api_key_id: string | null;
-      credential_hash: string | null;
     }>(
-      `SELECT authfn_api_key_id, credential_hash
+      `SELECT authfn_api_key_id
          FROM service_principals
         WHERE id = $1`,
-      [legacyPrincipalId],
+      [existingPrincipalId],
     );
-    expect(migrated.rows[0]?.authfn_api_key_id).toMatch(/^key_/u);
-    expect(migrated.rows[0]?.credential_hash).toBeNull();
+    expect(reissued.rows[0]?.authfn_api_key_id).toMatch(/^key_/u);
+
+    const removedColumn = await services.database.pool.query(
+      `SELECT 1
+         FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'service_principals'
+          AND column_name = 'credential_hash'`,
+    );
+    expect(removedColumn.rowCount).toBe(0);
   });
 
   it("serializes concurrent owner removals so one owner always remains", async () => {

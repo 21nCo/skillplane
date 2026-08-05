@@ -1,6 +1,5 @@
 import {
   bigint,
-  check,
   customType,
   date,
   doublePrecision,
@@ -119,7 +118,6 @@ export const servicePrincipals = pgTable(
     name: text("name").notNull(),
     role: text("role").notNull().default("viewer"),
     scopes: text("scopes").array().notNull().default([]),
-    credentialHash: text("credential_hash"),
     authfnApiKeyId: text("authfn_api_key_id").references(() => authfnApiKeys.id, {
       onDelete: "set null",
     }),
@@ -137,12 +135,7 @@ export const servicePrincipals = pgTable(
     updatedAt: utcTimestamp("updated_at").notNull().defaultNow(),
   },
   (table) => [
-    uniqueIndex("service_principals_credential_hash_unique").on(table.credentialHash),
     uniqueIndex("service_principals_authfn_api_key_unique").on(table.authfnApiKeyId),
-    check(
-      "service_principals_single_credential_source",
-      sql`${table.credentialHash} IS NULL OR ${table.authfnApiKeyId} IS NULL`,
-    ),
     uniqueIndex("service_principals_workspace_name_unique").on(
       table.workspaceId,
       table.name,

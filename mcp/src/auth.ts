@@ -1,7 +1,4 @@
-import {
-  authenticateServicePrincipalRequest,
-  type ServiceCredentialKind,
-} from "@skillplane/api";
+import { authenticateServicePrincipalRequest } from "@skillplane/api";
 import type { ApiServices } from "@skillplane/api";
 import {
   DomainError,
@@ -44,7 +41,7 @@ export interface ServiceMcpIdentity {
   readonly servicePrincipalId: string;
   readonly userId: string | null;
   readonly credentialId: string;
-  readonly credentialKind: ServiceCredentialKind;
+  readonly credentialKind: "service_principal";
   readonly workspaceId: string;
   readonly displayName: string;
   readonly role: ServicePrincipal["role"];
@@ -221,7 +218,7 @@ export async function authenticateMcpRequest(
     ...additionalScopes,
   ]);
   let identity: McpIdentity;
-  if (token.startsWith("sps_") || token.startsWith("spk_")) {
+  if (token.startsWith("spk_")) {
     identity = await authenticateService(services, request);
   } else {
     try {

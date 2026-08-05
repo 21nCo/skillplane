@@ -24,7 +24,6 @@ interface ServicePrincipalRow {
   readonly delegated_user_id: string | null;
   readonly expires_at: Date | null;
   readonly credential_version: number;
-  readonly credential_hash: string | null;
   readonly authfn_api_key_id: string | null;
   readonly last_used_at: Date | null;
   readonly revoked_at: Date | null;
@@ -41,11 +40,7 @@ function serialize(row: ServicePrincipalRow) {
     delegatedUserId: row.delegated_user_id,
     expiresAt: row.expires_at?.toISOString() ?? null,
     credentialVersion: row.credential_version,
-    credentialProvider: row.authfn_api_key_id
-      ? "authfn_api_key"
-      : row.credential_hash
-        ? "legacy_sps"
-        : "unavailable",
+    credentialAvailable: Boolean(row.authfn_api_key_id),
     lastUsedAt: row.last_used_at?.toISOString() ?? null,
     revokedAt: row.revoked_at?.toISOString() ?? null,
     createdAt: row.created_at.toISOString(),
@@ -127,7 +122,7 @@ export function registerServicePrincipalRoutes(app: Hono<ApiEnvironment>): void 
     authorize(principal, "members:read");
     const result = await services.database.pool.query<ServicePrincipalRow>(
       `SELECT id, name, role, scopes, delegated_user_id, expires_at,
-                credential_version, credential_hash, authfn_api_key_id,
+                credential_version, authfn_api_key_id,
                 last_used_at, revoked_at, created_at, updated_at
            FROM service_principals
           WHERE workspace_id = $1
@@ -216,7 +211,7 @@ export function registerServicePrincipalRoutes(app: Hono<ApiEnvironment>): void 
               created_by_user_id, delegated_user_id, expires_at)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
            RETURNING id, name, role, scopes, delegated_user_id, expires_at,
-                     credential_version, credential_hash, authfn_api_key_id,
+                     credential_version, authfn_api_key_id,
                      last_used_at, revoked_at, created_at, updated_at`,
         [
           id,
@@ -243,8 +238,7 @@ export function registerServicePrincipalRoutes(app: Hono<ApiEnvironment>): void 
           scopes,
           delegated: Boolean(delegatedUserId),
           expires: Boolean(expiresAt),
-          credentialProvider: "authfn_api_key",
-          authfnApiKeyId: issued.keyId,
+          credentialId: issued.keyId,
         },
       });
       await client.query("COMMIT");
@@ -305,7 +299,7 @@ export function registerServicePrincipalRoutes(app: Hono<ApiEnvironment>): void 
           await client.query("BEGIN");
           const currentResult = await client.query<ServicePrincipalRow>(
             `SELECT id, name, role, scopes, delegated_user_id, expires_at,
-                    credential_version, credential_hash, authfn_api_key_id,
+                    credential_version, authfn_api_key_id,
                     last_used_at, revoked_at, created_at, updated_at
                FROM service_principals
               WHERE workspace_id = $1 AND id = $2 AND revoked_at IS NULL
@@ -335,15 +329,14 @@ export function registerServicePrincipalRoutes(app: Hono<ApiEnvironment>): void 
           issuedForCleanup = issuedCredential;
           const result = await client.query<ServicePrincipalRow>(
             `UPDATE service_principals
-              SET credential_hash = NULL,
-                  authfn_api_key_id = $1,
+              SET authfn_api_key_id = $1,
                   credential_version = credential_version + 1,
                   last_used_at = NULL,
                   expires_at = $4,
                   updated_at = now()
             WHERE workspace_id = $2 AND id = $3 AND revoked_at IS NULL
             RETURNING id, name, role, scopes, delegated_user_id, expires_at,
-                      credential_version, credential_hash, authfn_api_key_id,
+                      credential_version, authfn_api_key_id,
                       last_used_at, revoked_at, created_at, updated_at`,
             [
               issuedCredential.keyId,
@@ -369,9 +362,7 @@ export function registerServicePrincipalRoutes(app: Hono<ApiEnvironment>): void 
             metadata: {
               credentialVersion: updated.credential_version,
               expires: Boolean(updated.expires_at),
-              credentialProvider: "authfn_api_key",
-              authfnApiKeyId: issuedCredential.keyId,
-              migratedLegacyCredential: current.authfn_api_key_id === null,
+              credentialId: issuedCredential.keyId,
             },
           });
           await client.query("COMMIT");
@@ -473,11 +464,9 @@ export function registerServicePrincipalRoutes(app: Hono<ApiEnvironment>): void 
           resourceType: "service_principal",
           resourceId: servicePrincipalId,
           metadata: {
-            credentialProvider: currentRow.authfn_api_key_id
-              ? "authfn_api_key"
-              : "legacy_sps",
+            credentialAvailable: Boolean(currentRow.authfn_api_key_id),
             ...(currentRow.authfn_api_key_id
-              ? { authfnApiKeyId: currentRow.authfn_api_key_id }
+              ? { credentialId: currentRow.authfn_api_key_id }
               : {}),
           },
         });

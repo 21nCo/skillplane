@@ -132,8 +132,7 @@ authentication and leave request headers empty. The client discovers Skillplane
 OAuth and obtains a user-bound access token after login and consent.
 
 For CI, headless agents, or organization-owned agents, use **Request headers**
-with a scoped `spk_...` credential instead. Existing `sps_...` credentials remain
-valid only during the migration window and become AuthFn keys when rotated.
+with a scoped Skillplane agent credential instead.
 
 The hosted endpoint must be deployed and reachable over HTTPS before a
 cloud-hosted client can connect to it.

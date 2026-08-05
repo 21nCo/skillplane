@@ -1,20 +1,16 @@
 import {
   InvalidAuthenticationError,
   SERVICE_PRINCIPAL_SCOPES,
-  assertServicePrincipalActive,
   isWorkspaceRole,
   type ServicePrincipal,
   type ServicePrincipalScope,
 } from "@skillplane/domain";
 import type { ApiServices } from "./context.js";
-import { hashOpaqueToken } from "./tenancy-crypto.js";
-
-export type ServiceCredentialKind = "authfn_api_key" | "service_principal_legacy";
 
 export interface AuthenticatedServicePrincipal {
   readonly principal: ServicePrincipal;
   readonly credentialId: string;
-  readonly credentialKind: ServiceCredentialKind;
+  readonly credentialKind: "service_principal";
 }
 
 interface ServicePrincipalRow {
@@ -53,37 +49,6 @@ function servicePrincipal(row: ServicePrincipalRow): ServicePrincipal {
   };
 }
 
-async function authenticateLegacyCredential(
-  services: ApiServices,
-  token: string,
-): Promise<AuthenticatedServicePrincipal> {
-  const result = await services.database.pool.query<ServicePrincipalRow>(
-    `SELECT id, workspace_id, name, role, scopes, delegated_user_id,
-            expires_at, revoked_at, credential_version, authfn_api_key_id
-       FROM service_principals
-      WHERE credential_hash = $1 AND authfn_api_key_id IS NULL
-      LIMIT 1`,
-    [await hashOpaqueToken(token)],
-  );
-  const row = result.rows[0];
-  if (!row) throw new InvalidAuthenticationError();
-  const principal = servicePrincipal(row);
-  assertServicePrincipalActive({
-    revokedAt: row.revoked_at,
-    expiresAt: row.expires_at,
-    scopes: principal.scopes,
-  });
-  await services.database.pool.query(
-    "UPDATE service_principals SET last_used_at = now() WHERE id = $1",
-    [row.id],
-  );
-  return {
-    principal,
-    credentialId: row.id,
-    credentialKind: "service_principal_legacy",
-  };
-}
-
 function metadataMatches(
   metadata: Readonly<Record<string, unknown>> | undefined,
   row: ServicePrincipalRow,
@@ -96,7 +61,7 @@ function metadataMatches(
   );
 }
 
-async function authenticateAuthFnCredential(
+async function authenticateServiceCredential(
   services: ApiServices,
   token: string,
 ): Promise<AuthenticatedServicePrincipal> {
@@ -129,7 +94,7 @@ async function authenticateAuthFnCredential(
   return {
     principal,
     credentialId: identity.actorId,
-    credentialKind: "authfn_api_key",
+    credentialKind: "service_principal",
   };
 }
 
@@ -140,11 +105,8 @@ export async function authenticateServicePrincipalRequest(
   const authorization = request.headers.get("authorization")?.trim();
   if (!authorization?.startsWith("Bearer ")) return null;
   const token = authorization.slice("Bearer ".length).trim();
-  if (token.startsWith("sps_")) {
-    return authenticateLegacyCredential(services, token);
-  }
   if (token.startsWith("spk_")) {
-    return authenticateAuthFnCredential(services, token);
+    return authenticateServiceCredential(services, token);
   }
   return null;
 }

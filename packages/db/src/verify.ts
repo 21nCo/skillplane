@@ -45,7 +45,6 @@ const REQUIRED_CONSTRAINTS = [
   "skill_contexts_current_knowledge_tenant_fk",
   "skill_versions_agent_attribution",
   "skills_current_version_tenant_fk",
-  "service_principals_single_credential_source",
   "workspaces_tenant_identity",
 ] as const;
 

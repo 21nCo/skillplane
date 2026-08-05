@@ -33,7 +33,7 @@
     readonly delegatedUserId: string | null;
     readonly expiresAt: string | null;
     readonly credentialVersion: number;
-    readonly credentialProvider: "authfn_api_key" | "legacy_sps" | "unavailable";
+    readonly credentialAvailable: boolean;
     readonly lastUsedAt: string | null;
     readonly revokedAt: string | null;
     readonly createdAt: string;
@@ -339,11 +339,9 @@
             <p>{agent.scopes.join(" · ")}</p>
             <small>
               Version {agent.credentialVersion}
-              · {agent.credentialProvider === "authfn_api_key"
-                ? "AuthFn API key"
-                : agent.credentialProvider === "legacy_sps"
-                  ? "legacy credential — rotate to migrate"
-                  : "credential unavailable — rotate to restore"}
+              {agent.credentialAvailable
+                ? ""
+                : " · credential unavailable — rotate to replace"}
               · {agent.lastUsedAt
                 ? `last used ${new Date(agent.lastUsedAt).toLocaleString()}`
                 : "never used"}
@@ -384,7 +382,7 @@
       <h2 id="credential-title">Save the credential for {credentialFor}</h2>
       <p>
         This secret will not be shown again. Store it in your agent’s encrypted secret
-        manager. AuthFn stores only its hash.
+        manager. Only a secure hash is retained.
       </p>
       <div class="secret">
         <code>{credential}</code>

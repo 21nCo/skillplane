@@ -37,7 +37,7 @@ export async function testProductionMcp() {
   const token = requireEnvironment("SKILLPLANE_PRODUCTION_MCP_ACCESS_TOKEN", {
     minimumLength: 32,
   });
-  if (token.startsWith("sps_") || token.startsWith("spk_")) {
+  if (token.startsWith("spk_")) {
     throw new Error(
       "SKILLPLANE_PRODUCTION_MCP_ACCESS_TOKEN must be an OAuth access token, not a service-principal credential",
     );

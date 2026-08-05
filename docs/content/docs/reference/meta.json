@@ -1,9 +1,4 @@
 {
   "title": "Reference",
-  "pages": [
-    "mcp-tools",
-    "roles-and-scopes",
-    "agent-credential-migration",
-    "troubleshooting"
-  ]
+  "pages": ["mcp-tools", "roles-and-scopes", "troubleshooting"]
 }

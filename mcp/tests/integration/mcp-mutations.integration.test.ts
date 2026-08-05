@@ -165,7 +165,7 @@ describe("MCP skill amendments", () => {
       model: TEST_CALLER.modelName,
       metadata: {
         channel: "mcp",
-        credential: { kind: "authfn_api_key" },
+        credential: { kind: "service_principal" },
         caller: {
           agentId: TEST_CALLER.agentId,
           modelVersion: TEST_CALLER.modelVersion,
