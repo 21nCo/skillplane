@@ -10,7 +10,7 @@
 
 <img
   class="brand-mark"
-  src="/skillplane-logo.png"
+  src="/skillplane-logo-gradient-transparent.png"
   alt=""
   aria-hidden="true"
   draggable="false"
@@ -25,7 +25,6 @@
   .brand-mark {
     display: block;
     flex: 0 0 auto;
-    object-fit: cover;
-    box-shadow: 0 0 0 1px color-mix(in srgb, var(--sp-color-border) 72%, transparent);
+    object-fit: contain;
   }
 </style>

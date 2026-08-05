@@ -14,6 +14,7 @@ import favicon from "./assets/favicon.ico";
 import favicon32 from "./assets/favicon-32x32.png";
 import icon192 from "./assets/icon-192.png";
 import icon512 from "./assets/icon-512.png";
+import gradientLogo from "./assets/skillplane-logo-gradient-transparent.png";
 import {
   authenticateMcpRequest,
   McpAuthenticationError,
@@ -58,7 +59,7 @@ const MCP_HOME = `<!doctype html>
   </head>
   <body>
     <main>
-      <img src="/icon-192.png" width="96" height="96" alt="">
+      <img src="/skillplane-logo-gradient-transparent.png" width="160" height="160" alt="">
       <h1>Skillplane MCP</h1>
       <p>Connect at <code>https://mcp.skillplane.dev/mcp</code>.</p>
       <p><a href="https://skillplane.dev">Open Skillplane</a></p>
@@ -487,6 +488,9 @@ export function createMcpApp(options: CreateMcpAppOptions = {}) {
   );
   app.get("/icon-192.png", () => brandAssetResponse(icon192, "image/png"));
   app.get("/icon-512.png", () => brandAssetResponse(icon512, "image/png"));
+  app.get("/skillplane-logo-gradient-transparent.png", () =>
+    brandAssetResponse(gradientLogo, "image/png"),
+  );
   app.get(
     "/site.webmanifest",
     () =>

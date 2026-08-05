@@ -45,6 +45,7 @@ describe("MCP OAuth discovery", () => {
     ["/apple-touch-icon.png", "image/png"],
     ["/icon-192.png", "image/png"],
     ["/icon-512.png", "image/png"],
+    ["/skillplane-logo-gradient-transparent.png", "image/png"],
   ])("serves the branded asset at %s", async (path, contentType) => {
     const response = await app.request(path);
     expect(response.status).toBe(200);
@@ -58,5 +59,13 @@ describe("MCP OAuth discovery", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toContain("text/html");
     await expect(response.text()).resolves.toContain('href="/favicon.ico"');
+  });
+
+  it("renders the gradient logo on the MCP landing page", async () => {
+    const response = await app.request("/");
+    expect(response.status).toBe(200);
+    await expect(response.text()).resolves.toContain(
+      'src="/skillplane-logo-gradient-transparent.png"',
+    );
   });
 });
