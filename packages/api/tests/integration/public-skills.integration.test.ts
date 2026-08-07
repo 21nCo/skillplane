@@ -1,5 +1,6 @@
 import { buildApiServices, createApiApp, type ApiServices } from "../../src/index.js";
 import { migrateDatabase, resolveTestDatabaseUrl } from "@skillplane/db";
+import { rollupUtcDay, writeAuditEvent } from "@skillplane/observability";
 import {
   createSkillBundleFixture,
   purgeTenantFixture,
@@ -287,5 +288,73 @@ describe("public skill discovery API", () => {
     expect(history.versions[0]).not.toHaveProperty("learningMetadata");
     expect(history.versions[0]?.id).toBe(candidate.version.id);
     expect(triage.skill.id).not.toBe(review.skill.id);
+  });
+
+  it("publishes aggregate skill and successful agent-use totals", async () => {
+    const beforeResponse = await app.request("/api/v1/stats/public");
+    expect(beforeResponse.status).toBe(200);
+    expect(beforeResponse.headers.get("cache-control")).toBe(
+      "public, max-age=60, s-maxage=300, stale-while-revalidate=3600",
+    );
+    const before = await data<{
+      readonly totalSkills: number;
+      readonly agentSkillUses: number;
+      readonly generatedAt: string;
+    }>(beforeResponse);
+
+    const measured = await createSkill({
+      slug: `agent-usage-${suffix}`,
+      name: "Agent usage",
+      markdown: "# Agent usage\n\nMeasure successful retrievals only.\n",
+      visibility: "private",
+    });
+    const dayStart = new Date(Date.now() - 2 * 86_400_000);
+    dayStart.setUTCHours(0, 0, 0, 0);
+    const day = dayStart.toISOString().slice(0, 10);
+    const recordUse = async (index: number, hour: number): Promise<void> => {
+      await writeAuditEvent(services.database.pool, {
+        id: `audit:public-stats:${suffix}:${String(index)}`,
+        workspaceId: tenant.workspaceId,
+        eventType: "mcp.skill_retrieve.success",
+        action: "skill_retrieve",
+        outcome: "success",
+        actorType: "service_principal",
+        actorId: `service:public-stats:${suffix}`,
+        requestId: `request:public-stats:${suffix}:${String(index)}`,
+        resourceType: "skill_version",
+        resourceId: measured.version.id,
+        skillId: measured.skill.id,
+        versionId: measured.version.id,
+        agent: "Codex",
+        model: "gpt-5",
+        channel: "mcp",
+        retentionClass: "detailed_read_90d",
+        occurredAt: new Date(dayStart.getTime() + hour * 3_600_000),
+      });
+    };
+
+    await recordUse(1, 10);
+    await recordUse(2, 11);
+    await rollupUtcDay(services.database.pool, {
+      day,
+      workspaceId: tenant.workspaceId,
+    });
+    await recordUse(3, 12);
+
+    const afterResponse = await app.request("/api/v1/stats/public");
+    const responseText = await afterResponse.text();
+    expect(afterResponse.status).toBe(200);
+    expect(responseText).not.toContain(tenant.workspaceId);
+    expect(responseText).not.toContain(measured.skill.id);
+    const envelope = JSON.parse(responseText) as {
+      readonly data: {
+        readonly totalSkills: number;
+        readonly agentSkillUses: number;
+        readonly generatedAt: string;
+      };
+    };
+    expect(envelope.data.totalSkills).toBe(before.totalSkills + 1);
+    expect(envelope.data.agentSkillUses).toBe(before.agentSkillUses + 3);
+    expect(envelope.data.generatedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/u);
   });
 });
