@@ -21,6 +21,7 @@ import { registerSkillVersionRoutes } from "./routes/skill-versions.js";
 import { registerWorkspaceRoutes } from "./routes/workspaces.js";
 import { registerReviewRoutes } from "./routes/reviews.js";
 import { registerOAuthMetadataRoutes } from "./routes/oauth-metadata.js";
+import { registerPublicStatsRoutes } from "./routes/public-stats.js";
 import { registerAnalyticsRoutes } from "./routes/analytics.js";
 import { registerAuditRoutes } from "./routes/audit.js";
 
@@ -123,6 +124,7 @@ export function createApiApp(options: ApiOptions = {}) {
   });
 
   registerOAuthMetadataRoutes(app, options.oauthMetadata);
+  registerPublicStatsRoutes(app);
   registerAnalyticsRoutes(app);
   registerAuditRoutes(app);
   registerWorkspaceRoutes(app);

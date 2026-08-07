@@ -506,6 +506,9 @@ export const auditEvents = pgTable(
       table.occurredAt,
       table.id,
     ),
+    index("audit_events_public_agent_skill_use_idx")
+      .on(table.workspaceId, table.occurredAt, table.id)
+      .where(sql`${table.action} = 'skill_retrieve' AND ${table.outcome} = 'success'`),
   ],
 );
 
