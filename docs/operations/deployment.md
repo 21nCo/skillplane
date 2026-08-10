@@ -49,6 +49,9 @@ Run `pnpm production:secrets:init` once to generate strong independent
 does not print values, rejects duplicate or weak existing assignments, refuses
 symlinks, and enforces mode `0600`.
 
+Supply the existing `POSTHOG_PROJECT_TOKEN` separately; the initializer does
+not generate credentials for external services.
+
 | Variable                           | Purpose                                                                             |
 | ---------------------------------- | ----------------------------------------------------------------------------------- |
 | `RAILWAY_DATABASE_URL`             | Direct Railway public Postgres URL used only by backup, migration, and verification |
@@ -56,6 +59,8 @@ symlinks, and enforces mode `0600`.
 | `SKILLPLANE_BACKUP_ENCRYPTION_KEY` | At least 32 characters; encrypts logical backups before they reach disk             |
 | `AUTHFN_SECRET`                    | AuthFn signing and tenancy secret, at least 32 characters                           |
 | `OAUTH_TOKEN_PEPPER`               | OAuth token hashing pepper, at least 32 characters                                  |
+| `POSTHOG_PROJECT_TOKEN`            | Existing PostHog project token supplied to the MCP Worker                           |
+| `POSTHOG_HOST`                     | PostHog ingestion host; production uses `https://us.i.posthog.com`                  |
 | `TURNSTILE_SECRET_KEY`             | Production Turnstile secret, at least 32 characters                                 |
 | `PUBLIC_TURNSTILE_SITE_KEY`        | Public site key for the production widget                                           |
 | `SKILLPLANE_RELEASE_TAG`           | Optional stable release label; generated when omitted                               |

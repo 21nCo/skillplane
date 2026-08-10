@@ -131,7 +131,7 @@ export async function deployAll() {
       },
       secretNames: {
         app: ["AUTHFN_SECRET", "OAUTH_TOKEN_PEPPER", "TURNSTILE_SECRET_KEY"],
-        mcp: ["OAUTH_TOKEN_PEPPER"],
+        mcp: ["OAUTH_TOKEN_PEPPER", "POSTHOG_PROJECT_TOKEN"],
       },
       turnstile: {
         siteKeyConfigured: true,

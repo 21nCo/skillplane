@@ -31,7 +31,7 @@ export const workers = Object.freeze({
     directory: resolve(root, "mcp"),
     config: resolve(root, "mcp", "wrangler.generated.json"),
     host: "mcp.skillplane.dev",
-    secretNames: ["OAUTH_TOKEN_PEPPER"],
+    secretNames: ["OAUTH_TOKEN_PEPPER", "POSTHOG_PROJECT_TOKEN"],
   },
 });
 

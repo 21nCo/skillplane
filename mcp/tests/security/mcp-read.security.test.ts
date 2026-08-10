@@ -1,4 +1,5 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { decodeSessionId, PostHog } from "@posthog/mcp";
 import type {
   ContextNotesListOutput,
   ContextsListOutput,
@@ -193,6 +194,60 @@ describe("MCP authentication and protocol security", () => {
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toMatchObject({
       error: "invalid_session",
+    });
+  });
+
+  it("carries PostHog analytics correlation across stateless requests", async () => {
+    const posthog = new PostHog("phc_fixture_posthog_project_token_123456789", {
+      disabled: true,
+    });
+    const analyticsApp = createMcpApp({
+      getServices: async () => environment.services,
+      posthog,
+    });
+    const request = (body: unknown, sessionId?: string) =>
+      analyticsApp.fetch(
+        new Request(TEST_MCP_RESOURCE, {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${environment.serviceToken}`,
+            "content-type": "application/json",
+            accept: "application/json, text/event-stream",
+            "mcp-protocol-version": "2025-11-25",
+            ...(sessionId ? { "mcp-session-id": sessionId } : {}),
+          },
+          body: JSON.stringify(body),
+        }),
+      );
+
+    const initialize = await request({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-11-25",
+        capabilities: {},
+        clientInfo: { name: "posthog-fixture", version: "1.0.0" },
+      },
+    });
+    expect(initialize.status).toBe(200);
+    const sessionId = initialize.headers.get("mcp-session-id");
+    expect(sessionId).toBeTruthy();
+    expect(decodeSessionId(sessionId)).toMatchObject({
+      clientName: "posthog-fixture",
+      clientVersion: "1.0.0",
+      protocolVersion: "2025-11-25",
+    });
+
+    const ping = await request(
+      { jsonrpc: "2.0", id: 2, method: "ping" },
+      sessionId ?? undefined,
+    );
+    expect(ping.status).toBe(200);
+    await expect(ping.json()).resolves.toMatchObject({
+      jsonrpc: "2.0",
+      id: 2,
+      result: {},
     });
   });
 });

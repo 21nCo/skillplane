@@ -27,7 +27,8 @@
   "vars": {
     "RUNTIME_ENV": "production",
     "DATABASE_ADAPTER": "postgres",
-    "OAUTH_ISSUER": "https://app.skillplane.dev"
+    "OAUTH_ISSUER": "https://app.skillplane.dev",
+    "POSTHOG_HOST": "https://us.i.posthog.com"
   },
   "observability": {
     "enabled": true,

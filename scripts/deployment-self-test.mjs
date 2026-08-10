@@ -5,6 +5,7 @@ import {
   parseRailwayDatabaseUrl,
   requireHyperdriveId,
   sanitizeDeploymentRecord,
+  workers,
 } from "./lib/production-deployment.mjs";
 import {
   assertHyperdriveOriginRecord,
@@ -34,6 +35,10 @@ assert(
   rendered.configs.app.routing.type === "custom-domain" &&
     rendered.configs.mcp.routing.type === "custom-domain",
   "Production routing modes were not rendered correctly",
+);
+assert(
+  workers.mcp.secretNames.includes("POSTHOG_PROJECT_TOKEN"),
+  "The MCP production secret inventory omitted PostHog",
 );
 
 const railway = parseRailwayDatabaseUrl(
