@@ -5,6 +5,7 @@ packages:
   - packages/*
 
 allowBuilds:
+  core-js: false
   esbuild: true
   protobufjs: true
   sharp: true

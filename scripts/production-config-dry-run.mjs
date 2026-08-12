@@ -17,6 +17,7 @@ export async function productionConfigDryRun() {
     await renderDeploymentConfigs({
       hyperdriveId: crypto.randomUUID().replaceAll("-", ""),
       siteKey: `self-test-${crypto.randomUUID()}`,
+      postHogProjectToken: `phc_${crypto.randomUUID().replaceAll("-", "")}`,
       outputPaths,
     });
     const results = {};

@@ -16,6 +16,7 @@
   import { RobotIcon, SquaresFourIcon, UsersThreeIcon } from "phosphor-svelte";
   import { onMount, type Snippet } from "svelte";
   import { signOut, type BrowserSession } from "$lib/auth/client.js";
+  import { initializePostHog } from "$lib/analytics/posthog.client.js";
   import type { WorkspaceStore } from "$lib/workspaces/store.svelte.js";
   import Sidebar from "./Sidebar.svelte";
   import Topbar from "./Topbar.svelte";
@@ -68,6 +69,7 @@
 
   async function leaveSession() {
     await signOut();
+    (await initializePostHog())?.reset();
     await goto(resolve("/sign-in"));
   }
 
@@ -82,6 +84,12 @@
   }
 
   onMount(() => {
+    void initializePostHog().then((posthog) => {
+      posthog?.identify(session.actorId, {
+        ...(session.subject.email ? { email: session.subject.email } : {}),
+      });
+    });
+
     const storedTheme = localStorage.getItem("skillplane.theme");
     const storedDensity = localStorage.getItem("skillplane.density");
     theme = isTheme(storedTheme) ? storedTheme : "dark";

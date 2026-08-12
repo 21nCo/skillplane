@@ -4,6 +4,7 @@ import {
   activeVersionFromDeployments,
   parseRailwayDatabaseUrl,
   requireHyperdriveId,
+  requirePostHogProjectToken,
   sanitizeDeploymentRecord,
   workers,
 } from "./lib/production-deployment.mjs";
@@ -25,9 +26,18 @@ try {
 }
 assert(missingIdRejected, "A missing Hyperdrive ID was accepted");
 
+let invalidPostHogTokenRejected = false;
+try {
+  requirePostHogProjectToken("placeholder");
+} catch {
+  invalidPostHogTokenRejected = true;
+}
+assert(invalidPostHogTokenRejected, "An invalid PostHog project token was accepted");
+
 const rendered = await renderDeploymentConfigs({
   hyperdriveId: "a".repeat(32),
   siteKey: "turnstile-self-test-site-key",
+  postHogProjectToken: `phc_${"a".repeat(32)}`,
   write: false,
 });
 assert(Object.keys(rendered.configs).length === 2, "Two configs were not rendered");

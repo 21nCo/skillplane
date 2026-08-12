@@ -50,7 +50,9 @@ does not print values, rejects duplicate or weak existing assignments, refuses
 symlinks, and enforces mode `0600`.
 
 Supply the existing `POSTHOG_PROJECT_TOKEN` separately; the initializer does
-not generate credentials for external services.
+not generate credentials for external services. The renderer exposes that
+project token to the browser as `PUBLIC_POSTHOG_KEY` and supplies it to the MCP
+Worker as a secret.
 
 | Variable                           | Purpose                                                                             |
 | ---------------------------------- | ----------------------------------------------------------------------------------- |
@@ -59,8 +61,8 @@ not generate credentials for external services.
 | `SKILLPLANE_BACKUP_ENCRYPTION_KEY` | At least 32 characters; encrypts logical backups before they reach disk             |
 | `AUTHFN_SECRET`                    | AuthFn signing and tenancy secret, at least 32 characters                           |
 | `OAUTH_TOKEN_PEPPER`               | OAuth token hashing pepper, at least 32 characters                                  |
-| `POSTHOG_PROJECT_TOKEN`            | Existing PostHog project token supplied to the MCP Worker                           |
-| `POSTHOG_HOST`                     | PostHog ingestion host; production uses `https://us.i.posthog.com`                  |
+| `POSTHOG_PROJECT_TOKEN`            | Existing PostHog project token used by browser and MCP analytics                    |
+| `POSTHOG_HOST`                     | Optional local MCP override; production uses the canonical US ingestion host        |
 | `TURNSTILE_SECRET_KEY`             | Production Turnstile secret, at least 32 characters                                 |
 | `PUBLIC_TURNSTILE_SITE_KEY`        | Public site key for the production widget                                           |
 | `SKILLPLANE_RELEASE_TAG`           | Optional stable release label; generated when omitted                               |
@@ -112,8 +114,10 @@ The commands enforce these boundaries:
 - Worker secrets are written to a mode-`0600` temporary JSON file, supplied to
   `wrangler deploy --secrets-file`, and deleted in a `finally` block. They are
   never written to Wrangler source configuration or `.conduct`. The app
-  receives AuthFn, OAuth, and Turnstile secrets; MCP receives only the OAuth
-  pepper. MCP does not receive Email Service or Turnstile bindings.
+  receives AuthFn, OAuth, and Turnstile secrets; MCP receives the OAuth pepper
+  and PostHog project token. The app also receives the public PostHog project
+  key and ingestion host as non-secret variables. MCP does not receive Email
+  Service or Turnstile bindings.
 - Deployment order is app, then MCP. On a first deployment, each Worker receives
   an identical rollback baseline followed by a distinct release version.
 - The app and MCP Workers use Custom Domains with `workers_dev: false`. The

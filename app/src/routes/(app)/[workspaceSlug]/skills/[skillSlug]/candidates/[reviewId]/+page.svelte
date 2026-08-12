@@ -67,8 +67,11 @@
     }
   }
 
-  async function decide(decision: "approve" | "reject", reason: string) {
-    if (!workspace || !skill.skill || !detail) return;
+  async function decide(
+    decision: "approve" | "reject",
+    reason: string,
+  ): Promise<boolean> {
+    if (!workspace || !skill.skill || !detail) return false;
     busy = true;
     actionError = null;
     try {
@@ -82,9 +85,11 @@
       });
       skill.replaceVersion(detail.candidate);
       await skill.refresh();
+      return true;
     } catch (cause) {
       actionError =
         cause instanceof Error ? cause.message : "Review decision was not saved.";
+      return false;
     } finally {
       busy = false;
     }

@@ -7,7 +7,7 @@ export function isPostHogSessionId(value: string): boolean {
 
 export function createPostHogResolver(
   configuredPostHog: PostHog | null | undefined,
-): (bindings: RuntimeBindings) => PostHog | null {
+): (bindings: RuntimeBindings | null | undefined) => PostHog | null {
   if (configuredPostHog !== undefined) {
     return () => configuredPostHog;
   }
@@ -21,10 +21,12 @@ export function createPostHogResolver(
     | undefined;
 
   return (bindings) => {
-    const token = bindings.POSTHOG_PROJECT_TOKEN?.trim();
-    const host = bindings.POSTHOG_HOST?.trim();
+    const token = bindings?.POSTHOG_PROJECT_TOKEN?.trim();
+    const host = bindings?.POSTHOG_HOST?.trim();
     if (!token || !host) return null;
-    if (cached?.token === token && cached.host === host) return cached.client;
+    if (cached?.token === token) {
+      if (cached.host === host) return cached.client;
+    }
 
     try {
       const client = new PostHog(token, {
@@ -50,14 +52,21 @@ export async function flushPostHog(
   posthog: PostHog,
   waitUntil?: (promise: Promise<unknown>) => void,
 ): Promise<void> {
-  const flush = posthog.flush().catch(() => {
+  const reportFailure = () => {
     console.error(
       JSON.stringify({
         component: "mcp",
         event: "mcp.posthog.flush.failed",
       }),
     );
-  });
+  };
+  let flush: Promise<void>;
+  try {
+    flush = Promise.resolve(posthog.flush()).catch(reportFailure);
+  } catch {
+    reportFailure();
+    return;
+  }
   if (waitUntil) {
     try {
       waitUntil(flush);

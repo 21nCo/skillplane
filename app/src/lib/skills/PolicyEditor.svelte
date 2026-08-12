@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { getPostHog } from "$lib/analytics/posthog.client.js";
   import { apiRequest } from "$lib/api/client.js";
   import { listContexts } from "$lib/contexts/api.js";
   import type { SkillContext } from "$lib/contexts/types.js";
@@ -143,6 +144,10 @@
       mode = updated.mode;
       rules =
         updated.mode === "trusted_auto_publish" ? updated.rules.map(editable) : [];
+      getPostHog()?.capture("amendment_policy_saved", {
+        policy_mode: updated.mode,
+        rule_count: updated.mode === "trusted_auto_publish" ? updated.rules.length : 0,
+      });
       saved = true;
     } catch (cause) {
       error =

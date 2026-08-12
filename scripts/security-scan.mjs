@@ -50,7 +50,6 @@ const bundleRoots = [
 const sensitiveEnvironmentKeys = [
   "AUTHFN_SECRET",
   "OAUTH_TOKEN_PEPPER",
-  "POSTHOG_PROJECT_TOKEN",
   "RAILWAY_DATABASE_URL",
   "TURNSTILE_SECRET_KEY",
 ];

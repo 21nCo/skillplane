@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { getPostHog } from "$lib/analytics/posthog.client.js";
   import { Badge, Button, Textarea } from "@skillplane/ui";
   import type { AmendmentReview } from "./types.js";
   import { CheckIcon, XIcon } from "phosphor-svelte";
@@ -12,7 +13,7 @@
     review: AmendmentReview;
     canDecide: boolean;
     busy?: boolean;
-    ondecide: (decision: "approve" | "reject", reason: string) => Promise<void>;
+    ondecide: (decision: "approve" | "reject", reason: string) => Promise<boolean>;
   } = $props();
 
   let reason = $state("");
@@ -31,7 +32,8 @@
 
   async function decide(decision: "approve" | "reject") {
     selected = decision;
-    await ondecide(decision, reason.trim());
+    const saved = await ondecide(decision, reason.trim());
+    if (saved) getPostHog()?.capture("candidate_review_decided", { decision });
     selected = null;
   }
 </script>

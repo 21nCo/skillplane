@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { getPostHog } from "$lib/analytics/posthog.client.js";
   import { CaretDownIcon } from "phosphor-svelte";
   import type { WorkspaceStore } from "$lib/workspaces/store.svelte.js";
 
@@ -9,6 +10,11 @@
     store: WorkspaceStore;
     compact?: boolean;
   } = $props();
+
+  function selectWorkspace(event: Event) {
+    store.select((event.currentTarget as HTMLSelectElement).value);
+    getPostHog()?.capture("workspace_switched");
+  }
 </script>
 
 <label class:compact>
@@ -16,7 +22,7 @@
   <div>
     <select
       value={store.activeId ?? ""}
-      onchange={(event) => store.select(event.currentTarget.value)}
+      onchange={selectWorkspace}
       aria-label="Active workspace"
       disabled={store.loading || store.workspaces.length === 0}
     >

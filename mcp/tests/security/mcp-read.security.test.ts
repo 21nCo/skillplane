@@ -1,5 +1,10 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { decodeSessionId, PostHog } from "@posthog/mcp";
+import {
+  decodeSessionId,
+  PostHog,
+  PostHogMCPAnalyticsEvent,
+  PostHogMCPAnalyticsProperty,
+} from "@posthog/mcp";
 import type {
   ContextNotesListOutput,
   ContextsListOutput,
@@ -10,7 +15,7 @@ import type {
   WorkspacesListOutput,
 } from "@skillplane/mcp-schema";
 import type { UserPrincipal } from "@skillplane/domain";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createMcpApp } from "../../src/index.js";
 import {
   parseStructured,
@@ -197,10 +202,12 @@ describe("MCP authentication and protocol security", () => {
     });
   });
 
-  it("carries PostHog analytics correlation across stateless requests", async () => {
+  it("emits and flushes PostHog initialization analytics across stateless requests", async () => {
     const posthog = new PostHog("phc_fixture_posthog_project_token_123456789", {
       disabled: true,
     });
+    const capture = vi.spyOn(posthog, "capture");
+    const flush = vi.spyOn(posthog, "flush");
     const analyticsApp = createMcpApp({
       getServices: async () => environment.services,
       posthog,
@@ -233,7 +240,8 @@ describe("MCP authentication and protocol security", () => {
     expect(initialize.status).toBe(200);
     const sessionId = initialize.headers.get("mcp-session-id");
     expect(sessionId).toBeTruthy();
-    expect(decodeSessionId(sessionId)).toMatchObject({
+    const decoded = decodeSessionId(sessionId);
+    expect(decoded).toMatchObject({
       clientName: "posthog-fixture",
       clientVersion: "1.0.0",
       protocolVersion: "2025-11-25",
@@ -249,6 +257,22 @@ describe("MCP authentication and protocol security", () => {
       id: 2,
       result: {},
     });
+
+    await vi.waitFor(() => expect(capture).toHaveBeenCalled());
+    const initializeCapture = capture.mock.calls
+      .map(([event]) => event)
+      .find((event) => event.event === PostHogMCPAnalyticsEvent.Initialize);
+    expect(initializeCapture).toMatchObject({
+      distinctId: decoded?.sessionId,
+      event: PostHogMCPAnalyticsEvent.Initialize,
+      properties: {
+        [PostHogMCPAnalyticsProperty.SessionId]: decoded?.sessionId,
+        [PostHogMCPAnalyticsProperty.ClientName]: "posthog-fixture",
+        [PostHogMCPAnalyticsProperty.ClientVersion]: "1.0.0",
+        [PostHogMCPAnalyticsProperty.ProtocolVersion]: "2025-11-25",
+      },
+    });
+    expect(flush).toHaveBeenCalledTimes(2);
   });
 });
 

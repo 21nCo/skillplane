@@ -16,11 +16,20 @@ const config = {
       mode: "hash",
       directives: {
         "default-src": ["self"],
-        "script-src": ["self", "https://challenges.cloudflare.com"],
+        "script-src": [
+          "self",
+          "https://challenges.cloudflare.com",
+          "https://*.posthog.com",
+        ],
         "style-src": ["self", "unsafe-inline"],
         "img-src": ["self", "data:"],
         "font-src": ["self"],
-        "connect-src": ["self", "https://challenges.cloudflare.com"],
+        "connect-src": [
+          "self",
+          "https://challenges.cloudflare.com",
+          "https://*.posthog.com",
+        ],
+        "worker-src": ["self", "blob:", "data:"],
         "frame-src": ["https://challenges.cloudflare.com"],
         "object-src": ["none"],
         "base-uri": ["self"],
