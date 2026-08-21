@@ -53,6 +53,7 @@ catalog:
   next: 16.3.0
   pg: 8.22.0
   phosphor-svelte: 3.1.0
+  posthog-js: 1.415.2
   react: 19.2.8
   react-dom: 19.2.8
   sendfn: 0.0.2

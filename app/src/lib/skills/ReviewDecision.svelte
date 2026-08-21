@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { getPostHog } from "$lib/analytics/posthog.client.js";
+  import { capturePostHog } from "$lib/analytics/posthog.client.js";
   import { Badge, Button, Textarea } from "@skillplane/ui";
   import type { AmendmentReview } from "./types.js";
   import { CheckIcon, XIcon } from "phosphor-svelte";
@@ -33,7 +33,7 @@
   async function decide(decision: "approve" | "reject") {
     selected = decision;
     const saved = await ondecide(decision, reason.trim());
-    if (saved) getPostHog()?.capture("candidate_review_decided", { decision });
+    if (saved) capturePostHog("candidate_review_decided", { decision });
     selected = null;
   }
 </script>

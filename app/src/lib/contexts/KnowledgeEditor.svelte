@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { getPostHog } from "$lib/analytics/posthog.client.js";
+  import { capturePostHog } from "$lib/analytics/posthog.client.js";
   import { SkillplaneApiError } from "$lib/api/client.js";
   import { SafeMarkdown } from "@skillplane/ui";
   import { Button, Input, Textarea } from "@skillplane/ui";
@@ -73,7 +73,7 @@
         learningMetadata: metadata,
         idempotencyKey,
       });
-      getPostHog()?.capture("context_knowledge_revision_saved");
+      capturePostHog("context_knowledge_revision_saved");
       onSaved(revision);
     } catch (cause) {
       if (

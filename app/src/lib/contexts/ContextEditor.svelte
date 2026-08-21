@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { getPostHog } from "$lib/analytics/posthog.client.js";
+  import { capturePostHog } from "$lib/analytics/posthog.client.js";
   import { Button, Input, Select, Textarea } from "@skillplane/ui";
   import { WarningCircleIcon } from "phosphor-svelte";
   import { createContext } from "./api.js";
@@ -81,7 +81,7 @@
         ...payload,
         idempotencyKey,
       });
-      getPostHog()?.capture("context_created", { context_type: type });
+      capturePostHog("context_created", { context_type: type });
       onCreated(result);
     } catch (cause) {
       error =

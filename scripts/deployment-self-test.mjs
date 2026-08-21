@@ -195,6 +195,7 @@ process.stdout.write(
   `${JSON.stringify({
     ok: true,
     checks: {
+      invalidPostHogTokenRejected: true,
       missingHyperdriveFailsClosed: true,
       inMemoryConfigRendering: true,
       productionRoutingModes: true,

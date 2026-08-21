@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { getPostHog } from "$lib/analytics/posthog.client.js";
+  import { capturePostHog } from "$lib/analytics/posthog.client.js";
   import { CaretDownIcon } from "phosphor-svelte";
   import type { WorkspaceStore } from "$lib/workspaces/store.svelte.js";
 
@@ -13,7 +13,7 @@
 
   function selectWorkspace(event: Event) {
     store.select((event.currentTarget as HTMLSelectElement).value);
-    getPostHog()?.capture("workspace_switched");
+    capturePostHog("workspace_switched");
   }
 </script>
 

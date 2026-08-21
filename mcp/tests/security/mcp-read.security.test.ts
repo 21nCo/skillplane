@@ -247,21 +247,22 @@ describe("MCP authentication and protocol security", () => {
       protocolVersion: "2025-11-25",
     });
 
-    const ping = await request(
-      { jsonrpc: "2.0", id: 2, method: "ping" },
+    const toolsList = await request(
+      { jsonrpc: "2.0", id: 2, method: "tools/list" },
       sessionId ?? undefined,
     );
-    expect(ping.status).toBe(200);
-    await expect(ping.json()).resolves.toMatchObject({
+    expect(toolsList.status).toBe(200);
+    await expect(toolsList.json()).resolves.toMatchObject({
       jsonrpc: "2.0",
       id: 2,
-      result: {},
+      result: { tools: expect.any(Array) },
     });
 
-    await vi.waitFor(() => expect(capture).toHaveBeenCalled());
-    const initializeCapture = capture.mock.calls
-      .map(([event]) => event)
-      .find((event) => event.event === PostHogMCPAnalyticsEvent.Initialize);
+    await vi.waitFor(() => expect(capture).toHaveBeenCalledTimes(2));
+    const captures = capture.mock.calls.map(([event]) => event);
+    const initializeCapture = captures.find(
+      (event) => event.event === PostHogMCPAnalyticsEvent.Initialize,
+    );
     expect(initializeCapture).toMatchObject({
       distinctId: decoded?.sessionId,
       event: PostHogMCPAnalyticsEvent.Initialize,
@@ -270,6 +271,16 @@ describe("MCP authentication and protocol security", () => {
         [PostHogMCPAnalyticsProperty.ClientName]: "posthog-fixture",
         [PostHogMCPAnalyticsProperty.ClientVersion]: "1.0.0",
         [PostHogMCPAnalyticsProperty.ProtocolVersion]: "2025-11-25",
+      },
+    });
+    const toolsListCapture = captures.find(
+      (event) => event.event === PostHogMCPAnalyticsEvent.ToolsList,
+    );
+    expect(toolsListCapture).toMatchObject({
+      distinctId: decoded?.sessionId,
+      event: PostHogMCPAnalyticsEvent.ToolsList,
+      properties: {
+        [PostHogMCPAnalyticsProperty.SessionId]: decoded?.sessionId,
       },
     });
     expect(flush).toHaveBeenCalledTimes(2);

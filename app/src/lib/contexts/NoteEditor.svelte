@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { getPostHog } from "$lib/analytics/posthog.client.js";
+  import { capturePostHog } from "$lib/analytics/posthog.client.js";
   import { SkillplaneApiError } from "$lib/api/client.js";
   import { SafeMarkdown } from "@skillplane/ui";
   import { Button, Input, Textarea } from "@skillplane/ui";
@@ -89,7 +89,7 @@
             learningMetadata: metadata,
             idempotencyKey,
           });
-      getPostHog()?.capture("context_note_saved", {
+      capturePostHog("context_note_saved", {
         operation: note ? "updated" : "created",
       });
       onSaved(saved);
