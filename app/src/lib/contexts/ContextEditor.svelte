@@ -76,15 +76,17 @@
         requestFingerprint = fingerprint;
         idempotencyKey = crypto.randomUUID();
       }
+      const submissionIdempotencyKey = idempotencyKey;
+      const submittedContextType = type;
       const result = await createContext({
         workspaceId,
         skillId,
         ...payload,
-        idempotencyKey,
+        idempotencyKey: submissionIdempotencyKey,
       });
-      if (capturedIdempotencyKey !== idempotencyKey) {
-        capturePostHog("context_created", { context_type: type });
-        capturedIdempotencyKey = idempotencyKey;
+      if (capturedIdempotencyKey !== submissionIdempotencyKey) {
+        capturePostHog("context_created", { context_type: submittedContextType });
+        capturedIdempotencyKey = submissionIdempotencyKey;
       }
       onCreated(result);
     } catch (cause) {
