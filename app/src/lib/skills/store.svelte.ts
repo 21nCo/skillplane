@@ -50,12 +50,26 @@ export class SkillDetailStore {
   }
 
   async refresh(): Promise<void> {
-    if (!this.workspaceId || !this.skill) return;
-    const [skill, versions] = await Promise.all([
-      getSkill(this.workspaceId, this.skill.id),
-      listSkillVersions(this.workspaceId, this.skill.id),
+    const workspaceId = this.workspaceId;
+    const skill = this.skill;
+    const skillSlug = this.skillSlug;
+    const loadedKey = this.loadedKey;
+    if (
+      !workspaceId ||
+      !skill ||
+      !skillSlug ||
+      loadedKey !== `${workspaceId}:${skillSlug}` ||
+      skill.slug !== skillSlug
+    ) {
+      return;
+    }
+    const request = ++this.request;
+    const [refreshedSkill, versions] = await Promise.all([
+      getSkill(workspaceId, skill.id),
+      listSkillVersions(workspaceId, skill.id),
     ]);
-    this.skill = skill;
+    if (request !== this.request || this.loadedKey !== loadedKey) return;
+    this.skill = refreshedSkill;
     this.versions = [...versions];
     this.error = null;
   }

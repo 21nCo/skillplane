@@ -128,7 +128,7 @@ function inspectBundle(path, content) {
   }
   if (
     relativePath.includes("/client/") &&
-    /AUTHFN_SECRET|OAUTH_TOKEN_PEPPER|RAILWAY_DATABASE_URL|TURNSTILE_SECRET_KEY/gu.test(
+    /AUTHFN_SECRET|OAUTH_TOKEN_PEPPER|POSTHOG_PROJECT_TOKEN|RAILWAY_DATABASE_URL|TURNSTILE_SECRET_KEY/gu.test(
       content,
     )
   ) {
@@ -171,6 +171,7 @@ for (const key of [
   "DATABASE_URL",
   "MIGRATION_DATABASE_URL",
   "OAUTH_TOKEN_PEPPER",
+  "POSTHOG_PROJECT_TOKEN",
   "RAILWAY_DATABASE_URL",
   "TEST_DATABASE_URL",
   "TURNSTILE_SECRET_KEY",

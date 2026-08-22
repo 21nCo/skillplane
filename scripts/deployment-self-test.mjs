@@ -4,7 +4,9 @@ import {
   activeVersionFromDeployments,
   parseRailwayDatabaseUrl,
   requireHyperdriveId,
+  requirePostHogProjectToken,
   sanitizeDeploymentRecord,
+  workers,
 } from "./lib/production-deployment.mjs";
 import {
   assertHyperdriveOriginRecord,
@@ -24,9 +26,18 @@ try {
 }
 assert(missingIdRejected, "A missing Hyperdrive ID was accepted");
 
+let invalidPostHogTokenRejected = false;
+try {
+  requirePostHogProjectToken("placeholder");
+} catch {
+  invalidPostHogTokenRejected = true;
+}
+assert(invalidPostHogTokenRejected, "An invalid PostHog project token was accepted");
+
 const rendered = await renderDeploymentConfigs({
   hyperdriveId: "a".repeat(32),
   siteKey: "turnstile-self-test-site-key",
+  postHogProjectToken: `phc_${"a".repeat(32)}`,
   write: false,
 });
 assert(Object.keys(rendered.configs).length === 2, "Two configs were not rendered");
@@ -34,6 +45,10 @@ assert(
   rendered.configs.app.routing.type === "custom-domain" &&
     rendered.configs.mcp.routing.type === "custom-domain",
   "Production routing modes were not rendered correctly",
+);
+assert(
+  workers.mcp.secretNames.includes("POSTHOG_PROJECT_TOKEN"),
+  "The MCP production secret inventory omitted PostHog",
 );
 
 const railway = parseRailwayDatabaseUrl(
@@ -180,6 +195,7 @@ process.stdout.write(
   `${JSON.stringify({
     ok: true,
     checks: {
+      invalidPostHogTokenRejected: true,
       missingHyperdriveFailsClosed: true,
       inMemoryConfigRendering: true,
       productionRoutingModes: true,

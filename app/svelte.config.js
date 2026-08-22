@@ -20,7 +20,14 @@ const config = {
         "style-src": ["self", "unsafe-inline"],
         "img-src": ["self", "data:"],
         "font-src": ["self"],
-        "connect-src": ["self", "https://challenges.cloudflare.com"],
+        "connect-src": [
+          "self",
+          "https://challenges.cloudflare.com",
+          // posthog.config.ts restricts PUBLIC_POSTHOG_HOST to these HTTPS domains.
+          "https://user.skillplane.dev",
+          "https://*.posthog.com",
+        ],
+        "worker-src": ["self", "blob:", "data:"],
         "frame-src": ["https://challenges.cloudflare.com"],
         "object-src": ["none"],
         "base-uri": ["self"],

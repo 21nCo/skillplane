@@ -8,6 +8,7 @@ import { metadataResponse, protectedResourceMetadata } from "@skillplane/auth";
 import type { RuntimeBindings } from "@skillplane/config";
 import { McpToolError } from "@skillplane/mcp-schema";
 import { normalizeBundlePath } from "@skillplane/storage";
+import { instrument, type PostHog } from "@posthog/mcp";
 import { Hono } from "hono";
 import appleTouchIcon from "./assets/apple-touch-icon.png";
 import favicon from "./assets/favicon.ico";
@@ -26,6 +27,11 @@ import {
   PostgresMcpAuditWriter,
   type McpAuditWriter,
 } from "./audit.js";
+import {
+  createPostHogResolver,
+  flushPostHog,
+  isPostHogSessionId,
+} from "./analytics.js";
 import { verifyDownloadGrant } from "./downloads.js";
 import { McpCursorCodec } from "./pagination.js";
 import { createSkillplaneMcpServer } from "./server.js";
@@ -88,6 +94,7 @@ export interface CreateMcpAppOptions {
   readonly getServices?: ApiServiceProvider;
   readonly createAuditWriter?: (services: ApiServices) => McpAuditWriter;
   readonly now?: () => Date;
+  readonly posthog?: PostHog | null;
 }
 
 function jsonError(status: number, code: string, message: string): Response {
@@ -451,6 +458,7 @@ export function createMcpApp(options: CreateMcpAppOptions = {}) {
   const getServices =
     options.getServices ?? createApiServiceProvider({ authentication: "oauth-only" });
   const now = options.now ?? (() => new Date());
+  const resolvePostHog = createPostHogResolver(options.posthog);
   const writer = new WeakMap<ApiServices, McpAuditWriter>();
   const auditFor = (services: ApiServices): McpAuditWriter => {
     const existing = writer.get(services);
@@ -508,7 +516,11 @@ export function createMcpApp(options: CreateMcpAppOptions = {}) {
     try {
       services = await getServices(context.env);
       const identity = await authenticateMcpRequest(context.req.raw, services);
-      if (context.req.header("mcp-session-id")) {
+      const sessionId = context.req.header("mcp-session-id");
+      // PostHog's token carries analytics correlation only; it does not restore
+      // application or authorization state. Continue rejecting every other
+      // session identifier on this stateless endpoint.
+      if (sessionId && !isPostHogSessionId(sessionId)) {
         return jsonError(
           400,
           "invalid_session",
@@ -532,14 +544,27 @@ export function createMcpApp(options: CreateMcpAppOptions = {}) {
         now,
       );
       const server = createSkillplaneMcpServer(runtime);
+      const posthog = resolvePostHog(context.env);
+      if (posthog) instrument(server, posthog);
       const transport = new WebStandardStreamableHTTPServerTransport({
         enableJsonResponse: true,
       });
       await server.connect(transport);
       const response = await transport.handleRequest(protocolRequest);
-      return secureProtocolResponse(
+      const protocolResponse = secureProtocolResponse(
         await compactLinearToolCatalogResponse(response, isLinearAgent),
       );
+      if (posthog) {
+        let waitUntil: ((promise: Promise<unknown>) => void) | undefined;
+        try {
+          const executionContext = context.executionCtx;
+          waitUntil = executionContext.waitUntil.bind(executionContext);
+        } catch {
+          // Hono's direct test helpers do not provide an execution context.
+        }
+        await flushPostHog(posthog, waitUntil);
+      }
+      return protocolResponse;
     } catch (error) {
       if (error instanceof McpAuthenticationError) {
         return mcpAuthenticationResponse(services, error);
@@ -612,12 +637,13 @@ interface WorkerHandler<Bindings> {
     context: {
       waitUntil(promise: Promise<unknown>): void;
       passThroughOnException(): void;
+      readonly props: unknown;
     },
   ): Response | Promise<Response>;
 }
 
 export default {
-  fetch(request, environment) {
-    return app.fetch(request, environment);
+  fetch(request, environment, context) {
+    return app.fetch(request, environment, context);
   },
 } satisfies WorkerHandler<RuntimeBindings>;

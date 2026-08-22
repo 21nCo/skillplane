@@ -17,6 +17,8 @@ export const productionStateDirectory = resolve(root, ".data", "production");
 export const productionBucket = "skillplane-skill-bundles";
 export const productionIssuer = "https://app.skillplane.dev";
 export const productionResource = "https://mcp.skillplane.dev/mcp";
+export const productionPostHogHost = "https://us.i.posthog.com";
+export const productionPostHogProxyHost = "https://user.skillplane.dev";
 
 export const workers = Object.freeze({
   app: {
@@ -31,13 +33,14 @@ export const workers = Object.freeze({
     directory: resolve(root, "mcp"),
     config: resolve(root, "mcp", "wrangler.generated.json"),
     host: "mcp.skillplane.dev",
-    secretNames: ["OAUTH_TOKEN_PEPPER"],
+    secretNames: ["OAUTH_TOKEN_PEPPER", "POSTHOG_PROJECT_TOKEN"],
   },
 });
 
 const railwayHostPattern = /(?:^|\.)(?:rlwy\.net|railway\.app)$/iu;
 const approvedRailwayAliasHosts = new Set(["insouth.db.21n.dev"]);
 const hyperdriveIdPattern = /^[a-f0-9]{32}$/u;
+const postHogProjectTokenPattern = /^phc_[A-Za-z0-9_-]{20,}$/u;
 const versionIdPattern =
   /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/iu;
 
@@ -78,6 +81,14 @@ export function requireHyperdriveId(value = process.env.CLOUDFLARE_HYPERDRIVE_ID
   return normalized;
 }
 
+export function requirePostHogProjectToken(value = process.env.POSTHOG_PROJECT_TOKEN) {
+  const normalized = value?.trim();
+  if (!normalized || !postHogProjectTokenPattern.test(normalized)) {
+    throw new Error("POSTHOG_PROJECT_TOKEN must be a valid PostHog project token");
+  }
+  return normalized;
+}
+
 const turnstileTestKeyPattern = /^[123]x0{10,}/iu;
 
 export function requireSecretEnvironment(name) {
@@ -114,7 +125,12 @@ export function productionSecretsForWorker(worker) {
     return productionSecrets();
   }
   return Object.fromEntries(
-    worker.secretNames.map((name) => [name, requireSecretEnvironment(name)]),
+    worker.secretNames.map((name) => [
+      name,
+      name === "POSTHOG_PROJECT_TOKEN"
+        ? requirePostHogProjectToken()
+        : requireSecretEnvironment(name),
+    ]),
   );
 }
 
