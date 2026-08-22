@@ -34,6 +34,7 @@
   let error = $state<string | null>(null);
   let requestFingerprint = "";
   let idempotencyKey = crypto.randomUUID();
+  let capturedIdempotencyKey = "";
 
   function slugify(value: string): string {
     return value
@@ -81,7 +82,10 @@
         ...payload,
         idempotencyKey,
       });
-      capturePostHog("context_created", { context_type: type });
+      if (capturedIdempotencyKey !== idempotencyKey) {
+        capturePostHog("context_created", { context_type: type });
+        capturedIdempotencyKey = idempotencyKey;
+      }
       onCreated(result);
     } catch (cause) {
       error =

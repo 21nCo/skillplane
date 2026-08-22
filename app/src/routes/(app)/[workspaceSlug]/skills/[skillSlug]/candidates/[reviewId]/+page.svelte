@@ -38,12 +38,15 @@
   let busy = $state(false);
   let error = $state<string | null>(null);
   let actionError = $state<string | null>(null);
+  let decisionSaved = $state(false);
   let loadedKey = $state("");
 
   async function load() {
     if (!workspace || !skill.skill || !page.params.reviewId) return;
     loading = true;
     error = null;
+    actionError = null;
+    decisionSaved = false;
     try {
       const review = await getAmendmentReview({
         workspaceId: workspace.id,
@@ -74,6 +77,7 @@
     if (!workspace || !skill.skill || !detail) return false;
     busy = true;
     actionError = null;
+    decisionSaved = false;
     try {
       detail = await decideAmendmentReview({
         workspaceId: workspace.id,
@@ -83,6 +87,7 @@
         reason,
         idempotencyKey: crypto.randomUUID(),
       });
+      decisionSaved = true;
       const reportRefreshFailure = (cause: unknown) => {
         actionError =
           cause instanceof Error
@@ -91,7 +96,7 @@
       };
       try {
         skill.replaceVersion(detail.candidate);
-        void skill.refresh().catch(reportRefreshFailure);
+        await skill.refresh();
       } catch (cause) {
         reportRefreshFailure(cause);
       }
@@ -226,7 +231,9 @@
             kind={actionError.toLocaleLowerCase().includes("conflict")
               ? "conflict"
               : "error"}
-            title="Review state was not changed"
+            title={decisionSaved
+              ? "Review decision was saved"
+              : "Review state was not changed"}
             message={actionError}
           />
         {/if}

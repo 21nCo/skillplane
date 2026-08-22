@@ -48,6 +48,7 @@ export function explicitProductAnalyticsConfig(
     capture_pageleave: false,
     capture_pageview: false,
     capture_performance: false,
+    disable_external_dependency_loading: true,
     disable_session_recording: true,
     disable_surveys: true,
     persistence: "memory",

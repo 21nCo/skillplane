@@ -30,6 +30,7 @@ describe("PostHog browser configuration", () => {
       capture_pageleave: false,
       capture_pageview: false,
       capture_performance: false,
+      disable_external_dependency_loading: true,
       disable_session_recording: true,
       disable_surveys: true,
       persistence: "memory",
@@ -61,6 +62,7 @@ describe("PostHog browser configuration", () => {
       expect(posthog.init).toHaveBeenCalledOnce();
       expect(posthog.capture).toHaveBeenCalledWith("workspace_switched", undefined);
       expect(posthog.reset).toHaveBeenCalledOnce();
+      expect(posthog.reset).toHaveBeenCalledWith(true);
     });
   });
 });

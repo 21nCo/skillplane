@@ -47,7 +47,7 @@ export function capturePostHog(event: EventName, properties?: Properties): void 
 export function resetPostHog(): void {
   void initializePostHog()
     .then((posthog) => {
-      posthog?.reset();
+      posthog?.reset(true);
     })
     .catch((cause: unknown) => {
       console.error("PostHog analytics reset failed.", cause);
