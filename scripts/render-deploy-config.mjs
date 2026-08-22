@@ -6,6 +6,7 @@ import {
   isMain,
   portablePath,
   productionPostHogHost,
+  productionPostHogProxyHost,
   publicTurnstileSiteKey,
   requireHyperdriveId,
   requirePostHogProjectToken,
@@ -65,7 +66,7 @@ function validateRenderedConfig(name, config, hyperdriveId, postHogProjectToken)
   if (
     name === "app" &&
     (config.vars?.PUBLIC_POSTHOG_KEY !== postHogProjectToken ||
-      config.vars?.PUBLIC_POSTHOG_HOST !== productionPostHogHost)
+      config.vars?.PUBLIC_POSTHOG_HOST !== productionPostHogProxyHost)
   ) {
     throw new Error("The app production PostHog bindings are incomplete");
   }
@@ -99,7 +100,7 @@ export async function renderDeploymentConfigs(options = {}) {
     app: runtimeConfig(await readTemplate("app"), hyperdriveId, {
       PUBLIC_TURNSTILE_SITE_KEY: siteKey,
       PUBLIC_POSTHOG_KEY: postHogProjectToken,
-      PUBLIC_POSTHOG_HOST: productionPostHogHost,
+      PUBLIC_POSTHOG_HOST: productionPostHogProxyHost,
     }),
     mcp: runtimeConfig(await readTemplate("mcp"), hyperdriveId, {
       POSTHOG_HOST: productionPostHogHost,

@@ -10,7 +10,7 @@ const posthog = vi.hoisted(() => ({
 vi.mock("$app/environment", () => ({ browser: true, dev: false }));
 vi.mock("$env/dynamic/public", () => ({
   env: {
-    PUBLIC_POSTHOG_HOST: "https://eu.i.posthog.com",
+    PUBLIC_POSTHOG_HOST: "https://user.skillplane.dev",
     PUBLIC_POSTHOG_KEY: "phc_test_project_key",
   },
 }));
@@ -18,8 +18,9 @@ vi.mock("posthog-js", () => ({ default: posthog }));
 
 describe("PostHog browser configuration", () => {
   it("collects only explicit product events without durable browser identity", () => {
-    expect(explicitProductAnalyticsConfig("https://eu.i.posthog.com")).toEqual({
-      api_host: "https://eu.i.posthog.com",
+    expect(explicitProductAnalyticsConfig("https://user.skillplane.dev")).toEqual({
+      api_host: "https://user.skillplane.dev",
+      ui_host: "https://us.posthog.com",
       defaults: "2026-05-30",
       advanced_disable_flags: true,
       autocapture: false,
@@ -40,7 +41,13 @@ describe("PostHog browser configuration", () => {
   it("rejects analytics hosts outside the app CSP", () => {
     expect(() =>
       explicitProductAnalyticsConfig("https://analytics.example.test"),
-    ).toThrow("PUBLIC_POSTHOG_HOST must be an HTTPS posthog.com subdomain");
+    ).toThrow("PUBLIC_POSTHOG_HOST must be https://user.skillplane.dev");
+  });
+
+  it("rejects unapproved Skillplane hosts instead of widening the CSP allowlist", () => {
+    expect(() =>
+      explicitProductAnalyticsConfig("https://analytics.skillplane.dev"),
+    ).toThrow("PUBLIC_POSTHOG_HOST must be https://user.skillplane.dev");
   });
 
   it("queues event capture and reset while the browser SDK initializes", async () => {

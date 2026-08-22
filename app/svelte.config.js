@@ -16,10 +16,11 @@ const config = {
       mode: "hash",
       directives: {
         "default-src": ["self"],
-        // posthog.config.ts restricts PUBLIC_POSTHOG_HOST to this HTTPS domain.
+        // posthog.config.ts restricts PUBLIC_POSTHOG_HOST to these HTTPS domains.
         "script-src": [
           "self",
           "https://challenges.cloudflare.com",
+          "https://user.skillplane.dev",
           "https://*.posthog.com",
         ],
         "style-src": ["self", "unsafe-inline"],
@@ -28,6 +29,7 @@ const config = {
         "connect-src": [
           "self",
           "https://challenges.cloudflare.com",
+          "https://user.skillplane.dev",
           "https://*.posthog.com",
         ],
         "worker-src": ["self", "blob:", "data:"],

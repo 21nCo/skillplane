@@ -18,6 +18,7 @@ export const productionBucket = "skillplane-skill-bundles";
 export const productionIssuer = "https://app.skillplane.dev";
 export const productionResource = "https://mcp.skillplane.dev/mcp";
 export const productionPostHogHost = "https://us.i.posthog.com";
+export const productionPostHogProxyHost = "https://user.skillplane.dev";
 
 export const workers = Object.freeze({
   app: {

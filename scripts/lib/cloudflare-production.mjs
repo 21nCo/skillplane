@@ -6,6 +6,7 @@ import {
   pathExists,
   productionBucket,
   productionPostHogHost,
+  productionPostHogProxyHost,
   productionReleaseTag,
   productionSecretsForWorker,
   portablePath,
@@ -226,7 +227,7 @@ async function validateGeneratedConfig(kind) {
   if (
     kind === "app" &&
     (config.vars?.PUBLIC_POSTHOG_KEY !== requirePostHogProjectToken() ||
-      config.vars?.PUBLIC_POSTHOG_HOST !== productionPostHogHost)
+      config.vars?.PUBLIC_POSTHOG_HOST !== productionPostHogProxyHost)
   ) {
     throw new Error(`${worker.name} generated PostHog bindings are invalid`);
   }
