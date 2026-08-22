@@ -5,7 +5,7 @@ runtime. They never connect to Railway or Cloudflare. Destructive restore
 operations accept only a loopback Postgres URL whose database name ends in
 `_test`.
 
-The project-owned Postgres container binds to host port `55432` by default.
+The project-owned Postgres container binds to host port `5703` by default.
 Starting or migrating it updates only `RUNTIME_ENV`, `DATABASE_ADAPTER`, and
 `DATABASE_URL` in the ignored Worker variable files. Authentication and OAuth
 values are preserved. Run `pnpm local:init` once after the first `pnpm db:up`
@@ -39,7 +39,7 @@ Use a local database name ending in `_test`:
 ```bash
 pnpm db:restore -- \
   --input .data/backups/skillplane.dump \
-  --database-url postgresql://skillplane:LOCAL_PASSWORD@127.0.0.1:55432/skillplane_restore_test
+  --database-url postgresql://skillplane:LOCAL_PASSWORD@127.0.0.1:5703/skillplane_restore_test
 ```
 
 Restore verifies the dump checksum before creating the target. It then recreates

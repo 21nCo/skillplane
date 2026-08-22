@@ -19,6 +19,23 @@ describe("MCP OAuth discovery", () => {
     },
   );
 
+  it("publishes the exact configured local OAuth issuer and resource", async () => {
+    const response = await app.fetch(
+      new Request("https://local-mcp.test/.well-known/oauth-protected-resource/mcp"),
+      {
+        RUNTIME_ENV: "local",
+        OAUTH_ISSUER: "https://app.local.skillplane.dev",
+        OAUTH_RESOURCE: "https://mcp.local.skillplane.dev/mcp",
+      },
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      resource: "https://mcp.local.skillplane.dev/mcp",
+      authorization_servers: ["https://app.local.skillplane.dev"],
+    });
+  });
+
   it("publishes the Skillplane identity for MCP clients", () => {
     expect(SKILLPLANE_MCP_SERVER_INFO).toMatchObject({
       name: "skillplane",

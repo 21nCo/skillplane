@@ -115,6 +115,8 @@ export async function startWorkspaceBrowserHarness(): Promise<WorkspaceBrowserHa
     AUTH_MODE: "otp",
     DATABASE_URL: databaseUrl,
     SKILL_BUNDLES: new TestObjectStorage(),
+    OAUTH_ISSUER: "https://app.skillplane.dev",
+    OAUTH_RESOURCE: "https://mcp.skillplane.dev/mcp",
     EMAIL_PROVIDER: "cloudflare-email",
     AUTHFN_SECRET: "workspace-browser-authfn-secret-32-characters",
     TURNSTILE_SECRET_KEY: "workspace-browser-turnstile-secret-value",

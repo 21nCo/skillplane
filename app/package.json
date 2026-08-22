@@ -5,9 +5,9 @@
   "type": "module",
   "scripts": {
     "sync": "svelte-kit sync",
-    "dev": "vite dev --host 127.0.0.1 --port 5173",
-    "dev:worker": "pnpm --dir .. exec turbo run build --filter='...@skillplane/app' && wrangler dev --config wrangler.jsonc --port 5173 --persist-to ../.data/wrangler/app",
-    "dev:worker:auth": "pnpm --dir .. exec turbo run build --filter='...@skillplane/app' && wrangler dev --config wrangler.auth.jsonc --port 5173 --persist-to ../.data/wrangler/app-auth",
+    "dev": "vite dev --host 127.0.0.1 --port 5700",
+    "dev:worker": "pnpm --dir .. exec turbo run build --filter='...@skillplane/app' && wrangler dev --config wrangler.jsonc --port 5700 --persist-to ../.data/wrangler/app",
+    "dev:worker:auth": "pnpm --dir .. exec turbo run build --filter='...@skillplane/app' && wrangler dev --config wrangler.auth.jsonc --port 5700 --persist-to ../.data/wrangler/app-auth",
     "build": "vite build",
     "typecheck": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "test:unit": "vitest run tests/unit",

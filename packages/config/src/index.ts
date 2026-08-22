@@ -39,6 +39,7 @@ export interface RuntimeBindings {
   readonly AUTHFN_SECRET?: string;
   readonly OAUTH_TOKEN_PEPPER?: string;
   readonly OAUTH_ISSUER?: string;
+  readonly OAUTH_RESOURCE?: string;
   readonly TURNSTILE_SECRET_KEY?: string;
   readonly TURNSTILE_ALLOWED_HOSTNAMES?: string;
   readonly PUBLIC_TURNSTILE_SITE_KEY?: string;
@@ -102,7 +103,7 @@ export interface RuntimeConfig {
   } | null;
   readonly oauth: {
     readonly issuer: string;
-    readonly resource: "https://mcp.skillplane.dev/mcp";
+    readonly resource: string;
     readonly tokenPepper: string;
   };
   readonly secrets: {
@@ -345,6 +346,83 @@ function requireSecret(
   return value;
 }
 
+export interface OAuthEndpoints {
+  readonly issuer: string;
+  readonly resource: string;
+}
+
+function parseOAuthUrl(
+  value: string,
+  field: "OAUTH_ISSUER" | "OAUTH_RESOURCE",
+  environment: RuntimeEnvironment,
+  productionValue: string,
+  missing: string[],
+): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    missing.push(field);
+    return null;
+  }
+  const loopbackHttp =
+    environment === "local" &&
+    parsed.protocol === "http:" &&
+    ["localhost", "127.0.0.1", "::1"].includes(parsed.hostname);
+  const normalized = parsed.toString().replace(/\/$/u, "");
+  if (
+    parsed.username ||
+    parsed.password ||
+    parsed.search ||
+    parsed.hash ||
+    (parsed.protocol !== "https:" && !loopbackHttp) ||
+    (environment === "production" && normalized !== productionValue)
+  ) {
+    missing.push(field);
+    return null;
+  }
+  return normalized;
+}
+
+export function parseOAuthEndpoints(
+  bindings: Pick<RuntimeBindings, "RUNTIME_ENV" | "OAUTH_ISSUER" | "OAUTH_RESOURCE">,
+): OAuthEndpoints {
+  const environment = readEnvironment(bindings);
+  const missing: string[] = [];
+  const issuer = parseOAuthUrl(
+    bindings.OAUTH_ISSUER ??
+      (environment === "local"
+        ? "http://localhost:5700"
+        : environment === "preview"
+          ? "https://app.dev.skillplane.dev"
+          : "https://app.skillplane.dev"),
+    "OAUTH_ISSUER",
+    environment,
+    "https://app.skillplane.dev",
+    missing,
+  );
+  const resource = parseOAuthUrl(
+    bindings.OAUTH_RESOURCE ??
+      (environment === "local"
+        ? "http://127.0.0.1:5701/mcp"
+        : environment === "preview"
+          ? "https://mcp.dev.skillplane.dev/mcp"
+          : "https://mcp.skillplane.dev/mcp"),
+    "OAUTH_RESOURCE",
+    environment,
+    "https://mcp.skillplane.dev/mcp",
+    missing,
+  );
+  if (missing.length > 0 || !issuer || !resource) {
+    throw new ConfigError(
+      environment === "local" ? "CONFIG_INVALID" : "PRODUCTION_BINDING_MISSING",
+      "OAuth endpoint configuration is unavailable",
+      [...new Set(missing)].sort(),
+    );
+  }
+  return { issuer, resource };
+}
+
 function parseOAuthConfiguration(
   bindings: RuntimeBindings,
   environment: RuntimeEnvironment,
@@ -354,30 +432,7 @@ function parseOAuthConfiguration(
     environment === "local" && bindings.OAUTH_TOKEN_PEPPER === undefined
       ? "skillplane-local-oauth-pepper-not-for-production"
       : requireSecret(bindings.OAUTH_TOKEN_PEPPER, "OAUTH_TOKEN_PEPPER", missing);
-  const issuer =
-    bindings.OAUTH_ISSUER ??
-    (environment === "local" ? "http://localhost:5173" : "https://app.skillplane.dev");
-  let parsed: URL | null = null;
-  try {
-    parsed = new URL(issuer);
-  } catch {
-    missing.push("OAUTH_ISSUER");
-  }
-  const localLoopback =
-    parsed?.protocol === "http:" &&
-    ["localhost", "127.0.0.1", "::1"].includes(parsed.hostname);
-  if (
-    !parsed ||
-    parsed.username ||
-    parsed.password ||
-    parsed.search ||
-    parsed.hash ||
-    (environment === "local"
-      ? parsed.protocol !== "https:" && !localLoopback
-      : parsed.toString().replace(/\/$/, "") !== "https://app.skillplane.dev")
-  ) {
-    missing.push("OAUTH_ISSUER");
-  }
+  const endpoints = parseOAuthEndpoints(bindings);
   if (missing.length > 0 || !tokenPepper) {
     throw new ConfigError(
       environment === "local" ? "CONFIG_INVALID" : "PRODUCTION_BINDING_MISSING",
@@ -386,8 +441,7 @@ function parseOAuthConfiguration(
     );
   }
   return {
-    issuer: issuer.replace(/\/$/, ""),
-    resource: "https://mcp.skillplane.dev/mcp",
+    ...endpoints,
     tokenPepper,
   };
 }

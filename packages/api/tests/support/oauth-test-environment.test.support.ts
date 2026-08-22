@@ -71,6 +71,7 @@ export async function startOAuthTestEnvironment(
     DATABASE_URL: databaseUrl,
     SKILL_BUNDLES: new TestObjectStorage(),
     OAUTH_ISSUER,
+    OAUTH_RESOURCE,
     OAUTH_TOKEN_PEPPER: OAUTH_PEPPER,
   });
   const app = createApiApp({

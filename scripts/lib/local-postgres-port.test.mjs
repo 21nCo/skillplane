@@ -14,9 +14,13 @@ describe("local Postgres port selection", () => {
     );
   });
 
-  it("migrates a persisted runtime from the former default", () => {
+  it("migrates persisted runtimes from former defaults", () => {
     assert.equal(
       selectLocalPostgresPort(undefined, 5_432),
+      DEFAULT_SKILLPLANE_POSTGRES_PORT,
+    );
+    assert.equal(
+      selectLocalPostgresPort(undefined, 55_432),
       DEFAULT_SKILLPLANE_POSTGRES_PORT,
     );
   });
@@ -45,8 +49,8 @@ describe("local Postgres port selection", () => {
     );
 
     assert.equal(runtime.port, DEFAULT_SKILLPLANE_POSTGRES_PORT);
-    assert.equal(new URL(runtime.databaseUrl).port, "55432");
-    assert.equal(new URL(runtime.testDatabaseUrl).port, "55432");
+    assert.equal(new URL(runtime.databaseUrl).port, "5703");
+    assert.equal(new URL(runtime.testDatabaseUrl).port, "5703");
     assert.equal(runtime.password, "secret");
   });
 });

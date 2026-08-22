@@ -22,6 +22,7 @@ coverage/
 wrangler.generated.json
 wrangler.generated.jsonc
 wrangler.production-self-test.json
+wrangler.development-self-test.json
 
 # Environment secrets
 .env

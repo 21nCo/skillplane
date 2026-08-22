@@ -64,6 +64,10 @@ describe("parseRuntimeConfig", () => {
     });
 
     expect(config.environment).toBe("local");
+    expect(config.oauth).toMatchObject({
+      issuer: "http://localhost:5700",
+      resource: "http://127.0.0.1:5701/mcp",
+    });
     expect(config.database.source).toBe("direct-postgres");
     expect(config.diagnostics).toEqual({
       environment: "local",
@@ -72,6 +76,39 @@ describe("parseRuntimeConfig", () => {
       email: "not-required-local",
       secretPresence: { authfn: false, turnstile: false, oauth: true },
     });
+  });
+
+  it("accepts distinct HTTPS OAuth endpoints for preview deployments", () => {
+    const config = parseRuntimeConfig(
+      productionBindings({
+        RUNTIME_ENV: "preview",
+        OAUTH_ISSUER: "https://app.dev.skillplane.dev",
+        OAUTH_RESOURCE: "https://mcp.dev.skillplane.dev/mcp",
+        TURNSTILE_ALLOWED_HOSTNAMES: "app.dev.skillplane.dev",
+      }),
+    );
+
+    expect(config.environment).toBe("preview");
+    expect(config.oauth).toMatchObject({
+      issuer: "https://app.dev.skillplane.dev",
+      resource: "https://mcp.dev.skillplane.dev/mcp",
+    });
+  });
+
+  it("rejects non-production OAuth identities in production", () => {
+    expect(() =>
+      parseRuntimeConfig(
+        productionBindings({
+          OAUTH_ISSUER: "https://app.dev.skillplane.dev",
+          OAUTH_RESOURCE: "https://mcp.dev.skillplane.dev/mcp",
+        }),
+      ),
+    ).toThrowError(
+      expect.objectContaining({
+        code: "PRODUCTION_BINDING_MISSING",
+        fields: ["OAUTH_ISSUER", "OAUTH_RESOURCE"],
+      }),
+    );
   });
 
   it("accepts complete production bindings without exposing secrets", () => {

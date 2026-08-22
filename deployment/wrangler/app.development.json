@@ -1,6 +1,6 @@
 {
   "$schema": "../../node_modules/wrangler/config-schema.json",
-  "name": "skillplane-app",
+  "name": "skillplane-app-dev",
   "main": ".svelte-kit/cloudflare/_worker.js",
   "compatibility_date": "2026-05-03",
   "compatibility_flags": ["nodejs_compat"],
@@ -11,14 +11,14 @@
   },
   "routes": [
     {
-      "pattern": "app.skillplane.dev",
+      "pattern": "app.dev.skillplane.dev",
       "custom_domain": true
     }
   ],
   "r2_buckets": [
     {
       "binding": "SKILL_BUNDLES",
-      "bucket_name": "skillplane-skill-bundles"
+      "bucket_name": "skillplane-skill-bundles-dev"
     }
   ],
   "send_email": [
@@ -29,14 +29,14 @@
     }
   ],
   "vars": {
-    "RUNTIME_ENV": "production",
+    "RUNTIME_ENV": "preview",
     "DATABASE_ADAPTER": "postgres",
     "AUTH_MODE": "otp",
     "EMAIL_PROVIDER": "cloudflare-email",
-    "OAUTH_ISSUER": "https://app.skillplane.dev",
-    "OAUTH_RESOURCE": "https://mcp.skillplane.dev/mcp",
-    "TURNSTILE_ALLOWED_HOSTNAMES": "app.skillplane.dev",
-    "SKILLPLANE_OTP_FROM": "Skillplane <no-reply@auth.skillplane.dev>"
+    "OAUTH_ISSUER": "https://app.dev.skillplane.dev",
+    "OAUTH_RESOURCE": "https://mcp.dev.skillplane.dev/mcp",
+    "TURNSTILE_ALLOWED_HOSTNAMES": "app.dev.skillplane.dev",
+    "SKILLPLANE_OTP_FROM": "Skillplane Dev <no-reply@auth.skillplane.dev>"
   },
   "observability": {
     "enabled": true,

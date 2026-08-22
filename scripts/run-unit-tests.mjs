@@ -19,6 +19,8 @@ const localRuntimeTests = spawnSync(
     "scripts/lib/local-wrangler-config.test.mjs",
     "scripts/lib/local-worker-vars.test.mjs",
     "scripts/local-init.test.mjs",
+    "scripts/development-deployment.test.mjs",
+    "scripts/configure-local-oauth.test.mjs",
     "scripts/production-smoke.test.mjs",
     "scripts/rollback.test.mjs",
   ],

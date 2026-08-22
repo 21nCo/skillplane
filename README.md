@@ -12,7 +12,7 @@ Start the project-owned Postgres instance with:
 pnpm db:up
 ```
 
-Skillplane binds Postgres to `127.0.0.1:55432` by default, leaving the standard
+Skillplane binds Postgres to `127.0.0.1:5703` by default, leaving the standard
 Postgres port available to other projects. An existing Skillplane runtime still
 using the former `5432` default is remapped automatically the next time this
 command runs; its Docker volume and database credentials are preserved. Explicit
@@ -61,7 +61,7 @@ credential.
 
 | Environment                     | Transport       | Authentication  | URL                              | Headers                               |
 | ------------------------------- | --------------- | --------------- | -------------------------------- | ------------------------------------- |
-| Local Skillplane                | Streamable HTTP | Request headers | `http://127.0.0.1:8788/mcp`      | `Authorization=Bearer spk_your_token` |
+| Local Skillplane                | Streamable HTTP | Request headers | `http://127.0.0.1:5701/mcp`      | `Authorization=Bearer spk_your_token` |
 | Hosted Skillplane               | Streamable HTTP | Auto (OAuth)    | `https://mcp.skillplane.dev/mcp` | Leave empty                           |
 | Hosted with an agent credential | Streamable HTTP | Request headers | `https://mcp.skillplane.dev/mcp` | `Authorization=Bearer spk_your_token` |
 
@@ -97,12 +97,53 @@ uses `key=value` syntax, enter:
 Authorization=Bearer spk_your_token
 ```
 
-Use **Request headers** for local development. Local OAuth discovery currently
-advertises the hosted authorization server, so **Auto** is intended for the
-hosted endpoint.
+Use **Request headers** for ordinary loopback development. To validate **Auto**
+against the local authorization server and database, use the complete tunneled
+OAuth workflow below.
 
 The client must run on the same machine to reach `127.0.0.1`. A cloud-hosted MCP
 client cannot connect to the local endpoint.
+
+### Complete local OAuth through Cloudflare Tunnel
+
+The loopback endpoint is sufficient for request-header credentials and automated
+tests. To exercise a real MCP client's OAuth discovery, browser consent, token
+exchange, and authenticated MCP call against the local database, route two stable
+HTTPS hostnames through one named Cloudflare Tunnel:
+
+```yaml
+tunnel: YOUR_TUNNEL_ID
+credentials-file: /absolute/path/to/YOUR_TUNNEL_ID.json
+ingress:
+  - hostname: app-local.skillplane.dev
+    service: http://127.0.0.1:5700
+  - hostname: mcp-local.skillplane.dev
+    service: http://127.0.0.1:5701
+  - service: http_status:404
+```
+
+After creating the tunnel and DNS routes, configure the exact OAuth identities:
+
+```bash
+pnpm db:up
+pnpm local:init
+pnpm local:oauth:configure -- \
+  --app-url https://app-local.skillplane.dev \
+  --mcp-url https://mcp-local.skillplane.dev
+```
+
+Start `pnpm dev:app:auth`, `pnpm dev:mcp`, and `pnpm local:tunnel` in separate
+terminals. Then run:
+
+```bash
+pnpm test:local:oauth
+```
+
+The verifier dynamically registers a loopback client, opens the browser for OTP
+sign-in and consent, exchanges the PKCE authorization code, connects to MCP with
+the resulting access token, calls `workspaces_list`, and revokes the token. The
+tunnel must not require a separate Cloudflare Access login because OAuth discovery
+and token endpoints must remain reachable by the MCP client.
 
 #### Codex
 
@@ -111,7 +152,7 @@ variable:
 
 ```bash
 codex mcp add skillplane_local \
-  --url http://127.0.0.1:8788/mcp \
+  --url http://127.0.0.1:5701/mcp \
   --bearer-token-env-var SKILLPLANE_LOCAL_MCP_TOKEN
 ```
 

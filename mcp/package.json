@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev --config wrangler.jsonc --port 8788 --persist-to ../.data/wrangler/mcp",
+    "dev": "wrangler dev --config wrangler.jsonc --port 5701 --persist-to ../.data/wrangler/mcp",
     "build": "wrangler deploy --config wrangler.jsonc --dry-run --outdir dist",
     "typecheck": "tsc --project tsconfig.json --noEmit",
     "test:unit": "vitest run src",
