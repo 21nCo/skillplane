@@ -70,7 +70,7 @@
       });
       progress = null;
       capturePostHog("skill_candidate_created", {
-        proposed_bump: proposedBump,
+        proposed_bump: version.proposedBump,
       });
       onCreated(version);
     } catch (cause) {

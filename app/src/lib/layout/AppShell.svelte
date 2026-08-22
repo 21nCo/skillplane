@@ -16,7 +16,7 @@
   import { RobotIcon, SquaresFourIcon, UsersThreeIcon } from "phosphor-svelte";
   import { onMount, type Snippet } from "svelte";
   import { signOut, type BrowserSession } from "$lib/auth/client.js";
-  import { initializePostHog } from "$lib/analytics/posthog.client.js";
+  import { initializePostHog, resetPostHog } from "$lib/analytics/posthog.client.js";
   import type { WorkspaceStore } from "$lib/workspaces/store.svelte.js";
   import Sidebar from "./Sidebar.svelte";
   import Topbar from "./Topbar.svelte";
@@ -69,7 +69,7 @@
 
   async function leaveSession() {
     await signOut();
-    (await initializePostHog())?.reset();
+    resetPostHog();
     await goto(resolve("/sign-in"));
   }
 

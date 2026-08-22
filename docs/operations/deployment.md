@@ -116,8 +116,9 @@ The commands enforce these boundaries:
   never written to Wrangler source configuration or `.conduct`. The app
   receives AuthFn, OAuth, and Turnstile secrets; MCP receives the OAuth pepper
   and PostHog project token. The app also receives the public PostHog project
-  key and ingestion host as non-secret variables. MCP does not receive Email
-  Service or Turnstile bindings.
+  key and ingestion host as non-secret variables, while MCP receives the
+  canonical PostHog ingestion host as a non-secret variable. MCP does not
+  receive Email Service or Turnstile bindings.
 - Deployment order is app, then MCP. On a first deployment, each Worker receives
   an identical rollback baseline followed by a distinct release version.
 - The app and MCP Workers use Custom Domains with `workers_dev: false`. The

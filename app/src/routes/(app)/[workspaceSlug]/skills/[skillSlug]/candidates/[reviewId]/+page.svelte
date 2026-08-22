@@ -83,8 +83,18 @@
         reason,
         idempotencyKey: crypto.randomUUID(),
       });
-      skill.replaceVersion(detail.candidate);
-      await skill.refresh();
+      const reportRefreshFailure = (cause: unknown) => {
+        actionError =
+          cause instanceof Error
+            ? `Review decision was saved, but the skill could not refresh: ${cause.message}`
+            : "Review decision was saved, but the skill could not refresh.";
+      };
+      try {
+        skill.replaceVersion(detail.candidate);
+        void skill.refresh().catch(reportRefreshFailure);
+      } catch (cause) {
+        reportRefreshFailure(cause);
+      }
       return true;
     } catch (cause) {
       actionError =

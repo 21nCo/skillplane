@@ -16,6 +16,7 @@ const config = {
       mode: "hash",
       directives: {
         "default-src": ["self"],
+        // posthog.config.ts restricts PUBLIC_POSTHOG_HOST to this HTTPS domain.
         "script-src": [
           "self",
           "https://challenges.cloudflare.com",
