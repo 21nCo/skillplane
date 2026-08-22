@@ -8,6 +8,11 @@ import {
   renderDevelopmentConfigs,
   requireDevelopmentHyperdriveId,
 } from "./lib/development-deployment.mjs";
+import {
+  productionIssuer,
+  productionResource,
+  workers,
+} from "./lib/production-deployment.mjs";
 
 describe("development deployment isolation", () => {
   it("renders two isolated development Workers without production identities", async () => {
@@ -18,6 +23,8 @@ describe("development deployment isolation", () => {
       write: false,
     });
 
+    assert.notEqual(developmentIssuer, productionIssuer);
+    assert.notEqual(developmentResource, productionResource);
     assert.deepEqual(Object.keys(rendered.configs).sort(), ["app", "mcp"]);
     for (const [kind, config] of Object.entries(rendered.configs)) {
       assert.equal(config.name, developmentWorkers[kind].name);
@@ -26,7 +33,7 @@ describe("development deployment isolation", () => {
       assert.equal(config.vars.OAUTH_ISSUER, developmentIssuer);
       assert.equal(config.vars.OAUTH_RESOURCE, developmentResource);
       assert.equal(config.vars.RUNTIME_ENV, "preview");
-      assert.notEqual(config.name, `skillplane-${kind}`);
+      assert.notEqual(config.name, workers[kind].name);
     }
   });
 

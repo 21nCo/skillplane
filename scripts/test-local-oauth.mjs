@@ -100,6 +100,23 @@ function openBrowser(url) {
   child.unref();
 }
 
+export async function waitForOAuthCallback(callback, timeoutMilliseconds = 600_000) {
+  let timeout;
+  try {
+    return await Promise.race([
+      callback,
+      new Promise((_, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error("OAuth browser flow timed out after 10 minutes")),
+          timeoutMilliseconds,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 export async function testLocalOAuth(options = {}) {
   const configured = await configuration(options);
   const resourceMetadataUrl = new URL(
@@ -172,15 +189,7 @@ export async function testLocalOAuth(options = {}) {
       `Complete sign-in and consent in the opened browser:\n${authorize.toString()}\n`,
     );
     openBrowser(authorize.toString());
-    const code = await Promise.race([
-      callback.callback,
-      new Promise((_, reject) =>
-        setTimeout(
-          () => reject(new Error("OAuth browser flow timed out after 10 minutes")),
-          600_000,
-        ),
-      ),
-    ]);
+    const code = await waitForOAuthCallback(callback.callback);
     const tokenResponse = await json(
       await fetch(authorizationMetadata.token_endpoint, {
         method: "POST",

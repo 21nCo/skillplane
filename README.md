@@ -111,6 +111,16 @@ tests. To exercise a real MCP client's OAuth discovery, browser consent, token
 exchange, and authenticated MCP call against the local database, route two stable
 HTTPS hostnames through one named Cloudflare Tunnel:
 
+```bash
+cloudflared tunnel create skillplane-local
+cloudflared tunnel route dns skillplane-local app-local.skillplane.dev
+cloudflared tunnel route dns skillplane-local mcp-local.skillplane.dev
+```
+
+Save the following configuration as `.data/cloudflared.yml`. Replace
+`YOUR_TUNNEL_ID` with the ID returned for `skillplane-local` and point
+`credentials-file` at that tunnel's generated JSON credentials file:
+
 ```yaml
 tunnel: YOUR_TUNNEL_ID
 credentials-file: /absolute/path/to/YOUR_TUNNEL_ID.json

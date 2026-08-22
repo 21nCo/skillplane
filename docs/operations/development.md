@@ -30,6 +30,12 @@ these development identities.
 5. Ensure the two development custom domains belong to the same Cloudflare
    account used by Wrangler.
 
+The development environment intentionally reuses this already-onboarded sender
+address because Cloudflare Email Service bindings require an authorized sender.
+The `Skillplane Dev` display name and the `app.dev.skillplane.dev` authorization
+host distinguish development OTP messages; database, OAuth secrets, and runtime
+resources remain isolated from production.
+
 Put the following values in the ignored `.env.development.local` file and set
 its mode to `0600`:
 
