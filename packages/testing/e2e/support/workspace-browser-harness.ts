@@ -173,7 +173,7 @@ export async function startWorkspaceBrowserHarness(): Promise<WorkspaceBrowserHa
         TURNSTILE_SECRET_KEY: "workspace-browser-turnstile-secret-value",
         TURNSTILE_ALLOWED_HOSTNAMES: "localhost",
         PUBLIC_TURNSTILE_SITE_KEY: "workspace-browser-site-key",
-        SKILLPLANE_OTP_FROM: "Skillplane <no-reply@auth.skillplane.dev>",
+        SKILLPLANE_OTP_FROM: "Skillplane Local <no-reply@auth-dev.skillplane.dev>",
         SEND_EMAIL: {
           send(message) {
             messages.push(message);

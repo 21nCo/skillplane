@@ -11,7 +11,7 @@
   },
   "routes": [
     {
-      "pattern": "app.dev.skillplane.dev",
+      "pattern": "app-dev.skillplane.dev",
       "custom_domain": true
     }
   ],
@@ -24,7 +24,7 @@
   "send_email": [
     {
       "name": "SEND_EMAIL",
-      "allowed_sender_addresses": ["no-reply@auth.skillplane.dev"],
+      "allowed_sender_addresses": ["no-reply@auth-dev.skillplane.dev"],
       "remote": true
     }
   ],
@@ -33,10 +33,10 @@
     "DATABASE_ADAPTER": "postgres",
     "AUTH_MODE": "otp",
     "EMAIL_PROVIDER": "cloudflare-email",
-    "OAUTH_ISSUER": "https://app.dev.skillplane.dev",
-    "OAUTH_RESOURCE": "https://mcp.dev.skillplane.dev/mcp",
-    "TURNSTILE_ALLOWED_HOSTNAMES": "app.dev.skillplane.dev",
-    "SKILLPLANE_OTP_FROM": "Skillplane Dev <no-reply@auth.skillplane.dev>"
+    "OAUTH_ISSUER": "https://app-dev.skillplane.dev",
+    "OAUTH_RESOURCE": "https://mcp-dev.skillplane.dev/mcp",
+    "TURNSTILE_ALLOWED_HOSTNAMES": "app-dev.skillplane.dev",
+    "SKILLPLANE_OTP_FROM": "Skillplane Dev <no-reply@auth-dev.skillplane.dev>"
   },
   "observability": {
     "enabled": true,

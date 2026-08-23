@@ -14,7 +14,7 @@
   "workers_dev": false,
   "routes": [
     {
-      "pattern": "mcp.dev.skillplane.dev",
+      "pattern": "mcp-dev.skillplane.dev",
       "custom_domain": true
     }
   ],
@@ -27,8 +27,8 @@
   "vars": {
     "RUNTIME_ENV": "preview",
     "DATABASE_ADAPTER": "postgres",
-    "OAUTH_ISSUER": "https://app.dev.skillplane.dev",
-    "OAUTH_RESOURCE": "https://mcp.dev.skillplane.dev/mcp"
+    "OAUTH_ISSUER": "https://app-dev.skillplane.dev",
+    "OAUTH_RESOURCE": "https://mcp-dev.skillplane.dev/mcp"
   },
   "observability": {
     "enabled": true,

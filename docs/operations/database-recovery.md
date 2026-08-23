@@ -1,18 +1,18 @@
 # Database backup and recovery
 
-Skillplane uses Railway Postgres as the production origin. Cloudflare Hyperdrive
+Skillplane uses PostgreSQL as the production origin. Cloudflare Hyperdrive
 is a connection accelerator for Workers, not a backup system and not a migration
 endpoint.
 
 ## Production backup policy
 
-- Enable Railway's managed backups and point-in-time recovery before production
+- Enable the provider's managed backups and point-in-time recovery before production
   traffic is accepted.
 - Take a logical `pg_dump --format=custom --no-owner --no-privileges` backup
   before every schema migration.
 - Encrypt exported backups, store them outside the database account, and apply a
   retention schedule approved for the workspace data classification.
-- Run migrations through a direct Railway connection using
+- Run migrations through a direct PostgreSQL connection using
   `MIGRATION_DATABASE_URL`; never route migration DDL through Hyperdrive.
 
 ## Restore drill
@@ -42,7 +42,7 @@ is implemented with the skill bundle subsystem.
 ## R2 inventory and orphan cleanup
 
 The database inventory is authoritative for references; R2 is authoritative for
-bytes. Export the database side with a direct Railway connection:
+bytes. Export the database side with a direct PostgreSQL connection:
 
 ```sql
 SELECT version.workspace_id,

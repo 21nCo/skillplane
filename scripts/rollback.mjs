@@ -8,8 +8,9 @@ import {
   isMain,
   pathExists,
   portablePath,
+  postgresTlsEvidence,
   productionStateDirectory,
-  railwayDatabase,
+  productionDatabase,
   readJson,
   root,
   sanitizeDeploymentRecord,
@@ -47,7 +48,7 @@ function quoteIdentifier(value) {
 }
 
 async function databaseSnapshot() {
-  const database = railwayDatabase();
+  const database = productionDatabase();
   const pool = new Pool({
     connectionString: database.url,
     application_name: "skillplane-production-rollback-verifier",
@@ -55,11 +56,14 @@ async function databaseSnapshot() {
     connectionTimeoutMillis: 10_000,
   });
   try {
-    const ssl = await pool.query(
-      "SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()",
-    );
-    if (ssl.rows[0]?.ssl !== true) {
-      throw new Error("The rollback verification connection is not protected by SSL");
+    const client = await pool.connect();
+    try {
+      const ssl = await client.query(
+        "SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()",
+      );
+      postgresTlsEvidence(client, ssl.rows[0]);
+    } finally {
+      client.release();
     }
     const tables = await pool.query(
       `SELECT table_name

@@ -8,8 +8,9 @@ import { Pool } from "pg";
 import {
   isMain,
   portablePath,
+  postgresTlsEvidence,
   productionStateDirectory,
-  railwayDatabase,
+  productionDatabase,
   requireSecretEnvironment,
   sha256,
   writeJsonAtomic,
@@ -28,9 +29,7 @@ async function openBackupSnapshot(database) {
     const ssl = await client.query(
       "SELECT ssl, version, cipher, bits FROM pg_stat_ssl WHERE pid = pg_backend_pid()",
     );
-    if (ssl.rows[0]?.ssl !== true) {
-      throw new Error("The Railway backup connection is not protected by SSL");
-    }
+    const tls = postgresTlsEvidence(client, ssl.rows[0]);
     const snapshot = await client.query(
       "SELECT pg_export_snapshot()::text AS snapshot",
     );
@@ -40,7 +39,7 @@ async function openBackupSnapshot(database) {
     );
     const serverMajor = Math.floor(Number(server.rows[0]?.version_num) / 10_000);
     if (!Number.isInteger(serverMajor) || serverMajor < 15 || serverMajor > 18) {
-      throw new Error("The Railway Postgres major version is not supported");
+      throw new Error("The PostgreSQL server major version is not supported");
     }
     const relations = await client.query(
       `SELECT to_regclass('public.skillplane_schema_migrations')::text AS migrations,
@@ -75,12 +74,7 @@ async function openBackupSnapshot(database) {
     return {
       snapshot: snapshot.rows[0]?.snapshot,
       inventory: {
-        ssl: {
-          enabled: true,
-          protocol: ssl.rows[0]?.version ?? "unknown",
-          cipher: ssl.rows[0]?.cipher ?? "unknown",
-          bits: Number(ssl.rows[0]?.bits ?? 0),
-        },
+        ssl: tls,
         migrations,
         bundleReferences,
         bundleReferenceDigest: sha256(
@@ -106,7 +100,7 @@ async function openBackupSnapshot(database) {
   }
 }
 
-function dumpRailway(database, snapshot, clientImage) {
+function dumpPostgres(database, snapshot, clientImage) {
   if (typeof snapshot !== "string" || !/^[0-9A-Fa-f-]+$/u.test(snapshot)) {
     throw new Error("Postgres did not provide a valid exported backup snapshot");
   }
@@ -149,7 +143,7 @@ function dumpRailway(database, snapshot, clientImage) {
   );
   if (result.error) throw result.error;
   if (result.status !== 0) {
-    throw new Error("The encrypted Railway pg_dump operation failed");
+    throw new Error("The encrypted PostgreSQL pg_dump operation failed");
   }
   if (!Buffer.isBuffer(result.stdout) || result.stdout.byteLength === 0) {
     throw new Error("pg_dump produced an empty backup");
@@ -224,13 +218,13 @@ function verifyProtectedDump(protectedDump, passphrase, expectedDump, clientImag
   return restoreList.split("\n").filter((line) => /^\d+;/u.test(line)).length;
 }
 
-export async function backupProductionDatabase() {
-  const database = railwayDatabase();
+export async function backupProductionDatabase(options = {}) {
+  const database = options.database ?? productionDatabase();
   const passphrase = requireSecretEnvironment("SKILLPLANE_BACKUP_ENCRYPTION_KEY");
   const source = await openBackupSnapshot(database);
   let dump;
   try {
-    dump = dumpRailway(
+    dump = dumpPostgres(
       database,
       source.snapshot,
       source.inventory.postgres.clientImage,
@@ -267,7 +261,7 @@ export async function backupProductionDatabase() {
     formatVersion: 1,
     createdAt: timestamp,
     source: {
-      provider: "railway",
+      provider: "postgresql",
       host: database.identity.host,
       port: database.identity.port,
       database: database.identity.database,

@@ -1,7 +1,7 @@
 # Local backup, restore, and R2 inventory recovery
 
 These commands rehearse Skillplane recovery against the local Docker Postgres
-runtime. They never connect to Railway or Cloudflare. Destructive restore
+runtime. They never connect to a remote PostgreSQL provider or Cloudflare. Destructive restore
 operations accept only a loopback Postgres URL whose database name ends in
 `_test`.
 
@@ -86,5 +86,5 @@ backs up, restores into a second database, verifies schema and R2 inventory
 equivalence, rejects a corrupt checksum, and exercises fail-closed orphan
 cleanup. All rehearsal databases are dropped in `finally` cleanup.
 
-For production Railway/Hyperdrive incident policy, retention, and RPO/RTO, see
+For production PostgreSQL/Hyperdrive incident policy, retention, and RPO/RTO, see
 `docs/operations/database-recovery.md`.

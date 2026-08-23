@@ -1,19 +1,19 @@
 # Development deployment
 
-Skillplane's persistent development environment isolates the stateful and
-addressable boundaries below from production, except for the explicitly shared
-email-delivery boundary described after the table:
+Skillplane's persistent development environment isolates the stateful,
+addressable, credential, and email-identity boundaries below from production:
 
-| Boundary     | Development                                   | Production                       |
-| ------------ | --------------------------------------------- | -------------------------------- |
-| App Worker   | `skillplane-app-dev`                          | `skillplane-app`                 |
-| MCP Worker   | `skillplane-mcp-dev`                          | `skillplane-mcp`                 |
-| App host     | `app.dev.skillplane.dev`                      | `app.skillplane.dev`             |
-| MCP resource | `https://mcp.dev.skillplane.dev/mcp`          | `https://mcp.skillplane.dev/mcp` |
-| R2 bucket    | `skillplane-skill-bundles-dev`                | `skillplane-skill-bundles`       |
-| Database     | A Railway database with a distinct `dev` name | Production Railway database      |
-| Hyperdrive   | `CLOUDFLARE_DEV_HYPERDRIVE_ID`                | `CLOUDFLARE_HYPERDRIVE_ID`       |
-| Secrets      | `SKILLPLANE_DEV_*` inputs                     | Production secret inputs         |
+| Boundary     | Development                          | Production                       |
+| ------------ | ------------------------------------ | -------------------------------- |
+| App Worker   | `skillplane-app-dev`                 | `skillplane-app`                 |
+| MCP Worker   | `skillplane-mcp-dev`                 | `skillplane-mcp`                 |
+| App host     | `app-dev.skillplane.dev`             | `app.skillplane.dev`             |
+| MCP resource | `https://mcp-dev.skillplane.dev/mcp` | `https://mcp.skillplane.dev/mcp` |
+| R2 bucket    | `skillplane-skill-bundles-dev`       | `skillplane-skill-bundles`       |
+| Database     | A distinct PostgreSQL database       | Production PostgreSQL database   |
+| Hyperdrive   | `CLOUDFLARE_DEV_HYPERDRIVE_ID`       | `CLOUDFLARE_HYPERDRIVE_ID`       |
+| Secrets      | `SKILLPLANE_DEV_*` inputs            | Production secret inputs         |
+| Email sender | `no-reply@auth-dev.skillplane.dev`   | `no-reply@auth.skillplane.dev`   |
 
 The development runtime uses `RUNTIME_ENV=preview`: it retains production-like
 OTP, Email Service, Hyperdrive, R2, and HTTPS requirements while allowing the
@@ -22,23 +22,22 @@ these development identities.
 
 ## One-time provider setup
 
-1. Create a separate Railway database whose database name contains a distinct
-   `dev` segment, such as `skillplane_dev`.
+1. Select a separate password-authenticated PostgreSQL database reachable over
+   TLS. The provider and database name are not used as environment boundaries.
 2. Create a cache-disabled Hyperdrive configuration for that database.
-3. Create a Turnstile widget allowing only `app.dev.skillplane.dev`.
-4. Confirm Cloudflare Email Service can send from
-   `no-reply@auth.skillplane.dev`.
-5. Ensure the two development custom domains belong to the same Cloudflare
-   account used by Wrangler.
+3. Create a Turnstile widget allowing only `app-dev.skillplane.dev`.
+4. Onboard `auth-dev.skillplane.dev` with Cloudflare Email Service and authorize
+   only `no-reply@auth-dev.skillplane.dev` for the development app Worker.
+5. Create the `app-dev.skillplane.dev` and `mcp-dev.skillplane.dev` custom domains.
+   Remove the old `app.dev.skillplane.dev` and `mcp.dev.skillplane.dev` routes in
+   the same cutover because their OAuth discovery identities are no longer valid.
+6. Create a dedicated `SKILLPLANE_DEV_CLOUDFLARE_API_TOKEN`. Do not reuse the
+   production or ambient Wrangler token. Limit it to the account and zones needed
+   by the development Workers, R2 bucket, Hyperdrive, and custom domains.
 
-The development environment intentionally reuses this already-onboarded sender
-address because Cloudflare Email Service bindings require an authorized sender.
-This is an explicit shared boundary with production: the sender address, delivery
-domain, Email Service binding, and sender reputation are not isolated. The
-`Skillplane Dev` display name helps recipients identify development OTPs, while
-the development Worker and host, database, Hyperdrive, R2 bucket, Turnstile
-widget, and OAuth secrets provide the compensating runtime isolation. Do not use
-the sender identity alone to determine which environment issued an OTP.
+Development and authenticated local OTP emails use the development sender, never
+the production sender. Every OTP identifies its environment and expected sign-in
+site. Default local startup continues to keep OTP authentication disabled.
 
 Put the following values in the ignored `.env.development.local` file and set
 its mode to `0600`:
@@ -46,15 +45,21 @@ its mode to `0600`:
 ```dotenv
 SKILLPLANE_DEV_DATABASE_URL=postgresql://...
 CLOUDFLARE_DEV_HYPERDRIVE_ID=...
+SKILLPLANE_DEV_CLOUDFLARE_API_TOKEN=...
 SKILLPLANE_DEV_AUTHFN_SECRET=...
 SKILLPLANE_DEV_OAUTH_TOKEN_PEPPER=...
 SKILLPLANE_DEV_TURNSTILE_SECRET_KEY=...
 PUBLIC_DEV_TURNSTILE_SITE_KEY=...
 ```
 
-The deployment rejects a database without a `dev` name segment, a database that
-matches `RAILWAY_DATABASE_URL`, a cache-enabled or mismatched Hyperdrive, a dirty
-source tree, or generated configuration containing production identities.
+The deployment rejects a database that matches
+`SKILLPLANE_PRODUCTION_DATABASE_URL` (or the temporary legacy
+`RAILWAY_DATABASE_URL`), a cache-enabled or mismatched Hyperdrive, a development
+Hyperdrive ID copied from production, a dirty source tree, a development API
+token reused from an ambient or production token, or generated configuration
+containing production identities. When production secret or Turnstile variables
+are also present in the invoking environment, the deployment additionally
+rejects copied development values.
 
 ## Deploy and verify
 

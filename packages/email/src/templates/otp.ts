@@ -4,6 +4,8 @@ export interface OtpTemplateInput {
   readonly code: string;
   readonly expiresInMinutes: number;
   readonly purpose: "verify-email" | "sign-in" | "sign-up" | "reset-password";
+  readonly environment: "local" | "preview" | "production";
+  readonly signInUrl: string;
 }
 
 const purposeCopy: Record<OtpTemplateInput["purpose"], string> = {
@@ -20,11 +22,37 @@ export function renderOtpEmail(input: OtpTemplateInput): RenderedEmail {
   if (!Number.isInteger(input.expiresInMinutes) || input.expiresInMinutes < 1) {
     throw new Error("OTP expiry must be a positive whole number of minutes");
   }
+  const signInUrl = new URL(input.signInUrl);
+  const loopbackHttp =
+    signInUrl.protocol === "http:" &&
+    ["localhost", "127.0.0.1", "[::1]"].includes(signInUrl.hostname);
+  if (
+    (signInUrl.protocol !== "https:" && !loopbackHttp) ||
+    signInUrl.username ||
+    signInUrl.password ||
+    signInUrl.search ||
+    signInUrl.hash
+  ) {
+    throw new Error("OTP sign-in URL must be HTTPS or loopback HTTP");
+  }
   const action = purposeCopy[input.purpose];
   const expiresInMinutes = String(input.expiresInMinutes);
-  const subject = "Your Skillplane verification code";
+  const environmentLabel =
+    input.environment === "production"
+      ? "Production"
+      : input.environment === "preview"
+        ? "Development"
+        : "Local";
+  const subject =
+    input.environment === "production"
+      ? "Your Skillplane verification code"
+      : `[Skillplane ${environmentLabel}] Verification code`;
+  const canonicalSignInUrl = signInUrl.toString().replace(/\/$/u, "");
   const text = [
     `Use ${input.code} to ${action}.`,
+    "",
+    `Environment: ${environmentLabel}`,
+    `Sign-in site: ${canonicalSignInUrl}`,
     "",
     `This code expires in ${expiresInMinutes} minutes and can be used once.`,
     "If you did not request this code, you can ignore this email.",
@@ -35,6 +63,7 @@ export function renderOtpEmail(input: OtpTemplateInput): RenderedEmail {
 <h1 style="margin:0 0 14px;font-size:25px;line-height:1.25">Continue to Skillplane</h1>
 <p style="margin:0 0 24px;color:#50505a;font-size:15px;line-height:1.65">Use this code to ${escapeHtml(action)}.</p>
 <div style="margin:0 0 24px;border:1px solid #d9d6ff;border-radius:10px;background:#f5f3ff;padding:18px;text-align:center;color:#3d327b;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:30px;font-weight:750;letter-spacing:.22em">${code}</div>
+<div style="margin:0 0 18px;border-radius:8px;background:#f6f6f8;padding:12px;color:#50505a;font-size:13px;line-height:1.65"><strong>Environment:</strong> ${environmentLabel}<br><strong>Sign-in site:</strong> ${escapeHtml(canonicalSignInUrl)}</div>
 <p style="margin:0;color:#6d6d76;font-size:13px;line-height:1.65">The code expires in ${expiresInMinutes} minutes and can be used once. If you did not request it, no action is required.</p>`;
   return {
     subject,

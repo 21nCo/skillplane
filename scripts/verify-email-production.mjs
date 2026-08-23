@@ -5,9 +5,10 @@ import { Pool } from "pg";
 import {
   isMain,
   pathExists,
+  postgresTlsEvidence,
   productionIssuer,
   productionStateDirectory,
-  railwayDatabase,
+  productionDatabase,
   readJson,
   requireEnvironment,
   sha256,
@@ -164,7 +165,7 @@ async function verifyChallenge(email, code) {
 }
 
 async function auditBrowserVerification(email) {
-  const database = railwayDatabase();
+  const database = productionDatabase();
   const pool = new Pool({
     connectionString: database.url,
     application_name: "skillplane-production-email-verifier",
@@ -172,11 +173,14 @@ async function auditBrowserVerification(email) {
     connectionTimeoutMillis: 10_000,
   });
   try {
-    const ssl = await pool.query(
-      "SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()",
-    );
-    if (ssl.rows[0]?.ssl !== true) {
-      throw new Error("The email audit connection is not protected by SSL");
+    const client = await pool.connect();
+    try {
+      const ssl = await client.query(
+        "SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()",
+      );
+      postgresTlsEvidence(client, ssl.rows[0]);
+    } finally {
+      client.release();
     }
     const result = await pool.query(
       `SELECT challenge.id,

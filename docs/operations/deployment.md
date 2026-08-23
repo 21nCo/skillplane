@@ -1,7 +1,7 @@
 # Production deployment
 
 This repository deploys the Skillplane app and MCP Cloudflare Workers backed by
-one Railway Postgres database through Hyperdrive and one private R2 bucket. The
+one PostgreSQL database through Hyperdrive and one private R2 bucket. The
 landing Worker is maintained and deployed independently from the 21n monorepo's
 `landing/skillplane` workspace. The production hosts are
 `skillplane.dev`, `app.skillplane.dev`, and `mcp.skillplane.dev`.
@@ -10,12 +10,12 @@ landing Worker is maintained and deployed independently from the 21n monorepo's
 
 Before the first release:
 
-1. Create the production Railway Postgres service, enable its managed backup
-   policy, and retain its public TCP-proxy URL or the explicitly approved
-   `insouth.db.21n.dev` Railway alias for migration and backup processes only.
-2. Create a Cloudflare Hyperdrive configuration whose origin is that Railway
-   database. Record its 32-character ID. Do not put the Railway URL into a
-   Worker variable.
+1. Create a password-authenticated production PostgreSQL database reachable over
+   TLS, enable the provider's managed backup and point-in-time recovery policy,
+   and retain its direct URL for migration and backup processes only.
+2. Create a Cloudflare Hyperdrive configuration whose origin is that PostgreSQL
+   database. Record its 32-character ID. Do not put the direct database URL into
+   a Worker variable.
 3. Create a production Turnstile widget restricted to
    `app.skillplane.dev`. Record its site key and secret key.
 4. Complete Cloudflare Email Service onboarding for `skillplane.dev`, including
@@ -49,23 +49,32 @@ Run `pnpm production:secrets:init` once to generate strong independent
 does not print values, rejects duplicate or weak existing assignments, refuses
 symlinks, and enforces mode `0600`.
 
-| Variable                           | Purpose                                                                             |
-| ---------------------------------- | ----------------------------------------------------------------------------------- |
-| `RAILWAY_DATABASE_URL`             | Direct Railway public Postgres URL used only by backup, migration, and verification |
-| `CLOUDFLARE_HYPERDRIVE_ID`         | Existing cache-disabled Hyperdrive configuration bound to `HYPERDRIVE`              |
-| `SKILLPLANE_BACKUP_ENCRYPTION_KEY` | At least 32 characters; encrypts logical backups before they reach disk             |
-| `AUTHFN_SECRET`                    | AuthFn signing and tenancy secret, at least 32 characters                           |
-| `OAUTH_TOKEN_PEPPER`               | OAuth token hashing pepper, at least 32 characters                                  |
-| `TURNSTILE_SECRET_KEY`             | Production Turnstile secret, at least 32 characters                                 |
-| `PUBLIC_TURNSTILE_SITE_KEY`        | Public site key for the production widget                                           |
-| `SKILLPLANE_RELEASE_TAG`           | Optional stable release label; generated when omitted                               |
+| Variable                                              | Purpose                                                                 |
+| ----------------------------------------------------- | ----------------------------------------------------------------------- |
+| `SKILLPLANE_PRODUCTION_DATABASE_URL`                  | Direct PostgreSQL URL used only by backup, migration, and verification  |
+| `SKILLPLANE_PRODUCTION_MIGRATION_SOURCE_DATABASE_URL` | Temporary old-production URL used only by `db:move:production`          |
+| `CLOUDFLARE_HYPERDRIVE_ID`                            | Existing cache-disabled Hyperdrive configuration bound to `HYPERDRIVE`  |
+| `SKILLPLANE_BACKUP_ENCRYPTION_KEY`                    | At least 32 characters; encrypts logical backups before they reach disk |
+| `AUTHFN_SECRET`                                       | AuthFn signing and tenancy secret, at least 32 characters               |
+| `OAUTH_TOKEN_PEPPER`                                  | OAuth token hashing pepper, at least 32 characters                      |
+| `TURNSTILE_SECRET_KEY`                                | Production Turnstile secret, at least 32 characters                     |
+| `PUBLIC_TURNSTILE_SITE_KEY`                           | Public site key for the production widget                               |
+| `SKILLPLANE_RELEASE_TAG`                              | Optional stable release label; generated when omitted                   |
 
-The Railway URL must use a Railway TCP-proxy hostname or the exact controlled
-alias `insouth.db.21n.dev`; arbitrary aliases remain rejected. The connection is
-forced to `sslmode=require`. Because the approved alias presents the Railway
-self-signed PostgreSQL certificate chain, node-postgres uses explicit
-libpq-compatible `require` semantics for that alias. Both backup and migration
-query `pg_stat_ssl` and fail if the connection is not encrypted.
+The direct URL may use any PostgreSQL provider, but it must include a host,
+username, password, and database name. `sslmode` defaults to `require`; only
+`require`, `verify-ca`, and `verify-full` are accepted. The controlled
+`insouth.db.21n.dev` alias retains its libpq-compatible TLS behavior. Both backup
+and migration query `pg_stat_ssl` and fail if the connection is not encrypted.
+Provider URLs using PostgreSQL 17's `sslrootcert=system` hint are normalized for
+`node-postgres`, which uses Node's trusted CA set while retaining `verify-full`.
+TLS evidence accepts either a certificate-authorized client socket or the
+server's `pg_stat_ssl` confirmation, so providers that terminate TLS at a
+PostgreSQL proxy remain verifiable without weakening transport security.
+
+`RAILWAY_DATABASE_URL` remains a temporary compatibility alias. New setups must
+use `SKILLPLANE_PRODUCTION_DATABASE_URL`; if both are present they must resolve
+to the same database identity.
 
 The production Hyperdrive configuration must have SQL response caching disabled.
 Skillplane is an authorization and mutation control plane, so stale cached reads
@@ -76,6 +85,31 @@ The complete Skillplane source must also be committed with a clean worktree.
 The application commit and a digest of all runtime, deployment, package, and
 script sources are written to the release manifest. Deployment refuses
 untracked or modified source.
+
+## Move production to a new PostgreSQL origin
+
+Keep both raw URLs only for the duration of the move:
+
+```dotenv
+SKILLPLANE_PRODUCTION_DATABASE_URL=postgresql://new-production...
+SKILLPLANE_PRODUCTION_MIGRATION_SOURCE_DATABASE_URL=postgresql://old-production...
+```
+
+Freeze writes to the source, ensure the target is empty, and run with the exact
+source and target database names as destructive confirmations:
+
+```bash
+pnpm db:move:production -- \
+  --confirm-source-write-frozen <old-database-name> \
+  --confirm-empty-database <new-database-name>
+```
+
+The command creates and verifies an encrypted source backup, restores it into
+the empty target, applies and verifies current migrations, then creates the
+fresh target backup and migration safety records required by `deploy:all`. It
+does not deploy Workers or move traffic. Remove
+`SKILLPLANE_PRODUCTION_MIGRATION_SOURCE_DATABASE_URL` after the cutover is
+accepted.
 
 ## Release sequence
 
@@ -94,8 +128,8 @@ The commands enforce these boundaries:
 - `db:backup:production` performs `pg_dump --format=custom`, encrypts the
   archive with AES-256-GCM and a scrypt-derived key, verifies decryption, and
   proves `pg_restore --list` can read it. Its Postgres client image matches the
-  Railway server major version, and no plaintext dump is written.
-- `db:migrate:production` applies committed migrations directly to Railway,
+  PostgreSQL server major version, and no plaintext dump is written.
+- `db:migrate:production` applies committed migrations directly to PostgreSQL,
   verifies every migration hash, table, constraint, trigger, and required query
   plan, and never uses Hyperdrive.
 - `deploy:all` refuses to start unless the matching backup is less than 24
@@ -103,7 +137,7 @@ The commands enforce these boundaries:
   ignored `wrangler.generated.json` files only after validating the real
   Hyperdrive ID. Before the first Cloudflare mutation, it reads that
   configuration back from Cloudflare and requires its origin host, port,
-  database, and user to exactly match `RAILWAY_DATABASE_URL`.
+  database, and user to exactly match `SKILLPLANE_PRODUCTION_DATABASE_URL`.
 - Worker secrets are written to a mode-`0600` temporary JSON file, supplied to
   `wrangler deploy --secrets-file`, and deleted in a `finally` block. They are
   never written to Wrangler source configuration or `.conduct`. The app
@@ -156,7 +190,7 @@ enter the received OTP, then set only
 pnpm verify:email:production
 ```
 
-The gate uses the SSL-protected direct Railway audit connection to prove a
+The gate uses the SSL-protected direct PostgreSQL audit connection to prove a
 recent Cloudflare Email Service challenge has a provider message ID, was
 consumed, and created an active email-OTP session. It persists only hashes.
 
@@ -172,7 +206,7 @@ pnpm verify:rollback:production
 ```
 
 Do not accept production traffic until every command passes and the provider
-dashboards show healthy Railway backups, Cloudflare Email Service onboarding,
+dashboards show healthy database-provider backups, Cloudflare Email Service onboarding,
 and both application Custom Domains as active. Verify the independently managed
 landing zone route from its own workspace.
 
@@ -189,4 +223,4 @@ landing zone route from its own workspace.
 - Never select another account's Hyperdrive configuration by position or infer
   an ID from unrelated resources.
 - Never retry a deployment by bypassing `--strict`, changing the canonical
-  domains, publishing R2, or placing `RAILWAY_DATABASE_URL` in Worker vars.
+  domains, publishing R2, or placing a direct PostgreSQL URL in Worker vars.

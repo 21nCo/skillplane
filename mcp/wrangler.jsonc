@@ -1,6 +1,6 @@
 {
   "$schema": "../node_modules/wrangler/config-schema.json",
-  "name": "skillplane-mcp",
+  "name": "skillplane-mcp-local",
   "main": "src/index.ts",
   "compatibility_date": "2026-05-03",
   "compatibility_flags": ["nodejs_compat"],
@@ -14,8 +14,8 @@
   "r2_buckets": [
     {
       "binding": "SKILL_BUNDLES",
-      "bucket_name": "skillplane-skill-bundles",
-      "preview_bucket_name": "skillplane-skill-bundles-preview",
+      "bucket_name": "skillplane-skill-bundles-local",
+      "preview_bucket_name": "skillplane-skill-bundles-local-preview",
     },
   ],
   "observability": {

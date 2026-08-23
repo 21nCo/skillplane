@@ -77,7 +77,7 @@ export async function smokeDevelopment() {
   const challenge = unauthorized.headers.get("www-authenticate") ?? "";
   assert(
     challenge.includes(
-      "mcp.dev.skillplane.dev/.well-known/oauth-protected-resource/mcp",
+      "mcp-dev.skillplane.dev/.well-known/oauth-protected-resource/mcp",
     ),
     "Development MCP challenge points at the wrong resource metadata",
   );

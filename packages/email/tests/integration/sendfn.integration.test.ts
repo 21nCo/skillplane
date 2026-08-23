@@ -9,6 +9,8 @@ describe("SendFn Cloudflare delivery", () => {
     const messages: CloudflareEmailMessage[] = [];
     const sendfn = createSkillplaneSendFn({
       from: "Skillplane <no-reply@auth.skillplane.dev>",
+      environment: "production",
+      signInUrl: "https://app.skillplane.dev",
       binding: {
         async send(message) {
           messages.push(message);

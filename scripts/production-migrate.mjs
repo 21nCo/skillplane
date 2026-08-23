@@ -5,8 +5,9 @@ import { Pool } from "pg";
 import {
   capture,
   isMain,
+  postgresTlsEvidence,
   productionStateDirectory,
-  railwayDatabase,
+  productionDatabase,
   readJson,
   writeJsonAtomic,
 } from "./lib/production-deployment.mjs";
@@ -19,19 +20,15 @@ async function verifySsl(database) {
     connectionTimeoutMillis: 10_000,
   });
   try {
-    const result = await pool.query(
-      "SELECT ssl, version, cipher, bits FROM pg_stat_ssl WHERE pid = pg_backend_pid()",
-    );
-    const row = result.rows[0];
-    if (row?.ssl !== true) {
-      throw new Error("The Railway migration connection is not protected by SSL");
+    const client = await pool.connect();
+    try {
+      const result = await client.query(
+        "SELECT ssl, version, cipher, bits FROM pg_stat_ssl WHERE pid = pg_backend_pid()",
+      );
+      return postgresTlsEvidence(client, result.rows[0]);
+    } finally {
+      client.release();
     }
-    return {
-      enabled: true,
-      protocol: row.version ?? "unknown",
-      cipher: row.cipher ?? "unknown",
-      bits: Number(row.bits ?? 0),
-    };
   } finally {
     await pool.end();
   }
@@ -43,7 +40,7 @@ async function requireFreshBackup(database) {
     backup = await readJson(resolve(productionStateDirectory, "backup.json"));
   } catch {
     throw new Error(
-      "A verified production backup is required before direct Railway migration",
+      "A verified production backup is required before direct database migration",
     );
   }
   const createdAt = Date.parse(backup.createdAt);
@@ -56,7 +53,7 @@ async function requireFreshBackup(database) {
     Date.now() - createdAt > 24 * 60 * 60 * 1000
   ) {
     throw new Error(
-      "The production backup is stale, invalid, or belongs to another Railway database",
+      "The production backup is stale, invalid, or belongs to another database",
     );
   }
   return backup;
@@ -71,8 +68,8 @@ function parseCommandJson(output, name) {
   }
 }
 
-export async function migrateProductionDatabase() {
-  const database = railwayDatabase();
+export async function migrateProductionDatabase(options = {}) {
+  const database = options.database ?? productionDatabase();
   const backup = await requireFreshBackup(database);
   const ssl = await verifySsl(database);
   const environment = { ...process.env, MIGRATION_DATABASE_URL: database.url };

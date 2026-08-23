@@ -2,7 +2,7 @@
 
 import {
   activeVersionFromDeployments,
-  parseRailwayDatabaseUrl,
+  parseDirectPostgresUrl,
   requireHyperdriveId,
   sanitizeDeploymentRecord,
 } from "./lib/production-deployment.mjs";
@@ -36,42 +36,42 @@ assert(
   "Production routing modes were not rendered correctly",
 );
 
-const railway = parseRailwayDatabaseUrl(
-  "postgresql://skillplane:secret@roundhouse.proxy.rlwy.net:12345/skillplane",
-  "self-test Railway URL",
+const postgres = parseDirectPostgresUrl(
+  "postgresql://skillplane:secret@db.example.test:12345/skillplane",
+  "self-test PostgreSQL URL",
 );
 assert(
-  new URL(railway.url).searchParams.get("sslmode") === "require",
-  "Railway SSL was not forced",
+  new URL(postgres.url).searchParams.get("sslmode") === "require",
+  "PostgreSQL SSL was not forced",
 );
 assert(
   !JSON.stringify({
-    fingerprint: railway.fingerprint,
-    identity: railway.identity,
+    fingerprint: postgres.fingerprint,
+    identity: postgres.identity,
   }).includes("secret"),
-  "The sanitized Railway identity retained a password",
+  "The sanitized PostgreSQL identity retained a password",
 );
 
-const railwayAlias = parseRailwayDatabaseUrl(
+const compatibleAlias = parseDirectPostgresUrl(
   "postgresql://skillplane:secret@insouth.db.21n.dev:47273/skillplane",
-  "self-test approved Railway alias",
+  "self-test libpq-compatible alias",
 );
 assert(
-  railwayAlias.identity.host === "insouth.db.21n.dev" &&
-    new URL(railwayAlias.url).searchParams.get("sslmode") === "require" &&
-    new URL(railwayAlias.url).searchParams.get("uselibpqcompat") === "true",
-  "The approved Railway alias was not accepted with encrypted libpq-compatible SSL",
+  compatibleAlias.identity.host === "insouth.db.21n.dev" &&
+    new URL(compatibleAlias.url).searchParams.get("sslmode") === "require" &&
+    new URL(compatibleAlias.url).searchParams.get("uselibpqcompat") === "true",
+  "The controlled alias was not accepted with encrypted libpq-compatible SSL",
 );
-let unrelatedAliasRejected = false;
+let weakSslRejected = false;
 try {
-  parseRailwayDatabaseUrl(
-    "postgresql://skillplane:secret@other.db.21n.dev:47273/skillplane",
-    "self-test unrelated alias",
+  parseDirectPostgresUrl(
+    "postgresql://skillplane:secret@db.example.test:5432/skillplane?sslmode=prefer",
+    "self-test weak SSL URL",
   );
 } catch {
-  unrelatedAliasRejected = true;
+  weakSslRejected = true;
 }
-assert(unrelatedAliasRejected, "An unrelated database alias was accepted");
+assert(weakSslRejected, "A PostgreSQL URL with weak SSL was accepted");
 
 const bannerWrappedJson = parseWranglerJson(
   `Wrangler 4.115.0\n${JSON.stringify({ id: "a".repeat(32) })}\n`,
@@ -86,16 +86,16 @@ const hyperdrive = assertHyperdriveOriginRecord(
   {
     id: "a".repeat(32),
     origin: {
-      host: railway.identity.host,
-      port: Number(railway.identity.port),
-      database: railway.identity.database,
-      user: railway.identity.username,
+      host: postgres.identity.host,
+      port: Number(postgres.identity.port),
+      database: postgres.identity.database,
+      user: postgres.identity.username,
     },
     caching: { disabled: true },
   },
-  railway.identity,
+  postgres.identity,
 );
-assert(hyperdrive.railwayOriginMatched, "Hyperdrive origin matching failed");
+assert(hyperdrive.databaseOriginMatched, "Hyperdrive origin matching failed");
 assert(hyperdrive.queryCacheDisabled, "Hyperdrive query caching was accepted");
 let cachedHyperdriveRejected = false;
 try {
@@ -103,14 +103,14 @@ try {
     {
       id: "a".repeat(32),
       origin: {
-        host: railway.identity.host,
-        port: Number(railway.identity.port),
-        database: railway.identity.database,
-        user: railway.identity.username,
+        host: postgres.identity.host,
+        port: Number(postgres.identity.port),
+        database: postgres.identity.database,
+        user: postgres.identity.username,
       },
       caching: { disabled: false },
     },
-    railway.identity,
+    postgres.identity,
   );
 } catch {
   cachedHyperdriveRejected = true;
@@ -126,20 +126,20 @@ try {
       id: "a".repeat(32),
       origin: {
         host: "unrelated.proxy.rlwy.net",
-        port: Number(railway.identity.port),
-        database: railway.identity.database,
-        user: railway.identity.username,
+        port: Number(postgres.identity.port),
+        database: postgres.identity.database,
+        user: postgres.identity.username,
       },
       caching: { disabled: true },
     },
-    railway.identity,
+    postgres.identity,
   );
 } catch {
   unrelatedHyperdriveRejected = true;
 }
 assert(
   unrelatedHyperdriveRejected,
-  "A Hyperdrive configuration for another Railway origin was accepted",
+  "A Hyperdrive configuration for another PostgreSQL origin was accepted",
 );
 
 const version = activeVersionFromDeployments([
@@ -183,9 +183,9 @@ process.stdout.write(
       missingHyperdriveFailsClosed: true,
       inMemoryConfigRendering: true,
       productionRoutingModes: true,
-      railwaySslForced: true,
-      approvedRailwayAliasAccepted: true,
-      unrelatedAliasRejected: true,
+      postgresSslForced: true,
+      controlledAliasAccepted: true,
+      weakSslRejected: true,
       wranglerBannerJsonParsed: true,
       hyperdriveOriginMatched: true,
       cachedHyperdriveRejected: true,

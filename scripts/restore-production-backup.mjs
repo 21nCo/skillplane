@@ -9,8 +9,9 @@ import { parseArguments } from "./lib/local-database.mjs";
 import {
   capture,
   isMain,
-  parseRailwayDatabaseUrl,
+  parseDirectPostgresUrl,
   portablePath,
+  postgresTlsEvidence,
   productionStateDirectory,
   readJson,
   requireEnvironment,
@@ -77,19 +78,22 @@ async function assertEmptyRecoveryTarget(database, confirmedName, sourceFingerpr
     connectionTimeoutMillis: 10_000,
   });
   try {
-    const ssl = await pool.query(
-      "SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()",
-    );
-    if (ssl.rows[0]?.ssl !== true) {
-      throw new Error("The recovery database connection is not protected by SSL");
-    }
-    const tables = await pool.query(
-      `SELECT count(*)::integer AS count
-         FROM information_schema.tables
-        WHERE table_schema = 'public' AND table_type = 'BASE TABLE'`,
-    );
-    if (tables.rows[0]?.count !== 0) {
-      throw new Error("The recovery database is not empty");
+    const client = await pool.connect();
+    try {
+      const ssl = await client.query(
+        "SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()",
+      );
+      postgresTlsEvidence(client, ssl.rows[0]);
+      const tables = await client.query(
+        `SELECT count(*)::integer AS count
+           FROM information_schema.tables
+          WHERE table_schema = 'public' AND table_type = 'BASE TABLE'`,
+      );
+      if (tables.rows[0]?.count !== 0) {
+        throw new Error("The recovery database is not empty");
+      }
+    } finally {
+      client.release();
     }
   } finally {
     await pool.end();
@@ -199,7 +203,10 @@ function parseCommandJson(output, label) {
   }
 }
 
-export async function restoreProductionBackup(arguments_ = process.argv.slice(2)) {
+export async function restoreProductionBackup(
+  arguments_ = process.argv.slice(2),
+  options = {},
+) {
   const parsed = parseArguments(arguments_);
   const manifestArgument = parsed.value("manifest");
   const confirmedName = parsed.value("confirm-empty-database");
@@ -224,11 +231,12 @@ export async function restoreProductionBackup(arguments_ = process.argv.slice(2)
   if (!/^postgres:(?:15|16|17|18)-alpine$/u.test(postgresClientImage ?? "")) {
     throw new Error("The backup manifest has an invalid Postgres client image");
   }
-  const recoveryUrl = requireEnvironment("SKILLPLANE_RECOVERY_DATABASE_URL");
-  const database = parseRailwayDatabaseUrl(
-    recoveryUrl,
-    "SKILLPLANE_RECOVERY_DATABASE_URL",
-  );
+  const database =
+    options.database ??
+    parseDirectPostgresUrl(
+      requireEnvironment("SKILLPLANE_RECOVERY_DATABASE_URL"),
+      "SKILLPLANE_RECOVERY_DATABASE_URL",
+    );
   await assertEmptyRecoveryTarget(
     database,
     confirmedName,

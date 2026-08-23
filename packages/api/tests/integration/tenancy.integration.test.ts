@@ -49,7 +49,7 @@ beforeAll(async () => {
     TURNSTILE_SECRET_KEY: "tenancy-integration-turnstile-secret-value",
     TURNSTILE_ALLOWED_HOSTNAMES: "localhost",
     PUBLIC_TURNSTILE_SITE_KEY: "tenancy-integration-site-key",
-    SKILLPLANE_OTP_FROM: "Skillplane <no-reply@auth.skillplane.dev>",
+    SKILLPLANE_OTP_FROM: "Skillplane Local <no-reply@auth-dev.skillplane.dev>",
     SEND_EMAIL: {
       send(message) {
         messages.push(message);

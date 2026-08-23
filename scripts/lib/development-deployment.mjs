@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import {
   capture,
   captureWrangler,
-  parseRailwayDatabaseUrl,
+  parseDirectPostgresUrl,
   requireEnvironment,
   requireSecretEnvironment,
   root,
@@ -12,15 +12,15 @@ import {
   writeJsonAtomic,
 } from "./production-deployment.mjs";
 
-export const developmentIssuer = "https://app.dev.skillplane.dev";
-export const developmentResource = "https://mcp.dev.skillplane.dev/mcp";
+export const developmentIssuer = "https://app-dev.skillplane.dev";
+export const developmentResource = "https://mcp-dev.skillplane.dev/mcp";
 export const developmentBucket = "skillplane-skill-bundles-dev";
 export const developmentStateDirectory = resolve(root, ".data", "development");
 
 export const developmentWorkers = Object.freeze({
   app: {
     name: "skillplane-app-dev",
-    host: "app.dev.skillplane.dev",
+    host: "app-dev.skillplane.dev",
     directory: resolve(root, "app"),
     config: resolve(root, "app", "wrangler.development.generated.json"),
     template: resolve(root, "deployment", "wrangler", "app.development.json"),
@@ -28,7 +28,7 @@ export const developmentWorkers = Object.freeze({
   },
   mcp: {
     name: "skillplane-mcp-dev",
-    host: "mcp.dev.skillplane.dev",
+    host: "mcp-dev.skillplane.dev",
     directory: resolve(root, "mcp"),
     config: resolve(root, "mcp", "wrangler.development.generated.json"),
     template: resolve(root, "deployment", "wrangler", "mcp.development.json"),
@@ -45,23 +45,25 @@ export function requireDevelopmentHyperdriveId(
       "CLOUDFLARE_DEV_HYPERDRIVE_ID must be a 32-character Hyperdrive ID",
     );
   }
+  if (normalized === process.env.CLOUDFLARE_HYPERDRIVE_ID?.trim().toLowerCase()) {
+    throw new Error(
+      "CLOUDFLARE_DEV_HYPERDRIVE_ID must differ from CLOUDFLARE_HYPERDRIVE_ID",
+    );
+  }
   return normalized;
 }
 
 export function developmentDatabase() {
-  const parsed = parseRailwayDatabaseUrl(
+  const parsed = parseDirectPostgresUrl(
     requireEnvironment("SKILLPLANE_DEV_DATABASE_URL"),
     "SKILLPLANE_DEV_DATABASE_URL",
   );
-  if (!/(?:^|[_-])dev(?:$|[_-])/iu.test(parsed.identity.database)) {
-    throw new Error(
-      "The development Railway database name must contain a distinct dev segment",
-    );
-  }
-  const production = process.env.RAILWAY_DATABASE_URL?.trim();
+  const production =
+    process.env.SKILLPLANE_PRODUCTION_DATABASE_URL?.trim() ??
+    process.env.RAILWAY_DATABASE_URL?.trim();
   if (
     production &&
-    parsed.fingerprint === parseRailwayDatabaseUrl(production).fingerprint
+    parsed.fingerprint === parseDirectPostgresUrl(production).fingerprint
   ) {
     throw new Error("Development and production database identities must be different");
   }
@@ -79,11 +81,55 @@ export function developmentSecrets() {
   if (new Set(Object.values(values)).size !== Object.keys(values).length) {
     throw new Error("Development secrets must use independent values");
   }
+  for (const [name, value] of Object.entries(values)) {
+    const productionValue = process.env[name];
+    if (productionValue !== undefined && value === productionValue) {
+      throw new Error(`SKILLPLANE_DEV_${name} must differ from production ${name}`);
+    }
+  }
   return values;
 }
 
 export function developmentSiteKey() {
-  return requireEnvironment("PUBLIC_DEV_TURNSTILE_SITE_KEY", { minimumLength: 10 });
+  const value = requireEnvironment("PUBLIC_DEV_TURNSTILE_SITE_KEY", {
+    minimumLength: 10,
+  });
+  if (
+    process.env.PUBLIC_TURNSTILE_SITE_KEY !== undefined &&
+    value === process.env.PUBLIC_TURNSTILE_SITE_KEY
+  ) {
+    throw new Error(
+      "PUBLIC_DEV_TURNSTILE_SITE_KEY must differ from production PUBLIC_TURNSTILE_SITE_KEY",
+    );
+  }
+  return value;
+}
+
+export function developmentCloudflareEnvironment() {
+  const token = requireSecretEnvironment("SKILLPLANE_DEV_CLOUDFLARE_API_TOKEN");
+  for (const name of ["CLOUDFLARE_API_TOKEN"]) {
+    if (process.env[name] !== undefined && token === process.env[name]) {
+      throw new Error(`SKILLPLANE_DEV_CLOUDFLARE_API_TOKEN must differ from ${name}`);
+    }
+  }
+  const environment = { ...process.env, CLOUDFLARE_API_TOKEN: token };
+  for (const name of [
+    "SKILLPLANE_DEV_CLOUDFLARE_API_TOKEN",
+    "SKILLPLANE_DEV_AUTHFN_SECRET",
+    "SKILLPLANE_DEV_OAUTH_TOKEN_PEPPER",
+    "SKILLPLANE_DEV_TURNSTILE_SECRET_KEY",
+    "SKILLPLANE_DEV_DATABASE_URL",
+    "SKILLPLANE_PRODUCTION_DATABASE_URL",
+    "AUTHFN_SECRET",
+    "OAUTH_TOKEN_PEPPER",
+    "TURNSTILE_SECRET_KEY",
+    "RAILWAY_DATABASE_URL",
+    "CLOUDFLARE_API_KEY",
+    "CLOUDFLARE_EMAIL",
+  ]) {
+    Reflect.deleteProperty(environment, name);
+  }
+  return environment;
 }
 
 export async function renderDevelopmentConfigs(options = {}) {
@@ -166,9 +212,14 @@ function parseHyperdrive(output) {
   return JSON.parse(output.slice(start, end + 1));
 }
 
-export function verifyDevelopmentHyperdrive(database = developmentDatabase()) {
+export function verifyDevelopmentHyperdrive(
+  database = developmentDatabase(),
+  options = {},
+) {
   const id = requireDevelopmentHyperdriveId();
-  const record = parseHyperdrive(captureWrangler(["hyperdrive", "get", id]).stdout);
+  const record = parseHyperdrive(
+    captureWrangler(["hyperdrive", "get", id], options).stdout,
+  );
   const origin = record.origin ?? {};
   if (
     record.id !== id ||
@@ -189,16 +240,20 @@ function bucketNames(output) {
   return [...output.matchAll(/^name:\s+([^\s]+)\s*$/gmu)].map((match) => match[1]);
 }
 
-export function ensureDevelopmentBucket() {
-  const listed = captureWrangler(["r2", "bucket", "list"]).stdout;
+export function ensureDevelopmentBucket(options = {}) {
+  const listed = captureWrangler(["r2", "bucket", "list"], options).stdout;
   let created = false;
   if (!bucketNames(listed).includes(developmentBucket)) {
-    run("pnpm", ["exec", "wrangler", "r2", "bucket", "create", developmentBucket]);
+    run("pnpm", ["exec", "wrangler", "r2", "bucket", "create", developmentBucket], {
+      env: options.env,
+    });
     created = true;
   }
   const privacy = assertPrivateDevelopmentBucket(
-    captureWrangler(["r2", "bucket", "dev-url", "get", developmentBucket]).stdout,
-    captureWrangler(["r2", "bucket", "domain", "list", developmentBucket]).stdout,
+    captureWrangler(["r2", "bucket", "dev-url", "get", developmentBucket], options)
+      .stdout,
+    captureWrangler(["r2", "bucket", "domain", "list", developmentBucket], options)
+      .stdout,
   );
   return { name: developmentBucket, created, ...privacy };
 }
@@ -239,12 +294,20 @@ export async function deployDevelopment() {
   ]).stdout.trim();
   if (changes)
     throw new Error("Development deployment requires a committed clean worktree");
+  const cloudflareEnvironment = developmentCloudflareEnvironment();
   const database = developmentDatabase();
   await renderDevelopmentConfigs();
-  captureWrangler(["whoami"]);
-  const hyperdrive = verifyDevelopmentHyperdrive(database);
-  const bucket = ensureDevelopmentBucket();
-  run("pnpm", ["build"], { failureMessage: "Development monorepo build failed" });
+  captureWrangler(["whoami"], { env: cloudflareEnvironment });
+  const hyperdrive = verifyDevelopmentHyperdrive(database, {
+    env: cloudflareEnvironment,
+  });
+  const bucket = ensureDevelopmentBucket({ env: cloudflareEnvironment });
+  const buildEnvironment = { ...cloudflareEnvironment };
+  delete buildEnvironment.CLOUDFLARE_API_TOKEN;
+  run("pnpm", ["build"], {
+    env: buildEnvironment,
+    failureMessage: "Development monorepo build failed",
+  });
   const deployed = {};
   for (const [kind, worker] of Object.entries(developmentWorkers)) {
     deployed[kind] = await withDevelopmentSecrets(kind, async (secretFile) => {
@@ -262,7 +325,11 @@ export async function deployDevelopment() {
           "--message",
           `Skillplane development ${commit.slice(0, 12)}`,
         ],
-        { cwd: worker.directory, failureMessage: `${worker.name} deployment failed` },
+        {
+          cwd: worker.directory,
+          env: cloudflareEnvironment,
+          failureMessage: `${worker.name} deployment failed`,
+        },
       );
       return { worker: worker.name, host: worker.host };
     });

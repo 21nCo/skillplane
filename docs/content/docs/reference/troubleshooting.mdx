@@ -37,4 +37,4 @@ Start it with `pnpm dev:mcp` and connect to `http://127.0.0.1:5701/mcp`. The cli
 
 ## Sign-in email does not arrive locally
 
-The default `pnpm dev:app:worker` mode disables authentication. Run `pnpm local:init`, confirm Wrangler access and sender onboarding, then use `pnpm dev:app:auth` for the real Cloudflare email-OTP flow.
+The default `pnpm dev:app:worker` mode disables authentication. Run `pnpm local:init`, confirm Wrangler access and that `no-reply@auth-dev.skillplane.dev` is onboarded, then use `pnpm dev:app:auth` for the real Cloudflare email-OTP flow. Local OTP emails identify the Local environment and expected sign-in site; they never use the production sender.

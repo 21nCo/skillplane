@@ -143,7 +143,9 @@ pnpm local:oauth:configure -- \
 ```
 
 Start `pnpm dev:app:auth`, `pnpm dev:mcp`, and `pnpm local:tunnel` in separate
-terminals. Then run:
+terminals. Authenticated local startup requires the authorized development sender
+`no-reply@auth-dev.skillplane.dev`; it does not send through the production mail
+identity. Then run:
 
 ```bash
 pnpm test:local:oauth

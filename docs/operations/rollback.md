@@ -2,7 +2,7 @@
 
 Skillplane uses Cloudflare Worker version rollback for application recovery and
 forward-only Postgres migrations for data safety. A Worker rollback must never
-silently revert or mutate the Railway schema.
+silently revert or mutate the PostgreSQL schema.
 
 ## Automated rehearsal
 
@@ -17,7 +17,7 @@ The command:
 1. acquires a local exclusive rehearsal lock;
 2. verifies every active Worker still equals the recorded release version;
 3. snapshots the migration ledger plus count and order-independent full-row
-   digest for every public table over an SSL-protected direct Railway
+   digest for every public table over an SSL-protected direct PostgreSQL
    connection;
 4. rolls landing, MCP, and app to their recorded prior versions;
 5. runs the complete production smoke suite;
@@ -50,7 +50,7 @@ If the current deployment is newer than the local release record:
    app, MCP, landing order and run smoke again.
 
 Never guess a version ID, use a version from another Worker, or change the
-Railway database during a Worker rollback.
+PostgreSQL database during a Worker rollback.
 
 ## Migration incidents
 
@@ -61,7 +61,7 @@ incident:
 2. Preserve the pre-migration encrypted backup and its manifest.
 3. Prefer a corrective forward migration that retains immutable audit,
    version, context, and note history.
-4. If recovery requires restoration, create a new Railway database and follow
+4. If recovery requires restoration, create a new PostgreSQL database and follow
    `backup-restore.md`. Do not restore over the source database.
 5. Verify the recovered database, update the Hyperdrive origin, deploy, and
    smoke before switching traffic.

@@ -40,6 +40,8 @@ export async function buildApiServices(
     ? createSkillplaneSendFn({
         binding: runtime.email.binding,
         from: runtime.email.from,
+        environment: runtime.environment,
+        signInUrl: runtime.oauth.issuer,
       })
     : null;
   try {

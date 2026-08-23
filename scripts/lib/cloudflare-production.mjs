@@ -46,7 +46,7 @@ export function assertHyperdriveOriginRecord(database, expectedIdentity) {
     actual.username !== expectedIdentity.username
   ) {
     throw new Error(
-      "CLOUDFLARE_HYPERDRIVE_ID does not target the configured Railway database",
+      "CLOUDFLARE_HYPERDRIVE_ID does not target the configured production database",
     );
   }
   if (database.caching?.disabled !== true) {
@@ -56,7 +56,7 @@ export function assertHyperdriveOriginRecord(database, expectedIdentity) {
   }
   return {
     id: database.id,
-    railwayOriginMatched: true,
+    databaseOriginMatched: true,
     queryCacheDisabled: true,
   };
 }
@@ -195,8 +195,7 @@ async function validateGeneratedConfig(kind) {
   }
   const config = JSON.parse(await readFile(worker.config, "utf8"));
   const route = config.routes?.[0];
-  const routeIsValid =
-    route?.pattern === worker.host && route.custom_domain === true;
+  const routeIsValid = route?.pattern === worker.host && route.custom_domain === true;
   if (
     config.name !== worker.name ||
     config.workers_dev !== false ||

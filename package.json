@@ -53,6 +53,7 @@
     "production:secrets:init": "node scripts/init-production-secrets.mjs",
     "db:backup:production": "node --env-file-if-exists=.env.production.local scripts/production-backup.mjs",
     "db:migrate:production": "node --env-file-if-exists=.env.production.local scripts/production-migrate.mjs",
+    "db:move:production": "node --env-file-if-exists=.env.production.local scripts/migrate-production-origin.mjs",
     "db:restore:production": "node --env-file-if-exists=.env.production.local scripts/restore-production-backup.mjs",
     "db:restore": "node scripts/restore.mjs",
     "r2:orphan-cleanup": "node scripts/orphan-cleanup.mjs",

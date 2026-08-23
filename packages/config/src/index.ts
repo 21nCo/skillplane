@@ -202,15 +202,25 @@ function validateCloudflareEmailProvider(
   }
 }
 
-function parseEmailSender(value: string | undefined, missing: string[]): string | null {
-  if (
-    typeof value !== "string" ||
-    !/^(?:[^<>\r\n]+\s*<)?[^\s<>@]+@auth\.skillplane\.dev>?$/.test(value.trim())
-  ) {
+function parseEmailSender(
+  value: string | undefined,
+  environment: RuntimeEnvironment,
+  missing: string[],
+): string | null {
+  const expectedAddress =
+    environment === "production"
+      ? "no-reply@auth.skillplane.dev"
+      : "no-reply@auth-dev.skillplane.dev";
+  const normalized = value?.trim();
+  const address = normalized
+    ? (/^[^<>\r\n]+\s*<([^\s<>@]+@[^\s<>@]+)>$/.exec(normalized)?.[1] ??
+      /^([^\s<>@]+@[^\s<>@]+)$/.exec(normalized)?.[1])
+    : undefined;
+  if (!normalized || address?.toLowerCase() !== expectedAddress) {
     missing.push("SKILLPLANE_OTP_FROM");
     return null;
   }
-  return value.trim();
+  return normalized;
 }
 
 function parseSiteKey(value: string | undefined, missing: string[]): string | null {
@@ -289,7 +299,7 @@ function parseAuthConfiguration(
     "TURNSTILE_SECRET_KEY",
     missing,
   );
-  const from = parseEmailSender(bindings.SKILLPLANE_OTP_FROM, missing);
+  const from = parseEmailSender(bindings.SKILLPLANE_OTP_FROM, environment, missing);
   const siteKey = parseSiteKey(bindings.PUBLIC_TURNSTILE_SITE_KEY, missing);
   const allowedHostnames = parseAllowedHostnames(
     bindings.TURNSTILE_ALLOWED_HOSTNAMES,
@@ -397,7 +407,7 @@ export function parseOAuthEndpoints(
       (environment === "local"
         ? "http://localhost:5700"
         : environment === "preview"
-          ? "https://app.dev.skillplane.dev"
+          ? "https://app-dev.skillplane.dev"
           : "https://app.skillplane.dev"),
     "OAUTH_ISSUER",
     environment,
@@ -409,7 +419,7 @@ export function parseOAuthEndpoints(
       (environment === "local"
         ? "http://127.0.0.1:5701/mcp"
         : environment === "preview"
-          ? "https://mcp.dev.skillplane.dev/mcp"
+          ? "https://mcp-dev.skillplane.dev/mcp"
           : "https://mcp.skillplane.dev/mcp"),
     "OAUTH_RESOURCE",
     environment,
