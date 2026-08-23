@@ -382,6 +382,15 @@ export function requireCleanSourceRevision() {
   return { commit, clean: true };
 }
 
+export function assertMigrationApplicationCompatibility(migration, applicationCommit) {
+  if (migration.applicationCommit !== applicationCommit) {
+    throw new Error(
+      "The production migration and application deployment must use the same Git commit",
+    );
+  }
+  return { applicationCommit };
+}
+
 export async function assertRecentDatabaseSafetyState() {
   const database = railwayDatabase();
   let backup;
@@ -421,6 +430,8 @@ export async function assertRecentDatabaseSafetyState() {
   ) {
     throw new Error("The migration safety record does not match the production backup");
   }
+  const sourceRevision = requireCleanSourceRevision();
+  assertMigrationApplicationCompatibility(migration, sourceRevision.commit);
   return { database, backup, migration };
 }
 

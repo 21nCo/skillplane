@@ -231,6 +231,12 @@ describe("audit retention and analytics rollups", () => {
       now: new Date(firstCutoff.getTime() + 90 * 86_400_000),
     });
     expect(first.deleted).toBe(1);
+    const preserved = await rollupUtcDay(pool, {
+      day: day(early),
+      workspaceId: tenant.workspaceId,
+      preserveFullerSnapshot: true,
+    });
+    expect(preserved.sourceEvents).toBe(2);
 
     const secondCutoff = new Date(early);
     secondCutoff.setUTCDate(secondCutoff.getUTCDate() + 1);

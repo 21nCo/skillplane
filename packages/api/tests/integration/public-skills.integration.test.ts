@@ -380,18 +380,34 @@ describe("public skill discovery API", () => {
     );
 
     const statsClient = await services.database.pool.connect();
-    let afterResponse: Response;
     let expectedTotalSkills: string;
+    let snapshotTotalSkills: string;
     try {
-      await statsClient.query("BEGIN");
-      await statsClient.query("LOCK TABLE skills IN SHARE MODE");
+      await statsClient.query("BEGIN ISOLATION LEVEL REPEATABLE READ");
       const expected = await statsClient.query<{ total: string }>(
         `SELECT count(*)::text AS total
            FROM skills
           WHERE archived_at IS NULL`,
       );
       expectedTotalSkills = expected.rows[0]?.total ?? "0";
-      afterResponse = await app.request("/api/v1/stats/public");
+      const snapshotServices: ApiServices = {
+        ...services,
+        database: {
+          ...services.database,
+          pool: {
+            query: statsClient.query.bind(statsClient),
+          } as unknown as typeof services.database.pool,
+        },
+      };
+      const snapshotApp = createApiApp({
+        requestId: () => `req_public_skills_snapshot_${suffix}`,
+        getServices: async () => snapshotServices,
+      });
+      const snapshotResponse = await snapshotApp.request("/api/v1/stats/public");
+      expect(snapshotResponse.status).toBe(200);
+      snapshotTotalSkills = (
+        await data<{ readonly totalSkills: string }>(snapshotResponse)
+      ).totalSkills;
       await statsClient.query("COMMIT");
     } catch (error) {
       await statsClient.query("ROLLBACK").catch(() => undefined);
@@ -399,6 +415,7 @@ describe("public skill discovery API", () => {
     } finally {
       statsClient.release();
     }
+    const afterResponse = await app.request("/api/v1/stats/public");
     const responseText = await afterResponse.text();
     expect(afterResponse.status).toBe(200);
     expect(responseText).not.toContain(tenant.workspaceId);
@@ -421,7 +438,8 @@ describe("public skill discovery API", () => {
     expect(BigInt(workspaceSkillsAfter.rows[0]?.total ?? "0")).toBe(
       BigInt(workspaceSkillsBefore.rows[0]?.total ?? "0") + 1n,
     );
-    expect(envelope.data.totalSkills).toBe(expectedTotalSkills);
+    expect(snapshotTotalSkills).toBe(expectedTotalSkills);
+    expect(envelope.data.totalSkills).toMatch(/^(?:0|[1-9][0-9]*)$/u);
     expect(BigInt(envelope.data.agentSkillUses)).toBeGreaterThanOrEqual(
       BigInt(before.agentSkillUses) + 4n,
     );

@@ -97,13 +97,18 @@ The commands enforce these boundaries:
   Railway server major version, and no plaintext dump is written.
 - `db:migrate:production` applies committed migrations directly to Railway,
   verifies every migration hash, table, constraint, trigger, and required query
-  plan, and never uses Hyperdrive.
+  plan, records the exact application Git commit, and never uses Hyperdrive.
 - `deploy:all` refuses to start unless the matching backup is less than 24
-  hours old and verified migration state is less than two hours old. It renders
-  ignored `wrangler.generated.json` files only after validating the real
-  Hyperdrive ID. Before the first Cloudflare mutation, it reads that
-  configuration back from Cloudflare and requires its origin host, port,
-  database, and user to exactly match `RAILWAY_DATABASE_URL`.
+  hours old, verified migration state is less than two hours old, and that
+  migration was produced from the exact application commit being deployed.
+  This commit lock is required for forward-only compatibility changes such as
+  the workspace-sharded public statistics counter in migration 0019; do not
+  canary or roll back an older app binary against that migrated schema. Deploy
+  a compatible forward maintenance release instead. The command renders ignored
+  `wrangler.generated.json` files only after validating the real Hyperdrive ID.
+  Before the first Cloudflare mutation, it reads that configuration back from
+  Cloudflare and requires its origin host, port, database, and user to exactly
+  match `RAILWAY_DATABASE_URL`.
 - Worker secrets are written to a mode-`0600` temporary JSON file, supplied to
   `wrangler deploy --secrets-file`, and deleted in a `finally` block. They are
   never written to Wrangler source configuration or `.conduct`. The app

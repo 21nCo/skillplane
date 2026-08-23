@@ -274,9 +274,10 @@ async function rollupWorkspace(
           WHERE workspace_id = $1 AND day = $2::date`,
         [workspaceId, day],
       );
-      if (Number(existing.rows[0]?.source_event_count ?? 0) > eventCount) {
+      const preservedEventCount = Number(existing.rows[0]?.source_event_count ?? 0);
+      if (existing.rows[0] && preservedEventCount >= eventCount) {
         await client.query("COMMIT");
-        return eventCount;
+        return preservedEventCount;
       }
     }
     await client.query(
