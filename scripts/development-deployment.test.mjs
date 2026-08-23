@@ -10,6 +10,7 @@ import {
   developmentSecrets,
   developmentSiteKey,
   developmentWorkers,
+  productionBundleReadEnvironment,
   renderDevelopmentConfigs,
   requireDevelopmentHyperdriveId,
 } from "./lib/development-deployment.mjs";
@@ -104,6 +105,22 @@ describe("development deployment isolation", () => {
       },
       () => assert.throws(() => developmentDatabase(), /identities must be different/u),
     );
+    for (const productionVariable of [
+      "SKILLPLANE_PRODUCTION_MIGRATION_SOURCE_DATABASE_URL",
+      "RAILWAY_DATABASE_URL",
+    ]) {
+      withEnvironment(
+        {
+          SKILLPLANE_DEV_DATABASE_URL: developmentUrl,
+          SKILLPLANE_PRODUCTION_DATABASE_URL: undefined,
+          SKILLPLANE_PRODUCTION_MIGRATION_SOURCE_DATABASE_URL: undefined,
+          RAILWAY_DATABASE_URL: undefined,
+          [productionVariable]: developmentUrl,
+        },
+        () =>
+          assert.throws(() => developmentDatabase(), /identities must be different/u),
+      );
+    }
   });
 
   it("requires the development bundle bucket to remain private", () => {
@@ -187,6 +204,39 @@ describe("development deployment isolation", () => {
         assert.equal(environment.CLOUDFLARE_API_KEY, undefined);
         assert.equal(environment.CLOUDFLARE_EMAIL, undefined);
       },
+    );
+  });
+
+  it("uses a separate read-only token for production bundle reads", () => {
+    const sourceToken = "production-r2-read-token-material-1234567890";
+    const developmentToken = "development-cloudflare-token-material-1234567890";
+    withEnvironment(
+      {
+        SKILLPLANE_PRODUCTION_R2_READ_TOKEN: sourceToken,
+        SKILLPLANE_DEV_CLOUDFLARE_API_TOKEN: developmentToken,
+        SKILLPLANE_PRODUCTION_DATABASE_URL:
+          "postgresql://skillplane:secret@production.example/skillplane",
+        CLOUDFLARE_API_KEY: "legacy-key-must-not-be-inherited",
+      },
+      () => {
+        const environment = productionBundleReadEnvironment();
+        assert.equal(environment.CLOUDFLARE_API_TOKEN, sourceToken);
+        assert.equal(environment.SKILLPLANE_PRODUCTION_R2_READ_TOKEN, undefined);
+        assert.equal(environment.SKILLPLANE_DEV_CLOUDFLARE_API_TOKEN, undefined);
+        assert.equal(environment.SKILLPLANE_PRODUCTION_DATABASE_URL, undefined);
+        assert.equal(environment.CLOUDFLARE_API_KEY, undefined);
+      },
+    );
+    withEnvironment(
+      {
+        SKILLPLANE_PRODUCTION_R2_READ_TOKEN: sourceToken,
+        SKILLPLANE_DEV_CLOUDFLARE_API_TOKEN: sourceToken,
+      },
+      () =>
+        assert.throws(
+          () => productionBundleReadEnvironment(),
+          /must differ from the development Cloudflare token/u,
+        ),
     );
   });
 

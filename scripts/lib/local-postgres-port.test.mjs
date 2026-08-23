@@ -33,6 +33,14 @@ describe("local Postgres port selection", () => {
     assert.equal(selectLocalPostgresPort("6432", 5_432), "6432");
   });
 
+  it("migrates the previous default when it remains explicitly configured", () => {
+    assert.equal(
+      selectLocalPostgresPort("55432", 55_432),
+      DEFAULT_SKILLPLANE_POSTGRES_PORT,
+    );
+    assert.equal(selectLocalPostgresPort("55432", 64_321), "55432");
+  });
+
   it("updates all persisted database URLs without changing credentials", () => {
     const runtime = rebindLocalRuntimePort(
       {

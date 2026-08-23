@@ -10,6 +10,8 @@ import {
   developmentBucket,
   developmentCloudflareEnvironment,
   developmentDatabase,
+  ensureDevelopmentBucket,
+  productionBundleReadEnvironment,
 } from "./lib/development-deployment.mjs";
 import {
   isMain,
@@ -23,20 +25,6 @@ function sha256(bytes) {
 
 function md5(bytes) {
   return createHash("md5").update(bytes).digest("hex");
-}
-
-function sourceCloudflareEnvironment() {
-  const environment = { ...process.env };
-  for (const name of [
-    "SKILLPLANE_DEV_CLOUDFLARE_API_TOKEN",
-    "SKILLPLANE_DEV_AUTHFN_SECRET",
-    "SKILLPLANE_DEV_OAUTH_TOKEN_PEPPER",
-    "SKILLPLANE_DEV_TURNSTILE_SECRET_KEY",
-    "SKILLPLANE_DEV_DATABASE_URL",
-  ]) {
-    Reflect.deleteProperty(environment, name);
-  }
-  return environment;
 }
 
 function wranglerObjectGet(bucket, key, path, environment) {
@@ -213,11 +201,15 @@ export async function reconcileDevelopmentBundles(options = {}) {
     options.references ?? (await referencedBundles(developmentDatabase()));
   const getSourceObject = options.getSourceObject ?? wranglerObjectGet;
   const putTargetObject = options.putTargetObject ?? cloudflareObjectPut;
-  const sourceEnvironment = options.sourceEnvironment ?? sourceCloudflareEnvironment();
+  const sourceEnvironment =
+    options.sourceEnvironment ?? productionBundleReadEnvironment();
   const targetEnvironment =
     options.targetEnvironment ?? developmentCloudflareEnvironment();
   const targetAccountId =
     options.targetAccountId ?? cloudflareAccountId(targetEnvironment);
+  await (options.ensureTargetBucket ?? ensureDevelopmentBucket)({
+    env: targetEnvironment,
+  });
   const inventory =
     options.inventory ??
     (await cloudflareObjects(developmentBucket, targetEnvironment, targetAccountId));

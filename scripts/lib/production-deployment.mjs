@@ -157,6 +157,7 @@ export function parseDirectPostgresUrl(raw, source = "Direct PostgreSQL URL") {
     throw new Error(`${source} must not weaken SSL`);
   }
   if (!sslMode) parsed.searchParams.set("sslmode", "require");
+  const sslRootCert = parsed.searchParams.get("sslrootcert");
   // PostgreSQL 17 accepts `sslrootcert=system`, but node-postgres treats every
   // sslrootcert value as a filesystem path. Omitting this provider hint keeps
   // verify-full enabled while using Node's trusted system CA set.
@@ -176,6 +177,10 @@ export function parseDirectPostgresUrl(raw, source = "Direct PostgreSQL URL") {
     url: parsed.toString(),
     password: decodeURIComponent(parsed.password),
     identity,
+    tls: {
+      mode: parsed.searchParams.get("sslmode"),
+      rootCert: sslRootCert,
+    },
     fingerprint: sha256(
       JSON.stringify({
         host: identity.host,
@@ -184,6 +189,28 @@ export function parseDirectPostgresUrl(raw, source = "Direct PostgreSQL URL") {
       }),
     ),
   };
+}
+
+export function postgresDockerTlsArguments(database) {
+  const mode = database.tls?.mode;
+  if (!["require", "verify-ca", "verify-full"].includes(mode)) {
+    throw new Error("The PostgreSQL Docker client requires a strong TLS mode");
+  }
+  const arguments_ = ["--env", `PGSSLMODE=${mode}`];
+  if (mode === "verify-ca" || mode === "verify-full") {
+    const rootCert = database.tls?.rootCert;
+    if (!rootCert || rootCert === "system") {
+      arguments_.push("--env", "PGSSLROOTCERT=/etc/ssl/certs/ca-certificates.crt");
+    } else {
+      arguments_.push(
+        "--volume",
+        `${resolve(rootCert)}:/skillplane-tls/root.crt:ro`,
+        "--env",
+        "PGSSLROOTCERT=/skillplane-tls/root.crt",
+      );
+    }
+  }
+  return arguments_;
 }
 
 export function postgresTlsEvidence(client, serverRow = {}) {
@@ -240,7 +267,7 @@ export function productionDatabase() {
     return canonicalDatabase;
   }
   return parseDirectPostgresUrl(
-    canonical ?? legacy ?? process.env.MIGRATION_DATABASE_URL?.trim(),
+    canonical || legacy || process.env.MIGRATION_DATABASE_URL?.trim(),
     canonical
       ? "SKILLPLANE_PRODUCTION_DATABASE_URL"
       : legacy
@@ -492,6 +519,7 @@ export function sanitizeDeploymentRecord(record) {
   return JSON.parse(
     JSON.stringify(record, (key, value) => {
       if (
+        typeof value === "string" &&
         key !== "secretNames" &&
         /(?:secret|password|token|authorization|cookie|databaseUrl|connectionString)/iu.test(
           key,

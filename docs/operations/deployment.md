@@ -105,9 +105,9 @@ pnpm db:move:production -- \
 ```
 
 The command creates and verifies an encrypted source backup, restores it into
-the empty target, applies and verifies current migrations, then creates the
-fresh target backup and migration safety records required by `deploy:all`. It
-does not deploy Workers or move traffic. Remove
+the empty target, creates a fresh pre-migration target backup, then applies and
+verifies current migrations and writes the safety records required by
+`deploy:all`. It does not deploy Workers or move traffic. Remove
 `SKILLPLANE_PRODUCTION_MIGRATION_SOURCE_DATABASE_URL` after the cutover is
 accepted.
 

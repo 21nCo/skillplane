@@ -51,7 +51,18 @@ describe("production origin migration orchestration", () => {
     assert.equal(result.targetBackup, "backup-2.manifest.json");
   });
 
-  it("requires explicit source freeze and distinct source and target", async () => {
+  it("requires explicit source-freeze confirmation", async () => {
+    await assert.rejects(
+      () =>
+        migrateProductionOrigin(["--confirm-empty-database", "live_skillplane"], {
+          source: database("old_skillplane", "source"),
+          target: database("live_skillplane", "target"),
+        }),
+      /confirm-source-write-frozen.*required/u,
+    );
+  });
+
+  it("requires distinct source and target databases", async () => {
     const source = database("skillplane", "same");
     await assert.rejects(
       () =>

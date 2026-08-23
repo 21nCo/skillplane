@@ -435,26 +435,29 @@ export async function deleteRegisteredClient(
     await database.query("BEGIN");
     const locked = await database.query(
       `SELECT client_id
-         FROM authfn_oauth_clients
+        FROM authfn_oauth_clients
         WHERE client_id = $1 AND source = 'dynamic'
-        FOR UPDATE`,
+        FOR NO KEY UPDATE`,
       [clientId],
     );
     if (locked.rowCount !== 1) {
       throw new OAuthError("invalid_client", "The OAuth client is not registered");
     }
-    await database.query(
-      "DELETE FROM authfn_oauth_authorization_requests WHERE payload->>'clientId' = $1",
-      [clientId],
-    );
     const affectedUsers = await database.query<{ user_id: string }>(
       `SELECT DISTINCT user_id
          FROM (
-           SELECT user_id FROM authfn_oauth_consents WHERE client_id = $1
+           SELECT user_id
+             FROM authfn_oauth_authorization_requests
+            WHERE payload->>'clientId' = $1 AND user_id IS NOT NULL
+           UNION SELECT user_id FROM authfn_oauth_consents WHERE client_id = $1
            UNION SELECT user_id FROM authfn_oauth_authorization_codes WHERE client_id = $1
            UNION SELECT user_id FROM authfn_oauth_access_tokens WHERE client_id = $1
            UNION SELECT user_id FROM authfn_oauth_refresh_tokens WHERE client_id = $1
          ) affected`,
+      [clientId],
+    );
+    await database.query(
+      "DELETE FROM authfn_oauth_authorization_requests WHERE payload->>'clientId' = $1",
       [clientId],
     );
     await database.query(

@@ -34,6 +34,8 @@ these development identities.
 6. Create a dedicated `SKILLPLANE_DEV_CLOUDFLARE_API_TOKEN`. Do not reuse the
    production or ambient Wrangler token. Limit it to the account and zones needed
    by the development Workers, R2 bucket, Hyperdrive, and custom domains.
+7. Create `SKILLPLANE_PRODUCTION_R2_READ_TOKEN` with read-only object access to
+   `skillplane-skill-bundles`. Keep it distinct from the development token.
 
 Development and authenticated local OTP emails use the development sender, never
 the production sender. Every OTP identifies its environment and expected sign-in
@@ -46,6 +48,7 @@ its mode to `0600`:
 SKILLPLANE_DEV_DATABASE_URL=postgresql://...
 CLOUDFLARE_DEV_HYPERDRIVE_ID=...
 SKILLPLANE_DEV_CLOUDFLARE_API_TOKEN=...
+SKILLPLANE_PRODUCTION_R2_READ_TOKEN=...
 SKILLPLANE_DEV_AUTHFN_SECRET=...
 SKILLPLANE_DEV_OAUTH_TOKEN_PEPPER=...
 SKILLPLANE_DEV_TURNSTILE_SECRET_KEY=...
@@ -78,7 +81,10 @@ copies only immutable bundles referenced by the development database from the
 production bucket into the private development bucket. Before copying, it
 verifies each production object's recorded SHA-256 digest and byte size. It then
 verifies the destination key, size, and object ETag. The command is idempotent
-and never deletes objects from either bucket.
+and never deletes objects from either bucket. It creates and verifies the private
+development bucket when necessary. The production token must grant read-only
+access to `skillplane-skill-bundles`; the development token remains responsible
+for the target bucket, and the command rejects a shared token.
 
 `deploy:dev` creates the private development R2 bucket if necessary, builds the
 complete workspace, and deploys the app followed by MCP. It does not read

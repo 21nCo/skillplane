@@ -58,12 +58,16 @@ export function developmentDatabase() {
     requireEnvironment("SKILLPLANE_DEV_DATABASE_URL"),
     "SKILLPLANE_DEV_DATABASE_URL",
   );
-  const production =
-    process.env.SKILLPLANE_PRODUCTION_DATABASE_URL?.trim() ??
-    process.env.RAILWAY_DATABASE_URL?.trim();
+  const productionUrls = [
+    process.env.SKILLPLANE_PRODUCTION_DATABASE_URL?.trim(),
+    process.env.SKILLPLANE_PRODUCTION_MIGRATION_SOURCE_DATABASE_URL?.trim(),
+    process.env.RAILWAY_DATABASE_URL?.trim(),
+  ].filter(Boolean);
   if (
-    production &&
-    parsed.fingerprint === parseDirectPostgresUrl(production).fingerprint
+    productionUrls.some(
+      (productionUrl) =>
+        parsed.fingerprint === parseDirectPostgresUrl(productionUrl).fingerprint,
+    )
   ) {
     throw new Error("Development and production database identities must be different");
   }
@@ -120,9 +124,37 @@ export function developmentCloudflareEnvironment() {
     "SKILLPLANE_DEV_TURNSTILE_SECRET_KEY",
     "SKILLPLANE_DEV_DATABASE_URL",
     "SKILLPLANE_PRODUCTION_DATABASE_URL",
+    "SKILLPLANE_PRODUCTION_MIGRATION_SOURCE_DATABASE_URL",
+    "SKILLPLANE_PRODUCTION_R2_READ_TOKEN",
     "AUTHFN_SECRET",
     "OAUTH_TOKEN_PEPPER",
     "TURNSTILE_SECRET_KEY",
+    "RAILWAY_DATABASE_URL",
+    "CLOUDFLARE_API_KEY",
+    "CLOUDFLARE_EMAIL",
+  ]) {
+    Reflect.deleteProperty(environment, name);
+  }
+  return environment;
+}
+
+export function productionBundleReadEnvironment() {
+  const token = requireSecretEnvironment("SKILLPLANE_PRODUCTION_R2_READ_TOKEN");
+  if (token === process.env.SKILLPLANE_DEV_CLOUDFLARE_API_TOKEN) {
+    throw new Error(
+      "SKILLPLANE_PRODUCTION_R2_READ_TOKEN must differ from the development Cloudflare token",
+    );
+  }
+  const environment = { ...process.env, CLOUDFLARE_API_TOKEN: token };
+  for (const name of [
+    "SKILLPLANE_PRODUCTION_R2_READ_TOKEN",
+    "SKILLPLANE_DEV_CLOUDFLARE_API_TOKEN",
+    "SKILLPLANE_DEV_AUTHFN_SECRET",
+    "SKILLPLANE_DEV_OAUTH_TOKEN_PEPPER",
+    "SKILLPLANE_DEV_TURNSTILE_SECRET_KEY",
+    "SKILLPLANE_DEV_DATABASE_URL",
+    "SKILLPLANE_PRODUCTION_DATABASE_URL",
+    "SKILLPLANE_PRODUCTION_MIGRATION_SOURCE_DATABASE_URL",
     "RAILWAY_DATABASE_URL",
     "CLOUDFLARE_API_KEY",
     "CLOUDFLARE_EMAIL",

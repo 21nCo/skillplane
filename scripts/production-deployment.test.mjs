@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   parseDirectPostgresUrl,
+  postgresDockerTlsArguments,
   postgresTlsEvidence,
   productionDatabase,
+  sanitizeDeploymentRecord,
 } from "./lib/production-deployment.mjs";
 
 function withEnvironment(overrides, operation) {
@@ -43,6 +45,27 @@ describe("provider-neutral production database configuration", () => {
 
     assert.equal(new URL(database.url).searchParams.get("sslmode"), "verify-full");
     assert.equal(new URL(database.url).searchParams.has("sslrootcert"), false);
+    assert.deepEqual(postgresDockerTlsArguments(database), [
+      "--env",
+      "PGSSLMODE=verify-full",
+      "--env",
+      "PGSSLROOTCERT=/etc/ssl/certs/ca-certificates.crt",
+    ]);
+  });
+
+  it("mounts an explicit CA certificate for containerized database tools", () => {
+    const database = parseDirectPostgresUrl(
+      "postgresql://skillplane:secret@db.provider.example/live?sslmode=verify-ca&sslrootcert=/secure/provider-ca.pem",
+    );
+
+    assert.deepEqual(postgresDockerTlsArguments(database), [
+      "--env",
+      "PGSSLMODE=verify-ca",
+      "--volume",
+      "/secure/provider-ca.pem:/skillplane-tls/root.crt:ro",
+      "--env",
+      "PGSSLROOTCERT=/skillplane-tls/root.crt",
+    ]);
   });
 
   it("accepts certificate-authorized TLS when a provider proxy hides pg_stat_ssl", () => {
@@ -112,6 +135,28 @@ describe("provider-neutral production database configuration", () => {
         MIGRATION_DATABASE_URL: undefined,
       },
       () => assert.equal(productionDatabase().identity.host, "new.provider.example"),
+    );
+  });
+
+  it("treats a blank canonical URL as unset", () => {
+    withEnvironment(
+      {
+        SKILLPLANE_PRODUCTION_DATABASE_URL: "   ",
+        RAILWAY_DATABASE_URL:
+          "postgresql://skillplane:legacy-secret@legacy.provider.example/live",
+        MIGRATION_DATABASE_URL: undefined,
+      },
+      () => assert.equal(productionDatabase().identity.host, "legacy.provider.example"),
+    );
+  });
+
+  it("preserves non-secret status values in sanitized deployment records", () => {
+    assert.deepEqual(
+      sanitizeDeploymentRecord({
+        runtimeDirectDatabaseUrl: false,
+        databaseUrl: "postgresql://secret",
+      }),
+      { runtimeDirectDatabaseUrl: false, databaseUrl: "[redacted]" },
     );
   });
 });

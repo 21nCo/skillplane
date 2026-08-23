@@ -10,7 +10,7 @@
   "topology": {
     "databaseOrigin": "postgresql",
     "workerDatabasePath": "cloudflare-hyperdrive",
-    "runtimeDirectDatabaseUrl": "[redacted]",
+    "runtimeDirectDatabaseUrl": false,
     "hosts": {
       "landing": "https://skillplane.dev",
       "app": "https://app.skillplane.dev",

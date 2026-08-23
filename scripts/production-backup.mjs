@@ -8,6 +8,7 @@ import { Pool } from "pg";
 import {
   isMain,
   portablePath,
+  postgresDockerTlsArguments,
   postgresTlsEvidence,
   productionStateDirectory,
   productionDatabase,
@@ -106,7 +107,7 @@ function dumpPostgres(database, snapshot, clientImage) {
   }
   const script = [
     "IFS= read -r PGPASSWORD",
-    "export PGPASSWORD PGSSLMODE=require",
+    "export PGPASSWORD",
     'exec pg_dump "$@"',
   ].join("\n");
   const result = spawnSync(
@@ -115,6 +116,7 @@ function dumpPostgres(database, snapshot, clientImage) {
       "run",
       "--rm",
       "-i",
+      ...postgresDockerTlsArguments(database),
       clientImage,
       "sh",
       "-ec",
