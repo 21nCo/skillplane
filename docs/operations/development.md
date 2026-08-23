@@ -32,9 +32,12 @@ these development identities.
 
 The development environment intentionally reuses this already-onboarded sender
 address because Cloudflare Email Service bindings require an authorized sender.
-The `Skillplane Dev` display name and the `app.dev.skillplane.dev` authorization
-host distinguish development OTP messages; database, OAuth secrets, and runtime
-resources remain isolated from production.
+This is an explicit shared boundary with production: the sender address, delivery
+domain, Email Service binding, and sender reputation are not isolated. The
+`Skillplane Dev` display name helps recipients identify development OTPs, while
+the development Worker and host, database, Hyperdrive, R2 bucket, Turnstile
+widget, and OAuth secrets provide the compensating runtime isolation. Do not use
+the sender identity alone to determine which environment issued an OTP.
 
 Put the following values in the ignored `.env.development.local` file and set
 its mode to `0600`:

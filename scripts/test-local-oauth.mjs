@@ -95,25 +95,46 @@ function callbackServer(state) {
   });
 }
 
-function openBrowser(url) {
-  const child = spawn("open", [url], { detached: true, stdio: "ignore" });
+export function browserLaunchCommand(url, platform = process.platform) {
+  if (platform === "darwin") return { command: "open", args: [url] };
+  if (platform === "win32") {
+    return { command: "rundll32", args: ["url.dll,FileProtocolHandler", url] };
+  }
+  return { command: "xdg-open", args: [url] };
+}
+
+export function openBrowser(url) {
+  const { command, args } = browserLaunchCommand(url);
+  const child = spawn(command, args, { detached: true, stdio: "ignore" });
+  child.once("error", (error) => {
+    process.stderr.write(
+      `Could not open a browser automatically (${error.message}). Open this URL manually:\n${url}\n`,
+    );
+  });
   child.unref();
 }
 
-export async function waitForOAuthCallback(callback, timeoutMilliseconds = 600_000) {
+export async function waitForOAuthCallback(
+  callback,
+  timeoutMilliseconds = 600_000,
+  timers = { setTimeout, clearTimeout },
+) {
   let timeout;
   try {
     return await Promise.race([
       callback,
       new Promise((_, reject) => {
-        timeout = setTimeout(
-          () => reject(new Error("OAuth browser flow timed out after 10 minutes")),
+        timeout = timers.setTimeout(
+          () =>
+            reject(
+              new Error(`OAuth browser flow timed out after ${timeoutMilliseconds} ms`),
+            ),
           timeoutMilliseconds,
         );
       }),
     ]);
   } finally {
-    clearTimeout(timeout);
+    if (timeout !== undefined) timers.clearTimeout(timeout);
   }
 }
 
