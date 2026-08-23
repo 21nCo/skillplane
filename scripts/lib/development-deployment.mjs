@@ -226,7 +226,6 @@ export function verifyDevelopmentHyperdrive(
     origin.host?.toLowerCase() !== database.identity.host ||
     String(origin.port ?? "5432") !== database.identity.port ||
     origin.database !== database.identity.database ||
-    origin.user !== database.identity.username ||
     record.caching?.disabled !== true
   ) {
     throw new Error(

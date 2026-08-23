@@ -137,7 +137,8 @@ The commands enforce these boundaries:
   ignored `wrangler.generated.json` files only after validating the real
   Hyperdrive ID. Before the first Cloudflare mutation, it reads that
   configuration back from Cloudflare and requires its origin host, port,
-  database, and user to exactly match `SKILLPLANE_PRODUCTION_DATABASE_URL`.
+  and database to exactly match `SKILLPLANE_PRODUCTION_DATABASE_URL`. The
+  Hyperdrive origin may use a separate least-privilege database role.
 - Worker secrets are written to a mode-`0600` temporary JSON file, supplied to
   `wrangler deploy --secrets-file`, and deleted in a `finally` block. They are
   never written to Wrangler source configuration or `.conduct`. The app

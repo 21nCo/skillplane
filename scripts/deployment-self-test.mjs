@@ -89,7 +89,7 @@ const hyperdrive = assertHyperdriveOriginRecord(
       host: postgres.identity.host,
       port: Number(postgres.identity.port),
       database: postgres.identity.database,
-      user: postgres.identity.username,
+      user: "dedicated_hyperdrive_runtime",
     },
     caching: { disabled: true },
   },
