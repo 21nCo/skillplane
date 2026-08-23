@@ -246,6 +246,7 @@ async function rollupWorkspace(
   pool: Pool,
   workspaceId: string,
   day: string,
+  preserveFullerSnapshot: boolean,
 ): Promise<number> {
   const client = await pool.connect();
   try {
@@ -264,6 +265,20 @@ async function rollupWorkspace(
           AND occurred_at < $2::date + interval '1 day'`,
       [workspaceId, day],
     );
+    const row = source.rows[0];
+    const eventCount = Number(row?.event_count ?? 0);
+    if (preserveFullerSnapshot) {
+      const existing = await client.query<{ source_event_count: string }>(
+        `SELECT source_event_count
+           FROM analytics_rollup_runs
+          WHERE workspace_id = $1 AND day = $2::date`,
+        [workspaceId, day],
+      );
+      if (Number(existing.rows[0]?.source_event_count ?? 0) > eventCount) {
+        await client.query("COMMIT");
+        return eventCount;
+      }
+    }
     await client.query(
       "DELETE FROM analytics_daily_dimensions WHERE workspace_id = $1 AND day = $2",
       [workspaceId, day],
@@ -274,8 +289,6 @@ async function rollupWorkspace(
     );
     await insertSummary(client, workspaceId, day);
     await insertDimensions(client, workspaceId, day);
-    const row = source.rows[0];
-    const eventCount = Number(row?.event_count ?? 0);
     await client.query(
       `INSERT INTO analytics_rollup_runs (
          workspace_id, day, source_event_count, source_latest_event_at,
@@ -300,7 +313,11 @@ async function rollupWorkspace(
 
 export async function rollupUtcDay(
   pool: Pool,
-  options: { readonly day: string; readonly workspaceId?: string },
+  options: {
+    readonly day: string;
+    readonly workspaceId?: string;
+    readonly preserveFullerSnapshot?: boolean;
+  },
 ): Promise<RollupResult> {
   const day = requireDay(options.day);
   const workspaces = options.workspaceId
@@ -324,7 +341,12 @@ export async function rollupUtcDay(
       ).rows;
   let sourceEvents = 0;
   for (const row of workspaces) {
-    sourceEvents += await rollupWorkspace(pool, row.workspace_id, day);
+    sourceEvents += await rollupWorkspace(
+      pool,
+      row.workspace_id,
+      day,
+      options.preserveFullerSnapshot ?? false,
+    );
   }
   return { day, workspaces: workspaces.length, sourceEvents };
 }

@@ -309,6 +309,18 @@ describe("public skill discovery API", () => {
       readonly agentSkillUses: string;
       readonly generatedAt: string;
     }>(beforeResponse);
+    const countersBefore = await services.database.pool.query<{
+      id: string;
+      agent_skill_uses: string;
+    }>(
+      `SELECT id, agent_skill_uses::text
+         FROM public_stats_counters
+        WHERE id IN ('global', $1)`,
+      [tenant.workspaceId],
+    );
+    const counterBefore = new Map(
+      countersBefore.rows.map((row) => [row.id, BigInt(row.agent_skill_uses)]),
+    );
 
     const measured = await createSkill({
       slug: `agent-usage-${suffix}`,
@@ -350,7 +362,43 @@ describe("public skill discovery API", () => {
     await recordUse(3, 11);
     await recordUse(4, 12);
 
-    const afterResponse = await app.request("/api/v1/stats/public");
+    const countersAfter = await services.database.pool.query<{
+      id: string;
+      agent_skill_uses: string;
+    }>(
+      `SELECT id, agent_skill_uses::text
+         FROM public_stats_counters
+        WHERE id IN ('global', $1)`,
+      [tenant.workspaceId],
+    );
+    const counterAfter = new Map(
+      countersAfter.rows.map((row) => [row.id, BigInt(row.agent_skill_uses)]),
+    );
+    expect(counterAfter.get("global")).toBe(counterBefore.get("global"));
+    expect(counterAfter.get(tenant.workspaceId)).toBe(
+      (counterBefore.get(tenant.workspaceId) ?? 0n) + 4n,
+    );
+
+    const statsClient = await services.database.pool.connect();
+    let afterResponse: Response;
+    let expectedTotalSkills: string;
+    try {
+      await statsClient.query("BEGIN");
+      await statsClient.query("LOCK TABLE skills IN SHARE MODE");
+      const expected = await statsClient.query<{ total: string }>(
+        `SELECT count(*)::text AS total
+           FROM skills
+          WHERE archived_at IS NULL`,
+      );
+      expectedTotalSkills = expected.rows[0]?.total ?? "0";
+      afterResponse = await app.request("/api/v1/stats/public");
+      await statsClient.query("COMMIT");
+    } catch (error) {
+      await statsClient.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      statsClient.release();
+    }
     const responseText = await afterResponse.text();
     expect(afterResponse.status).toBe(200);
     expect(responseText).not.toContain(tenant.workspaceId);
@@ -373,9 +421,7 @@ describe("public skill discovery API", () => {
     expect(BigInt(workspaceSkillsAfter.rows[0]?.total ?? "0")).toBe(
       BigInt(workspaceSkillsBefore.rows[0]?.total ?? "0") + 1n,
     );
-    expect(BigInt(envelope.data.totalSkills)).toBeGreaterThanOrEqual(
-      BigInt(workspaceSkillsAfter.rows[0]?.total ?? "0"),
-    );
+    expect(envelope.data.totalSkills).toBe(expectedTotalSkills);
     expect(BigInt(envelope.data.agentSkillUses)).toBeGreaterThanOrEqual(
       BigInt(before.agentSkillUses) + 4n,
     );

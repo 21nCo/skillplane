@@ -87,6 +87,14 @@ describe("service-principal authentication", () => {
       },
       validRow,
     ],
+    [
+      "a mismatched credential version",
+      {
+        ...validIdentity,
+        metadata: { ...validIdentity.metadata, credentialVersion: 2 },
+      },
+      validRow,
+    ],
     ["an owner-role service principal", validIdentity, { ...validRow, role: "owner" }],
     [
       "an invalid service-principal scope",

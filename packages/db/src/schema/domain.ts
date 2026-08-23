@@ -524,7 +524,6 @@ export const publicStatsCounters = pgTable(
     updatedAt: utcTimestamp("updated_at").notNull().defaultNow(),
   },
   (table) => [
-    check("public_stats_counters_global_id", sql`${table.id} = 'global'`),
     check(
       "public_stats_counters_agent_skill_uses_nonnegative",
       sql`${table.agentSkillUses} >= 0`,
@@ -735,6 +734,7 @@ export const domainSchema = {
   contextNoteRevisions,
   amendmentReviews,
   auditEvents,
+  publicStatsCounters,
   analyticsDaily,
   analyticsDailySummary,
   analyticsDailyDimensions,

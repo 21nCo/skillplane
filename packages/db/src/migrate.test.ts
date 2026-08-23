@@ -24,6 +24,7 @@ describe("migration chain", () => {
       "0016_authfn_service_principal_keys.sql",
       "0017_public_stats_index.sql",
       "0018_public_stats_counter.sql",
+      "0019_public_stats_counter_shards.sql",
     ]);
     expect(new Set(migrations.map((migration) => migration.sha256)).size).toBe(
       migrations.length,

@@ -25,10 +25,10 @@ export async function readPublicStats(pool: Pool): Promise<PublicStats> {
         WHERE archived_at IS NULL
      )
      SELECT active_skills.total::text AS total_skills,
-            counters.agent_skill_uses::text AS agent_skill_uses
+            COALESCE(sum(counters.agent_skill_uses), 0)::text AS agent_skill_uses
        FROM active_skills
-       CROSS JOIN public_stats_counters counters
-      WHERE counters.id = 'global'`,
+       LEFT JOIN public_stats_counters counters ON true
+      GROUP BY active_skills.total`,
   );
   const row = result.rows[0];
   if (!row) throw new Error("Public statistics query returned no rows");
