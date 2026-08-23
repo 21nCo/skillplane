@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { ALL_SKILLS_ROLLUP_ID } from "./rollups.js";
 import { readPublicStats } from "./public-stats.js";
 
 describe("public statistics", () => {
@@ -17,7 +16,9 @@ describe("public statistics", () => {
       totalSkills: "9007199254740992",
       agentSkillUses: "18446744073709551615",
     });
-    expect(query).toHaveBeenCalledWith(expect.any(String), [ALL_SKILLS_ROLLUP_ID]);
+    expect(query).toHaveBeenCalledOnce();
+    expect(query.mock.calls[0]?.[0]).toContain("public_stats_counters");
+    expect(query.mock.calls[0]?.[0]).not.toContain("audit_events");
   });
 
   it("rejects malformed or negative database counts", async () => {

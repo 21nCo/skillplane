@@ -1,11 +1,13 @@
 import {
   bigint,
+  check,
   customType,
   date,
   doublePrecision,
   index,
   integer,
   jsonb,
+  numeric,
   pgTable,
   primaryKey,
   text,
@@ -511,6 +513,22 @@ export const auditEvents = pgTable(
     index("audit_events_public_agent_skill_use_idx")
       .on(table.workspaceId, table.occurredAt, table.id)
       .where(sql`${table.action} = 'skill_retrieve' AND ${table.outcome} = 'success'`),
+  ],
+);
+
+export const publicStatsCounters = pgTable(
+  "public_stats_counters",
+  {
+    id: text("id").primaryKey(),
+    agentSkillUses: numeric("agent_skill_uses").notNull().default("0"),
+    updatedAt: utcTimestamp("updated_at").notNull().defaultNow(),
+  },
+  (table) => [
+    check("public_stats_counters_global_id", sql`${table.id} = 'global'`),
+    check(
+      "public_stats_counters_agent_skill_uses_nonnegative",
+      sql`${table.agentSkillUses} >= 0`,
+    ),
   ],
 );
 

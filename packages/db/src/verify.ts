@@ -28,6 +28,7 @@ export const REQUIRED_TABLES = [
   "context_note_revisions",
   "context_notes",
   "idempotency_records",
+  "public_stats_counters",
   "service_principals",
   "skill_contexts",
   "skill_version_files",
@@ -50,6 +51,7 @@ const REQUIRED_CONSTRAINTS = [
 
 const REQUIRED_TRIGGERS = [
   "audit_events_immutable",
+  "audit_events_public_stats_counter_insert",
   "context_knowledge_revisions_immutable",
   "context_note_revisions_immutable",
   "context_notes_current_revision_valid",

@@ -232,6 +232,12 @@ export function registerServicePrincipalRoutes(app: Hono<ApiEnvironment>): void 
         });
         throw error;
       });
+    let clientReleased = false;
+    const releaseClient = () => {
+      if (clientReleased) return;
+      client.release();
+      clientReleased = true;
+    };
     try {
       await client.query("BEGIN");
       const result = await client.query<ServicePrincipalRow>(
@@ -280,6 +286,7 @@ export function registerServicePrincipalRoutes(app: Hono<ApiEnvironment>): void 
       );
     } catch (error) {
       await client.query("ROLLBACK").catch(() => undefined);
+      releaseClient();
       await revokeAuthFnCredentialBestEffort(services, {
         keyId: issued.keyId,
         actorId: principal.userId,
@@ -300,7 +307,7 @@ export function registerServicePrincipalRoutes(app: Hono<ApiEnvironment>): void 
       }
       throw error;
     } finally {
-      client.release();
+      releaseClient();
     }
   });
 
@@ -363,6 +370,12 @@ export function registerServicePrincipalRoutes(app: Hono<ApiEnvironment>): void 
           });
           throw error;
         });
+      let clientReleased = false;
+      const releaseClient = () => {
+        if (clientReleased) return;
+        client.release();
+        clientReleased = true;
+      };
       let previousAuthFnKeyId: string | null;
       let row: ServicePrincipalRow;
       try {
@@ -432,6 +445,7 @@ export function registerServicePrincipalRoutes(app: Hono<ApiEnvironment>): void 
         row = updated;
       } catch (error) {
         await client.query("ROLLBACK").catch(() => undefined);
+        releaseClient();
         await revokeAuthFnCredentialBestEffort(services, {
           keyId: issued.keyId,
           actorId: principal.userId,
@@ -442,7 +456,7 @@ export function registerServicePrincipalRoutes(app: Hono<ApiEnvironment>): void 
         });
         throw error;
       } finally {
-        client.release();
+        releaseClient();
       }
       if (previousAuthFnKeyId) {
         await revokeAuthFnCredentialBestEffort(services, {

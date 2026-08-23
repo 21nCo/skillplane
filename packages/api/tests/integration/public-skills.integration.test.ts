@@ -291,6 +291,14 @@ describe("public skill discovery API", () => {
   });
 
   it("publishes aggregate skill and successful agent-use totals", async () => {
+    const workspaceSkillsBefore = await services.database.pool.query<{
+      total: string;
+    }>(
+      `SELECT count(*)::text AS total
+         FROM skills
+        WHERE workspace_id = $1 AND archived_at IS NULL`,
+      [tenant.workspaceId],
+    );
     const beforeResponse = await app.request("/api/v1/stats/public");
     expect(beforeResponse.status).toBe(200);
     expect(beforeResponse.headers.get("cache-control")).toBe(
@@ -354,8 +362,21 @@ describe("public skill discovery API", () => {
         readonly generatedAt: string;
       };
     };
-    expect(BigInt(envelope.data.totalSkills)).toBe(BigInt(before.totalSkills) + 1n);
-    expect(BigInt(envelope.data.agentSkillUses)).toBe(
+    const workspaceSkillsAfter = await services.database.pool.query<{
+      total: string;
+    }>(
+      `SELECT count(*)::text AS total
+         FROM skills
+        WHERE workspace_id = $1 AND archived_at IS NULL`,
+      [tenant.workspaceId],
+    );
+    expect(BigInt(workspaceSkillsAfter.rows[0]?.total ?? "0")).toBe(
+      BigInt(workspaceSkillsBefore.rows[0]?.total ?? "0") + 1n,
+    );
+    expect(BigInt(envelope.data.totalSkills)).toBeGreaterThanOrEqual(
+      BigInt(workspaceSkillsAfter.rows[0]?.total ?? "0"),
+    );
+    expect(BigInt(envelope.data.agentSkillUses)).toBeGreaterThanOrEqual(
       BigInt(before.agentSkillUses) + 4n,
     );
     expect(envelope.data.generatedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/u);

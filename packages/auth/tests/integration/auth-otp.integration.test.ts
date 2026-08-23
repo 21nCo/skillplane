@@ -31,24 +31,29 @@ describe("Skillplane email OTP integration", () => {
       emit: () => Promise.reject(new Error("observability unavailable")),
     });
 
-    const created = await active.server.apiKeys.create({
-      ownerUserId: "user:issuing-administrator",
-      name: "Skillplane agent: review",
-      scopes: ["skills:read"],
-      metadata: { kind: "skillplane_service_principal" },
-      expiresAt: null,
-      requestId: "req_emit_failure",
-    });
+    let keyId: string | undefined;
+    try {
+      const created = await active.server.apiKeys.create({
+        ownerUserId: "user:issuing-administrator",
+        name: "Skillplane agent: review",
+        scopes: ["skills:read"],
+        metadata: { kind: "skillplane_service_principal" },
+        expiresAt: null,
+        requestId: "req_emit_failure",
+      });
+      keyId = created.keyId;
 
-    expect(created.secret).toMatch(/^spk_/u);
-    const stored = await active.pool.query<{ user_id: string | null }>(
-      "SELECT user_id FROM authfn_api_keys WHERE id = $1",
-      [created.keyId],
-    );
-    expect(stored.rows[0]?.user_id).toBeNull();
-    await active.pool.query("DELETE FROM authfn_api_keys WHERE id = $1", [
-      created.keyId,
-    ]);
+      expect(created.secret).toMatch(/^spk_/u);
+      const stored = await active.pool.query<{ user_id: string | null }>(
+        "SELECT user_id FROM authfn_api_keys WHERE id = $1",
+        [created.keyId],
+      );
+      expect(stored.rows[0]?.user_id).toBeNull();
+    } finally {
+      if (keyId) {
+        await active.pool.query("DELETE FROM authfn_api_keys WHERE id = $1", [keyId]);
+      }
+    }
   });
 
   it("delivers through SendFn, stores only a hash, and persists a secure session", async () => {
