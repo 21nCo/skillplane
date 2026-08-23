@@ -297,8 +297,8 @@ describe("public skill discovery API", () => {
       "public, max-age=60, s-maxage=300, stale-while-revalidate=3600",
     );
     const before = await data<{
-      readonly totalSkills: number;
-      readonly agentSkillUses: number;
+      readonly totalSkills: string;
+      readonly agentSkillUses: string;
       readonly generatedAt: string;
     }>(beforeResponse);
 
@@ -339,7 +339,8 @@ describe("public skill discovery API", () => {
       day,
       workspaceId: tenant.workspaceId,
     });
-    await recordUse(3, 12);
+    await recordUse(3, 11);
+    await recordUse(4, 12);
 
     const afterResponse = await app.request("/api/v1/stats/public");
     const responseText = await afterResponse.text();
@@ -348,13 +349,15 @@ describe("public skill discovery API", () => {
     expect(responseText).not.toContain(measured.skill.id);
     const envelope = JSON.parse(responseText) as {
       readonly data: {
-        readonly totalSkills: number;
-        readonly agentSkillUses: number;
+        readonly totalSkills: string;
+        readonly agentSkillUses: string;
         readonly generatedAt: string;
       };
     };
-    expect(envelope.data.totalSkills).toBe(before.totalSkills + 1);
-    expect(envelope.data.agentSkillUses).toBe(before.agentSkillUses + 3);
+    expect(BigInt(envelope.data.totalSkills)).toBe(BigInt(before.totalSkills) + 1n);
+    expect(BigInt(envelope.data.agentSkillUses)).toBe(
+      BigInt(before.agentSkillUses) + 4n,
+    );
     expect(envelope.data.generatedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/u);
   });
 });

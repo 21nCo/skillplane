@@ -1,3 +1,4 @@
+import { AuthFnApiKeyRevokedError } from "@authfn/core";
 import {
   InvalidAuthenticationError,
   SERVICE_PRINCIPAL_SCOPES,
@@ -65,7 +66,15 @@ async function authenticateServiceCredential(
   services: ApiServices,
   token: string,
 ): Promise<AuthenticatedServicePrincipal> {
-  const identity = await services.auth.apiKeys.authenticate(token).catch(() => null);
+  let identity: Awaited<ReturnType<typeof services.auth.apiKeys.authenticate>>;
+  try {
+    identity = await services.auth.apiKeys.authenticate(token);
+  } catch (error) {
+    if (error instanceof AuthFnApiKeyRevokedError) {
+      throw new InvalidAuthenticationError();
+    }
+    throw error;
+  }
   if (identity?.type !== "api-key" || identity.actorType !== "api-key") {
     throw new InvalidAuthenticationError();
   }
@@ -88,7 +97,10 @@ async function authenticateServiceCredential(
   }
   const principal = servicePrincipal(row);
   await services.database.pool.query(
-    "UPDATE service_principals SET last_used_at = now() WHERE id = $1",
+    `UPDATE service_principals
+        SET last_used_at = now()
+      WHERE id = $1
+        AND (last_used_at IS NULL OR last_used_at < now() - interval '1 minute')`,
     [row.id],
   );
   return {
@@ -103,8 +115,10 @@ export async function authenticateServicePrincipalRequest(
   services: ApiServices,
 ): Promise<AuthenticatedServicePrincipal | null> {
   const authorization = request.headers.get("authorization")?.trim();
-  if (!authorization?.startsWith("Bearer ")) return null;
-  const token = authorization.slice("Bearer ".length).trim();
+  if (!authorization) return null;
+  const bearer = /^Bearer[ \t]+/iu.exec(authorization);
+  if (!bearer) return null;
+  const token = authorization.slice(bearer[0].length).trim();
   if (token.startsWith("spk_")) {
     return authenticateServiceCredential(services, token);
   }

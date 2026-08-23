@@ -7,7 +7,7 @@ import {
   type TenantFixture,
 } from "@skillplane/testing";
 import { Pool } from "pg";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 let databaseUrl: string;
 let services: ApiServices;
@@ -305,9 +305,10 @@ describe("tenancy integration", () => {
       authfn_api_key_id: string;
       secret_hash: string;
       metadata: Record<string, unknown>;
+      user_id: string | null;
     }>(
       `SELECT sp.authfn_api_key_id, key.secret_hash,
-              key.metadata
+              key.metadata, key.user_id
          FROM service_principals sp
          JOIN authfn_api_keys key ON key.id = sp.authfn_api_key_id
         WHERE sp.id = $1`,
@@ -317,6 +318,7 @@ describe("tenancy integration", () => {
     if (!persistedCredential) throw new Error("AuthFn credential was not persisted");
     serviceAuthFnKeyId = persistedCredential.authfn_api_key_id;
     expect(persistedCredential.secret_hash).toMatch(/^[a-f0-9]{64}$/u);
+    expect(persistedCredential.user_id).toBeNull();
     expect(JSON.stringify(persistedCredential)).not.toContain(serviceCredential);
     expect(persistedCredential.metadata).toMatchObject({
       kind: "skillplane_service_principal",
@@ -380,6 +382,45 @@ describe("tenancy integration", () => {
     });
     expect(replacementAccess.status).toBe(200);
 
+    const revokeSpy = vi
+      .spyOn(services.auth.apiKeys, "revoke")
+      .mockRejectedValueOnce(new Error("simulated AuthFn cleanup outage"));
+    const reconciledRotation = await app.request(
+      `/api/v1/workspaces/${organizationId}/service-principals/${servicePrincipalId}/rotate`,
+      {
+        method: "POST",
+        headers: {
+          ...headers(owner),
+          "content-type": "application/json",
+        },
+        body: "{}",
+      },
+    );
+    expect(reconciledRotation.status).toBe(200);
+    const reconciled = await json<{ data: { credential: string } }>(reconciledRotation);
+    serviceCredential = reconciled.data.credential;
+    revokeSpy.mockRestore();
+
+    const cleanupAudit = await services.database.pool.query<{
+      error_code: string | null;
+      metadata: Record<string, unknown>;
+    }>(
+      `SELECT metadata->>'errorCode' AS error_code, metadata
+         FROM audit_events
+        WHERE resource_id = $1
+          AND event_type = 'service_principal.authfn_key_cleanup_failed'
+        ORDER BY occurred_at DESC, id DESC
+        LIMIT 1`,
+      [servicePrincipalId],
+    );
+    expect(cleanupAudit.rows[0]).toMatchObject({
+      error_code: "AUTHFN_KEY_CLEANUP_FAILED",
+      metadata: expect.objectContaining({ cleanupReason: "rotation" }),
+    });
+
+    const deleteRevokeSpy = vi
+      .spyOn(services.auth.apiKeys, "revoke")
+      .mockRejectedValueOnce(new Error("simulated AuthFn revocation outage"));
     const revoked = await app.request(
       `/api/v1/workspaces/${organizationId}/service-principals/${servicePrincipalId}`,
       {
@@ -388,6 +429,40 @@ describe("tenancy integration", () => {
       },
     );
     expect(revoked.status).toBe(200);
+    deleteRevokeSpy.mockRestore();
+
+    const locallyRevoked = await services.database.pool.query<{
+      revoked_at: Date | null;
+    }>("SELECT revoked_at FROM service_principals WHERE id = $1", [servicePrincipalId]);
+    expect(locallyRevoked.rows[0]?.revoked_at).toBeInstanceOf(Date);
+    const revocationCleanupAudit = await services.database.pool.query<{
+      metadata: Record<string, unknown>;
+    }>(
+      `SELECT metadata
+         FROM audit_events
+        WHERE resource_id = $1
+          AND event_type = 'service_principal.authfn_key_cleanup_failed'
+          AND metadata->>'cleanupReason' = 'revocation'
+        ORDER BY occurred_at DESC, id DESC
+        LIMIT 1`,
+      [servicePrincipalId],
+    );
+    expect(revocationCleanupAudit.rows[0]?.metadata).toMatchObject({
+      cleanupReason: "revocation",
+    });
+
+    const currentKey = await services.database.pool.query<{
+      authfn_api_key_id: string | null;
+    }>("SELECT authfn_api_key_id FROM service_principals WHERE id = $1", [
+      servicePrincipalId,
+    ]);
+    const currentKeyId = currentKey.rows[0]?.authfn_api_key_id;
+    if (!currentKeyId) throw new Error("Service principal key was not retained");
+    await services.auth.apiKeys.revoke({
+      keyId: currentKeyId,
+      actorId: owner.userId,
+      requestId: "req_cleanup_revocation",
+    });
 
     const denied = await app.request("/api/v1/skills/search?q=review", {
       headers: {
@@ -426,6 +501,7 @@ describe("tenancy integration", () => {
     );
     expect(lifecycleAudit.rows.map((event) => event.event_type)).toEqual([
       "service_principal.created",
+      "service_principal.credential_rotated",
       "service_principal.credential_rotated",
       "service_principal.revoked",
     ]);

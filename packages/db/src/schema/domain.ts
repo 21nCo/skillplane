@@ -135,7 +135,9 @@ export const servicePrincipals = pgTable(
     updatedAt: utcTimestamp("updated_at").notNull().defaultNow(),
   },
   (table) => [
-    uniqueIndex("service_principals_authfn_api_key_unique").on(table.authfnApiKeyId),
+    uniqueIndex("service_principals_authfn_api_key_unique")
+      .on(table.authfnApiKeyId)
+      .where(sql`${table.authfnApiKeyId} IS NOT NULL`),
     uniqueIndex("service_principals_workspace_name_unique").on(
       table.workspaceId,
       table.name,

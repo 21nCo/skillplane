@@ -1,6 +1,7 @@
 import type { Pool, PoolClient } from "pg";
 
 const DAY = /^\d{4}-\d{2}-\d{2}$/u;
+export const ALL_SKILLS_ROLLUP_ID = "";
 const DIMENSION_TYPES = [
   ["agent", "agent"],
   ["model", "model"],
@@ -29,7 +30,7 @@ async function insertSummary(
 ): Promise<void> {
   await client.query(
     `WITH source AS (
-       SELECT event.*, NULLIF(event.metadata->>'skillId', '') AS event_skill_id,
+       SELECT event.*, NULLIF(event.metadata->>'skillId', $3) AS event_skill_id,
               CASE
                 WHEN event.metadata->>'latencyMs' ~ '^[0-9]+(?:\\.[0-9]+)?$'
                 THEN (event.metadata->>'latencyMs')::double precision
@@ -44,7 +45,7 @@ async function insertSummary(
           AND event.occurred_at < $2::date + interval '1 day'
      ),
      grouped AS (
-       SELECT COALESCE(event_skill_id, '') AS skill_id,
+       SELECT COALESCE(event_skill_id, $3) AS skill_id,
               count(*) AS event_count,
               count(*) FILTER (
                 WHERE is_retrieval AND outcome = 'success'
@@ -93,7 +94,7 @@ async function insertSummary(
         GROUP BY event_skill_id
      ),
      workspace_total AS (
-       SELECT ''::text AS skill_id,
+       SELECT $3::text AS skill_id,
               count(*) AS event_count,
               count(*) FILTER (
                 WHERE is_retrieval AND outcome = 'success'
@@ -141,7 +142,7 @@ async function insertSummary(
            ON skill.workspace_id = $1 AND skill.id = source.event_skill_id
      ),
      combined AS (
-       SELECT * FROM grouped WHERE skill_id <> ''
+       SELECT * FROM grouped WHERE skill_id <> $3
        UNION ALL
        SELECT * FROM workspace_total
      )
@@ -158,7 +159,7 @@ async function insertSummary(
             latency_p50_ms, latency_p95_ms, current_version_retrieval_count,
             versioned_retrieval_count
        FROM combined`,
-    [workspaceId, day],
+    [workspaceId, day, ALL_SKILLS_ROLLUP_ID],
   );
 }
 
@@ -170,7 +171,7 @@ async function insertDimensions(
   for (const [type, column] of DIMENSION_TYPES) {
     await client.query(
       `WITH source AS (
-         SELECT event.*, COALESCE(event.metadata->>'skillId', '') AS skill_id
+         SELECT event.*, COALESCE(event.metadata->>'skillId', $4) AS skill_id
            FROM audit_events event
           WHERE event.workspace_id = $1
             AND event.occurred_at >= $2::date
@@ -185,10 +186,10 @@ async function insertDimensions(
                 count(DISTINCT actor_type || ':' || actor_id)
                   AS unique_principal_count
            FROM source
-          WHERE skill_id <> ''
+          WHERE skill_id <> $4
           GROUP BY skill_id, ${column}
          UNION ALL
-         SELECT '', ${column}::text,
+         SELECT $4, ${column}::text,
                 count(*),
                 count(*) FILTER (WHERE outcome <> 'success'),
                 count(DISTINCT actor_type || ':' || actor_id)
@@ -202,12 +203,12 @@ async function insertDimensions(
        SELECT $1, $2::date, skill_id, $3, dimension_value,
               event_count, failure_count, unique_principal_count
          FROM rows`,
-      [workspaceId, day, type],
+      [workspaceId, day, type, ALL_SKILLS_ROLLUP_ID],
     );
   }
   await client.query(
     `WITH source AS (
-       SELECT event.*, COALESCE(event.metadata->>'skillId', '') AS skill_id,
+       SELECT event.*, COALESCE(event.metadata->>'skillId', $3) AS skill_id,
               event.metadata->>'versionId' AS dimension_value
          FROM audit_events event
         WHERE event.workspace_id = $1
@@ -221,10 +222,10 @@ async function insertDimensions(
               count(DISTINCT actor_type || ':' || actor_id)
                 AS unique_principal_count
          FROM source
-        WHERE skill_id <> ''
+        WHERE skill_id <> $3
         GROUP BY skill_id, dimension_value
        UNION ALL
-       SELECT '', dimension_value, count(*),
+       SELECT $3, dimension_value, count(*),
               count(*) FILTER (WHERE outcome <> 'success'),
               count(DISTINCT actor_type || ':' || actor_id)
          FROM source
@@ -237,7 +238,7 @@ async function insertDimensions(
      SELECT $1, $2::date, skill_id, 'version', dimension_value,
             event_count, failure_count, unique_principal_count
        FROM rows`,
-    [workspaceId, day],
+    [workspaceId, day, ALL_SKILLS_ROLLUP_ID],
   );
 }
 
