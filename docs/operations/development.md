@@ -66,11 +66,19 @@ rejects copied development values.
 ```bash
 pnpm deploy:check
 pnpm db:migrate:dev
+pnpm r2:sync:dev
 pnpm deploy:dev:render
 pnpm deploy:dev
 pnpm smoke:dev
 pnpm test:dev:oauth
 ```
+
+Run `r2:sync:dev` after restoring or copying database data into development. It
+copies only immutable bundles referenced by the development database from the
+production bucket into the private development bucket. Before copying, it
+verifies each production object's recorded SHA-256 digest and byte size. It then
+verifies the destination key, size, and object ETag. The command is idempotent
+and never deletes objects from either bucket.
 
 `deploy:dev` creates the private development R2 bucket if necessary, builds the
 complete workspace, and deploys the app followed by MCP. It does not read

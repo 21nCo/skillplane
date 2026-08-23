@@ -57,6 +57,7 @@
     "db:restore:production": "node --env-file-if-exists=.env.production.local scripts/restore-production-backup.mjs",
     "db:restore": "node scripts/restore.mjs",
     "r2:orphan-cleanup": "node scripts/orphan-cleanup.mjs",
+    "r2:sync:dev": "node --env-file-if-exists=.env.development.local scripts/reconcile-development-bundles.mjs",
     "analytics:rollup": "pnpm --filter @skillplane/observability build && node scripts/analytics-rollup.mjs",
     "audit:retention": "pnpm --filter @skillplane/observability build && node scripts/audit-retention.mjs",
     "services:wait": "node scripts/wait-for-services.mjs",
