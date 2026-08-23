@@ -143,16 +143,20 @@ describe("OAuth 2.1 authorization server integration", () => {
       error: "invalid_client",
     });
     const audit = await environment.services.database.pool.query<{
+      actor_id: string;
+      actor_type: string;
       event_type: string;
       resource_id: string;
     }>(
-      `SELECT event_type, resource_id
+      `SELECT actor_id, actor_type, event_type, resource_id
          FROM audit_events
         WHERE event_type = 'oauth.client.deleted' AND resource_id = $1`,
       [disposable.clientId],
     );
     expect(audit.rows).toEqual([
       {
+        actor_id: "system:oauth-client-registry",
+        actor_type: "system",
         event_type: "oauth.client.deleted",
         resource_id: disposable.clientId,
       },

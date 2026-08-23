@@ -189,7 +189,6 @@ export async function testLocalOAuth(options = {}) {
       await fetch(authorizationMetadata.registration_endpoint, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        signal: AbortSignal.timeout(15_000),
         body: JSON.stringify({
           client_name: "Skillplane local OAuth verifier",
           redirect_uris: [callback.redirectUri],

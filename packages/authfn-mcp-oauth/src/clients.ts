@@ -433,6 +433,16 @@ export async function deleteRegisteredClient(
   const database = await runtime.pool.connect();
   try {
     await database.query("BEGIN");
+    const locked = await database.query(
+      `SELECT client_id
+         FROM authfn_oauth_clients
+        WHERE client_id = $1 AND source = 'dynamic'
+        FOR UPDATE`,
+      [clientId],
+    );
+    if (locked.rowCount !== 1) {
+      throw new OAuthError("invalid_client", "The OAuth client is not registered");
+    }
     await database.query(
       "DELETE FROM authfn_oauth_authorization_requests WHERE payload->>'clientId' = $1",
       [clientId],
