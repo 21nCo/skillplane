@@ -94,7 +94,22 @@ export async function renderDevelopmentConfigs(options = {}) {
     const template = JSON.parse(await readFile(worker.template, "utf8"));
     const config = {
       ...template,
-      $schema: "../node_modules/wrangler/config-schema.json",
+      $schema: options.absoluteEntryPaths
+        ? resolve(root, "node_modules", "wrangler", "config-schema.json")
+        : "../node_modules/wrangler/config-schema.json",
+      ...(options.absoluteEntryPaths
+        ? {
+            main: resolve(worker.directory, template.main),
+            ...(template.assets
+              ? {
+                  assets: {
+                    ...template.assets,
+                    directory: resolve(worker.directory, template.assets.directory),
+                  },
+                }
+              : {}),
+          }
+        : {}),
       hyperdrive: [{ binding: "HYPERDRIVE", id: hyperdriveId }],
       vars: {
         ...template.vars,

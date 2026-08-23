@@ -157,36 +157,56 @@ export async function startWorkspaceBrowserHarness(): Promise<WorkspaceBrowserHa
   });
   const port = await listen(server);
   const origin = `http://localhost:${port}`;
-  const services = await buildApiServices({
-    RUNTIME_ENV: "local",
-    DATABASE_ADAPTER: "postgres",
-    AUTH_MODE: "otp",
-    DATABASE_URL: databaseUrl,
-    SKILL_BUNDLES: new TestObjectStorage(),
-    OAUTH_ISSUER: origin,
-    OAUTH_RESOURCE: `${origin}/mcp`,
-    EMAIL_PROVIDER: "cloudflare-email",
-    AUTHFN_SECRET: "workspace-browser-authfn-secret-32-characters",
-    TURNSTILE_SECRET_KEY: "workspace-browser-turnstile-secret-value",
-    TURNSTILE_ALLOWED_HOSTNAMES: "localhost",
-    PUBLIC_TURNSTILE_SITE_KEY: "workspace-browser-site-key",
-    SKILLPLANE_OTP_FROM: "Skillplane <no-reply@auth.skillplane.dev>",
-    SEND_EMAIL: {
-      send(message) {
-        messages.push(message);
-        return Promise.resolve({ messageId: `cf_workspace_${messages.length}` });
-      },
-    },
-  });
-  apiState.value = createApiApp({
-    requestId: () => `req_workspace_${crypto.randomUUID()}`,
-    getServices: async () => services,
-  });
-  await services.database.pool.query(
-    `INSERT INTO workspace_memberships (id, workspace_id, user_id, role)
-     VALUES ($1, $2, $3, 'viewer')`,
-    [`membership:${suffix}:browser-viewer`, fixture.workspaceId, invitedFixture.userId],
-  );
+  const services = await (async () => {
+    let initialized: Awaited<ReturnType<typeof buildApiServices>> | undefined;
+    try {
+      const built = await buildApiServices({
+        RUNTIME_ENV: "local",
+        DATABASE_ADAPTER: "postgres",
+        AUTH_MODE: "otp",
+        DATABASE_URL: databaseUrl,
+        SKILL_BUNDLES: new TestObjectStorage(),
+        OAUTH_ISSUER: origin,
+        OAUTH_RESOURCE: `${origin}/mcp`,
+        EMAIL_PROVIDER: "cloudflare-email",
+        AUTHFN_SECRET: "workspace-browser-authfn-secret-32-characters",
+        TURNSTILE_SECRET_KEY: "workspace-browser-turnstile-secret-value",
+        TURNSTILE_ALLOWED_HOSTNAMES: "localhost",
+        PUBLIC_TURNSTILE_SITE_KEY: "workspace-browser-site-key",
+        SKILLPLANE_OTP_FROM: "Skillplane <no-reply@auth.skillplane.dev>",
+        SEND_EMAIL: {
+          send(message) {
+            messages.push(message);
+            return Promise.resolve({ messageId: `cf_workspace_${messages.length}` });
+          },
+        },
+      });
+      initialized = built;
+      apiState.value = createApiApp({
+        requestId: () => `req_workspace_${crypto.randomUUID()}`,
+        getServices: async () => built,
+      });
+      await built.database.pool.query(
+        `INSERT INTO workspace_memberships (id, workspace_id, user_id, role)
+         VALUES ($1, $2, $3, 'viewer')`,
+        [
+          `membership:${suffix}:browser-viewer`,
+          fixture.workspaceId,
+          invitedFixture.userId,
+        ],
+      );
+      return built;
+    } catch (error) {
+      await closeHttpServer(server).catch(() => undefined);
+      await vite.close().catch(() => undefined);
+      await initialized?.datafn.close().catch(() => undefined);
+      await initialized?.email?.close().catch(() => undefined);
+      await initialized?.database.close().catch(() => undefined);
+      await purgeTenantFixture(databaseUrl, suffix).catch(() => undefined);
+      await purgeTenantFixture(databaseUrl, invitedSuffix).catch(() => undefined);
+      throw error;
+    }
+  })();
   let observabilitySeeded = false;
 
   return {

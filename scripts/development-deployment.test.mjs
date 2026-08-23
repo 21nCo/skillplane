@@ -72,14 +72,17 @@ describe("development deployment isolation", () => {
 
   it("allocates collision-free config dry-run paths", () => {
     const first = developmentDryRunPaths("first-invocation");
-    const second = developmentDryRunPaths("second-invocation");
+    const second = developmentDryRunPaths();
 
     assert.notEqual(first.outputDirectory, second.outputDirectory);
     for (const kind of Object.keys(developmentWorkers)) {
       assert.notEqual(first.outputPaths[kind], second.outputPaths[kind]);
       assert.match(
         first.outputPaths[kind],
-        new RegExp(`wrangler\\.development-self-test-first-invocation\\.json$`, "u"),
+        new RegExp(
+          `\\.data/development-config-dry-run/first-invocation/${kind}/wrangler\\.json$`,
+          "u",
+        ),
       );
     }
   });

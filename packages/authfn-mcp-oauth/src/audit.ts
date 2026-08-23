@@ -79,3 +79,50 @@ export async function writeOAuthAudit(
       : {}),
   });
 }
+
+export async function writeOAuthClientDeletionAudit(
+  client: PoolClient,
+  runtime: OAuthRuntime,
+  input: {
+    readonly clientId: string;
+    readonly requestId: string;
+    readonly affectedUserIds: readonly string[];
+  },
+): Promise<void> {
+  const memberships =
+    input.affectedUserIds.length > 0
+      ? await client.query<{ workspace_id: string }>(
+          `SELECT DISTINCT ON (m.user_id) w.id AS workspace_id
+             FROM workspace_memberships m
+             JOIN workspaces w ON w.id = m.workspace_id
+            WHERE m.user_id = ANY($1::text[])
+            ORDER BY m.user_id, (w.kind = 'personal') DESC, m.created_at, m.id`,
+          [[...new Set(input.affectedUserIds)]],
+        )
+      : { rows: [] };
+  for (const workspaceId of new Set(memberships.rows.map((row) => row.workspace_id))) {
+    await writeAuditEvent(client, {
+      id: id("audit:", runtime.randomBytes),
+      workspaceId,
+      eventType: "oauth.client.deleted",
+      action: "oauth.client.delete",
+      outcome: "success",
+      actorType: "service_principal",
+      actorId: input.clientId,
+      requestId: input.requestId,
+      resourceType: "oauth_client",
+      resourceId: input.clientId,
+      channel: "oauth",
+      retentionClass: "permanent",
+      metadata: { affectedUserCount: input.affectedUserIds.length },
+    });
+  }
+  await runtime.emit({
+    type: "oauth.client.deleted",
+    requestId: input.requestId,
+    outcome: "success",
+    actorId: input.clientId,
+    clientId: input.clientId,
+    metadata: { affectedUserCount: input.affectedUserIds.length },
+  });
+}

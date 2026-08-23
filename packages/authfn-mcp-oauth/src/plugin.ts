@@ -386,6 +386,7 @@ export function createAuthFnMcpOAuthPlugin(
               runtime,
               clientId,
               request.headers.get("authorization"),
+              request,
             );
             return new Response(null, { status: 204, headers: noStoreHeaders() });
           } catch (error) {

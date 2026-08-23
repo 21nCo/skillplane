@@ -25,8 +25,11 @@ describe("development database migration", () => {
       assert.equal(call.options.env.DATABASE_URL, "");
     }
     assert.deepEqual(
-      calls.map((call) => call.arguments_.at(-1)),
-      ["migrate", "verify"],
+      calls.map((call) => call.arguments_),
+      [
+        ["--filter", "@skillplane/db", "migrate"],
+        ["--filter", "@skillplane/db", "verify"],
+      ],
     );
   });
 });

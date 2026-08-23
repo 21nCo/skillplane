@@ -177,6 +177,9 @@ export async function testLocalOAuth(options = {}) {
   let clientId;
   let registrationAccessToken;
   let registrationClientUri;
+  let primaryError;
+  let cleanupError;
+  let verificationResult;
   const client = new Client({
     name: "skillplane-local-oauth-verifier",
     version: "1.0.0",
@@ -186,6 +189,7 @@ export async function testLocalOAuth(options = {}) {
       await fetch(authorizationMetadata.registration_endpoint, {
         method: "POST",
         headers: { "content-type": "application/json" },
+        signal: AbortSignal.timeout(15_000),
         body: JSON.stringify({
           client_name: "Skillplane local OAuth verifier",
           redirect_uris: [callback.redirectUri],
@@ -232,6 +236,7 @@ export async function testLocalOAuth(options = {}) {
       await fetch(authorizationMetadata.token_endpoint, {
         method: "POST",
         headers: { "content-type": "application/x-www-form-urlencoded" },
+        signal: AbortSignal.timeout(15_000),
         body: new URLSearchParams({
           grant_type: "authorization_code",
           client_id: clientId,
@@ -282,7 +287,7 @@ export async function testLocalOAuth(options = {}) {
       },
     });
     assert(result.isError !== true, "Authenticated workspaces_list failed");
-    return {
+    verificationResult = {
       ok: true,
       checkedAt: new Date().toISOString(),
       issuer: configured.issuer,
@@ -295,29 +300,75 @@ export async function testLocalOAuth(options = {}) {
       },
       mcp: { authenticated: true, toolCount: tools.tools.length, workspacesList: true },
     };
+  } catch (error) {
+    primaryError = error;
   } finally {
-    await client.close().catch(() => undefined);
-    await callback.close().catch(() => undefined);
-    try {
+    const cleanupErrors = [];
+    const cleanup = async (operation) => {
+      try {
+        await operation();
+      } catch (error) {
+        cleanupErrors.push(
+          error instanceof Error ? error : new Error("OAuth cleanup failed"),
+        );
+      }
+    };
+    await cleanup(() => client.close());
+    await cleanup(() => callback.close());
+    await cleanup(async () => {
       const revocationToken = refreshToken ?? token;
       if (revocationToken && authorizationMetadata.revocation_endpoint) {
         const response = await fetch(authorizationMetadata.revocation_endpoint, {
           method: "POST",
           headers: { "content-type": "application/x-www-form-urlencoded" },
           body: new URLSearchParams({ token: revocationToken, client_id: clientId }),
+          signal: AbortSignal.timeout(15_000),
         });
         assert(response.ok, "OAuth token revocation failed");
+        if (refreshToken) {
+          const verification = await fetch(authorizationMetadata.token_endpoint, {
+            method: "POST",
+            headers: { "content-type": "application/x-www-form-urlencoded" },
+            body: new URLSearchParams({
+              grant_type: "refresh_token",
+              refresh_token: refreshToken,
+              client_id: clientId,
+            }),
+            signal: AbortSignal.timeout(15_000),
+          });
+          const body = await verification.json().catch(() => null);
+          assert(
+            verification.status === 400 && body?.error === "invalid_grant",
+            "OAuth refresh token remained usable after revocation",
+          );
+        }
       }
-    } finally {
+    });
+    await cleanup(async () => {
       if (registrationClientUri && registrationAccessToken) {
         const response = await fetch(registrationClientUri, {
           method: "DELETE",
           headers: { authorization: `Bearer ${registrationAccessToken}` },
+          signal: AbortSignal.timeout(15_000),
         });
         assert(response.status === 204, "OAuth client cleanup failed");
       }
+    });
+    if (cleanupErrors.length > 0) {
+      cleanupError = new AggregateError(
+        cleanupErrors,
+        "OAuth verification cleanup failed",
+      );
+      if (primaryError) {
+        process.stderr.write(
+          `${cleanupError.message}: ${cleanupErrors.map((error) => error.message).join("; ")}\n`,
+        );
+      }
     }
   }
+  if (primaryError) throw primaryError;
+  if (cleanupError) throw cleanupError;
+  return verificationResult;
 }
 
 if (isMain(import.meta.url)) {

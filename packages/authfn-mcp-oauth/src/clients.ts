@@ -2,6 +2,7 @@ import { isIP } from "node:net";
 import type { PoolClient } from "pg";
 import { consumeRateLimit } from "@skillplane/db";
 import { isOAuthScope, type OAuthRuntime } from "./config.js";
+import { oauthRequestId, writeOAuthClientDeletionAudit } from "./audit.js";
 import { OAuthError } from "./errors.js";
 import { id, keyedHash, randomOpaqueSecret, secureEqual } from "./tokens.js";
 
@@ -426,6 +427,7 @@ export async function deleteRegisteredClient(
   runtime: OAuthRuntime,
   clientId: string,
   bearer: string | null,
+  request: Request,
 ): Promise<void> {
   await requireRegistrationAccess(runtime, clientId, bearer);
   const database = await runtime.pool.connect();
@@ -435,6 +437,20 @@ export async function deleteRegisteredClient(
       "DELETE FROM authfn_oauth_authorization_requests WHERE payload->>'clientId' = $1",
       [clientId],
     );
+    const affectedUsers = await database.query<{ user_id: string }>(
+      `SELECT DISTINCT user_id
+         FROM (
+           SELECT user_id FROM authfn_oauth_consents WHERE client_id = $1
+           UNION SELECT user_id FROM authfn_oauth_authorization_codes WHERE client_id = $1
+           UNION SELECT user_id FROM authfn_oauth_access_tokens WHERE client_id = $1
+           UNION SELECT user_id FROM authfn_oauth_refresh_tokens WHERE client_id = $1
+         ) affected`,
+      [clientId],
+    );
+    await database.query(
+      "UPDATE authfn_oauth_refresh_tokens SET parent_id = NULL WHERE client_id = $1",
+      [clientId],
+    );
     const deleted = await database.query(
       "DELETE FROM authfn_oauth_clients WHERE client_id = $1 AND source = 'dynamic'",
       [clientId],
@@ -442,6 +458,11 @@ export async function deleteRegisteredClient(
     if (deleted.rowCount !== 1) {
       throw new OAuthError("invalid_client", "The OAuth client is not registered");
     }
+    await writeOAuthClientDeletionAudit(database, runtime, {
+      clientId,
+      requestId: oauthRequestId(request),
+      affectedUserIds: affectedUsers.rows.map((row) => row.user_id),
+    });
     await database.query("COMMIT");
   } catch (error) {
     await database.query("ROLLBACK");

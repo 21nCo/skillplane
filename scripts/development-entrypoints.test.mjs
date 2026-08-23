@@ -25,7 +25,7 @@ describe("local and development command entrypoints", () => {
     const result = spawnSync(
       process.execPath,
       ["--input-type=module", "--eval", source],
-      { cwd: root, encoding: "utf8" },
+      { cwd: root, encoding: "utf8", timeout: 30_000 },
     );
 
     assert.equal(result.status, 0, result.stderr);

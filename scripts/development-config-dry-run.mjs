@@ -10,12 +10,18 @@ import {
 import { isMain, root, run } from "./lib/production-deployment.mjs";
 
 export function developmentDryRunPaths(identifier = randomUUID()) {
+  const outputDirectory = resolve(
+    root,
+    ".data",
+    "development-config-dry-run",
+    identifier,
+  );
   return {
-    outputDirectory: resolve(root, ".data", "development-config-dry-run", identifier),
+    outputDirectory,
     outputPaths: Object.fromEntries(
-      Object.entries(developmentWorkers).map(([kind, worker]) => [
+      Object.keys(developmentWorkers).map((kind) => [
         kind,
-        resolve(worker.directory, `wrangler.development-self-test-${identifier}.json`),
+        resolve(outputDirectory, kind, "wrangler.json"),
       ]),
     ),
   };
@@ -28,6 +34,7 @@ export async function developmentConfigDryRun() {
       hyperdriveId: "d".repeat(32),
       siteKey: "development-self-test-site-key",
       outputPaths,
+      absoluteEntryPaths: true,
     });
     run("pnpm", ["--filter", "@skillplane/config", "build"], {
       failureMessage: "Development config package build failed",
@@ -44,7 +51,7 @@ export async function developmentConfigDryRun() {
           "--dry-run",
           "--strict",
           "--outdir",
-          resolve(outputDirectory, kind),
+          resolve(outputDirectory, kind, "bundle"),
         ],
         {
           cwd: worker.directory,
