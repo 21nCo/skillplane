@@ -27,5 +27,12 @@ describe("production migration and application compatibility", () => {
       () => assertMigrationApplicationCompatibility({}, "a".repeat(40)),
       /same Git commit/u,
     );
+    assert.throws(
+      () =>
+        assertMigrationApplicationCompatibility({
+          applicationCommit: "a".repeat(40),
+        }),
+      /same Git commit/u,
+    );
   });
 });
