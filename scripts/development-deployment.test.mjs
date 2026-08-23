@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  assertPrivateDevelopmentBucket,
   developmentBucket,
   developmentIssuer,
   developmentResource,
@@ -13,6 +14,7 @@ import {
   productionResource,
   workers,
 } from "./lib/production-deployment.mjs";
+import { developmentDryRunPaths } from "./development-config-dry-run.mjs";
 
 describe("development deployment isolation", () => {
   it("renders two isolated development Workers without production identities", async () => {
@@ -40,5 +42,45 @@ describe("development deployment isolation", () => {
   it("rejects missing or malformed development Hyperdrive IDs", () => {
     assert.throws(() => requireDevelopmentHyperdriveId(""), /32-character/u);
     assert.throws(() => requireDevelopmentHyperdriveId("production"), /32-character/u);
+  });
+
+  it("requires the development bundle bucket to remain private", () => {
+    assert.deepEqual(
+      assertPrivateDevelopmentBucket(
+        "Public access via the r2.dev URL is disabled.",
+        "There are no custom domains connected to this bucket.",
+      ),
+      { private: true, r2DevDisabled: true, customDomainCount: 0 },
+    );
+    assert.throws(
+      () =>
+        assertPrivateDevelopmentBucket(
+          "Public access via the r2.dev URL is enabled.",
+          "There are no custom domains connected to this bucket.",
+        ),
+      /r2\.dev URL must remain disabled/u,
+    );
+    assert.throws(
+      () =>
+        assertPrivateDevelopmentBucket(
+          "Public access via the r2.dev URL is disabled.",
+          "dev-assets.example.test",
+        ),
+      /must not expose a custom domain/u,
+    );
+  });
+
+  it("allocates collision-free config dry-run paths", () => {
+    const first = developmentDryRunPaths("first-invocation");
+    const second = developmentDryRunPaths("second-invocation");
+
+    assert.notEqual(first.outputDirectory, second.outputDirectory);
+    for (const kind of Object.keys(developmentWorkers)) {
+      assert.notEqual(first.outputPaths[kind], second.outputPaths[kind]);
+      assert.match(
+        first.outputPaths[kind],
+        new RegExp(`wrangler\\.development-self-test-first-invocation\\.json$`, "u"),
+      );
+    }
   });
 });

@@ -5,6 +5,8 @@ import { resolve } from "node:path";
 import {
   isMain,
   portablePath,
+  productionIssuer,
+  productionResource,
   publicTurnstileSiteKey,
   requireHyperdriveId,
   root,
@@ -55,8 +57,8 @@ function validateRenderedConfig(name, config, hyperdriveId) {
     throw new Error(`The ${name} production binding inventory is incomplete`);
   }
   if (
-    config.vars?.OAUTH_ISSUER !== "https://app.skillplane.dev" ||
-    config.vars?.OAUTH_RESOURCE !== "https://mcp.skillplane.dev/mcp"
+    config.vars?.OAUTH_ISSUER !== productionIssuer ||
+    config.vars?.OAUTH_RESOURCE !== productionResource
   ) {
     throw new Error(`The ${name} production OAuth identity is not canonical`);
   }

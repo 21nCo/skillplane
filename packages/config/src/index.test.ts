@@ -95,6 +95,41 @@ describe("parseRuntimeConfig", () => {
     });
   });
 
+  it("uses the canonical preview OAuth defaults without explicit overrides", () => {
+    const config = parseRuntimeConfig(
+      productionBindings({
+        RUNTIME_ENV: "preview",
+        OAUTH_ISSUER: undefined,
+        OAUTH_RESOURCE: undefined,
+        TURNSTILE_ALLOWED_HOSTNAMES: "app.dev.skillplane.dev",
+      }),
+    );
+
+    expect(config.oauth).toMatchObject({
+      issuer: "https://app.dev.skillplane.dev",
+      resource: "https://mcp.dev.skillplane.dev/mcp",
+    });
+  });
+
+  it("rejects non-canonical OAuth endpoint paths", () => {
+    expect(() =>
+      parseRuntimeConfig({
+        RUNTIME_ENV: "local",
+        DATABASE_ADAPTER: "postgres",
+        DATABASE_URL: "postgresql://skillplane:fixture@127.0.0.1:5432/skillplane",
+        AUTH_MODE: "disabled",
+        SKILL_BUNDLES: objectStorage,
+        OAUTH_ISSUER: "https://app.local.skillplane.dev/prefix",
+        OAUTH_RESOURCE: "https://mcp.local.skillplane.dev/mcp/extra",
+      }),
+    ).toThrowError(
+      expect.objectContaining({
+        code: "CONFIG_INVALID",
+        fields: ["OAUTH_ISSUER", "OAUTH_RESOURCE"],
+      }),
+    );
+  });
+
   it("rejects non-production OAuth identities in production", () => {
     expect(() =>
       parseRuntimeConfig(

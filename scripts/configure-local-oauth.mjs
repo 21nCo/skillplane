@@ -4,6 +4,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { updateWorkerDevelopmentVariables } from "./lib/local-worker-vars.mjs";
+import { isMain } from "./lib/production-deployment.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const statePath = join(root, ".data", "local-oauth.json");
@@ -30,6 +31,9 @@ function canonicalHttps(value, label, path = undefined) {
     throw new Error(
       `${label} must be an absolute HTTPS URL without credentials, query, or fragment`,
     );
+  }
+  if (path === undefined && parsed.pathname !== "/") {
+    throw new Error(`${label} must use the origin root without a path`);
   }
   if (path !== undefined) parsed.pathname = path;
   return parsed.toString().replace(/\/$/u, "");
@@ -100,6 +104,6 @@ export function normalizeLocalOAuthUrls(appUrl, mcpUrl) {
   return { issuer, resource };
 }
 
-if (fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+if (isMain(import.meta.url)) {
   process.stdout.write(`${JSON.stringify(await configureLocalOAuth(), null, 2)}\n`);
 }

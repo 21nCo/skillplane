@@ -1,20 +1,19 @@
 #!/usr/bin/env node
 
-import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { developmentDatabase } from "./lib/development-deployment.mjs";
-import { root, run } from "./lib/production-deployment.mjs";
+import { isMain, root, run } from "./lib/production-deployment.mjs";
 
-export function migrateDevelopment() {
-  const database = developmentDatabase();
-  run("pnpm", ["--filter", "@skillplane/db", "migrate"], {
+export function migrateDevelopment(options = {}) {
+  const database = options.database ?? developmentDatabase();
+  const execute = options.run ?? run;
+  execute("pnpm", ["--filter", "@skillplane/db", "migrate"], {
     cwd: root,
     env: { ...process.env, MIGRATION_DATABASE_URL: database.url, DATABASE_URL: "" },
     failureMessage: "Development database migration failed",
   });
-  run("pnpm", ["--filter", "@skillplane/db", "verify"], {
+  execute("pnpm", ["--filter", "@skillplane/db", "verify"], {
     cwd: root,
-    env: { ...process.env, DATABASE_URL: database.url, MIGRATION_DATABASE_URL: "" },
+    env: { ...process.env, MIGRATION_DATABASE_URL: database.url, DATABASE_URL: "" },
     failureMessage: "Development database verification failed",
   });
   return {
@@ -24,6 +23,6 @@ export function migrateDevelopment() {
   };
 }
 
-if (fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+if (isMain(import.meta.url)) {
   process.stdout.write(`${JSON.stringify(migrateDevelopment(), null, 2)}\n`);
 }

@@ -5,7 +5,12 @@ import {
 } from "@authfn/core";
 import { consumeRateLimit } from "@skillplane/db";
 import { authorize, consentDetails, decideConsent } from "./authorization.js";
-import { getRegisteredClient, registerClient, resolveClient } from "./clients.js";
+import {
+  deleteRegisteredClient,
+  getRegisteredClient,
+  registerClient,
+  resolveClient,
+} from "./clients.js";
 import {
   normalizeOAuthConfig,
   type AuthFnMcpOAuthConfig,
@@ -357,6 +362,32 @@ export function createAuthFnMcpOAuthPlugin(
               grant_types: ["authorization_code", "refresh_token"],
               response_types: ["code"],
             });
+          } catch (error) {
+            return oauthErrorResponse(error);
+          }
+        },
+      },
+      {
+        method: "DELETE",
+        path: "/oauth/register/:clientId",
+        meta:
+          createAuthFnRouteMeta(
+            "oauthDeleteRegistration",
+            "Delete a dynamically registered OAuth client",
+            { mode: "none" },
+          ) ?? {},
+        handler: async (
+          request,
+          context: { readonly params: Readonly<Record<string, string>> },
+        ) => {
+          try {
+            const clientId = decodeURIComponent(context.params.clientId ?? "");
+            await deleteRegisteredClient(
+              runtime,
+              clientId,
+              request.headers.get("authorization"),
+            );
+            return new Response(null, { status: 204, headers: noStoreHeaders() });
           } catch (error) {
             return oauthErrorResponse(error);
           }

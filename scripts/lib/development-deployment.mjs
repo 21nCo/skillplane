@@ -176,11 +176,26 @@ function bucketNames(output) {
 
 export function ensureDevelopmentBucket() {
   const listed = captureWrangler(["r2", "bucket", "list"]).stdout;
+  let created = false;
   if (!bucketNames(listed).includes(developmentBucket)) {
     run("pnpm", ["exec", "wrangler", "r2", "bucket", "create", developmentBucket]);
-    return { name: developmentBucket, created: true };
+    created = true;
   }
-  return { name: developmentBucket, created: false };
+  const privacy = assertPrivateDevelopmentBucket(
+    captureWrangler(["r2", "bucket", "dev-url", "get", developmentBucket]).stdout,
+    captureWrangler(["r2", "bucket", "domain", "list", developmentBucket]).stdout,
+  );
+  return { name: developmentBucket, created, ...privacy };
+}
+
+export function assertPrivateDevelopmentBucket(devUrl, domains) {
+  if (!/public access .* is disabled/iu.test(devUrl)) {
+    throw new Error("The development R2 r2.dev URL must remain disabled");
+  }
+  if (!/no custom domains/iu.test(domains)) {
+    throw new Error("The development R2 bucket must not expose a custom domain");
+  }
+  return { private: true, r2DevDisabled: true, customDomainCount: 0 };
 }
 
 async function withDevelopmentSecrets(kind, operation) {

@@ -75,6 +75,30 @@ describe("OAuth 2.1 authorization server integration", () => {
     });
   });
 
+  it("deletes a dynamic client with its registration credential", async () => {
+    const disposable = await environment.registerClient({
+      name: "Disposable Skillplane Test Agent",
+    });
+    const deleted = await environment.app.fetch(
+      new Request(disposable.registrationClientUri, {
+        method: "DELETE",
+        headers: {
+          authorization: `Bearer ${disposable.registrationAccessToken}`,
+        },
+      }),
+    );
+
+    expect(deleted.status).toBe(204);
+    const readAfterDelete = await environment.app.fetch(
+      new Request(disposable.registrationClientUri, {
+        headers: {
+          authorization: `Bearer ${disposable.registrationAccessToken}`,
+        },
+      }),
+    );
+    expect(readAfterDelete.status).toBe(401);
+  });
+
   it("resolves an HTTPS Client ID Metadata Document with exact identifier matching", async () => {
     const clientId = "https://client.example.test/oauth/client.json";
     const resolved = await resolveClient(

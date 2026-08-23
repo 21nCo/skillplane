@@ -8,6 +8,7 @@ import {
   readWorkerDevelopmentVariables,
   updateWorkerDevelopmentVariables,
 } from "./lib/local-worker-vars.mjs";
+import { isMain } from "./lib/production-deployment.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const runtimePath = join(repoRoot, ".data", "local-runtime.json");
@@ -162,7 +163,7 @@ export async function initializeLocalEnvironment() {
   };
 }
 
-if (fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+if (isMain(import.meta.url)) {
   process.stdout.write(
     `${JSON.stringify(await initializeLocalEnvironment(), null, 2)}\n`,
   );

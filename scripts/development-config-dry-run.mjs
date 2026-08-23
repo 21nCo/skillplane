@@ -1,22 +1,28 @@
 #!/usr/bin/env node
 
+import { randomUUID } from "node:crypto";
 import { rm, unlink } from "node:fs/promises";
 import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import {
   developmentWorkers,
   renderDevelopmentConfigs,
 } from "./lib/development-deployment.mjs";
-import { root, run } from "./lib/production-deployment.mjs";
+import { isMain, root, run } from "./lib/production-deployment.mjs";
+
+export function developmentDryRunPaths(identifier = randomUUID()) {
+  return {
+    outputDirectory: resolve(root, ".data", "development-config-dry-run", identifier),
+    outputPaths: Object.fromEntries(
+      Object.entries(developmentWorkers).map(([kind, worker]) => [
+        kind,
+        resolve(worker.directory, `wrangler.development-self-test-${identifier}.json`),
+      ]),
+    ),
+  };
+}
 
 export async function developmentConfigDryRun() {
-  const outputDirectory = resolve(root, ".data", "development-config-dry-run");
-  const outputPaths = Object.fromEntries(
-    Object.keys(developmentWorkers).map((kind) => [
-      kind,
-      resolve(root, kind, "wrangler.development-self-test.json"),
-    ]),
-  );
+  const { outputDirectory, outputPaths } = developmentDryRunPaths();
   try {
     await renderDevelopmentConfigs({
       hyperdriveId: "d".repeat(32),
@@ -65,6 +71,6 @@ export async function developmentConfigDryRun() {
   }
 }
 
-if (fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+if (isMain(import.meta.url)) {
   process.stdout.write(`${JSON.stringify(await developmentConfigDryRun(), null, 2)}\n`);
 }

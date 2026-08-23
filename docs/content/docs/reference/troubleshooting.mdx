@@ -33,7 +33,7 @@ This is expected when the same idempotency key and request are replayed. Generat
 
 ## Local MCP cannot be reached
 
-Start it with `pnpm dev:mcp` and connect to `http://127.0.0.1:5701/mcp`. The client must run on the same machine. Local OAuth discovery advertises the hosted authorization server, so use request headers with an agent credential for local development.
+Start it with `pnpm dev:mcp` and connect to `http://127.0.0.1:5701/mcp`. The client must run on the same machine. The default local metadata advertises the loopback app and MCP identities, but many MCP clients require HTTPS OAuth endpoints and cannot complete browser OAuth against those loopback identities. Use request headers with an agent credential for ordinary local development, or configure the documented `app-local.skillplane.dev` and `mcp-local.skillplane.dev` Cloudflare Tunnel flow for full browser OAuth.
 
 ## Sign-in email does not arrive locally
 

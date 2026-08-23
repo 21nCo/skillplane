@@ -8,6 +8,7 @@ import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isMain } from "./lib/production-deployment.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -172,7 +173,10 @@ export async function testLocalOAuth(options = {}) {
   const challenge = createHash("sha256").update(verifier).digest("base64url");
   const callback = await callbackServer(state);
   let token;
+  let refreshToken;
   let clientId;
+  let registrationAccessToken;
+  let registrationClientUri;
   const client = new Client({
     name: "skillplane-local-oauth-verifier",
     version: "1.0.0",
@@ -195,6 +199,19 @@ export async function testLocalOAuth(options = {}) {
     );
     clientId = registration.client_id;
     assert(typeof clientId === "string", "Dynamic registration omitted client_id");
+    const registeredAccessToken = registration.registration_access_token;
+    const registeredClientUri = registration.registration_client_uri;
+    assert(
+      typeof registeredAccessToken === "string" && registeredAccessToken.length >= 32,
+      "Dynamic registration omitted registration_access_token",
+    );
+    assert(
+      typeof registeredClientUri === "string" &&
+        new URL(registeredClientUri).origin === new URL(configured.issuer).origin,
+      "Dynamic registration omitted a valid registration_client_uri",
+    );
+    registrationAccessToken = registeredAccessToken;
+    registrationClientUri = registeredClientUri;
     const authorize = new URL(authorizationMetadata.authorization_endpoint);
     authorize.search = new URLSearchParams({
       response_type: "code",
@@ -227,9 +244,14 @@ export async function testLocalOAuth(options = {}) {
       "OAuth token exchange",
     );
     token = tokenResponse.access_token;
+    refreshToken = tokenResponse.refresh_token;
     assert(
       typeof token === "string" && token.length >= 32,
       "Token exchange omitted access_token",
+    );
+    assert(
+      typeof refreshToken === "string" && refreshToken.length >= 32,
+      "Token exchange omitted refresh_token",
     );
     const transport = new StreamableHTTPClientTransport(new URL(configured.resource), {
       requestInit: { headers: { authorization: `Bearer ${token}` } },
@@ -276,16 +298,28 @@ export async function testLocalOAuth(options = {}) {
   } finally {
     await client.close().catch(() => undefined);
     await callback.close().catch(() => undefined);
-    if (token && authorizationMetadata.revocation_endpoint) {
-      await fetch(authorizationMetadata.revocation_endpoint, {
-        method: "POST",
-        headers: { "content-type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({ token, client_id: clientId }),
-      }).catch(() => undefined);
+    try {
+      const revocationToken = refreshToken ?? token;
+      if (revocationToken && authorizationMetadata.revocation_endpoint) {
+        const response = await fetch(authorizationMetadata.revocation_endpoint, {
+          method: "POST",
+          headers: { "content-type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({ token: revocationToken, client_id: clientId }),
+        });
+        assert(response.ok, "OAuth token revocation failed");
+      }
+    } finally {
+      if (registrationClientUri && registrationAccessToken) {
+        const response = await fetch(registrationClientUri, {
+          method: "DELETE",
+          headers: { authorization: `Bearer ${registrationAccessToken}` },
+        });
+        assert(response.status === 204, "OAuth client cleanup failed");
+      }
     }
   }
 }
 
-if (fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+if (isMain(import.meta.url)) {
   process.stdout.write(`${JSON.stringify(await testLocalOAuth(), null, 2)}\n`);
 }

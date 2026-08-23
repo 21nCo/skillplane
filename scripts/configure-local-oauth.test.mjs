@@ -16,7 +16,7 @@ describe("local OAuth tunnel configuration", () => {
     );
   });
 
-  it("rejects HTTP, credentials, and a shared origin", () => {
+  it("rejects HTTP, credentials, app paths, and a shared origin", () => {
     assert.throws(
       () =>
         normalizeLocalOAuthUrls(
@@ -36,10 +36,47 @@ describe("local OAuth tunnel configuration", () => {
     assert.throws(
       () =>
         normalizeLocalOAuthUrls(
-          "https://local.skillplane.dev/app",
+          "https://app-local.skillplane.dev/prefix",
+          "https://mcp-local.skillplane.dev/mcp",
+        ),
+      /Local app URL must use the origin root/u,
+    );
+    assert.throws(
+      () =>
+        normalizeLocalOAuthUrls(
+          "https://local.skillplane.dev",
           "https://local.skillplane.dev/mcp",
         ),
       /distinct hostnames/u,
+    );
+  });
+
+  it("reports malformed, query, and fragment inputs with the correct label", () => {
+    assert.throws(
+      () =>
+        normalizeLocalOAuthUrls("not-an-app-url", "https://mcp-local.skillplane.dev"),
+      /Local app URL must be an absolute HTTPS URL/u,
+    );
+    assert.throws(
+      () =>
+        normalizeLocalOAuthUrls(
+          "https://app-local.skillplane.dev?mode=local",
+          "https://mcp-local.skillplane.dev",
+        ),
+      /Local app URL.*query/u,
+    );
+    assert.throws(
+      () =>
+        normalizeLocalOAuthUrls("https://app-local.skillplane.dev", "not-an-mcp-url"),
+      /Local MCP URL must be an absolute HTTPS URL/u,
+    );
+    assert.throws(
+      () =>
+        normalizeLocalOAuthUrls(
+          "https://app-local.skillplane.dev",
+          "https://mcp-local.skillplane.dev#fragment",
+        ),
+      /Local MCP URL.*fragment/u,
     );
   });
 });

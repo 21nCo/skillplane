@@ -1,11 +1,10 @@
 #!/usr/bin/env node
 
-import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import {
   developmentIssuer,
   developmentResource,
 } from "./lib/development-deployment.mjs";
+import { isMain } from "./lib/production-deployment.mjs";
 
 function assert(value, message) {
   if (!value) throw new Error(message);
@@ -94,6 +93,6 @@ export async function smokeDevelopment() {
   };
 }
 
-if (fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+if (isMain(import.meta.url)) {
   process.stdout.write(`${JSON.stringify(await smokeDevelopment(), null, 2)}\n`);
 }

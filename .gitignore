@@ -23,6 +23,8 @@ wrangler.generated.json
 wrangler.generated.jsonc
 wrangler.production-self-test.json
 wrangler.development-self-test.json
+wrangler.development-self-test-*.json
+wrangler.development.generated.json
 
 # Environment secrets
 .env

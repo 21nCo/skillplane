@@ -370,11 +370,14 @@ function parseOAuthUrl(
     parsed.protocol === "http:" &&
     ["localhost", "127.0.0.1", "::1"].includes(parsed.hostname);
   const normalized = parsed.toString().replace(/\/$/u, "");
+  const canonicalPath =
+    field === "OAUTH_ISSUER" ? parsed.pathname === "/" : parsed.pathname === "/mcp";
   if (
     parsed.username ||
     parsed.password ||
     parsed.search ||
     parsed.hash ||
+    !canonicalPath ||
     (parsed.protocol !== "https:" && !loopbackHttp) ||
     (environment === "production" && normalized !== productionValue)
   ) {

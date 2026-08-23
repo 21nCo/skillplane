@@ -4,7 +4,6 @@ import { resolve } from "node:path";
 import { expect, test } from "@playwright/test";
 import { startWorkspaceBrowserHarness } from "./support/workspace-browser-harness.js";
 
-const resource = "https://mcp.skillplane.dev/mcp";
 const evidenceDirectory = resolve(process.cwd(), ".conduct/screenshots/phase-10");
 
 test("@oauth-consent shows explicit permissions and approves a loopback client", async ({
@@ -12,6 +11,7 @@ test("@oauth-consent shows explicit permissions and approves a loopback client",
   context,
 }) => {
   const harness = await startWorkspaceBrowserHarness();
+  const resource = `${harness.origin}/mcp`;
   let clientId: string | undefined;
   try {
     await context.addCookies([
@@ -73,7 +73,8 @@ test("@oauth-consent shows explicit permissions and approves a loopback client",
     const consentLocation = authorization.headers()["location"];
     if (!consentLocation) throw new Error("Consent redirect is missing");
     const consent = new URL(consentLocation);
-    await page.goto(`${harness.origin}${consent.pathname}${consent.search}`);
+    expect(consent.origin).toBe(harness.origin);
+    await page.goto(consent.toString());
 
     await expect(
       page.getByRole("heading", {

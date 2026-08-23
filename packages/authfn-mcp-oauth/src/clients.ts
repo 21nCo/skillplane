@@ -387,6 +387,15 @@ export async function getRegisteredClient(
   clientId: string,
   bearer: string | null,
 ): Promise<OAuthClient> {
+  await requireRegistrationAccess(runtime, clientId, bearer);
+  return resolveClient(runtime, clientId);
+}
+
+async function requireRegistrationAccess(
+  runtime: OAuthRuntime,
+  clientId: string,
+  bearer: string | null,
+): Promise<void> {
   if (!bearer?.startsWith("Bearer ")) {
     throw new OAuthError(
       "invalid_client",
@@ -411,5 +420,33 @@ export async function getRegisteredClient(
       401,
     );
   }
-  return resolveClient(runtime, clientId);
+}
+
+export async function deleteRegisteredClient(
+  runtime: OAuthRuntime,
+  clientId: string,
+  bearer: string | null,
+): Promise<void> {
+  await requireRegistrationAccess(runtime, clientId, bearer);
+  const database = await runtime.pool.connect();
+  try {
+    await database.query("BEGIN");
+    await database.query(
+      "DELETE FROM authfn_oauth_authorization_requests WHERE payload->>'clientId' = $1",
+      [clientId],
+    );
+    const deleted = await database.query(
+      "DELETE FROM authfn_oauth_clients WHERE client_id = $1 AND source = 'dynamic'",
+      [clientId],
+    );
+    if (deleted.rowCount !== 1) {
+      throw new OAuthError("invalid_client", "The OAuth client is not registered");
+    }
+    await database.query("COMMIT");
+  } catch (error) {
+    await database.query("ROLLBACK");
+    throw error;
+  } finally {
+    database.release();
+  }
 }

@@ -1,7 +1,8 @@
 # Development deployment
 
-Skillplane's persistent development environment is isolated from production at
-every stateful and addressable boundary:
+Skillplane's persistent development environment isolates the stateful and
+addressable boundaries below from production, except for the explicitly shared
+email-delivery boundary described after the table:
 
 | Boundary     | Development                                   | Production                       |
 | ------------ | --------------------------------------------- | -------------------------------- |

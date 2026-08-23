@@ -1,12 +1,11 @@
 #!/usr/bin/env node
 
-import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { renderDevelopmentConfigs } from "./lib/development-deployment.mjs";
+import { isMain } from "./lib/production-deployment.mjs";
 
 export { renderDevelopmentConfigs };
 
-if (fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+if (isMain(import.meta.url)) {
   const result = await renderDevelopmentConfigs();
   process.stdout.write(
     `${JSON.stringify({ ...result, configs: Object.keys(result.configs) }, null, 2)}\n`,
