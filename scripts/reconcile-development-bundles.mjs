@@ -3,6 +3,7 @@
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { mkdtemp, readFile, rm, unlink } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Pool } from "pg";
@@ -19,6 +20,9 @@ import {
   requireEnvironment,
 } from "./lib/production-deployment.mjs";
 
+const nodeRequire = createRequire(import.meta.url);
+const wranglerCli = nodeRequire.resolve("wrangler");
+
 function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
@@ -31,10 +35,9 @@ function r2Etag(bytes) {
 
 function wranglerObjectGet(bucket, key, path, environment) {
   const result = spawnSync(
-    "pnpm",
+    process.execPath,
     [
-      "exec",
-      "wrangler",
+      wranglerCli,
       "r2",
       "object",
       "get",
@@ -58,7 +61,7 @@ function wranglerObjectGet(bucket, key, path, environment) {
 }
 
 function cloudflareAccountId(environment) {
-  const result = spawnSync("pnpm", ["exec", "wrangler", "whoami"], {
+  const result = spawnSync(process.execPath, [wranglerCli, "whoami"], {
     env: environment,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
