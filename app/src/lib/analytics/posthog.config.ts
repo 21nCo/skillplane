@@ -1,4 +1,4 @@
-import type { PostHogConfig } from "posthog-js";
+import type { PostHogConfig } from "posthog-js/dist/module.full.no-external";
 
 const defaultPostHogHost = "https://user.skillplane.dev";
 const postHogUiHost = "https://us.posthog.com";
@@ -43,19 +43,22 @@ export function explicitProductAnalyticsConfig(
     api_host: supportedPostHogHost(apiHost),
     ui_host: postHogUiHost,
     defaults: "2026-05-30",
-    advanced_disable_flags: true,
-    autocapture: false,
-    capture_dead_clicks: false,
-    capture_exceptions: false,
-    capture_heatmaps: false,
-    capture_pageleave: false,
-    capture_pageview: false,
-    capture_performance: false,
+    advanced_disable_flags: false,
+    autocapture: true,
+    capture_dead_clicks: true,
+    capture_exceptions: true,
+    capture_heatmaps: true,
+    capture_pageleave: "if_capture_pageview",
+    capture_pageview: "history_change",
+    capture_performance: true,
     disable_external_dependency_loading: true,
-    disable_session_recording: true,
-    disable_surveys: true,
-    persistence: "memory",
-    person_profiles: "never",
-    rageclick: false,
+    disable_session_recording: false,
+    disable_surveys: false,
+    persistence: "localStorage+cookie",
+    person_profiles: "identified_only",
+    rageclick: true,
+    session_recording: {
+      maskAllInputs: true,
+    },
   };
 }

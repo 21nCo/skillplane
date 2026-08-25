@@ -1,6 +1,10 @@
 import { browser, dev } from "$app/environment";
 import { env } from "$env/dynamic/public";
-import type { EventName, PostHog, Properties } from "posthog-js";
+import type {
+  EventName,
+  PostHog,
+  Properties,
+} from "posthog-js/dist/module.full.no-external";
 import { explicitProductAnalyticsConfig } from "./posthog.config.js";
 
 let initialization: Promise<PostHog | undefined> | undefined;
@@ -20,7 +24,7 @@ export function initializePostHog(): Promise<PostHog | undefined> {
     return Promise.resolve(undefined);
   }
 
-  initialization ??= import("posthog-js")
+  initialization ??= import("posthog-js/dist/module.full.no-external")
     .then(({ default: posthog }) => {
       posthog.init(projectKey, explicitProductAnalyticsConfig(env.PUBLIC_POSTHOG_HOST));
       return posthog;
