@@ -14,14 +14,16 @@ describe("audit redaction", () => {
         allowed: "skill:review",
       },
       authorization: "Bearer not-persisted",
+      credentials: ["spk_skillplaneagentcredentialvalue"],
       safe: ["model:gpt", { contextId: "context:one" }],
     });
 
     expect(result.value).toEqual({
+      credentials: [],
       nested: { allowed: "skill:review" },
       safe: ["model:gpt", { contextId: "context:one" }],
     });
-    expect(result.removedFieldCount).toBe(6);
+    expect(result.removedFieldCount).toBe(7);
     expect(JSON.stringify(result.value)).not.toContain("example.test");
     expect(containsSensitiveAuditData({ note: "person@example.test" })).toBe(true);
   });

@@ -61,9 +61,9 @@ credential.
 
 | Environment                     | Transport       | Authentication  | URL                              | Headers                               |
 | ------------------------------- | --------------- | --------------- | -------------------------------- | ------------------------------------- |
-| Local Skillplane                | Streamable HTTP | Request headers | `http://127.0.0.1:8788/mcp`      | `Authorization=Bearer sps_your_token` |
+| Local Skillplane                | Streamable HTTP | Request headers | `http://127.0.0.1:8788/mcp`      | `Authorization=Bearer spk_your_token` |
 | Hosted Skillplane               | Streamable HTTP | Auto (OAuth)    | `https://mcp.skillplane.dev/mcp` | Leave empty                           |
-| Hosted with an agent credential | Streamable HTTP | Request headers | `https://mcp.skillplane.dev/mcp` | `Authorization=Bearer sps_your_token` |
+| Hosted with an agent credential | Streamable HTTP | Request headers | `https://mcp.skillplane.dev/mcp` | `Authorization=Bearer spk_your_token` |
 
 Do not select **No auth**. The Skillplane MCP endpoint requires a bearer
 credential for every request.
@@ -94,7 +94,7 @@ The credential is displayed only once. In clients whose request-header field
 uses `key=value` syntax, enter:
 
 ```text
-Authorization=Bearer sps_your_token
+Authorization=Bearer spk_your_token
 ```
 
 Use **Request headers** for local development. Local OAuth discovery currently
@@ -115,11 +115,11 @@ codex mcp add skillplane_local \
   --bearer-token-env-var SKILLPLANE_LOCAL_MCP_TOKEN
 ```
 
-Set `SKILLPLANE_LOCAL_MCP_TOKEN` to the `sps_...` credential before starting
+Set `SKILLPLANE_LOCAL_MCP_TOKEN` to the `spk_...` credential before starting
 Codex. On macOS, Codex Desktop can receive it through the launch environment:
 
 ```bash
-launchctl setenv SKILLPLANE_LOCAL_MCP_TOKEN 'sps_your_token'
+launchctl setenv SKILLPLANE_LOCAL_MCP_TOKEN 'spk_your_token'
 ```
 
 Fully quit and reopen Codex, then start a new task so the MCP tools are
@@ -132,7 +132,7 @@ authentication and leave request headers empty. The client discovers Skillplane
 OAuth and obtains a user-bound access token after login and consent.
 
 For CI, headless agents, or organization-owned agents, use **Request headers**
-with a scoped `sps_...` credential instead.
+with a scoped Skillplane agent credential instead.
 
 The hosted endpoint must be deployed and reachable over HTTPS before a
 cloud-hosted client can connect to it.

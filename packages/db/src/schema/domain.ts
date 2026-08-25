@@ -1,11 +1,13 @@
 import {
   bigint,
+  check,
   customType,
   date,
   doublePrecision,
   index,
   integer,
   jsonb,
+  numeric,
   pgTable,
   primaryKey,
   text,
@@ -13,7 +15,7 @@ import {
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
-import { authfnUsers } from "./authfn.js";
+import { authfnApiKeys, authfnUsers } from "./authfn.js";
 
 const utcTimestamp = (name: string) =>
   timestamp(name, { mode: "date", withTimezone: true });
@@ -118,7 +120,9 @@ export const servicePrincipals = pgTable(
     name: text("name").notNull(),
     role: text("role").notNull().default("viewer"),
     scopes: text("scopes").array().notNull().default([]),
-    credentialHash: text("credential_hash").notNull(),
+    authfnApiKeyId: text("authfn_api_key_id").references(() => authfnApiKeys.id, {
+      onDelete: "set null",
+    }),
     createdByUserId: text("created_by_user_id").references(() => authfnUsers.id, {
       onDelete: "set null",
     }),
@@ -133,7 +137,9 @@ export const servicePrincipals = pgTable(
     updatedAt: utcTimestamp("updated_at").notNull().defaultNow(),
   },
   (table) => [
-    uniqueIndex("service_principals_credential_hash_unique").on(table.credentialHash),
+    uniqueIndex("service_principals_authfn_api_key_unique")
+      .on(table.authfnApiKeyId)
+      .where(sql`${table.authfnApiKeyId} IS NOT NULL`),
     uniqueIndex("service_principals_workspace_name_unique").on(
       table.workspaceId,
       table.name,
@@ -504,6 +510,24 @@ export const auditEvents = pgTable(
       table.occurredAt,
       table.id,
     ),
+    index("audit_events_public_agent_skill_use_idx")
+      .on(table.workspaceId, table.occurredAt, table.id)
+      .where(sql`${table.action} = 'skill_retrieve' AND ${table.outcome} = 'success'`),
+  ],
+);
+
+export const publicStatsCounters = pgTable(
+  "public_stats_counters",
+  {
+    id: text("id").primaryKey(),
+    agentSkillUses: numeric("agent_skill_uses").notNull().default("0"),
+    updatedAt: utcTimestamp("updated_at").notNull().defaultNow(),
+  },
+  (table) => [
+    check(
+      "public_stats_counters_agent_skill_uses_nonnegative",
+      sql`${table.agentSkillUses} >= 0`,
+    ),
   ],
 );
 
@@ -710,6 +734,7 @@ export const domainSchema = {
   contextNoteRevisions,
   amendmentReviews,
   auditEvents,
+  publicStatsCounters,
   analyticsDaily,
   analyticsDailySummary,
   analyticsDailyDimensions,

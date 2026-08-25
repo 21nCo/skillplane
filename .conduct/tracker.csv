@@ -6,3 +6,4 @@ id, desc, status, completedAt, completionDoc
 2026-08-03-c83f1d6a-issue,"Codex OAuth refresh fails and MCP agents cannot manage the complete skill lifecycle",1,2026-08-03T15:55:29Z,2026-08-03-7f3c9a2e-completion
 2026-08-04-32192064-issue,"Linear MCP connector authorization fails while hydrating client metadata in Workerd",1,2026-08-04T02:00:25Z,2026-08-04-32192064-completion
 2026-08-04-yh02xrqp-issue,"Linear Agent fails when Skillplane MCP connector is active",1,2026-08-04T12:19:39Z,2026-08-04-yh02xrqp-completion
+SKI-1,"Move service-principal credential authentication to AuthFn API keys",1,2026-08-05T12:04:29Z,2026-08-05-05fc074e-completion

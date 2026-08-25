@@ -109,7 +109,7 @@ function inspectBundle(path, content) {
   const relativePath = relative(root, path).replaceAll("\\", "/");
   const markers = [
     ["BUNDLE_DATABASE_URL", /postgres(?:ql)?:\/\/[^:@/\s]+:[^@/\s]+@/giu],
-    ["BUNDLE_SERVICE_CREDENTIAL", /\bsps_[A-Za-z0-9_-]{16,}\b/gu],
+    ["BUNDLE_SERVICE_CREDENTIAL", /\bspk_[A-Za-z0-9_-]{16,}\b/gu],
     [
       "BUNDLE_PRIVATE_KEY",
       /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----\r?\n[A-Za-z0-9+/=\r\n]{100,}\r?\n-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/gu,

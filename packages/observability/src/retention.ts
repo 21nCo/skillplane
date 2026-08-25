@@ -68,7 +68,11 @@ export async function runAuditRetention(
   }
   for (const workspace of eligible.rows) {
     for (const day of daysBetween(workspace.earliest_at, workspace.latest_at)) {
-      await rollupUtcDay(pool, { day, workspaceId: workspace.workspace_id });
+      await rollupUtcDay(pool, {
+        day,
+        workspaceId: workspace.workspace_id,
+        preserveFullerSnapshot: true,
+      });
     }
   }
   let deleted = 0;

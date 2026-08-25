@@ -10,7 +10,7 @@ Skillplane treats reusable instructions as controlled artifacts rather than untr
 Every MCP request requires one of two identities:
 
 - a user-bound OAuth access token obtained through interactive sign-in and consent; or
-- an `sps_...` agent credential bound to one workspace, role, and explicit scopes.
+- a Skillplane agent credential mapped to a service principal with one workspace, role, and explicit scopes.
 
 Credentials can have an expiry, can be rotated, and can be revoked immediately. The full agent credential is displayed only at creation or rotation.
 
@@ -36,7 +36,7 @@ Contexts belong to one skill and workspace. Their knowledge history is append-on
 
 ## Operational safety
 
-- Treat `sps_...` values as secrets and store them outside checked-in configuration.
+- Treat `spk_...` values as secrets and store them outside checked-in configuration.
 - Give each automation its own credential so access and audit history remain attributable.
 - Prefer expiry and rotation for long-running integrations.
 - Review public visibility before publishing sensitive instructions.

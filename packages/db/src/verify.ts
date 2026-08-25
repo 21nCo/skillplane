@@ -28,6 +28,7 @@ export const REQUIRED_TABLES = [
   "context_note_revisions",
   "context_notes",
   "idempotency_records",
+  "public_stats_counters",
   "service_principals",
   "skill_contexts",
   "skill_version_files",
@@ -50,6 +51,7 @@ const REQUIRED_CONSTRAINTS = [
 
 const REQUIRED_TRIGGERS = [
   "audit_events_immutable",
+  "audit_events_public_stats_counter_insert",
   "context_knowledge_revisions_immutable",
   "context_note_revisions_immutable",
   "context_notes_current_revision_valid",
@@ -183,6 +185,13 @@ export async function verifyDatabase(
           WHERE workspace_id = $1 AND skill_id = $2 AND slug = $3`,
         ["workspace:example", "skill:example", "project"],
       ),
+      servicePrincipalApiKey: await explain(
+        pool,
+        `SELECT id FROM service_principals
+          WHERE authfn_api_key_id = $1
+          LIMIT 1`,
+        ["key_example"],
+      ),
       publicSkillSearch: await explain(
         pool,
         `SELECT id FROM skills
@@ -228,9 +237,14 @@ export async function verifyDatabase(
     }
     if (
       !queryPlans.publicSkillSearch.includes("skills_public_search_idx") ||
-      !queryPlans.workspaceSkillSearch.includes("skills_workspace_search_idx")
+      !queryPlans.workspaceSkillSearch.includes("skills_workspace_search_idx") ||
+      !queryPlans.servicePrincipalApiKey.includes(
+        "service_principals_authfn_api_key_unique",
+      )
     ) {
-      throw new Error("Skill search query plans do not use the required GIN indexes");
+      throw new Error(
+        "Required query plans do not use their credential/search indexes",
+      );
     }
 
     return {

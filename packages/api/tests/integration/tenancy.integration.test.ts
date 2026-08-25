@@ -7,7 +7,7 @@ import {
   type TenantFixture,
 } from "@skillplane/testing";
 import { Pool } from "pg";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 let databaseUrl: string;
 let services: ApiServices;
@@ -87,6 +87,7 @@ describe("tenancy integration", () => {
   let invitationToken: string;
   let serviceCredential: string;
   let servicePrincipalId: string;
+  let serviceAuthFnKeyId: string;
 
   it("bootstraps exactly one personal workspace under concurrent requests", async () => {
     const responses = await Promise.all(
@@ -283,12 +284,13 @@ describe("tenancy integration", () => {
     const body = await json<{
       data: {
         credential: string;
-        servicePrincipal: { id: string };
+        servicePrincipal: { id: string; credentialAvailable: boolean };
       };
     }>(created);
     serviceCredential = body.data.credential;
     servicePrincipalId = body.data.servicePrincipal.id;
-    expect(serviceCredential).toMatch(/^sps_[A-Za-z0-9_-]+$/u);
+    expect(body.data.servicePrincipal.credentialAvailable).toBe(true);
+    expect(serviceCredential).toMatch(/^spk_[A-Za-z0-9_-]+$/u);
 
     const listing = await app.request(
       `/api/v1/workspaces/${organizationId}/service-principals`,
@@ -297,14 +299,33 @@ describe("tenancy integration", () => {
     const serializedListing = await listing.text();
     expect(serializedListing).not.toContain(serviceCredential);
     expect(serializedListing).not.toContain("credentialHash");
+    expect(serializedListing).not.toMatch(/authfn|credentialProvider/iu);
 
     const persisted = await services.database.pool.query<{
-      credential_hash: string;
-    }>("SELECT credential_hash FROM service_principals WHERE id = $1", [
+      authfn_api_key_id: string;
+      secret_hash: string;
+      metadata: Record<string, unknown>;
+      user_id: string | null;
+    }>(
+      `SELECT sp.authfn_api_key_id, key.secret_hash,
+              key.metadata, key.user_id
+         FROM service_principals sp
+         JOIN authfn_api_keys key ON key.id = sp.authfn_api_key_id
+        WHERE sp.id = $1`,
+      [servicePrincipalId],
+    );
+    const persistedCredential = persisted.rows[0];
+    if (!persistedCredential) throw new Error("AuthFn credential was not persisted");
+    serviceAuthFnKeyId = persistedCredential.authfn_api_key_id;
+    expect(persistedCredential.secret_hash).toMatch(/^[a-f0-9]{64}$/u);
+    expect(persistedCredential.user_id).toBeNull();
+    expect(JSON.stringify(persistedCredential)).not.toContain(serviceCredential);
+    expect(persistedCredential.metadata).toMatchObject({
+      kind: "skillplane_service_principal",
       servicePrincipalId,
-    ]);
-    expect(persisted.rows[0]?.credential_hash).toMatch(/^[a-f0-9]{64}$/u);
-    expect(persisted.rows[0]?.credential_hash).not.toBe(serviceCredential);
+      workspaceId: organizationId,
+      credentialVersion: 1,
+    });
 
     const access = await app.request("/api/v1/skills/search?q=review", {
       headers: {
@@ -337,7 +358,7 @@ describe("tenancy integration", () => {
     expect(rotated.status).toBe(200);
     const rotation = await json<{ data: { credential: string } }>(rotated);
     const replacementCredential = rotation.data.credential;
-    expect(replacementCredential).toMatch(/^sps_/u);
+    expect(replacementCredential).toMatch(/^spk_/u);
     expect(replacementCredential).not.toBe(serviceCredential);
 
     const oldDenied = await app.request("/api/v1/skills/search?q=review", {
@@ -347,6 +368,10 @@ describe("tenancy integration", () => {
       },
     });
     expect(oldDenied.status).toBe(401);
+    const oldAuthFnKey = await services.database.pool.query<{
+      revoked_at: Date | null;
+    }>("SELECT revoked_at FROM authfn_api_keys WHERE id = $1", [serviceAuthFnKeyId]);
+    expect(oldAuthFnKey.rows[0]?.revoked_at).toBeInstanceOf(Date);
 
     serviceCredential = replacementCredential;
     const replacementAccess = await app.request("/api/v1/skills/search?q=review", {
@@ -357,6 +382,45 @@ describe("tenancy integration", () => {
     });
     expect(replacementAccess.status).toBe(200);
 
+    const revokeSpy = vi
+      .spyOn(services.auth.apiKeys, "revoke")
+      .mockRejectedValueOnce(new Error("simulated AuthFn cleanup outage"));
+    const reconciledRotation = await app.request(
+      `/api/v1/workspaces/${organizationId}/service-principals/${servicePrincipalId}/rotate`,
+      {
+        method: "POST",
+        headers: {
+          ...headers(owner),
+          "content-type": "application/json",
+        },
+        body: "{}",
+      },
+    );
+    expect(reconciledRotation.status).toBe(200);
+    const reconciled = await json<{ data: { credential: string } }>(reconciledRotation);
+    serviceCredential = reconciled.data.credential;
+    revokeSpy.mockRestore();
+
+    const cleanupAudit = await services.database.pool.query<{
+      error_code: string | null;
+      metadata: Record<string, unknown>;
+    }>(
+      `SELECT metadata->>'errorCode' AS error_code, metadata
+         FROM audit_events
+        WHERE resource_id = $1
+          AND event_type = 'service_principal.authfn_key_cleanup_failed'
+        ORDER BY occurred_at DESC, id DESC
+        LIMIT 1`,
+      [servicePrincipalId],
+    );
+    expect(cleanupAudit.rows[0]).toMatchObject({
+      error_code: "AUTHFN_KEY_CLEANUP_FAILED",
+      metadata: expect.objectContaining({ cleanupReason: "rotation" }),
+    });
+
+    const deleteRevokeSpy = vi
+      .spyOn(services.auth.apiKeys, "revoke")
+      .mockRejectedValueOnce(new Error("simulated AuthFn revocation outage"));
     const revoked = await app.request(
       `/api/v1/workspaces/${organizationId}/service-principals/${servicePrincipalId}`,
       {
@@ -365,6 +429,40 @@ describe("tenancy integration", () => {
       },
     );
     expect(revoked.status).toBe(200);
+    deleteRevokeSpy.mockRestore();
+
+    const locallyRevoked = await services.database.pool.query<{
+      revoked_at: Date | null;
+    }>("SELECT revoked_at FROM service_principals WHERE id = $1", [servicePrincipalId]);
+    expect(locallyRevoked.rows[0]?.revoked_at).toBeInstanceOf(Date);
+    const revocationCleanupAudit = await services.database.pool.query<{
+      metadata: Record<string, unknown>;
+    }>(
+      `SELECT metadata
+         FROM audit_events
+        WHERE resource_id = $1
+          AND event_type = 'service_principal.authfn_key_cleanup_failed'
+          AND metadata->>'cleanupReason' = 'revocation'
+        ORDER BY occurred_at DESC, id DESC
+        LIMIT 1`,
+      [servicePrincipalId],
+    );
+    expect(revocationCleanupAudit.rows[0]?.metadata).toMatchObject({
+      cleanupReason: "revocation",
+    });
+
+    const currentKey = await services.database.pool.query<{
+      authfn_api_key_id: string | null;
+    }>("SELECT authfn_api_key_id FROM service_principals WHERE id = $1", [
+      servicePrincipalId,
+    ]);
+    const currentKeyId = currentKey.rows[0]?.authfn_api_key_id;
+    if (!currentKeyId) throw new Error("Service principal key was not retained");
+    await services.auth.apiKeys.revoke({
+      keyId: currentKeyId,
+      actorId: owner.userId,
+      requestId: "req_cleanup_revocation",
+    });
 
     const denied = await app.request("/api/v1/skills/search?q=review", {
       headers: {
@@ -373,7 +471,159 @@ describe("tenancy integration", () => {
       },
     });
     expect(denied.status).toBe(401);
-    expect(await denied.text()).toContain("SERVICE_PRINCIPAL_INVALID");
+    expect(await denied.text()).toContain("AUTH_INVALID");
+    const activeKey = await services.database.pool.query<{
+      id: string;
+      revoked_at: Date | null;
+    }>(
+      `SELECT key.id, key.revoked_at
+         FROM authfn_api_keys key
+         JOIN service_principals sp ON sp.authfn_api_key_id = key.id
+        WHERE sp.id = $1`,
+      [servicePrincipalId],
+    );
+    expect(activeKey.rows[0]?.revoked_at).toBeInstanceOf(Date);
+
+    const lifecycleAudit = await services.database.pool.query<{
+      event_type: string;
+      metadata: Record<string, unknown>;
+    }>(
+      `SELECT event_type, metadata
+         FROM audit_events
+        WHERE resource_id = $1
+          AND event_type IN (
+            'service_principal.created',
+            'service_principal.credential_rotated',
+            'service_principal.revoked'
+          )
+        ORDER BY occurred_at, id`,
+      [servicePrincipalId],
+    );
+    expect(lifecycleAudit.rows.map((event) => event.event_type)).toEqual([
+      "service_principal.created",
+      "service_principal.credential_rotated",
+      "service_principal.credential_rotated",
+      "service_principal.revoked",
+    ]);
+    expect(JSON.stringify(lifecycleAudit.rows)).not.toContain(serviceCredential);
+  });
+
+  it("uses AuthFn expiration as the authentication authority", async () => {
+    const expiresAt = new Date(Date.now() + 60 * 60 * 1_000).toISOString();
+    const created = await app.request(
+      `/api/v1/workspaces/${organizationId}/service-principals`,
+      {
+        method: "POST",
+        headers: {
+          ...headers(owner),
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          name: `expiring-agent-${suffix}`,
+          role: "viewer",
+          scopes: ["skills:read"],
+          expiresAt,
+        }),
+      },
+    );
+    expect(created.status).toBe(201);
+    const body = await json<{
+      data: { credential: string; servicePrincipal: { id: string } };
+    }>(created);
+    await services.database.pool.query(
+      `UPDATE authfn_api_keys
+          SET expires_at = now() - interval '1 second'
+        WHERE id = (
+          SELECT authfn_api_key_id FROM service_principals WHERE id = $1
+        )`,
+      [body.data.servicePrincipal.id],
+    );
+    const denied = await app.request("/api/v1/skills/search?q=expired", {
+      headers: {
+        authorization: `Bearer ${body.data.credential}`,
+        "x-skillplane-workspace-id": organizationId,
+      },
+    });
+    expect(denied.status).toBe(401);
+  });
+
+  it("rejects removed credentials and reissues a credential for existing principals", async () => {
+    const removedCredential = `sps_${crypto.randomUUID().replaceAll("-", "")}${crypto
+      .randomUUID()
+      .replaceAll("-", "")}`;
+    const existingPrincipalId = `service-principal:existing-${suffix}`;
+    await services.database.pool.query(
+      `INSERT INTO service_principals
+         (id, workspace_id, name, role, scopes, created_by_user_id)
+       VALUES ($1, $2, $3, 'viewer', $4, $5)`,
+      [
+        existingPrincipalId,
+        organizationId,
+        `existing-agent-${suffix}`,
+        ["skills:read"],
+        owner.userId,
+      ],
+    );
+
+    const removedAccess = await app.request("/api/v1/skills/search?q=removed", {
+      headers: {
+        authorization: `Bearer ${removedCredential}`,
+        "x-skillplane-workspace-id": organizationId,
+      },
+    });
+    expect(removedAccess.status).toBe(401);
+
+    const listing = await app.request(
+      `/api/v1/workspaces/${organizationId}/service-principals`,
+      { headers: headers(owner) },
+    );
+    const listed = await json<{
+      data: { servicePrincipals: { id: string; credentialAvailable: boolean }[] };
+    }>(listing);
+    expect(
+      listed.data.servicePrincipals.find(({ id }) => id === existingPrincipalId),
+    ).toMatchObject({ credentialAvailable: false });
+
+    const rotated = await app.request(
+      `/api/v1/workspaces/${organizationId}/service-principals/${existingPrincipalId}/rotate`,
+      {
+        method: "POST",
+        headers: {
+          ...headers(owner),
+          "content-type": "application/json",
+        },
+        body: "{}",
+      },
+    );
+    expect(rotated.status).toBe(200);
+    const rotation = await json<{ data: { credential: string } }>(rotated);
+    expect(rotation.data.credential).toMatch(/^spk_/u);
+
+    const access = await app.request("/api/v1/skills/search?q=existing", {
+      headers: {
+        authorization: `Bearer ${rotation.data.credential}`,
+        "x-skillplane-workspace-id": organizationId,
+      },
+    });
+    expect(access.status).toBe(200);
+    const reissued = await services.database.pool.query<{
+      authfn_api_key_id: string | null;
+    }>(
+      `SELECT authfn_api_key_id
+         FROM service_principals
+        WHERE id = $1`,
+      [existingPrincipalId],
+    );
+    expect(reissued.rows[0]?.authfn_api_key_id).toMatch(/^key_/u);
+
+    const removedColumn = await services.database.pool.query(
+      `SELECT 1
+         FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'service_principals'
+          AND column_name = 'credential_hash'`,
+    );
+    expect(removedColumn.rowCount).toBe(0);
   });
 
   it("serializes concurrent owner removals so one owner always remains", async () => {

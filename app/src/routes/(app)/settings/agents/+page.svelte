@@ -33,6 +33,7 @@
     readonly delegatedUserId: string | null;
     readonly expiresAt: string | null;
     readonly credentialVersion: number;
+    readonly credentialAvailable: boolean;
     readonly lastUsedAt: string | null;
     readonly revokedAt: string | null;
     readonly createdAt: string;
@@ -338,6 +339,9 @@
             <p>{agent.scopes.join(" · ")}</p>
             <small>
               Version {agent.credentialVersion}
+              {agent.credentialAvailable
+                ? ""
+                : " · credential unavailable — rotate to replace"}
               · {agent.lastUsedAt
                 ? `last used ${new Date(agent.lastUsedAt).toLocaleString()}`
                 : "never used"}
@@ -378,7 +382,7 @@
       <h2 id="credential-title">Save the credential for {credentialFor}</h2>
       <p>
         This secret will not be shown again. Store it in your agent’s encrypted secret
-        manager. Skillplane stores only its hash.
+        manager. Only a secure hash is retained.
       </p>
       <div class="secret">
         <code>{credential}</code>

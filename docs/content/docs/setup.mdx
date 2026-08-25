@@ -34,7 +34,7 @@ For CI, headless automation, or an organization-owned agent:
 1. Open **Settings → Agent credentials**.
 2. Create an `Editor` credential.
 3. Select only the scopes the agent needs.
-4. Copy the `sps_...` value when it appears. It is shown once.
+4. Copy the agent credential when it appears. It is shown once.
 
 For a full create, retrieve, context, and improvement workflow, select:
 
@@ -47,7 +47,7 @@ For a full create, retrieve, context, and improvement workflow, select:
 Send it as a bearer token:
 
 ```text
-Authorization=Bearer sps_your_token
+Authorization=Bearer spk_your_token
 ```
 
 Do not choose **No auth**. Every MCP request must carry either an OAuth access token or an agent credential.
@@ -65,7 +65,7 @@ codex mcp add skillplane \
 Set `SKILLPLANE_MCP_TOKEN` before starting Codex. On macOS, Codex Desktop can receive it through the launch environment:
 
 ```bash
-launchctl setenv SKILLPLANE_MCP_TOKEN 'sps_your_token'
+launchctl setenv SKILLPLANE_MCP_TOKEN 'spk_your_token'
 ```
 
 Fully quit and reopen Codex, then start a new task so the MCP tools are discovered.

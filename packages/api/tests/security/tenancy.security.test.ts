@@ -99,13 +99,9 @@ describe("tenancy security", () => {
     await expect(decryptEmail(secret, ciphertext)).resolves.toBe(email);
   });
 
-  it("creates high-entropy invitation and service secrets whose hashes reveal no token", async () => {
+  it("creates high-entropy invitation secrets whose hashes reveal no token", async () => {
     const invitation = createOpaqueToken("spi");
-    const credential = createOpaqueToken("sps");
     expect(invitation).toMatch(/^spi_[A-Za-z0-9_-]{43}$/u);
-    expect(credential).toMatch(/^sps_[A-Za-z0-9_-]{43}$/u);
-    expect(credential).not.toBe(createOpaqueToken("sps"));
     expect(await hashOpaqueToken(invitation)).not.toContain(invitation);
-    expect(await hashOpaqueToken(credential)).not.toContain(credential);
   });
 });

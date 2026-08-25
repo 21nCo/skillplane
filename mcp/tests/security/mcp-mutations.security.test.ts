@@ -195,24 +195,35 @@ describe("MCP mutation authorization and isolation", () => {
   });
 
   it("enforces workspace role even when the credential carries mutation scopes", async () => {
-    const viewerToken = `sps_${crypto.randomUUID().replaceAll("-", "")}${crypto
-      .randomUUID()
-      .replaceAll("-", "")}`;
+    const servicePrincipalId = `service-principal:mcp-viewer-write-${crypto.randomUUID()}`;
+    const viewerCredential = await environment.services.auth.apiKeys.create({
+      ownerUserId: environment.owner.userId,
+      name: `MCP viewer write ${crypto.randomUUID()}`,
+      scopes: ["skills:read", "skills:amend", "contexts:read", "contexts:write"],
+      metadata: {
+        kind: "skillplane_service_principal",
+        servicePrincipalId,
+        workspaceId: environment.owner.workspaceId,
+        credentialVersion: 1,
+      },
+      expiresAt: null,
+      requestId: "fixture:mcp-viewer-write:created",
+    });
     await environment.services.database.pool.query(
       `INSERT INTO service_principals
-         (id, workspace_id, name, role, scopes, credential_hash,
+         (id, workspace_id, name, role, scopes, authfn_api_key_id,
           created_by_user_id)
        VALUES ($1, $2, $3, 'viewer', $4, $5, $6)`,
       [
-        `service-principal:mcp-viewer-write-${crypto.randomUUID()}`,
+        servicePrincipalId,
         environment.owner.workspaceId,
         `MCP viewer write ${crypto.randomUUID()}`,
         ["skills:read", "skills:amend", "contexts:read", "contexts:write"],
-        createHash("sha256").update(viewerToken).digest("hex"),
+        viewerCredential.keyId,
         environment.owner.userId,
       ],
     );
-    const viewer = await environment.connect(viewerToken);
+    const viewer = await environment.connect(viewerCredential.secret);
     const readsBefore = environment.storage.getCalls;
     const result = await viewer.client.callTool({
       name: "skill_amend",
@@ -334,7 +345,10 @@ describe("MCP mutation authorization and isolation", () => {
 
   it("rolls back candidate, R2 object, and context revision when mutation audit fails", async () => {
     const credential = await environment.services.database.pool.query<{ id: string }>(
-      "SELECT id FROM service_principals WHERE credential_hash = $1",
+      `SELECT sp.id
+         FROM service_principals sp
+         JOIN authfn_api_keys key ON key.id = sp.authfn_api_key_id
+        WHERE key.secret_hash = $1`,
       [createHash("sha256").update(environment.serviceToken).digest("hex")],
     );
     const actorId = credential.rows[0]?.id;

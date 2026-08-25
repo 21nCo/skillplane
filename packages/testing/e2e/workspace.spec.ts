@@ -142,9 +142,9 @@ test("@workspace creates, switches, persists, invites, and issues a one-time cre
   await page.getByLabel("Name").fill(`Review agent ${suffix}`);
   await page.getByRole("button", { name: "Create credential" }).click();
   const secret = page.locator(".secret code");
-  await expect(secret).toContainText("sps_");
+  await expect(secret).toContainText("spk_");
   const credential = await secret.textContent();
-  expect(credential).toMatch(/^sps_/u);
+  expect(credential).toMatch(/^spk_/u);
   const browserStorage = await page.evaluate(() => ({
     local: JSON.stringify(localStorage),
     session: JSON.stringify(sessionStorage),

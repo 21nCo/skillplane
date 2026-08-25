@@ -5,10 +5,10 @@ import {
   parseServicePrincipalRole,
   parseServicePrincipalScopes,
 } from "@skillplane/domain";
+import { writeAuditEvent } from "@skillplane/observability";
 import type { Hono } from "hono";
-import type { ApiEnvironment } from "../context.js";
+import type { ApiEnvironment, ApiServices } from "../context.js";
 import { success } from "../envelopes.js";
-import { createOpaqueToken, hashOpaqueToken } from "../tenancy-crypto.js";
 import {
   isPostgresUniqueViolation,
   parseOptionalExpiry,
@@ -25,6 +25,7 @@ interface ServicePrincipalRow {
   readonly delegated_user_id: string | null;
   readonly expires_at: Date | null;
   readonly credential_version: number;
+  readonly authfn_api_key_id: string | null;
   readonly last_used_at: Date | null;
   readonly revoked_at: Date | null;
   readonly created_at: Date;
@@ -40,11 +41,98 @@ function serialize(row: ServicePrincipalRow) {
     delegatedUserId: row.delegated_user_id,
     expiresAt: row.expires_at?.toISOString() ?? null,
     credentialVersion: row.credential_version,
+    credentialAvailable: Boolean(row.authfn_api_key_id),
     lastUsedAt: row.last_used_at?.toISOString() ?? null,
     revokedAt: row.revoked_at?.toISOString() ?? null,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
   };
+}
+
+function credentialMetadata(input: {
+  readonly servicePrincipalId: string;
+  readonly workspaceId: string;
+  readonly credentialVersion: number;
+}): Readonly<Record<string, unknown>> {
+  return {
+    kind: "skillplane_service_principal",
+    servicePrincipalId: input.servicePrincipalId,
+    workspaceId: input.workspaceId,
+    credentialVersion: input.credentialVersion,
+  };
+}
+
+async function issueAuthFnCredential(
+  services: ApiServices,
+  input: {
+    readonly ownerUserId: string;
+    readonly servicePrincipalId: string;
+    readonly workspaceId: string;
+    readonly name: string;
+    readonly scopes: readonly string[];
+    readonly expiresAt: Date | null;
+    readonly credentialVersion: number;
+    readonly requestId: string;
+  },
+) {
+  return services.auth.apiKeys.create({
+    ownerUserId: input.ownerUserId,
+    name: `Skillplane agent: ${input.name}`,
+    scopes: input.scopes,
+    metadata: credentialMetadata(input),
+    expiresAt: input.expiresAt,
+    requestId: input.requestId,
+  });
+}
+
+async function revokeAuthFnCredentialBestEffort(
+  services: ApiServices,
+  input: {
+    readonly keyId: string;
+    readonly actorId: string;
+    readonly workspaceId: string;
+    readonly servicePrincipalId: string;
+    readonly requestId: string;
+    readonly reason: "rollback" | "rotation" | "revocation";
+  },
+): Promise<void> {
+  try {
+    await services.auth.apiKeys.revoke(input);
+  } catch {
+    let auditRecorded = false;
+    try {
+      await writeAuditEvent(services.database.pool, {
+        workspaceId: input.workspaceId,
+        eventType: "service_principal.authfn_key_cleanup_failed",
+        action: "members:write",
+        outcome: "error",
+        actorType: "user",
+        actorId: input.actorId,
+        userId: input.actorId,
+        requestId: input.requestId,
+        resourceType: "service_principal",
+        resourceId: input.servicePrincipalId,
+        errorCode: "AUTHFN_KEY_CLEANUP_FAILED",
+        metadata: {
+          credentialId: input.keyId,
+          cleanupReason: input.reason,
+        },
+      });
+      auditRecorded = true;
+    } catch {
+      // The structured error below remains the alertable fallback if audit storage fails.
+    }
+    console.error(
+      JSON.stringify({
+        component: "api",
+        event: "service_principal.authfn_key_cleanup.failed",
+        keyId: input.keyId,
+        requestId: input.requestId,
+        reason: input.reason,
+        auditRecorded,
+      }),
+    );
+  }
 }
 
 export function registerServicePrincipalRoutes(app: Hono<ApiEnvironment>): void {
@@ -61,7 +149,8 @@ export function registerServicePrincipalRoutes(app: Hono<ApiEnvironment>): void 
     authorize(principal, "members:read");
     const result = await services.database.pool.query<ServicePrincipalRow>(
       `SELECT id, name, role, scopes, delegated_user_id, expires_at,
-                credential_version, last_used_at, revoked_at, created_at, updated_at
+                credential_version, authfn_api_key_id,
+                last_used_at, revoked_at, created_at, updated_at
            FROM service_principals
           WHERE workspace_id = $1
           ORDER BY created_at DESC, id`,
@@ -118,26 +207,54 @@ export function registerServicePrincipalRoutes(app: Hono<ApiEnvironment>): void 
         );
       }
     }
-    const credential = createOpaqueToken("sps");
     const id = `service-principal:${crypto.randomUUID()}`;
-    const client = await services.database.pool.connect();
+    const requestId = context.get("requestId");
+    const issued = await issueAuthFnCredential(services, {
+      ownerUserId: principal.userId,
+      servicePrincipalId: id,
+      workspaceId: principal.workspaceId,
+      name,
+      scopes,
+      expiresAt,
+      credentialVersion: 1,
+      requestId,
+    });
+    const client = await services.database.pool
+      .connect()
+      .catch(async (error: unknown) => {
+        await revokeAuthFnCredentialBestEffort(services, {
+          keyId: issued.keyId,
+          actorId: principal.userId,
+          workspaceId: principal.workspaceId,
+          servicePrincipalId: id,
+          requestId,
+          reason: "rollback",
+        });
+        throw error;
+      });
+    let clientReleased = false;
+    const releaseClient = () => {
+      if (clientReleased) return;
+      client.release();
+      clientReleased = true;
+    };
     try {
       await client.query("BEGIN");
       const result = await client.query<ServicePrincipalRow>(
         `INSERT INTO service_principals
-             (id, workspace_id, name, role, scopes, credential_hash,
+             (id, workspace_id, name, role, scopes, authfn_api_key_id,
               created_by_user_id, delegated_user_id, expires_at)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
            RETURNING id, name, role, scopes, delegated_user_id, expires_at,
-                     credential_version, last_used_at, revoked_at, created_at,
-                     updated_at`,
+                     credential_version, authfn_api_key_id,
+                     last_used_at, revoked_at, created_at, updated_at`,
         [
           id,
           principal.workspaceId,
           name,
           role,
           scopes,
-          await hashOpaqueToken(credential),
+          issued.keyId,
           principal.userId,
           delegatedUserId,
           expiresAt,
@@ -148,7 +265,7 @@ export function registerServicePrincipalRoutes(app: Hono<ApiEnvironment>): void 
       await writeApiAudit(client, principal, {
         eventType: "service_principal.created",
         action: "members:write",
-        requestId: context.get("requestId"),
+        requestId,
         resourceType: "service_principal",
         resourceId: id,
         metadata: {
@@ -156,18 +273,28 @@ export function registerServicePrincipalRoutes(app: Hono<ApiEnvironment>): void 
           scopes,
           delegated: Boolean(delegatedUserId),
           expires: Boolean(expiresAt),
+          credentialId: issued.keyId,
         },
       });
       await client.query("COMMIT");
       return context.json(
         success(context, {
           servicePrincipal: serialize(created),
-          credential,
+          credential: issued.secret,
         }),
         201,
       );
     } catch (error) {
       await client.query("ROLLBACK").catch(() => undefined);
+      releaseClient();
+      await revokeAuthFnCredentialBestEffort(services, {
+        keyId: issued.keyId,
+        actorId: principal.userId,
+        workspaceId: principal.workspaceId,
+        servicePrincipalId: id,
+        requestId,
+        reason: "rollback",
+      });
       if (
         isPostgresUniqueViolation(error, "service_principals_workspace_name_unique")
       ) {
@@ -180,7 +307,7 @@ export function registerServicePrincipalRoutes(app: Hono<ApiEnvironment>): void 
       }
       throw error;
     } finally {
-      client.release();
+      releaseClient();
     }
   });
 
@@ -200,34 +327,101 @@ export function registerServicePrincipalRoutes(app: Hono<ApiEnvironment>): void 
       const body = await readJsonObject(context);
       const expiresAt =
         body.expiresAt === undefined ? undefined : parseOptionalExpiry(body.expiresAt);
-      const credential = createOpaqueToken("sps");
-      const values: unknown[] = [
-        await hashOpaqueToken(credential),
-        principal.workspaceId,
-        context.req.param("servicePrincipalId"),
-      ];
-      const expirySql =
-        expiresAt === undefined
-          ? ""
-          : `, expires_at = $${String(values.push(expiresAt))}`;
-      const client = await services.database.pool.connect();
+      const servicePrincipalId = context.req.param("servicePrincipalId");
+      const requestId = context.get("requestId");
+      const snapshotResult = await services.database.pool.query<ServicePrincipalRow>(
+        `SELECT id, name, role, scopes, delegated_user_id, expires_at,
+                credential_version, authfn_api_key_id,
+                last_used_at, revoked_at, created_at, updated_at
+           FROM service_principals
+          WHERE workspace_id = $1 AND id = $2 AND revoked_at IS NULL`,
+        [principal.workspaceId, servicePrincipalId],
+      );
+      const snapshot = snapshotResult.rows[0];
+      if (!snapshot) {
+        throw new DomainError(
+          "SERVICE_PRINCIPAL_INVALID",
+          "The service principal is not active",
+          404,
+        );
+      }
+      const nextVersion = snapshot.credential_version + 1;
+      const nextExpiry = expiresAt === undefined ? snapshot.expires_at : expiresAt;
+      const issued = await issueAuthFnCredential(services, {
+        ownerUserId: principal.userId,
+        servicePrincipalId,
+        workspaceId: principal.workspaceId,
+        name: snapshot.name,
+        scopes: snapshot.scopes,
+        expiresAt: nextExpiry,
+        credentialVersion: nextVersion,
+        requestId,
+      });
+      const client = await services.database.pool
+        .connect()
+        .catch(async (error: unknown) => {
+          await revokeAuthFnCredentialBestEffort(services, {
+            keyId: issued.keyId,
+            actorId: principal.userId,
+            workspaceId: principal.workspaceId,
+            servicePrincipalId,
+            requestId,
+            reason: "rollback",
+          });
+          throw error;
+        });
+      let clientReleased = false;
+      const releaseClient = () => {
+        if (clientReleased) return;
+        client.release();
+        clientReleased = true;
+      };
+      let previousAuthFnKeyId: string | null;
+      let row: ServicePrincipalRow;
       try {
         await client.query("BEGIN");
+        const currentResult = await client.query<ServicePrincipalRow>(
+          `SELECT id, name, role, scopes, delegated_user_id, expires_at,
+                  credential_version, authfn_api_key_id,
+                  last_used_at, revoked_at, created_at, updated_at
+             FROM service_principals
+            WHERE workspace_id = $1 AND id = $2 AND revoked_at IS NULL
+            FOR UPDATE`,
+          [principal.workspaceId, servicePrincipalId],
+        );
+        const current = currentResult.rows[0];
+        if (!current) {
+          throw new DomainError(
+            "SERVICE_PRINCIPAL_INVALID",
+            "The service principal is not active",
+            404,
+          );
+        }
+        if (
+          current.credential_version !== snapshot.credential_version ||
+          current.authfn_api_key_id !== snapshot.authfn_api_key_id
+        ) {
+          throw new DomainError(
+            "CONFLICT",
+            "The service principal credential changed during rotation",
+            409,
+          );
+        }
         const result = await client.query<ServicePrincipalRow>(
           `UPDATE service_principals
-            SET credential_hash = $1,
-                credential_version = credential_version + 1,
-                last_used_at = NULL,
-                updated_at = now()
-                ${expirySql}
-          WHERE workspace_id = $2 AND id = $3 AND revoked_at IS NULL
-          RETURNING id, name, role, scopes, delegated_user_id, expires_at,
-                    credential_version, last_used_at, revoked_at, created_at,
-                    updated_at`,
-          values,
+              SET authfn_api_key_id = $1,
+                  credential_version = credential_version + 1,
+                  last_used_at = NULL,
+                  expires_at = $4,
+                  updated_at = now()
+            WHERE workspace_id = $2 AND id = $3 AND revoked_at IS NULL
+            RETURNING id, name, role, scopes, delegated_user_id, expires_at,
+                      credential_version, authfn_api_key_id,
+                      last_used_at, revoked_at, created_at, updated_at`,
+          [issued.keyId, principal.workspaceId, servicePrincipalId, nextExpiry],
         );
-        const row = result.rows[0];
-        if (!row) {
+        const updated = result.rows[0];
+        if (!updated) {
           throw new DomainError(
             "SERVICE_PRINCIPAL_INVALID",
             "The service principal is not active",
@@ -237,27 +431,49 @@ export function registerServicePrincipalRoutes(app: Hono<ApiEnvironment>): void 
         await writeApiAudit(client, principal, {
           eventType: "service_principal.credential_rotated",
           action: "members:write",
-          requestId: context.get("requestId"),
+          requestId,
           resourceType: "service_principal",
-          resourceId: row.id,
+          resourceId: updated.id,
           metadata: {
-            credentialVersion: row.credential_version,
-            expires: Boolean(row.expires_at),
+            credentialVersion: updated.credential_version,
+            expires: Boolean(updated.expires_at),
+            credentialId: issued.keyId,
           },
         });
         await client.query("COMMIT");
-        return context.json(
-          success(context, {
-            servicePrincipal: serialize(row),
-            credential,
-          }),
-        );
+        previousAuthFnKeyId = current.authfn_api_key_id;
+        row = updated;
       } catch (error) {
         await client.query("ROLLBACK").catch(() => undefined);
+        releaseClient();
+        await revokeAuthFnCredentialBestEffort(services, {
+          keyId: issued.keyId,
+          actorId: principal.userId,
+          workspaceId: principal.workspaceId,
+          servicePrincipalId,
+          requestId,
+          reason: "rollback",
+        });
         throw error;
       } finally {
-        client.release();
+        releaseClient();
       }
+      if (previousAuthFnKeyId) {
+        await revokeAuthFnCredentialBestEffort(services, {
+          keyId: previousAuthFnKeyId,
+          actorId: principal.userId,
+          workspaceId: principal.workspaceId,
+          servicePrincipalId,
+          requestId,
+          reason: "rotation",
+        });
+      }
+      return context.json(
+        success(context, {
+          servicePrincipal: serialize(row),
+          credential: issued.secret,
+        }),
+      );
     },
   );
 
@@ -274,15 +490,33 @@ export function registerServicePrincipalRoutes(app: Hono<ApiEnvironment>): void 
       }
       const principal = await workspaceUser(context);
       authorize(principal, "members:write");
+      const servicePrincipalId = context.req.param("servicePrincipalId");
+      const requestId = context.get("requestId");
       const client = await services.database.pool.connect();
+      let authFnKeyId: string | null;
       try {
         await client.query("BEGIN");
+        const current = await client.query<{ authfn_api_key_id: string | null }>(
+          `SELECT authfn_api_key_id
+             FROM service_principals
+            WHERE workspace_id = $1 AND id = $2
+            FOR UPDATE`,
+          [principal.workspaceId, servicePrincipalId],
+        );
+        const currentRow = current.rows[0];
+        if (!currentRow) {
+          throw new DomainError(
+            "SERVICE_PRINCIPAL_INVALID",
+            "The service principal was not found",
+            404,
+          );
+        }
         const result = await client.query(
           `UPDATE service_principals
             SET revoked_at = COALESCE(revoked_at, now()), updated_at = now()
           WHERE workspace_id = $1 AND id = $2
           RETURNING id`,
-          [principal.workspaceId, context.req.param("servicePrincipalId")],
+          [principal.workspaceId, servicePrincipalId],
         );
         if (!result.rowCount) {
           throw new DomainError(
@@ -294,18 +528,35 @@ export function registerServicePrincipalRoutes(app: Hono<ApiEnvironment>): void 
         await writeApiAudit(client, principal, {
           eventType: "service_principal.revoked",
           action: "members:write",
-          requestId: context.get("requestId"),
+          requestId,
           resourceType: "service_principal",
-          resourceId: context.req.param("servicePrincipalId"),
+          resourceId: servicePrincipalId,
+          metadata: {
+            credentialAvailable: Boolean(currentRow.authfn_api_key_id),
+            ...(currentRow.authfn_api_key_id
+              ? { credentialId: currentRow.authfn_api_key_id }
+              : {}),
+          },
         });
         await client.query("COMMIT");
-        return context.json(success(context, { revoked: true }));
+        authFnKeyId = currentRow.authfn_api_key_id;
       } catch (error) {
         await client.query("ROLLBACK").catch(() => undefined);
         throw error;
       } finally {
         client.release();
       }
+      if (authFnKeyId) {
+        await revokeAuthFnCredentialBestEffort(services, {
+          keyId: authFnKeyId,
+          actorId: principal.userId,
+          workspaceId: principal.workspaceId,
+          servicePrincipalId,
+          requestId,
+          reason: "revocation",
+        });
+      }
+      return context.json(success(context, { revoked: true }));
     },
   );
 }
