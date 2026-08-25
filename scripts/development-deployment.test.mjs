@@ -6,6 +6,9 @@ import {
   developmentDatabase,
   developmentBucket,
   developmentIssuer,
+  developmentPostHogHost,
+  developmentPostHogProjectToken,
+  developmentPostHogProxyHost,
   developmentResource,
   developmentSecrets,
   developmentSiteKey,
@@ -40,6 +43,7 @@ function withEnvironment(overrides, operation) {
 }
 
 const developmentSecretEnvironment = Object.freeze({
+  PUBLIC_POSTHOG_KEY: `phc_${"d".repeat(32)}`,
   SKILLPLANE_DEV_AUTHFN_SECRET: "development-authfn-secret-material-1234567890",
   SKILLPLANE_DEV_OAUTH_TOKEN_PEPPER:
     "development-oauth-pepper-secret-material-1234567890",
@@ -52,6 +56,7 @@ describe("development deployment isolation", () => {
     const id = "d".repeat(32);
     const rendered = await renderDevelopmentConfigs({
       hyperdriveId: id,
+      postHogProjectToken: developmentSecretEnvironment.PUBLIC_POSTHOG_KEY,
       siteKey: "development-turnstile-site-key",
       write: false,
     });
@@ -68,6 +73,26 @@ describe("development deployment isolation", () => {
       assert.equal(config.vars.RUNTIME_ENV, "preview");
       assert.notEqual(config.name, workers[kind].name);
     }
+    assert.equal(
+      rendered.configs.app.vars.PUBLIC_POSTHOG_KEY,
+      developmentSecretEnvironment.PUBLIC_POSTHOG_KEY,
+    );
+    assert.equal(
+      rendered.configs.app.vars.PUBLIC_POSTHOG_HOST,
+      developmentPostHogProxyHost,
+    );
+    assert.equal(rendered.configs.mcp.vars.POSTHOG_HOST, developmentPostHogHost);
+    assert.ok(developmentWorkers.mcp.secrets.includes("POSTHOG_PROJECT_TOKEN"));
+  });
+
+  it("requires a distinct development PostHog project token", () => {
+    const token = `phc_${"d".repeat(32)}`;
+    withEnvironment({ POSTHOG_PROJECT_TOKEN: token }, () =>
+      assert.throws(
+        () => developmentPostHogProjectToken(token),
+        /must differ from production POSTHOG_PROJECT_TOKEN/u,
+      ),
+    );
   });
 
   it("rejects missing or malformed development Hyperdrive IDs", () => {

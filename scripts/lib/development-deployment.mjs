@@ -6,6 +6,7 @@ import {
   captureWrangler,
   parseDirectPostgresUrl,
   requireEnvironment,
+  requirePostHogProjectToken,
   requireSecretEnvironment,
   root,
   run,
@@ -15,6 +16,8 @@ import {
 export const developmentIssuer = "https://app-dev.skillplane.dev";
 export const developmentResource = "https://mcp-dev.skillplane.dev/mcp";
 export const developmentBucket = "skillplane-skill-bundles-dev";
+export const developmentPostHogHost = "https://us.i.posthog.com";
+export const developmentPostHogProxyHost = "https://user-dev.skillplane.dev";
 export const developmentStateDirectory = resolve(root, ".data", "development");
 
 export const developmentWorkers = Object.freeze({
@@ -32,9 +35,26 @@ export const developmentWorkers = Object.freeze({
     directory: resolve(root, "mcp"),
     config: resolve(root, "mcp", "wrangler.development.generated.json"),
     template: resolve(root, "deployment", "wrangler", "mcp.development.json"),
-    secrets: ["OAUTH_TOKEN_PEPPER"],
+    secrets: ["OAUTH_TOKEN_PEPPER", "POSTHOG_PROJECT_TOKEN"],
   },
 });
+
+export function developmentPostHogProjectToken(value = process.env.PUBLIC_POSTHOG_KEY) {
+  let token;
+  try {
+    token = requirePostHogProjectToken(value);
+  } catch {
+    throw new Error(
+      "PUBLIC_POSTHOG_KEY must be a valid development PostHog project token",
+    );
+  }
+  if (token === process.env.POSTHOG_PROJECT_TOKEN?.trim()) {
+    throw new Error(
+      "PUBLIC_POSTHOG_KEY must differ from production POSTHOG_PROJECT_TOKEN",
+    );
+  }
+  return token;
+}
 
 export function requireDevelopmentHyperdriveId(
   value = process.env.CLOUDFLARE_DEV_HYPERDRIVE_ID,
@@ -78,6 +98,7 @@ export function developmentSecrets() {
   const values = {
     AUTHFN_SECRET: requireSecretEnvironment("SKILLPLANE_DEV_AUTHFN_SECRET"),
     OAUTH_TOKEN_PEPPER: requireSecretEnvironment("SKILLPLANE_DEV_OAUTH_TOKEN_PEPPER"),
+    POSTHOG_PROJECT_TOKEN: developmentPostHogProjectToken(),
     TURNSTILE_SECRET_KEY: requireSecretEnvironment(
       "SKILLPLANE_DEV_TURNSTILE_SECRET_KEY",
     ),
@@ -123,6 +144,10 @@ export function developmentCloudflareEnvironment() {
     "SKILLPLANE_DEV_OAUTH_TOKEN_PEPPER",
     "SKILLPLANE_DEV_TURNSTILE_SECRET_KEY",
     "SKILLPLANE_DEV_DATABASE_URL",
+    "PUBLIC_POSTHOG_KEY",
+    "PUBLIC_POSTHOG_HOST",
+    "POSTHOG_PROJECT_TOKEN",
+    "POSTHOG_HOST",
     "SKILLPLANE_PRODUCTION_DATABASE_URL",
     "SKILLPLANE_PRODUCTION_MIGRATION_SOURCE_DATABASE_URL",
     "SKILLPLANE_PRODUCTION_R2_READ_TOKEN",
@@ -167,6 +192,8 @@ export function productionBundleReadEnvironment() {
 export async function renderDevelopmentConfigs(options = {}) {
   const hyperdriveId = requireDevelopmentHyperdriveId(options.hyperdriveId);
   const siteKey = options.siteKey ?? developmentSiteKey();
+  const postHogProjectToken =
+    options.postHogProjectToken ?? developmentPostHogProjectToken();
   const rendered = {};
   for (const [kind, worker] of Object.entries(developmentWorkers)) {
     const template = JSON.parse(await readFile(worker.template, "utf8"));
@@ -191,10 +218,16 @@ export async function renderDevelopmentConfigs(options = {}) {
       hyperdrive: [{ binding: "HYPERDRIVE", id: hyperdriveId }],
       vars: {
         ...template.vars,
-        ...(kind === "app" ? { PUBLIC_TURNSTILE_SITE_KEY: siteKey } : {}),
+        ...(kind === "app"
+          ? {
+              PUBLIC_TURNSTILE_SITE_KEY: siteKey,
+              PUBLIC_POSTHOG_KEY: postHogProjectToken,
+              PUBLIC_POSTHOG_HOST: developmentPostHogProxyHost,
+            }
+          : { POSTHOG_HOST: developmentPostHogHost }),
       },
     };
-    assertDevelopmentConfig(kind, config, hyperdriveId);
+    assertDevelopmentConfig(kind, config, hyperdriveId, postHogProjectToken);
     if (options.write !== false) {
       await writeJsonAtomic(options.outputPaths?.[kind] ?? worker.config, config, {
         mode: 0o600,
@@ -205,7 +238,12 @@ export async function renderDevelopmentConfigs(options = {}) {
   return { ok: true, environment: "development", hyperdriveId, configs: rendered };
 }
 
-export function assertDevelopmentConfig(kind, config, hyperdriveId) {
+export function assertDevelopmentConfig(
+  kind,
+  config,
+  hyperdriveId,
+  postHogProjectToken = developmentPostHogProjectToken(),
+) {
   const worker = developmentWorkers[kind];
   if (
     !worker ||
@@ -230,6 +268,16 @@ export function assertDevelopmentConfig(kind, config, hyperdriveId) {
       config.send_email?.[0]?.name !== "SEND_EMAIL")
   ) {
     throw new Error("The app development authentication bindings are incomplete");
+  }
+  if (
+    kind === "app" &&
+    (config.vars?.PUBLIC_POSTHOG_KEY !== postHogProjectToken ||
+      config.vars?.PUBLIC_POSTHOG_HOST !== developmentPostHogProxyHost)
+  ) {
+    throw new Error("The app development PostHog bindings are incomplete");
+  }
+  if (kind === "mcp" && config.vars?.POSTHOG_HOST !== developmentPostHogHost) {
+    throw new Error("The MCP development PostHog host is incomplete");
   }
   if (kind === "mcp" && config.send_email !== undefined) {
     throw new Error("The MCP development Worker must not receive email bindings");

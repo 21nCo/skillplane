@@ -2,10 +2,13 @@ import type { PostHogConfig } from "posthog-js";
 
 const defaultPostHogHost = "https://user.skillplane.dev";
 const postHogUiHost = "https://us.posthog.com";
-const skillplanePostHogProxyHost = "user.skillplane.dev";
+const skillplanePostHogProxyHosts = new Set([
+  "user.skillplane.dev",
+  "user-dev.skillplane.dev",
+]);
 
 const hostError =
-  "PUBLIC_POSTHOG_HOST must be https://user.skillplane.dev or an HTTPS posthog.com subdomain allowed by the app CSP.";
+  "PUBLIC_POSTHOG_HOST must be an approved Skillplane proxy or HTTPS posthog.com subdomain allowed by the app CSP.";
 
 function supportedPostHogHost(apiHost: string | undefined): string {
   const configured = apiHost ?? defaultPostHogHost;
@@ -16,7 +19,7 @@ function supportedPostHogHost(apiHost: string | undefined): string {
     throw new Error(hostError);
   }
   const supportedHostname =
-    url.hostname === skillplanePostHogProxyHost ||
+    skillplanePostHogProxyHosts.has(url.hostname) ||
     url.hostname.endsWith(".posthog.com");
   if (
     url.protocol !== "https:" ||

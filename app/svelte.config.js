@@ -25,6 +25,7 @@ const config = {
           "https://challenges.cloudflare.com",
           // posthog.config.ts restricts PUBLIC_POSTHOG_HOST to these HTTPS domains.
           "https://user.skillplane.dev",
+          "https://user-dev.skillplane.dev",
           "https://*.posthog.com",
         ],
         "worker-src": ["self", "blob:", "data:"],

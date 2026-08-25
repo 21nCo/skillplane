@@ -42,13 +42,19 @@ describe("PostHog browser configuration", () => {
   it("rejects analytics hosts outside the app CSP", () => {
     expect(() =>
       explicitProductAnalyticsConfig("https://analytics.example.test"),
-    ).toThrow("PUBLIC_POSTHOG_HOST must be https://user.skillplane.dev");
+    ).toThrow("PUBLIC_POSTHOG_HOST must be an approved Skillplane proxy");
   });
 
   it("rejects unapproved Skillplane hosts instead of widening the CSP allowlist", () => {
     expect(() =>
       explicitProductAnalyticsConfig("https://analytics.skillplane.dev"),
-    ).toThrow("PUBLIC_POSTHOG_HOST must be https://user.skillplane.dev");
+    ).toThrow("PUBLIC_POSTHOG_HOST must be an approved Skillplane proxy");
+  });
+
+  it("allows the isolated development PostHog proxy", () => {
+    expect(
+      explicitProductAnalyticsConfig("https://user-dev.skillplane.dev").api_host,
+    ).toBe("https://user-dev.skillplane.dev");
   });
 
   it("queues event capture and reset while the browser SDK initializes", async () => {

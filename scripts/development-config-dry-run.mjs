@@ -32,6 +32,7 @@ export async function developmentConfigDryRun() {
   try {
     await renderDevelopmentConfigs({
       hyperdriveId: "d".repeat(32),
+      postHogProjectToken: `phc_${"d".repeat(32)}`,
       siteKey: "development-self-test-site-key",
       outputPaths,
       absoluteEntryPaths: true,

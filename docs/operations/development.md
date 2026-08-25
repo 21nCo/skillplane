@@ -3,17 +3,18 @@
 Skillplane's persistent development environment isolates the stateful,
 addressable, credential, and email-identity boundaries below from production:
 
-| Boundary     | Development                          | Production                       |
-| ------------ | ------------------------------------ | -------------------------------- |
-| App Worker   | `skillplane-app-dev`                 | `skillplane-app`                 |
-| MCP Worker   | `skillplane-mcp-dev`                 | `skillplane-mcp`                 |
-| App host     | `app-dev.skillplane.dev`             | `app.skillplane.dev`             |
-| MCP resource | `https://mcp-dev.skillplane.dev/mcp` | `https://mcp.skillplane.dev/mcp` |
-| R2 bucket    | `skillplane-skill-bundles-dev`       | `skillplane-skill-bundles`       |
-| Database     | A distinct PostgreSQL database       | Production PostgreSQL database   |
-| Hyperdrive   | `CLOUDFLARE_DEV_HYPERDRIVE_ID`       | `CLOUDFLARE_HYPERDRIVE_ID`       |
-| Secrets      | `SKILLPLANE_DEV_*` inputs            | Production secret inputs         |
-| Email sender | `no-reply@auth-dev.skillplane.dev`   | `no-reply@auth.skillplane.dev`   |
+| Boundary     | Development                                     | Production                                   |
+| ------------ | ----------------------------------------------- | -------------------------------------------- |
+| App Worker   | `skillplane-app-dev`                            | `skillplane-app`                             |
+| MCP Worker   | `skillplane-mcp-dev`                            | `skillplane-mcp`                             |
+| App host     | `app-dev.skillplane.dev`                        | `app.skillplane.dev`                         |
+| MCP resource | `https://mcp-dev.skillplane.dev/mcp`            | `https://mcp.skillplane.dev/mcp`             |
+| R2 bucket    | `skillplane-skill-bundles-dev`                  | `skillplane-skill-bundles`                   |
+| Database     | A distinct PostgreSQL database                  | Production PostgreSQL database               |
+| Hyperdrive   | `CLOUDFLARE_DEV_HYPERDRIVE_ID`                  | `CLOUDFLARE_HYPERDRIVE_ID`                   |
+| Secrets      | `SKILLPLANE_DEV_*` inputs                       | Production secret inputs                     |
+| Email sender | `no-reply@auth-dev.skillplane.dev`              | `no-reply@auth.skillplane.dev`               |
+| Analytics    | Dedicated project via `user-dev.skillplane.dev` | Production project via `user.skillplane.dev` |
 
 The development runtime uses `RUNTIME_ENV=preview`: it retains production-like
 OTP, Email Service, Hyperdrive, R2, and HTTPS requirements while allowing the
@@ -36,6 +37,9 @@ these development identities.
    by the development Workers, R2 bucket, Hyperdrive, and custom domains.
 7. Create `SKILLPLANE_PRODUCTION_R2_READ_TOKEN` with read-only object access to
    `skillplane-skill-bundles`. Keep it distinct from the development token.
+8. Create a dedicated PostHog development project and configure its managed
+   reverse proxy at `user-dev.skillplane.dev`. Keep its project token distinct
+   from production.
 
 Development and authenticated local OTP emails use the development sender, never
 the production sender. Every OTP identifies its environment and expected sign-in
@@ -53,6 +57,7 @@ SKILLPLANE_DEV_AUTHFN_SECRET=...
 SKILLPLANE_DEV_OAUTH_TOKEN_PEPPER=...
 SKILLPLANE_DEV_TURNSTILE_SECRET_KEY=...
 PUBLIC_DEV_TURNSTILE_SITE_KEY=...
+PUBLIC_POSTHOG_KEY=phc_development_project_token
 ```
 
 The deployment rejects a database that matches
@@ -63,6 +68,12 @@ token reused from an ambient or production token, or generated configuration
 containing production identities. When production secret or Turnstile variables
 are also present in the invoking environment, the deployment additionally
 rejects copied development values.
+
+The development renderer exposes `PUBLIC_POSTHOG_KEY` and
+`https://user-dev.skillplane.dev` to the browser app. It supplies the same
+project token to the MCP Worker as the `POSTHOG_PROJECT_TOKEN` secret and uses
+the canonical US ingestion host for MCP traffic. The token must differ from a
+production `POSTHOG_PROJECT_TOKEN` present in the invoking environment.
 
 ## Deploy and verify
 
