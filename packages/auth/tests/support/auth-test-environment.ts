@@ -41,6 +41,7 @@ export interface AuthTestEnvironmentOptions {
   readonly now?: () => Date;
   readonly recipientLimit?: number;
   readonly networkLimit?: number;
+  readonly emit?: (event: SafeAuthEvent) => Promise<void> | void;
 }
 
 export function cookieHeader(response: Response): string {
@@ -112,9 +113,11 @@ export async function createAuthTestEnvironment(
             : { success: false, reason: "invalid" },
         ),
     },
-    emit(event) {
-      events.push(event);
-    },
+    emit:
+      options.emit ??
+      ((event) => {
+        events.push(event);
+      }),
   });
 
   return {

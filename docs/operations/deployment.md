@@ -4,7 +4,8 @@ This repository deploys the Skillplane app and MCP Cloudflare Workers backed by
 one PostgreSQL database through Hyperdrive and one private R2 bucket. The
 landing Worker is maintained and deployed independently from the 21n monorepo's
 `landing/skillplane` workspace. The production hosts are
-`skillplane.dev`, `app.skillplane.dev`, and `mcp.skillplane.dev`.
+`skillplane.dev`, `app.skillplane.dev`, `mcp.skillplane.dev`, and the PostHog
+reverse proxy at `user.skillplane.dev`.
 
 ## One-time provider preparation
 
@@ -21,7 +22,11 @@ Before the first release:
 4. Complete Cloudflare Email Service onboarding for `skillplane.dev`, including
    the sender `no-reply@auth.skillplane.dev`, and confirm arbitrary-recipient
    transactional sending is enabled.
-5. Confirm the Wrangler identity has Workers Scripts, Workers Routes,
+5. Create the PostHog managed reverse proxy for `user.skillplane.dev` by
+   following the [PostHog reverse-proxy guide](https://posthog.com/docs/advanced/proxy).
+   Point an unproxied DNS-only CNAME at the PostHog-provided proxy target and
+   wait until PostHog reports the proxy as live.
+6. Confirm the Wrangler identity has Workers Scripts, Workers Routes,
    Hyperdrive read, R2 read/write, and Email Sending permissions. The zone must
    be active in the same Cloudflare account.
 
@@ -49,6 +54,11 @@ Run `pnpm production:secrets:init` once to generate strong independent
 does not print values, rejects duplicate or weak existing assignments, refuses
 symlinks, and enforces mode `0600`.
 
+Supply the existing `POSTHOG_PROJECT_TOKEN` separately; the initializer does
+not generate credentials for external services. The renderer exposes that
+project token to the browser as `PUBLIC_POSTHOG_KEY` and supplies it to the MCP
+Worker as a secret.
+
 | Variable                                              | Purpose                                                                 |
 | ----------------------------------------------------- | ----------------------------------------------------------------------- |
 | `SKILLPLANE_PRODUCTION_DATABASE_URL`                  | Direct PostgreSQL URL used only by backup, migration, and verification  |
@@ -57,6 +67,8 @@ symlinks, and enforces mode `0600`.
 | `SKILLPLANE_BACKUP_ENCRYPTION_KEY`                    | At least 32 characters; encrypts logical backups before they reach disk |
 | `AUTHFN_SECRET`                                       | AuthFn signing and tenancy secret, at least 32 characters               |
 | `OAUTH_TOKEN_PEPPER`                                  | OAuth token hashing pepper, at least 32 characters                      |
+| `POSTHOG_PROJECT_TOKEN`                               | Existing PostHog project token used by browser and MCP analytics        |
+| `POSTHOG_HOST`                                        | Optional local MCP override; production uses the canonical US host      |
 | `TURNSTILE_SECRET_KEY`                                | Production Turnstile secret, at least 32 characters                     |
 | `PUBLIC_TURNSTILE_SITE_KEY`                           | Public site key for the production widget                               |
 | `SKILLPLANE_RELEASE_TAG`                              | Optional stable release label; generated when omitted                   |
@@ -131,19 +143,29 @@ The commands enforce these boundaries:
   PostgreSQL server major version, and no plaintext dump is written.
 - `db:migrate:production` applies committed migrations directly to PostgreSQL,
   verifies every migration hash, table, constraint, trigger, and required query
-  plan, and never uses Hyperdrive.
+  plan, records the exact application Git commit, and never uses Hyperdrive.
 - `deploy:all` refuses to start unless the matching backup is less than 24
-  hours old and verified migration state is less than two hours old. It renders
-  ignored `wrangler.generated.json` files only after validating the real
-  Hyperdrive ID. Before the first Cloudflare mutation, it reads that
-  configuration back from Cloudflare and requires its origin host, port,
-  and database to exactly match `SKILLPLANE_PRODUCTION_DATABASE_URL`. The
-  Hyperdrive origin may use a separate least-privilege database role.
+  hours old, verified migration state is less than two hours old, and that
+  migration was produced from the exact application commit being deployed.
+  This commit lock is required for forward-only compatibility changes such as
+  the workspace-sharded public statistics counter in migration 0019; do not
+  canary or roll back an older app binary against that migrated schema. Deploy
+  a compatible forward maintenance release instead. The command renders ignored
+  `wrangler.generated.json` files only after validating the real Hyperdrive ID.
+  Before the first Cloudflare mutation, it reads that configuration back from
+  Cloudflare and requires its origin host, port, and database to exactly match
+  `SKILLPLANE_PRODUCTION_DATABASE_URL`. The Hyperdrive origin may use a separate
+  least-privilege database role.
 - Worker secrets are written to a mode-`0600` temporary JSON file, supplied to
   `wrangler deploy --secrets-file`, and deleted in a `finally` block. They are
   never written to Wrangler source configuration or `.conduct`. The app
-  receives AuthFn, OAuth, and Turnstile secrets; MCP receives only the OAuth
-  pepper. MCP does not receive Email Service or Turnstile bindings.
+  receives AuthFn, OAuth, and Turnstile secrets; MCP receives the OAuth pepper
+  and PostHog project token. The app also receives the public PostHog project
+  key and `https://user.skillplane.dev` proxy host as non-secret variables.
+  The browser SDK keeps `https://us.posthog.com` as its UI host, as required by
+  PostHog. MCP traffic does not use the browser proxy and receives the canonical
+  PostHog ingestion host as a non-secret variable. MCP does not receive Email
+  Service or Turnstile bindings.
 - Deployment order is app, then MCP. On a first deployment, each Worker receives
   an identical rollback baseline followed by a distinct release version.
 - The app and MCP Workers use Custom Domains with `workers_dev: false`. The
@@ -208,8 +230,10 @@ pnpm verify:rollback:production
 
 Do not accept production traffic until every command passes and the provider
 dashboards show healthy database-provider backups, Cloudflare Email Service onboarding,
-and both application Custom Domains as active. Verify the independently managed
-landing zone route from its own workspace.
+both application Custom Domains as active, and the PostHog proxy as live. In the
+browser network panel, trigger an explicit product event, confirm its request to
+`user.skillplane.dev` returns `200`, and confirm the event appears in PostHog.
+Verify the independently managed landing zone route from its own workspace.
 
 ## Failure handling
 

@@ -2,6 +2,7 @@
   import { Button, Select, Textarea } from "@skillplane/ui";
   import { CheckCircleIcon, WarningCircleIcon } from "phosphor-svelte";
   import { SvelteMap } from "svelte/reactivity";
+  import { capturePostHog } from "$lib/analytics/posthog.client.js";
   import { createSkillCandidate, getSkillBundle } from "./api.js";
   import { buildSkillBundle, bytesToBase64, filesFromBundle } from "./bundle.js";
   import type { SemanticBump, Skill, SkillVersion } from "./types.js";
@@ -68,6 +69,9 @@
         idempotencyKey,
       });
       progress = null;
+      capturePostHog("skill_candidate_created", {
+        proposed_bump: version.proposedBump,
+      });
       onCreated(version);
     } catch (cause) {
       progress = null;

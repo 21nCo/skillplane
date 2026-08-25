@@ -27,6 +27,7 @@ const localRuntimeTests = spawnSync(
     "scripts/configure-local-oauth.test.mjs",
     "scripts/test-local-oauth.test.mjs",
     "scripts/production-smoke.test.mjs",
+    "scripts/production-deployment.test.mjs",
     "scripts/rollback.test.mjs",
   ],
   {

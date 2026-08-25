@@ -5,11 +5,14 @@ import {
   captureWrangler,
   pathExists,
   productionBucket,
+  productionPostHogHost,
+  productionPostHogProxyHost,
   productionReleaseTag,
   productionSecretsForWorker,
   portablePath,
   publicTurnstileSiteKey,
   requireHyperdriveId,
+  requirePostHogProjectToken,
   root,
   run,
   validateVersionId,
@@ -220,6 +223,13 @@ async function validateGeneratedConfig(kind) {
     throw new Error(`${worker.name} generated auth bindings are invalid`);
   }
   if (
+    kind === "app" &&
+    (config.vars?.PUBLIC_POSTHOG_KEY !== requirePostHogProjectToken() ||
+      config.vars?.PUBLIC_POSTHOG_HOST !== productionPostHogProxyHost)
+  ) {
+    throw new Error(`${worker.name} generated PostHog bindings are invalid`);
+  }
+  if (
     kind === "mcp" &&
     (config.send_email !== undefined ||
       !config.rules?.some(
@@ -235,6 +245,9 @@ async function validateGeneratedConfig(kind) {
       "SKILLPLANE_OTP_FROM" in (config.vars ?? {}))
   ) {
     throw new Error(`${worker.name} has unnecessary authentication bindings`);
+  }
+  if (kind === "mcp" && config.vars?.POSTHOG_HOST !== productionPostHogHost) {
+    throw new Error(`${worker.name} generated PostHog host is invalid`);
   }
 }
 

@@ -6,9 +6,12 @@ import {
   isMain,
   portablePath,
   productionIssuer,
+  productionPostHogHost,
+  productionPostHogProxyHost,
   productionResource,
   publicTurnstileSiteKey,
   requireHyperdriveId,
+  requirePostHogProjectToken,
   root,
   sha256,
   workers,
@@ -34,7 +37,7 @@ function runtimeConfig(template, hyperdriveId, variables = {}) {
   };
 }
 
-function validateRenderedConfig(name, config, hyperdriveId) {
+function validateRenderedConfig(name, config, hyperdriveId, postHogProjectToken) {
   const serialized = JSON.stringify(config);
   const route = config.routes?.[0];
   const routeIsValid =
@@ -69,6 +72,13 @@ function validateRenderedConfig(name, config, hyperdriveId) {
     throw new Error("The app production email binding is incomplete");
   }
   if (
+    name === "app" &&
+    (config.vars?.PUBLIC_POSTHOG_KEY !== postHogProjectToken ||
+      config.vars?.PUBLIC_POSTHOG_HOST !== productionPostHogProxyHost)
+  ) {
+    throw new Error("The app production PostHog bindings are incomplete");
+  }
+  if (
     name === "mcp" &&
     (config.send_email !== undefined ||
       !config.rules?.some(
@@ -85,22 +95,30 @@ function validateRenderedConfig(name, config, hyperdriveId) {
   ) {
     throw new Error("The MCP Worker must not receive an email binding");
   }
+  if (name === "mcp" && config.vars?.POSTHOG_HOST !== productionPostHogHost) {
+    throw new Error("The MCP production PostHog host is incomplete");
+  }
 }
 
 export async function renderDeploymentConfigs(options = {}) {
   const hyperdriveId = requireHyperdriveId(options.hyperdriveId);
   const siteKey = options.siteKey ?? publicTurnstileSiteKey();
+  const postHogProjectToken = requirePostHogProjectToken(options.postHogProjectToken);
   const templates = {
     app: runtimeConfig(await readTemplate("app"), hyperdriveId, {
       PUBLIC_TURNSTILE_SITE_KEY: siteKey,
+      PUBLIC_POSTHOG_KEY: postHogProjectToken,
+      PUBLIC_POSTHOG_HOST: productionPostHogProxyHost,
     }),
-    mcp: runtimeConfig(await readTemplate("mcp"), hyperdriveId),
+    mcp: runtimeConfig(await readTemplate("mcp"), hyperdriveId, {
+      POSTHOG_HOST: productionPostHogHost,
+    }),
   };
   for (const config of Object.values(templates)) {
     config.$schema = "../node_modules/wrangler/config-schema.json";
   }
   for (const [name, config] of Object.entries(templates)) {
-    validateRenderedConfig(name, config, hyperdriveId);
+    validateRenderedConfig(name, config, hyperdriveId, postHogProjectToken);
   }
   if (options.write !== false) {
     for (const [name, config] of Object.entries(templates)) {

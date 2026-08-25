@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { capturePostHog } from "$lib/analytics/posthog.client.js";
   import { Button, Input, Select, Textarea } from "@skillplane/ui";
   import { WarningCircleIcon } from "phosphor-svelte";
   import { createContext } from "./api.js";
@@ -33,6 +34,7 @@
   let error = $state<string | null>(null);
   let requestFingerprint = "";
   let idempotencyKey = crypto.randomUUID();
+  let capturedIdempotencyKey = "";
 
   function slugify(value: string): string {
     return value
@@ -74,12 +76,18 @@
         requestFingerprint = fingerprint;
         idempotencyKey = crypto.randomUUID();
       }
+      const submissionIdempotencyKey = idempotencyKey;
+      const submittedContextType = type;
       const result = await createContext({
         workspaceId,
         skillId,
         ...payload,
-        idempotencyKey,
+        idempotencyKey: submissionIdempotencyKey,
       });
+      if (capturedIdempotencyKey !== submissionIdempotencyKey) {
+        capturePostHog("context_created", { context_type: submittedContextType });
+        capturedIdempotencyKey = submissionIdempotencyKey;
+      }
       onCreated(result);
     } catch (cause) {
       error =

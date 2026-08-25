@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { capturePostHog } from "$lib/analytics/posthog.client.js";
   import { SkillplaneApiError } from "$lib/api/client.js";
   import { SafeMarkdown } from "@skillplane/ui";
   import { Button, Input, Textarea } from "@skillplane/ui";
@@ -88,6 +89,9 @@
             learningMetadata: metadata,
             idempotencyKey,
           });
+      capturePostHog("context_note_saved", {
+        operation: note ? "updated" : "created",
+      });
       onSaved(saved);
     } catch (cause) {
       if (

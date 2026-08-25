@@ -1,11 +1,13 @@
 import {
   bigint,
+  check,
   customType,
   date,
   doublePrecision,
   index,
   integer,
   jsonb,
+  numeric,
   pgTable,
   primaryKey,
   text,
@@ -135,7 +137,9 @@ export const servicePrincipals = pgTable(
     updatedAt: utcTimestamp("updated_at").notNull().defaultNow(),
   },
   (table) => [
-    uniqueIndex("service_principals_authfn_api_key_unique").on(table.authfnApiKeyId),
+    uniqueIndex("service_principals_authfn_api_key_unique")
+      .on(table.authfnApiKeyId)
+      .where(sql`${table.authfnApiKeyId} IS NOT NULL`),
     uniqueIndex("service_principals_workspace_name_unique").on(
       table.workspaceId,
       table.name,
@@ -512,6 +516,21 @@ export const auditEvents = pgTable(
   ],
 );
 
+export const publicStatsCounters = pgTable(
+  "public_stats_counters",
+  {
+    id: text("id").primaryKey(),
+    agentSkillUses: numeric("agent_skill_uses").notNull().default("0"),
+    updatedAt: utcTimestamp("updated_at").notNull().defaultNow(),
+  },
+  (table) => [
+    check(
+      "public_stats_counters_agent_skill_uses_nonnegative",
+      sql`${table.agentSkillUses} >= 0`,
+    ),
+  ],
+);
+
 export const analyticsDaily = pgTable(
   "analytics_daily",
   {
@@ -715,6 +734,7 @@ export const domainSchema = {
   contextNoteRevisions,
   amendmentReviews,
   auditEvents,
+  publicStatsCounters,
   analyticsDaily,
   analyticsDailySummary,
   analyticsDailyDimensions,

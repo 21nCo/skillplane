@@ -198,4 +198,73 @@ describe("audit retention and analytics rollups", () => {
       ),
     ).rejects.toMatchObject({ code: "55000" });
   });
+
+  it("preserves a full-day rollup across successive partial-day retention runs", async () => {
+    const early = daysAgo(92, 2);
+    const late = daysAgo(92, 20);
+    for (const [label, occurredAt] of [
+      ["early", early],
+      ["late", late],
+    ] as const) {
+      await writeAuditEvent(pool, {
+        id: `audit:partial-retention:${suffix}:${label}`,
+        workspaceId: tenant.workspaceId,
+        eventType: "mcp.skill_retrieve.success",
+        action: "skill_retrieve",
+        outcome: "success",
+        actorType: "service_principal",
+        actorId: "service:partial-retention",
+        requestId: `request:partial-retention:${suffix}:${label}`,
+        resourceType: "skill_version",
+        resourceId: `skill-version:${suffix}`,
+        skillId: tenant.skillId,
+        versionId: `skill-version:${suffix}`,
+        channel: "mcp",
+        retentionClass: "detailed_read_90d",
+        occurredAt,
+      });
+    }
+
+    const firstCutoff = new Date(early);
+    firstCutoff.setUTCHours(12, 0, 0, 0);
+    const first = await runAuditRetention(pool, {
+      now: new Date(firstCutoff.getTime() + 90 * 86_400_000),
+    });
+    expect(first.deleted).toBe(1);
+    const preserved = await rollupUtcDay(pool, {
+      day: day(early),
+      workspaceId: tenant.workspaceId,
+      preserveFullerSnapshot: true,
+    });
+    expect(preserved.sourceEvents).toBe(2);
+
+    const secondCutoff = new Date(early);
+    secondCutoff.setUTCDate(secondCutoff.getUTCDate() + 1);
+    secondCutoff.setUTCHours(0, 0, 0, 0);
+    const second = await runAuditRetention(pool, {
+      now: new Date(secondCutoff.getTime() + 90 * 86_400_000),
+    });
+    expect(second.deleted).toBe(1);
+
+    const retained = await pool.query<{
+      event_count: string;
+      source_event_count: string;
+    }>(
+      `SELECT dimension.event_count::text, run.source_event_count
+         FROM analytics_daily_dimensions dimension
+         JOIN analytics_rollup_runs run
+           ON run.workspace_id = dimension.workspace_id
+          AND run.day = dimension.day
+        WHERE dimension.workspace_id = $1
+          AND dimension.day = $2::date
+          AND dimension.skill_id = ''
+          AND dimension.dimension_type = 'tool'
+          AND dimension.dimension_value = 'skill_retrieve'`,
+      [tenant.workspaceId, day(early)],
+    );
+    expect(retained.rows[0]).toEqual({
+      event_count: "2",
+      source_event_count: "2",
+    });
+  });
 });

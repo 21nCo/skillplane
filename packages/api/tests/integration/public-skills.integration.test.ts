@@ -291,16 +291,36 @@ describe("public skill discovery API", () => {
   });
 
   it("publishes aggregate skill and successful agent-use totals", async () => {
+    const workspaceSkillsBefore = await services.database.pool.query<{
+      total: string;
+    }>(
+      `SELECT count(*)::text AS total
+         FROM skills
+        WHERE workspace_id = $1 AND archived_at IS NULL`,
+      [tenant.workspaceId],
+    );
     const beforeResponse = await app.request("/api/v1/stats/public");
     expect(beforeResponse.status).toBe(200);
     expect(beforeResponse.headers.get("cache-control")).toBe(
       "public, max-age=60, s-maxage=300, stale-while-revalidate=3600",
     );
     const before = await data<{
-      readonly totalSkills: number;
-      readonly agentSkillUses: number;
+      readonly totalSkills: string;
+      readonly agentSkillUses: string;
       readonly generatedAt: string;
     }>(beforeResponse);
+    const countersBefore = await services.database.pool.query<{
+      id: string;
+      agent_skill_uses: string;
+    }>(
+      `SELECT id, agent_skill_uses::text
+         FROM public_stats_counters
+        WHERE id IN ('global', $1)`,
+      [tenant.workspaceId],
+    );
+    const counterBefore = new Map(
+      countersBefore.rows.map((row) => [row.id, BigInt(row.agent_skill_uses)]),
+    );
 
     const measured = await createSkill({
       slug: `agent-usage-${suffix}`,
@@ -339,8 +359,62 @@ describe("public skill discovery API", () => {
       day,
       workspaceId: tenant.workspaceId,
     });
-    await recordUse(3, 12);
+    await recordUse(3, 11);
+    await recordUse(4, 12);
 
+    const countersAfter = await services.database.pool.query<{
+      id: string;
+      agent_skill_uses: string;
+    }>(
+      `SELECT id, agent_skill_uses::text
+         FROM public_stats_counters
+        WHERE id IN ('global', $1)`,
+      [tenant.workspaceId],
+    );
+    const counterAfter = new Map(
+      countersAfter.rows.map((row) => [row.id, BigInt(row.agent_skill_uses)]),
+    );
+    expect(counterAfter.get("global")).toBe(counterBefore.get("global"));
+    expect(counterAfter.get(tenant.workspaceId)).toBe(
+      (counterBefore.get(tenant.workspaceId) ?? 0n) + 4n,
+    );
+
+    const statsClient = await services.database.pool.connect();
+    let expectedTotalSkills: string;
+    let snapshotTotalSkills: string;
+    try {
+      await statsClient.query("BEGIN ISOLATION LEVEL REPEATABLE READ");
+      const expected = await statsClient.query<{ total: string }>(
+        `SELECT count(*)::text AS total
+           FROM skills
+          WHERE archived_at IS NULL`,
+      );
+      expectedTotalSkills = expected.rows[0]?.total ?? "0";
+      const snapshotServices: ApiServices = {
+        ...services,
+        database: {
+          ...services.database,
+          pool: {
+            query: statsClient.query.bind(statsClient),
+          } as unknown as typeof services.database.pool,
+        },
+      };
+      const snapshotApp = createApiApp({
+        requestId: () => `req_public_skills_snapshot_${suffix}`,
+        getServices: async () => snapshotServices,
+      });
+      const snapshotResponse = await snapshotApp.request("/api/v1/stats/public");
+      expect(snapshotResponse.status).toBe(200);
+      snapshotTotalSkills = (
+        await data<{ readonly totalSkills: string }>(snapshotResponse)
+      ).totalSkills;
+      await statsClient.query("COMMIT");
+    } catch (error) {
+      await statsClient.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      statsClient.release();
+    }
     const afterResponse = await app.request("/api/v1/stats/public");
     const responseText = await afterResponse.text();
     expect(afterResponse.status).toBe(200);
@@ -348,13 +422,27 @@ describe("public skill discovery API", () => {
     expect(responseText).not.toContain(measured.skill.id);
     const envelope = JSON.parse(responseText) as {
       readonly data: {
-        readonly totalSkills: number;
-        readonly agentSkillUses: number;
+        readonly totalSkills: string;
+        readonly agentSkillUses: string;
         readonly generatedAt: string;
       };
     };
-    expect(envelope.data.totalSkills).toBe(before.totalSkills + 1);
-    expect(envelope.data.agentSkillUses).toBe(before.agentSkillUses + 3);
+    const workspaceSkillsAfter = await services.database.pool.query<{
+      total: string;
+    }>(
+      `SELECT count(*)::text AS total
+         FROM skills
+        WHERE workspace_id = $1 AND archived_at IS NULL`,
+      [tenant.workspaceId],
+    );
+    expect(BigInt(workspaceSkillsAfter.rows[0]?.total ?? "0")).toBe(
+      BigInt(workspaceSkillsBefore.rows[0]?.total ?? "0") + 1n,
+    );
+    expect(snapshotTotalSkills).toBe(expectedTotalSkills);
+    expect(envelope.data.totalSkills).toMatch(/^(?:0|[1-9][0-9]*)$/u);
+    expect(BigInt(envelope.data.agentSkillUses)).toBeGreaterThanOrEqual(
+      BigInt(before.agentSkillUses) + 4n,
+    );
     expect(envelope.data.generatedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/u);
   });
 });

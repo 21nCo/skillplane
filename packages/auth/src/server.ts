@@ -80,6 +80,8 @@ function defaultEmit(event: SafeAuthEvent): void {
   console.info(JSON.stringify({ component: "auth", ...event }));
 }
 
+const SERVICE_PRINCIPAL_API_KEY_PREFIX = "spk";
+
 export function createSkillplaneAuthServer(
   input: CreateSkillplaneAuthServerInput,
 ): SkillplaneAuthServer {
@@ -111,7 +113,7 @@ export function createSkillplaneAuthServer(
       maxAttempts: 5,
     }),
     authFnApiKeyPlugin({
-      secretPrefix: "spk",
+      secretPrefix: SERVICE_PRINCIPAL_API_KEY_PREFIX,
       ...(input.now ? { now: input.now } : {}),
     }),
     oauth.plugin,
@@ -147,7 +149,9 @@ export function createSkillplaneAuthServer(
         const created = await createApiKey(
           apiKeyConfig,
           {
-            userId: options.ownerUserId,
+            // AuthFn's persisted schema permits unowned keys, but its current
+            // create input type is narrower than that database contract.
+            userId: null as unknown as string,
             name: options.name,
             scopes: [...options.scopes],
             metadata: { ...options.metadata },
@@ -155,15 +159,27 @@ export function createSkillplaneAuthServer(
           },
           {
             ...(input.now ? { now: input.now } : {}),
-            secretPrefix: "spk",
+            secretPrefix: SERVICE_PRINCIPAL_API_KEY_PREFIX,
           },
         );
-        await emit({
-          type: "authfn.api_key.created",
-          requestId: options.requestId,
-          outcome: "created",
-          actorId: options.ownerUserId,
-        });
+        try {
+          await emit({
+            type: "authfn.api_key.created",
+            requestId: options.requestId,
+            outcome: "created",
+            actorId: options.ownerUserId,
+          });
+        } catch {
+          console.error(
+            JSON.stringify({
+              component: "auth",
+              event: "authfn.api_key.created.emit_failed",
+              requestId: options.requestId,
+              actorId: options.ownerUserId,
+              keyId: created.keyId,
+            }),
+          );
+        }
         return { keyId: created.keyId, secret: created.secret };
       },
       authenticate: (secret) =>

@@ -18,7 +18,8 @@
     "@skillplane/config": "workspace:*",
     "@skillplane/ui": "workspace:*",
     "fflate": "catalog:",
-    "phosphor-svelte": "catalog:"
+    "phosphor-svelte": "catalog:",
+    "posthog-js": "catalog:"
   },
   "devDependencies": {
     "@sveltejs/adapter-cloudflare": "catalog:",

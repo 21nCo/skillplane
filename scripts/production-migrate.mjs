@@ -9,6 +9,7 @@ import {
   productionStateDirectory,
   productionDatabase,
   readJson,
+  requireCleanSourceRevision,
   writeJsonAtomic,
 } from "./lib/production-deployment.mjs";
 
@@ -69,6 +70,7 @@ function parseCommandJson(output, name) {
 }
 
 export async function migrateProductionDatabase(options = {}) {
+  const sourceRevision = options.sourceRevision ?? requireCleanSourceRevision();
   const database = options.database ?? productionDatabase();
   const backup = await requireFreshBackup(database);
   const ssl = await verifySsl(database);
@@ -91,6 +93,7 @@ export async function migrateProductionDatabase(options = {}) {
   const state = {
     ok: migration.ok === true && verification.ok === true,
     createdAt: new Date().toISOString(),
+    applicationCommit: sourceRevision.commit,
     databaseFingerprint: database.fingerprint,
     backupSha256: backup.encryptedSha256,
     backupCreatedAt: backup.createdAt,

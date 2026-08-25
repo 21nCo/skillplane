@@ -1,4 +1,10 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import {
+  decodeSessionId,
+  PostHog,
+  PostHogMCPAnalyticsEvent,
+  PostHogMCPAnalyticsProperty,
+} from "@posthog/mcp";
 import type {
   ContextNotesListOutput,
   ContextsListOutput,
@@ -9,7 +15,7 @@ import type {
   WorkspacesListOutput,
 } from "@skillplane/mcp-schema";
 import type { UserPrincipal } from "@skillplane/domain";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createMcpApp } from "../../src/index.js";
 import {
   parseStructured,
@@ -194,6 +200,90 @@ describe("MCP authentication and protocol security", () => {
     await expect(response.json()).resolves.toMatchObject({
       error: "invalid_session",
     });
+  });
+
+  it("emits and flushes PostHog initialization analytics across stateless requests", async () => {
+    const posthog = new PostHog("phc_fixture_posthog_project_token_123456789", {
+      disabled: true,
+    });
+    const capture = vi.spyOn(posthog, "capture");
+    const flush = vi.spyOn(posthog, "flush");
+    const analyticsApp = createMcpApp({
+      getServices: async () => environment.services,
+      posthog,
+    });
+    const request = (body: unknown, sessionId?: string) =>
+      analyticsApp.fetch(
+        new Request(TEST_MCP_RESOURCE, {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${environment.serviceToken}`,
+            "content-type": "application/json",
+            accept: "application/json, text/event-stream",
+            "mcp-protocol-version": "2025-11-25",
+            ...(sessionId ? { "mcp-session-id": sessionId } : {}),
+          },
+          body: JSON.stringify(body),
+        }),
+      );
+
+    const initialize = await request({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-11-25",
+        capabilities: {},
+        clientInfo: { name: "posthog-fixture", version: "1.0.0" },
+      },
+    });
+    expect(initialize.status).toBe(200);
+    const sessionId = initialize.headers.get("mcp-session-id");
+    expect(sessionId).toBeTruthy();
+    const decoded = decodeSessionId(sessionId);
+    expect(decoded).toMatchObject({
+      clientName: "posthog-fixture",
+      clientVersion: "1.0.0",
+      protocolVersion: "2025-11-25",
+    });
+
+    const toolsList = await request(
+      { jsonrpc: "2.0", id: 2, method: "tools/list" },
+      sessionId ?? undefined,
+    );
+    expect(toolsList.status).toBe(200);
+    await expect(toolsList.json()).resolves.toMatchObject({
+      jsonrpc: "2.0",
+      id: 2,
+      result: { tools: expect.any(Array) },
+    });
+
+    await vi.waitFor(() => expect(capture).toHaveBeenCalledTimes(2));
+    const captures = capture.mock.calls.map(([event]) => event);
+    const initializeCapture = captures.find(
+      (event) => event.event === PostHogMCPAnalyticsEvent.Initialize,
+    );
+    expect(initializeCapture).toMatchObject({
+      distinctId: decoded?.sessionId,
+      event: PostHogMCPAnalyticsEvent.Initialize,
+      properties: {
+        [PostHogMCPAnalyticsProperty.SessionId]: decoded?.sessionId,
+        [PostHogMCPAnalyticsProperty.ClientName]: "posthog-fixture",
+        [PostHogMCPAnalyticsProperty.ClientVersion]: "1.0.0",
+        [PostHogMCPAnalyticsProperty.ProtocolVersion]: "2025-11-25",
+      },
+    });
+    const toolsListCapture = captures.find(
+      (event) => event.event === PostHogMCPAnalyticsEvent.ToolsList,
+    );
+    expect(toolsListCapture).toMatchObject({
+      distinctId: decoded?.sessionId,
+      event: PostHogMCPAnalyticsEvent.ToolsList,
+      properties: {
+        [PostHogMCPAnalyticsProperty.SessionId]: decoded?.sessionId,
+      },
+    });
+    expect(flush).toHaveBeenCalledTimes(2);
   });
 });
 

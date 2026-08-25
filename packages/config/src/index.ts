@@ -40,6 +40,8 @@ export interface RuntimeBindings {
   readonly OAUTH_TOKEN_PEPPER?: string;
   readonly OAUTH_ISSUER?: string;
   readonly OAUTH_RESOURCE?: string;
+  readonly POSTHOG_HOST?: string;
+  readonly POSTHOG_PROJECT_TOKEN?: string;
   readonly TURNSTILE_SECRET_KEY?: string;
   readonly TURNSTILE_ALLOWED_HOSTNAMES?: string;
   readonly PUBLIC_TURNSTILE_SITE_KEY?: string;
