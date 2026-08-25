@@ -23,8 +23,10 @@ function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
-function md5(bytes) {
-  return createHash("md5").update(bytes).digest("hex");
+function r2Etag(bytes) {
+  // R2 exposes single-part object ETags as MD5; SHA-256 is verified separately.
+  const hash = createHash("md5"); // NOSONAR -- protocol compatibility, not security.
+  return hash.update(bytes).digest("hex");
 }
 
 function wranglerObjectGet(bucket, key, path, environment) {
@@ -233,7 +235,7 @@ export async function reconcileDevelopmentBundles(options = {}) {
       }
       await verifyObject(sourcePath, reference, "Production");
       const sourceBytes = await readFile(sourcePath);
-      const expectedEtag = md5(sourceBytes);
+      const expectedEtag = r2Etag(sourceBytes);
       expectedEtags.set(reference.key, expectedEtag);
       const current = inventory.get(reference.key);
       if (current) {

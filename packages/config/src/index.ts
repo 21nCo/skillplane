@@ -432,7 +432,7 @@ export function parseOAuthEndpoints(
     throw new ConfigError(
       environment === "local" ? "CONFIG_INVALID" : "PRODUCTION_BINDING_MISSING",
       "OAuth endpoint configuration is unavailable",
-      [...new Set(missing)].sort(),
+      [...new Set(missing)].sort((left, right) => left.localeCompare(right)),
     );
   }
   return { issuer, resource };
