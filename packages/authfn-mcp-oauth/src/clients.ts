@@ -2,6 +2,7 @@ import { isIP } from "node:net";
 import type { PoolClient } from "pg";
 import { consumeRateLimit } from "@skillplane/db";
 import { isOAuthScope, type OAuthRuntime } from "./config.js";
+import { oauthRequestId, writeOAuthClientDeletionAudit } from "./audit.js";
 import { OAuthError } from "./errors.js";
 import { id, keyedHash, randomOpaqueSecret, secureEqual } from "./tokens.js";
 
@@ -387,6 +388,15 @@ export async function getRegisteredClient(
   clientId: string,
   bearer: string | null,
 ): Promise<OAuthClient> {
+  await requireRegistrationAccess(runtime, clientId, bearer);
+  return resolveClient(runtime, clientId);
+}
+
+async function requireRegistrationAccess(
+  runtime: OAuthRuntime,
+  clientId: string,
+  bearer: string | null,
+): Promise<void> {
   if (!bearer?.startsWith("Bearer ")) {
     throw new OAuthError(
       "invalid_client",
@@ -411,5 +421,66 @@ export async function getRegisteredClient(
       401,
     );
   }
-  return resolveClient(runtime, clientId);
+}
+
+export async function deleteRegisteredClient(
+  runtime: OAuthRuntime,
+  clientId: string,
+  bearer: string | null,
+  request: Request,
+): Promise<void> {
+  await requireRegistrationAccess(runtime, clientId, bearer);
+  const database = await runtime.pool.connect();
+  try {
+    await database.query("BEGIN");
+    const locked = await database.query(
+      `SELECT client_id
+        FROM authfn_oauth_clients
+        WHERE client_id = $1 AND source = 'dynamic'
+        FOR NO KEY UPDATE`,
+      [clientId],
+    );
+    if (locked.rowCount !== 1) {
+      throw new OAuthError("invalid_client", "The OAuth client is not registered");
+    }
+    const affectedUsers = await database.query<{ user_id: string }>(
+      `SELECT DISTINCT user_id
+         FROM (
+           SELECT user_id
+             FROM authfn_oauth_authorization_requests
+            WHERE payload->>'clientId' = $1 AND user_id IS NOT NULL
+           UNION SELECT user_id FROM authfn_oauth_consents WHERE client_id = $1
+           UNION SELECT user_id FROM authfn_oauth_authorization_codes WHERE client_id = $1
+           UNION SELECT user_id FROM authfn_oauth_access_tokens WHERE client_id = $1
+           UNION SELECT user_id FROM authfn_oauth_refresh_tokens WHERE client_id = $1
+         ) affected`,
+      [clientId],
+    );
+    await database.query(
+      "DELETE FROM authfn_oauth_authorization_requests WHERE payload->>'clientId' = $1",
+      [clientId],
+    );
+    await database.query(
+      "UPDATE authfn_oauth_refresh_tokens SET parent_id = NULL WHERE client_id = $1",
+      [clientId],
+    );
+    const deleted = await database.query(
+      "DELETE FROM authfn_oauth_clients WHERE client_id = $1 AND source = 'dynamic'",
+      [clientId],
+    );
+    if (deleted.rowCount !== 1) {
+      throw new OAuthError("invalid_client", "The OAuth client is not registered");
+    }
+    await writeOAuthClientDeletionAudit(database, runtime, {
+      clientId,
+      requestId: oauthRequestId(request),
+      affectedUserIds: affectedUsers.rows.map((row) => row.user_id),
+    });
+    await database.query("COMMIT");
+  } catch (error) {
+    await database.query("ROLLBACK");
+    throw error;
+  } finally {
+    database.release();
+  }
 }

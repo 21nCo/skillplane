@@ -56,7 +56,7 @@ describe("local Worker development variables", () => {
     await updateWorkerDevelopmentVariables(path, { RUNTIME_ENV: "local" });
     await chmod(path, 0o644);
     await updateWorkerDevelopmentVariables(path, {
-      DATABASE_URL: "postgresql://skillplane:test@127.0.0.1:55432/skillplane",
+      DATABASE_URL: "postgresql://skillplane:test@127.0.0.1:5703/skillplane",
     });
 
     assert.equal((await stat(path)).mode & 0o777, 0o600);

@@ -5,7 +5,7 @@ import {
   type ApiServices,
 } from "@skillplane/api";
 import { metadataResponse, protectedResourceMetadata } from "@skillplane/auth";
-import type { RuntimeBindings } from "@skillplane/config";
+import { parseOAuthEndpoints, type RuntimeBindings } from "@skillplane/config";
 import { McpToolError } from "@skillplane/mcp-schema";
 import { normalizeBundlePath } from "@skillplane/storage";
 import { instrument, type PostHog } from "@posthog/mcp";
@@ -470,13 +470,17 @@ export function createMcpApp(options: CreateMcpAppOptions = {}) {
     return created;
   };
 
-  const metadata = protectedResourceMetadata({
-    issuer: MCP_ISSUER,
-    resource: MCP_RESOURCE,
-  });
-  app.get("/.well-known/oauth-protected-resource", () => metadataResponse(metadata));
-  app.get("/.well-known/oauth-protected-resource/mcp", () =>
-    metadataResponse(metadata),
+  const metadata = (bindings: RuntimeBindings | undefined) =>
+    protectedResourceMetadata(
+      bindings?.RUNTIME_ENV
+        ? parseOAuthEndpoints(bindings)
+        : { issuer: MCP_ISSUER, resource: MCP_RESOURCE },
+    );
+  app.get("/.well-known/oauth-protected-resource", (context) =>
+    metadataResponse(metadata(context.env)),
+  );
+  app.get("/.well-known/oauth-protected-resource/mcp", (context) =>
+    metadataResponse(metadata(context.env)),
   );
   app.get(
     "/",

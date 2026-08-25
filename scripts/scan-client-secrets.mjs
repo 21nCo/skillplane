@@ -11,7 +11,6 @@ const forbiddenMarkers = [
   "OAUTH_TOKEN_PEPPER",
   "POSTHOG_PROJECT_TOKEN",
   "DATABASE_URL",
-  "RAILWAY_DATABASE_URL",
   "TURNSTILE_SECRET_KEY",
   "postgresql://",
   "postgres://",

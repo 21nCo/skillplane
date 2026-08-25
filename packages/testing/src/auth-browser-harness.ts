@@ -105,6 +105,8 @@ export async function startAuthBrowserHarness(): Promise<AuthBrowserHarness> {
   const messages: CloudflareEmailMessage[] = [];
   const sendfn = createSkillplaneSendFn({
     from: "Skillplane <no-reply@auth.skillplane.dev>",
+    environment: "production",
+    signInUrl: "https://app.skillplane.dev",
     binding: {
       send(message) {
         messages.push(message);

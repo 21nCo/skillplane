@@ -37,8 +37,7 @@ export const workers = Object.freeze({
   },
 });
 
-const railwayHostPattern = /(?:^|\.)(?:rlwy\.net|railway\.app)$/iu;
-const approvedRailwayAliasHosts = new Set(["insouth.db.21n.dev"]);
+const libpqCompatHosts = new Set(["insouth.db.21n.dev"]);
 const hyperdriveIdPattern = /^[a-f0-9]{32}$/u;
 const postHogProjectTokenPattern = /^phc_[A-Za-z0-9_-]{20,}$/u;
 const versionIdPattern =
@@ -75,7 +74,7 @@ export function requireHyperdriveId(value = process.env.CLOUDFLARE_HYPERDRIVE_ID
   const normalized = value?.trim().toLowerCase();
   if (!normalized || !hyperdriveIdPattern.test(normalized)) {
     throw new Error(
-      "CLOUDFLARE_HYPERDRIVE_ID must be the 32-character ID for the skillplane Railway Hyperdrive configuration",
+      "CLOUDFLARE_HYPERDRIVE_ID must be the 32-character ID for the Skillplane production Hyperdrive configuration",
     );
   }
   return normalized;
@@ -144,7 +143,7 @@ export function publicTurnstileSiteKey() {
   return value;
 }
 
-export function parseRailwayDatabaseUrl(raw, source = "Railway database URL") {
+export function parseDirectPostgresUrl(raw, source = "Direct PostgreSQL URL") {
   if (!raw) {
     throw new Error(`${source} is required`);
   }
@@ -158,24 +157,30 @@ export function parseRailwayDatabaseUrl(raw, source = "Railway database URL") {
   const normalizedHost = parsed.hostname.toLowerCase();
   if (
     !["postgres:", "postgresql:"].includes(parsed.protocol) ||
-    (!railwayHostPattern.test(normalizedHost) &&
-      !approvedRailwayAliasHosts.has(normalizedHost)) ||
+    !normalizedHost ||
     !parsed.username ||
     !parsed.password ||
     !database ||
+    database.includes("/") ||
     parsed.hash
   ) {
     throw new Error(
-      `${source} must be a complete public Railway Postgres URL or an approved Railway alias`,
+      `${source} must be a complete PostgreSQL URL with host, credentials, and database name`,
     );
   }
-  if (
-    ["disable", "allow", "prefer"].includes(parsed.searchParams.get("sslmode") ?? "")
-  ) {
+  const sslMode = parsed.searchParams.get("sslmode");
+  if (sslMode && !["require", "verify-ca", "verify-full"].includes(sslMode)) {
     throw new Error(`${source} must not weaken SSL`);
   }
-  parsed.searchParams.set("sslmode", "require");
-  if (approvedRailwayAliasHosts.has(normalizedHost)) {
+  if (!sslMode) parsed.searchParams.set("sslmode", "require");
+  const sslRootCert = parsed.searchParams.get("sslrootcert");
+  // PostgreSQL 17 accepts `sslrootcert=system`, but node-postgres treats every
+  // sslrootcert value as a filesystem path. Omitting this provider hint keeps
+  // verify-full enabled while using Node's trusted system CA set.
+  if (parsed.searchParams.get("sslrootcert") === "system") {
+    parsed.searchParams.delete("sslrootcert");
+  }
+  if (libpqCompatHosts.has(normalizedHost)) {
     parsed.searchParams.set("uselibpqcompat", "true");
   }
   const identity = {
@@ -188,6 +193,10 @@ export function parseRailwayDatabaseUrl(raw, source = "Railway database URL") {
     url: parsed.toString(),
     password: decodeURIComponent(parsed.password),
     identity,
+    tls: {
+      mode: parsed.searchParams.get("sslmode"),
+      rootCert: sslRootCert,
+    },
     fingerprint: sha256(
       JSON.stringify({
         host: identity.host,
@@ -198,13 +207,95 @@ export function parseRailwayDatabaseUrl(raw, source = "Railway database URL") {
   };
 }
 
-export function railwayDatabase() {
-  const raw =
-    process.env.RAILWAY_DATABASE_URL?.trim() ??
-    process.env.MIGRATION_DATABASE_URL?.trim();
-  return parseRailwayDatabaseUrl(
-    raw,
-    "RAILWAY_DATABASE_URL for direct production backup and migration",
+export function postgresDockerTlsArguments(database) {
+  const mode = database.tls?.mode;
+  if (!["require", "verify-ca", "verify-full"].includes(mode)) {
+    throw new Error("The PostgreSQL Docker client requires a strong TLS mode");
+  }
+  const arguments_ = ["--env", `PGSSLMODE=${mode}`];
+  if (mode === "verify-ca" || mode === "verify-full") {
+    const rootCert = database.tls?.rootCert;
+    if (!rootCert || rootCert === "system") {
+      arguments_.push("--env", "PGSSLROOTCERT=/etc/ssl/certs/ca-certificates.crt");
+    } else {
+      arguments_.push(
+        "--volume",
+        `${resolve(rootCert)}:/skillplane-tls/root.crt:ro`,
+        "--env",
+        "PGSSLROOTCERT=/skillplane-tls/root.crt",
+      );
+    }
+  }
+  return arguments_;
+}
+
+export function postgresTlsEvidence(client, serverRow = {}) {
+  const stream = client?.connection?.stream;
+  const clientEncrypted = stream?.encrypted === true;
+  const certificateAuthorized = stream?.authorized === true;
+  const serverReportedEncrypted = serverRow?.ssl === true;
+  if (!clientEncrypted || (!certificateAuthorized && !serverReportedEncrypted)) {
+    throw new Error(
+      "The PostgreSQL client connection is not protected by verified TLS",
+    );
+  }
+  const clientCipher =
+    typeof stream.getCipher === "function" ? stream.getCipher() : undefined;
+  const protocol =
+    serverRow?.version ??
+    (typeof stream.getProtocol === "function" ? stream.getProtocol() : undefined) ??
+    "unknown";
+  const cipher =
+    serverRow?.cipher ?? clientCipher?.standardName ?? clientCipher?.name ?? "unknown";
+  const serverBits = Number(serverRow?.bits ?? 0);
+  const inferredBits = cipher.includes("_256_")
+    ? 256
+    : cipher.includes("_128_")
+      ? 128
+      : 0;
+  return {
+    enabled: true,
+    certificateAuthorized,
+    serverReportedEncrypted,
+    protocol,
+    cipher,
+    bits: serverBits > 0 ? serverBits : inferredBits,
+  };
+}
+
+export function productionDatabase() {
+  const canonical = process.env.SKILLPLANE_PRODUCTION_DATABASE_URL?.trim();
+  const legacy = process.env.RAILWAY_DATABASE_URL?.trim();
+  if (canonical && legacy) {
+    const canonicalDatabase = parseDirectPostgresUrl(
+      canonical,
+      "SKILLPLANE_PRODUCTION_DATABASE_URL",
+    );
+    const legacyDatabase = parseDirectPostgresUrl(
+      legacy,
+      "legacy RAILWAY_DATABASE_URL",
+    );
+    if (canonicalDatabase.fingerprint !== legacyDatabase.fingerprint) {
+      throw new Error(
+        "SKILLPLANE_PRODUCTION_DATABASE_URL conflicts with legacy RAILWAY_DATABASE_URL",
+      );
+    }
+    return canonicalDatabase;
+  }
+  return parseDirectPostgresUrl(
+    canonical || legacy || process.env.MIGRATION_DATABASE_URL?.trim(),
+    canonical
+      ? "SKILLPLANE_PRODUCTION_DATABASE_URL"
+      : legacy
+        ? "legacy RAILWAY_DATABASE_URL"
+        : "SKILLPLANE_PRODUCTION_DATABASE_URL for direct production backup and migration",
+  );
+}
+
+export function productionMigrationSourceDatabase() {
+  return parseDirectPostgresUrl(
+    requireEnvironment("SKILLPLANE_PRODUCTION_MIGRATION_SOURCE_DATABASE_URL"),
+    "SKILLPLANE_PRODUCTION_MIGRATION_SOURCE_DATABASE_URL",
   );
 }
 
@@ -408,7 +499,7 @@ export function assertMigrationApplicationCompatibility(migration, applicationCo
 }
 
 export async function assertRecentDatabaseSafetyState() {
-  const database = railwayDatabase();
+  const database = productionDatabase();
   let backup;
   let migration;
   try {
@@ -455,6 +546,7 @@ export function sanitizeDeploymentRecord(record) {
   return JSON.parse(
     JSON.stringify(record, (key, value) => {
       if (
+        typeof value === "string" &&
         key !== "secretNames" &&
         /(?:secret|password|token|authorization|cookie|databaseUrl|connectionString)/iu.test(
           key,

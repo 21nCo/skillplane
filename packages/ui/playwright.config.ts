@@ -16,14 +16,14 @@ export default defineConfig({
   snapshotPathTemplate: "{testDir}/visual/__screenshots__/{arg}{ext}",
   use: {
     ...devices["Desktop Chrome"],
-    baseURL: "http://127.0.0.1:4176",
+    baseURL: "http://127.0.0.1:5702",
     headless: true,
     reducedMotion: "reduce",
     trace: "retain-on-failure",
   },
   webServer: {
     command: "pnpm exec vite --config vite.config.ts",
-    url: "http://127.0.0.1:4176",
+    url: "http://127.0.0.1:5702",
     reuseExistingServer: false,
     timeout: 30_000,
   },

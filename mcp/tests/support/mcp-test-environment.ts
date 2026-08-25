@@ -335,6 +335,7 @@ export async function startMcpTestEnvironment(
     DATABASE_URL: databaseUrl,
     SKILL_BUNDLES: storage,
     OAUTH_ISSUER: TEST_OAUTH_ISSUER,
+    OAUTH_RESOURCE: TEST_MCP_RESOURCE,
     OAUTH_TOKEN_PEPPER: TEST_OAUTH_PEPPER,
   });
   const skill = await seedSkill(services, owner, short);

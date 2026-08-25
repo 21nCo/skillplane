@@ -10,6 +10,8 @@ import { renderOtpEmail } from "./templates/otp.js";
 export interface CreateSkillplaneSendFnInput {
   readonly binding: CloudflareEmailBinding;
   readonly from: string;
+  readonly environment: "local" | "preview" | "production";
+  readonly signInUrl: string;
 }
 
 export interface SkillplaneSendFn {
@@ -39,13 +41,18 @@ function toDeliveryFailure(error: unknown): SkillplaneEmailDeliveryError {
   return new SkillplaneEmailDeliveryError("E_UNKNOWN", true);
 }
 
-function createDelivery(client: SendFnEdgeClient): AuthFnDeliveryProvider {
+function createDelivery(
+  client: SendFnEdgeClient,
+  context: Pick<CreateSkillplaneSendFnInput, "environment" | "signInUrl">,
+): AuthFnDeliveryProvider {
   return {
     async send(input: AuthFnDeliveryRequest) {
       const rendered = renderOtpEmail({
         code: input.code,
         expiresInMinutes: 10,
         purpose: input.purpose,
+        environment: context.environment,
+        signInUrl: context.signInUrl,
       });
       try {
         const transaction = await client.email({
@@ -88,7 +95,7 @@ export function createSkillplaneSendFn(
   });
   return {
     client,
-    delivery: createDelivery(client),
+    delivery: createDelivery(client, input),
     close: () => client.close(),
   };
 }

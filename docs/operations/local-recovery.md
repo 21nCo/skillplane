@@ -1,11 +1,11 @@
 # Local backup, restore, and R2 inventory recovery
 
 These commands rehearse Skillplane recovery against the local Docker Postgres
-runtime. They never connect to Railway or Cloudflare. Destructive restore
+runtime. They never connect to a remote PostgreSQL provider or Cloudflare. Destructive restore
 operations accept only a loopback Postgres URL whose database name ends in
 `_test`.
 
-The project-owned Postgres container binds to host port `55432` by default.
+The project-owned Postgres container binds to host port `5703` by default.
 Starting or migrating it updates only `RUNTIME_ENV`, `DATABASE_ADAPTER`, and
 `DATABASE_URL` in the ignored Worker variable files. Authentication and OAuth
 values are preserved. Run `pnpm local:init` once after the first `pnpm db:up`
@@ -39,7 +39,7 @@ Use a local database name ending in `_test`:
 ```bash
 pnpm db:restore -- \
   --input .data/backups/skillplane.dump \
-  --database-url postgresql://skillplane:LOCAL_PASSWORD@127.0.0.1:55432/skillplane_restore_test
+  --database-url postgresql://skillplane:LOCAL_PASSWORD@127.0.0.1:5703/skillplane_restore_test
 ```
 
 Restore verifies the dump checksum before creating the target. It then recreates
@@ -86,5 +86,5 @@ backs up, restores into a second database, verifies schema and R2 inventory
 equivalence, rejects a corrupt checksum, and exercises fail-closed orphan
 cleanup. All rehearsal databases are dropped in `finally` cleanup.
 
-For production Railway/Hyperdrive incident policy, retention, and RPO/RTO, see
+For production PostgreSQL/Hyperdrive incident policy, retention, and RPO/RTO, see
 `docs/operations/database-recovery.md`.

@@ -1,13 +1,13 @@
 # Production backup and restore
 
-Railway managed backups and point-in-time recovery are the first recovery
+Provider-managed backups and point-in-time recovery are the first recovery
 layer. Skillplane also creates an encrypted logical backup before every
 production migration so database metadata can be reconciled with immutable R2
 objects.
 
 ## Create and verify a backup
 
-Set `RAILWAY_DATABASE_URL` and
+Set `SKILLPLANE_PRODUCTION_DATABASE_URL` and
 `SKILLPLANE_BACKUP_ENCRYPTION_KEY`, then run:
 
 ```bash
@@ -16,11 +16,11 @@ pnpm db:backup:production
 
 The backup process:
 
-- verifies Railway SSL through `pg_stat_ssl`;
+- verifies PostgreSQL SSL through `pg_stat_ssl`;
 - exports one repeatable-read snapshot for the manifest inventory and
   `pg_dump`;
 - captures the migration ledger and every R2 bundle reference;
-- runs a Postgres client image matching the Railway server major version and
+- runs a Postgres client image matching the server major version and
   creates a custom-format dump with owner and privilege data removed;
 - encrypts in memory with AES-256-GCM using a unique salt and IV and a
   scrypt-derived key;
@@ -36,13 +36,13 @@ inside the encrypted database archive. The manifest does not contain the
 passphrase or database credentials.
 
 Copy the encrypted archive and manifest to an approved encrypted backup store
-outside the Railway account. Store the encryption key separately. Enable a
+outside the database-provider account. Store the encryption key separately. Enable a
 retention policy appropriate for audit and workspace data; never use an R2
 lifecycle rule to expire published skill bundles.
 
 ## Recovery drill
 
-Create a new, empty Railway Postgres database. Never reuse the production
+Create a new, empty PostgreSQL database. Never reuse the production
 source. Set:
 
 - `SKILLPLANE_RECOVERY_DATABASE_URL` to its public TCP-proxy URL;
@@ -56,7 +56,7 @@ pnpm db:restore:production -- \
   --confirm-empty-database <recovery-database-name>
 ```
 
-The restore command fails unless the target is an empty, SSL-protected Railway
+The restore command fails unless the target is an empty, SSL-protected PostgreSQL
 database with a fingerprint different from the backup source. It decrypts into
 a unique mode-`0700` temporary directory, supplies the database password to
 Postgres through a temporary `.pgpass`, restores with `--exit-on-error`, and
@@ -68,8 +68,8 @@ remaining committed migrations, runs the complete database verifier, and
 writes sanitized drill evidence under
 `.data/production/restore-drills/`.
 
-The recovery database remains for operator inspection. Delete it through
-Railway only after the evidence has been reviewed; the script never drops a
+The recovery database remains for operator inspection. Delete it through the
+database provider only after the evidence has been reviewed; the script never drops a
 remote database.
 
 ## R2 reconciliation
@@ -87,13 +87,13 @@ Before promoting a recovered database:
    succeed. Preserve all referenced objects.
 
 After reconciliation, repoint or recreate the skillplane Hyperdrive
-configuration for the recovered Railway origin, supply the resulting ID to the
+configuration for the recovered PostgreSQL origin, supply the resulting ID to the
 normal deployment process, and run every production smoke, OAuth/MCP, email,
 and rollback gate before moving traffic.
 
 ## Recovery objectives
 
-- Managed Railway PITR covers recent database incidents.
+- Provider-managed PITR covers recent database incidents.
 - The pre-migration logical backup provides a portable metadata recovery point.
 - Immutable R2 objects plus the manifest reference inventory reconstruct skill
   version bytes.

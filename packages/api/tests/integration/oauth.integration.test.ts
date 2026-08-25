@@ -75,6 +75,94 @@ describe("OAuth 2.1 authorization server integration", () => {
     });
   });
 
+  it("deletes a dynamic client with its registration credential", async () => {
+    const disposable = await environment.registerClient({
+      name: "Disposable Skillplane Test Agent",
+    });
+    const grant = await environment.authorize(disposable);
+    const exchange = await environment.exchangeCode(grant);
+    expect(exchange.status).toBe(200);
+    const tokens = (await exchange.json()) as {
+      readonly access_token: string;
+      readonly refresh_token: string;
+    };
+    const refresh = await environment.app.fetch(
+      new Request(
+        `${OAUTH_ISSUER}/auth/oauth/token`,
+        oauthForm({
+          grant_type: "refresh_token",
+          client_id: disposable.clientId,
+          refresh_token: tokens.refresh_token,
+        }),
+      ),
+    );
+    expect(refresh.status).toBe(200);
+    const rotated = (await refresh.json()) as {
+      readonly access_token: string;
+      readonly refresh_token: string;
+    };
+    const pendingGrant = await environment.authorize(disposable);
+    const deleted = await environment.app.fetch(
+      new Request(disposable.registrationClientUri, {
+        method: "DELETE",
+        headers: {
+          authorization: `Bearer ${disposable.registrationAccessToken}`,
+        },
+      }),
+    );
+
+    expect(deleted.status).toBe(204);
+    const readAfterDelete = await environment.app.fetch(
+      new Request(disposable.registrationClientUri, {
+        headers: {
+          authorization: `Bearer ${disposable.registrationAccessToken}`,
+        },
+      }),
+    );
+    expect(readAfterDelete.status).toBe(401);
+    await expect(
+      verifyTestAccessToken(environment, rotated.access_token),
+    ).rejects.toMatchObject({ code: "invalid_grant", status: 401 });
+    const refreshAfterDelete = await environment.app.fetch(
+      new Request(
+        `${OAUTH_ISSUER}/auth/oauth/token`,
+        oauthForm({
+          grant_type: "refresh_token",
+          client_id: disposable.clientId,
+          refresh_token: rotated.refresh_token,
+        }),
+      ),
+    );
+    expect(refreshAfterDelete.status).toBe(401);
+    await expect(refreshAfterDelete.json()).resolves.toMatchObject({
+      error: "invalid_client",
+    });
+    const codeAfterDelete = await environment.exchangeCode(pendingGrant);
+    expect(codeAfterDelete.status).toBe(401);
+    await expect(codeAfterDelete.json()).resolves.toMatchObject({
+      error: "invalid_client",
+    });
+    const audit = await environment.services.database.pool.query<{
+      actor_id: string;
+      actor_type: string;
+      event_type: string;
+      resource_id: string;
+    }>(
+      `SELECT actor_id, actor_type, event_type, resource_id
+         FROM audit_events
+        WHERE event_type = 'oauth.client.deleted' AND resource_id = $1`,
+      [disposable.clientId],
+    );
+    expect(audit.rows).toEqual([
+      {
+        actor_id: "system:oauth-client-registry",
+        actor_type: "system",
+        event_type: "oauth.client.deleted",
+        resource_id: disposable.clientId,
+      },
+    ]);
+  });
+
   it("resolves an HTTPS Client ID Metadata Document with exact identifier matching", async () => {
     const clientId = "https://client.example.test/oauth/client.json";
     const resolved = await resolveClient(

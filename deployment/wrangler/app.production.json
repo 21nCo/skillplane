@@ -34,6 +34,7 @@
     "AUTH_MODE": "otp",
     "EMAIL_PROVIDER": "cloudflare-email",
     "OAUTH_ISSUER": "https://app.skillplane.dev",
+    "OAUTH_RESOURCE": "https://mcp.skillplane.dev/mcp",
     "TURNSTILE_ALLOWED_HOSTNAMES": "app.skillplane.dev",
     "SKILLPLANE_OTP_FROM": "Skillplane <no-reply@auth.skillplane.dev>"
   },

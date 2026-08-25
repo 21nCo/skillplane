@@ -5,8 +5,10 @@ import { resolve } from "node:path";
 import {
   isMain,
   portablePath,
+  productionIssuer,
   productionPostHogHost,
   productionPostHogProxyHost,
+  productionResource,
   publicTurnstileSiteKey,
   requireHyperdriveId,
   requirePostHogProjectToken,
@@ -56,6 +58,12 @@ function validateRenderedConfig(name, config, hyperdriveId, postHogProjectToken)
     config.r2_buckets?.[0]?.bucket_name !== "skillplane-skill-bundles"
   ) {
     throw new Error(`The ${name} production binding inventory is incomplete`);
+  }
+  if (
+    config.vars?.OAUTH_ISSUER !== productionIssuer ||
+    config.vars?.OAUTH_RESOURCE !== productionResource
+  ) {
+    throw new Error(`The ${name} production OAuth identity is not canonical`);
   }
   if (
     name === "app" &&

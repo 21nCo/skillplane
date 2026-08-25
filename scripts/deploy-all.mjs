@@ -107,7 +107,7 @@ export async function deployAll() {
     applicationCommit: sourceRevision.commit,
     sourceDigest,
     topology: {
-      databaseOrigin: "railway-postgres",
+      databaseOrigin: "postgresql",
       workerDatabasePath: "cloudflare-hyperdrive",
       runtimeDirectDatabaseUrl: false,
       hosts: {
@@ -120,7 +120,7 @@ export async function deployAll() {
       hyperdrive: {
         binding: "HYPERDRIVE",
         id: hyperdriveId,
-        railwayOriginMatched: hyperdrive.railwayOriginMatched,
+        databaseOriginMatched: hyperdrive.databaseOriginMatched,
         queryCacheDisabled: hyperdrive.queryCacheDisabled,
       },
       r2: { binding: "SKILL_BUNDLES", ...r2 },

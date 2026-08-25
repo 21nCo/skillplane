@@ -33,6 +33,7 @@ const email = {
 const fixtureSecret = "fixture-only-secret-material-32-bytes";
 
 function productionBindings(overrides: Partial<RuntimeBindings> = {}): RuntimeBindings {
+  const environment = overrides.RUNTIME_ENV ?? "production";
   return {
     RUNTIME_ENV: "production",
     DATABASE_ADAPTER: "postgres",
@@ -48,7 +49,10 @@ function productionBindings(overrides: Partial<RuntimeBindings> = {}): RuntimeBi
     TURNSTILE_SECRET_KEY: fixtureSecret,
     TURNSTILE_ALLOWED_HOSTNAMES: "app.skillplane.dev,skillplane.dev",
     PUBLIC_TURNSTILE_SITE_KEY: "fixture-site-key",
-    SKILLPLANE_OTP_FROM: "Skillplane <no-reply@auth.skillplane.dev>",
+    SKILLPLANE_OTP_FROM:
+      environment === "production"
+        ? "Skillplane <no-reply@auth.skillplane.dev>"
+        : "Skillplane Dev <no-reply@auth-dev.skillplane.dev>",
     ...overrides,
   };
 }
@@ -64,6 +68,10 @@ describe("parseRuntimeConfig", () => {
     });
 
     expect(config.environment).toBe("local");
+    expect(config.oauth).toMatchObject({
+      issuer: "http://localhost:5700",
+      resource: "http://127.0.0.1:5701/mcp",
+    });
     expect(config.database.source).toBe("direct-postgres");
     expect(config.diagnostics).toEqual({
       environment: "local",
@@ -72,6 +80,128 @@ describe("parseRuntimeConfig", () => {
       email: "not-required-local",
       secretPresence: { authfn: false, turnstile: false, oauth: true },
     });
+  });
+
+  it("accepts local OTP only with the isolated development sender", () => {
+    const config = parseRuntimeConfig({
+      RUNTIME_ENV: "local",
+      DATABASE_ADAPTER: "postgres",
+      DATABASE_URL: "postgresql://skillplane:fixture@127.0.0.1:5432/skillplane",
+      AUTH_MODE: "otp",
+      EMAIL_PROVIDER: "cloudflare-email",
+      SKILL_BUNDLES: objectStorage,
+      SEND_EMAIL: email,
+      AUTHFN_SECRET: fixtureSecret,
+      TURNSTILE_SECRET_KEY: fixtureSecret,
+      TURNSTILE_ALLOWED_HOSTNAMES: "localhost,127.0.0.1",
+      PUBLIC_TURNSTILE_SITE_KEY: "fixture-site-key",
+      SKILLPLANE_OTP_FROM: "Skillplane Local <no-reply@auth-dev.skillplane.dev>",
+    });
+
+    expect(config.email?.from).toBe(
+      "Skillplane Local <no-reply@auth-dev.skillplane.dev>",
+    );
+    expect(config.environment).toBe("local");
+  });
+
+  it("accepts distinct HTTPS OAuth endpoints for preview deployments", () => {
+    const config = parseRuntimeConfig(
+      productionBindings({
+        RUNTIME_ENV: "preview",
+        OAUTH_ISSUER: "https://app-dev.skillplane.dev",
+        OAUTH_RESOURCE: "https://mcp-dev.skillplane.dev/mcp",
+        TURNSTILE_ALLOWED_HOSTNAMES: "app-dev.skillplane.dev",
+      }),
+    );
+
+    expect(config.environment).toBe("preview");
+    expect(config.oauth).toMatchObject({
+      issuer: "https://app-dev.skillplane.dev",
+      resource: "https://mcp-dev.skillplane.dev/mcp",
+    });
+  });
+
+  it("uses the canonical preview OAuth defaults without explicit overrides", () => {
+    const config = parseRuntimeConfig(
+      productionBindings({
+        RUNTIME_ENV: "preview",
+        OAUTH_ISSUER: undefined,
+        OAUTH_RESOURCE: undefined,
+        TURNSTILE_ALLOWED_HOSTNAMES: "app-dev.skillplane.dev",
+      }),
+    );
+
+    expect(config.oauth).toMatchObject({
+      issuer: "https://app-dev.skillplane.dev",
+      resource: "https://mcp-dev.skillplane.dev/mcp",
+    });
+  });
+
+  it("rejects production sender identity in preview", () => {
+    expect(() =>
+      parseRuntimeConfig(
+        productionBindings({
+          RUNTIME_ENV: "preview",
+          SKILLPLANE_OTP_FROM: "Skillplane <no-reply@auth.skillplane.dev>",
+          TURNSTILE_ALLOWED_HOSTNAMES: "app-dev.skillplane.dev",
+        }),
+      ),
+    ).toThrowError(
+      expect.objectContaining({
+        code: "PRODUCTION_BINDING_MISSING",
+        fields: ["SKILLPLANE_OTP_FROM"],
+      }),
+    );
+  });
+
+  it("rejects development sender identity in production", () => {
+    expect(() =>
+      parseRuntimeConfig(
+        productionBindings({
+          SKILLPLANE_OTP_FROM: "Skillplane Dev <no-reply@auth-dev.skillplane.dev>",
+        }),
+      ),
+    ).toThrowError(
+      expect.objectContaining({
+        code: "PRODUCTION_BINDING_MISSING",
+        fields: ["SKILLPLANE_OTP_FROM"],
+      }),
+    );
+  });
+
+  it("rejects non-canonical OAuth endpoint paths", () => {
+    expect(() =>
+      parseRuntimeConfig({
+        RUNTIME_ENV: "local",
+        DATABASE_ADAPTER: "postgres",
+        DATABASE_URL: "postgresql://skillplane:fixture@127.0.0.1:5432/skillplane",
+        AUTH_MODE: "disabled",
+        SKILL_BUNDLES: objectStorage,
+        OAUTH_ISSUER: "https://app.local.skillplane.dev/prefix",
+        OAUTH_RESOURCE: "https://mcp.local.skillplane.dev/mcp/extra",
+      }),
+    ).toThrowError(
+      expect.objectContaining({
+        code: "CONFIG_INVALID",
+        fields: ["OAUTH_ISSUER", "OAUTH_RESOURCE"],
+      }),
+    );
+  });
+
+  it("rejects non-production OAuth identities in production", () => {
+    expect(() =>
+      parseRuntimeConfig(
+        productionBindings({
+          OAUTH_ISSUER: "https://app-dev.skillplane.dev",
+          OAUTH_RESOURCE: "https://mcp-dev.skillplane.dev/mcp",
+        }),
+      ),
+    ).toThrowError(
+      expect.objectContaining({
+        code: "PRODUCTION_BINDING_MISSING",
+        fields: ["OAUTH_ISSUER", "OAUTH_RESOURCE"],
+      }),
+    );
   });
 
   it("accepts complete production bindings without exposing secrets", () => {

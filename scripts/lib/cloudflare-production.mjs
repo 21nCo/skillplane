@@ -38,18 +38,16 @@ export function assertHyperdriveOriginRecord(database, expectedIdentity) {
     host: origin?.host?.trim().toLowerCase(),
     port: String(origin?.port ?? "5432"),
     database: origin?.database,
-    username: origin?.user,
   };
   if (
     !database ||
     database.id !== requireHyperdriveId(database.id) ||
     actual.host !== expectedIdentity.host ||
     actual.port !== expectedIdentity.port ||
-    actual.database !== expectedIdentity.database ||
-    actual.username !== expectedIdentity.username
+    actual.database !== expectedIdentity.database
   ) {
     throw new Error(
-      "CLOUDFLARE_HYPERDRIVE_ID does not target the configured Railway database",
+      "CLOUDFLARE_HYPERDRIVE_ID does not target the configured production database",
     );
   }
   if (database.caching?.disabled !== true) {
@@ -59,7 +57,7 @@ export function assertHyperdriveOriginRecord(database, expectedIdentity) {
   }
   return {
     id: database.id,
-    railwayOriginMatched: true,
+    databaseOriginMatched: true,
     queryCacheDisabled: true,
   };
 }

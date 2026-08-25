@@ -7,7 +7,7 @@ export default defineConfig({
   plugins: [tailwindcss(), svelte()],
   server: {
     host: "127.0.0.1",
-    port: 4176,
+    port: 5702,
     strictPort: true,
   },
 });
