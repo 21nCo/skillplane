@@ -8,7 +8,7 @@
 - Launcher: `Codex Desktop`
 - Issue: Linear `SKI-6` — Adopt McpFn for Skillplane MCP runtime, authorization, and quality gates
 - Skillplane base: `main` at `c13917c360b326d6199162de63df9e61e4885944`
-- McpFn source: local `MCP-2` worktree at base `ab038917e7f3700a868eb8946fece2805c9439e0`
+- McpFn source: local `MCP-2` worktree at base `9a3009c765626090010acae250ddd105a28b0558`
 - McpFn source digest: `sha256:51bf866cc5ec5cb0ba3dee17fdbbd589f3dcaeab388c9685c25828fbde252da9`
 - Publication state: publication authorized on `codex/ski-6-mcpfn-runtime`; merge, deployment, live-provider verification, and Linear status transition remain out of scope
 
@@ -51,7 +51,7 @@ Skillplane directly constructed the MCP SDK server and Streamable HTTP transport
 
 - McpFn `@mcpfn/auth`, `@mcpfn/core`, and `@mcpfn/testing` tests: PASS (`36`, `62`, and `20` tests).
 - McpFn focused typecheck and builds: PASS.
-- `pnpm mcpfn:verify`: PASS at base `ab038917e7f3700a868eb8946fece2805c9439e0` and digest `sha256:51bf866cc5ec5cb0ba3dee17fdbbd589f3dcaeab388c9685c25828fbde252da9`.
+- `pnpm mcpfn:verify`: PASS at base `9a3009c765626090010acae250ddd105a28b0558` and digest `sha256:51bf866cc5ec5cb0ba3dee17fdbbd589f3dcaeab388c9685c25828fbde252da9`.
 - `pnpm boundaries:verify`: PASS.
 - `pnpm test:mcp:contract`: PASS (`8/8`).
 - `pnpm test:mcp:conformance`: PASS (`1/1` authenticated run). Retained summary records `5` hard-gate successes, `25` reviewed non-advertised-capability failures, and `1` reviewed stateless-session warning.
