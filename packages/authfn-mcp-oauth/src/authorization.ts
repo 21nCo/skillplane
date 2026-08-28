@@ -4,11 +4,11 @@ import {
   requireCookieSession,
 } from "@authfn/core";
 import type { AuthFnPluginRuntimeContext } from "@authfn/core";
+import type { McpFnValidatedAuthorizationRequest } from "@mcpfn/auth";
 import { consumeRateLimit } from "@skillplane/db";
 import type { PoolClient } from "pg";
 import { writeOAuthAudit, oauthRequestId } from "./audit.js";
-import { resolveClient, type OAuthClient } from "./clients.js";
-import { isOAuthScope, type OAuthRuntime, type OAuthScope } from "./config.js";
+import type { OAuthRuntime, OAuthScope } from "./config.js";
 import { OAuthError, noStoreHeaders } from "./errors.js";
 import { issueAuthorizationCode } from "./codes.js";
 import { id, keyedHash, signPayload, verifySignedPayload } from "./tokens.js";
@@ -39,102 +39,29 @@ interface StoredAuthorizationRequest {
   readonly consumed_at: Date | null;
 }
 
-function singleParameter(url: URL, name: string, required = true): string | null {
-  const values = url.searchParams.getAll(name);
-  if (values.length > 1 || (required && values.length !== 1) || values[0] === "") {
-    throw new OAuthError("invalid_request", `${name} must be provided exactly once`);
+function storedAuthorizationRequest(
+  input: McpFnValidatedAuthorizationRequest,
+): ValidatedAuthorizationRequest {
+  if (!input.resource) {
+    throw new OAuthError("invalid_target", "The requested resource is required");
   }
-  return values[0] ?? null;
-}
-
-function requiredParameter(url: URL, name: string): string {
-  const value = singleParameter(url, name);
-  if (value === null) {
-    throw new OAuthError("invalid_request", `${name} is required`);
-  }
-  return value;
-}
-
-function validateState(value: string | null): string | undefined {
-  if (value === null) return undefined;
-  let hasControlCharacter = false;
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    if (code <= 31 || code === 127) {
-      hasControlCharacter = true;
-      break;
-    }
-  }
-  if (value.length < 1 || value.length > 512 || hasControlCharacter) {
-    throw new OAuthError("invalid_request", "state is invalid");
-  }
-  return value;
-}
-
-function readScopes(value: string): readonly OAuthScope[] {
-  const scopes = [...new Set(value.split(" ").filter(Boolean))];
-  if (
-    scopes.length < 1 ||
-    scopes.length > 20 ||
-    scopes.some((scope) => !isOAuthScope(scope))
-  ) {
-    throw new OAuthError(
-      "invalid_scope",
-      "One or more requested scopes are unsupported",
-    );
-  }
-  return scopes as OAuthScope[];
-}
-
-export async function validateAuthorizationRequest(
-  runtime: OAuthRuntime,
-  url: URL,
-): Promise<ValidatedAuthorizationRequest> {
-  if (singleParameter(url, "response_type") !== "code") {
-    throw new OAuthError(
-      "unsupported_response_type",
-      "Only response_type=code is supported",
-    );
-  }
-  const clientId = requiredParameter(url, "client_id");
-  const client = await resolveClient(runtime, clientId, {
-    refreshMetadata: clientId.startsWith("https://"),
-  });
-  const redirectUri = requiredParameter(url, "redirect_uri");
-  if (!client.redirectUris.includes(redirectUri)) {
-    throw new OAuthError(
-      "invalid_request",
-      "redirect_uri is not registered for this client",
-    );
-  }
-  const resource = requiredParameter(url, "resource");
-  if (resource !== runtime.resource) {
-    throw new OAuthError("invalid_target", "The requested resource is not supported");
-  }
-  if (singleParameter(url, "code_challenge_method") !== "S256") {
-    throw new OAuthError("invalid_request", "PKCE S256 is required");
-  }
-  const codeChallenge = requiredParameter(url, "code_challenge");
-  if (!/^[A-Za-z0-9_-]{43}$/.test(codeChallenge)) {
-    throw new OAuthError(
-      "invalid_request",
-      "code_challenge must be a valid S256 challenge",
-    );
-  }
-  const parsedRedirect = new URL(redirectUri);
-  const state = validateState(singleParameter(url, "state", false));
+  const parsedRedirect = new URL(input.redirectUri);
+  const clientName =
+    typeof input.client.metadata.client_name === "string"
+      ? input.client.metadata.client_name
+      : input.client.clientId;
   return {
-    clientId,
-    clientName: client.clientName,
-    redirectUri,
+    clientId: input.client.clientId,
+    clientName,
+    redirectUri: input.redirectUri,
     redirectHost: parsedRedirect.host,
     loopbackRedirect:
       parsedRedirect.protocol === "http:" &&
       ["localhost", "127.0.0.1", "::1"].includes(parsedRedirect.hostname),
-    resource,
-    scopes: readScopes(requiredParameter(url, "scope")),
-    ...(state !== undefined ? { state } : {}),
-    codeChallenge,
+    resource: input.resource,
+    scopes: input.scopes as OAuthScope[],
+    ...(input.state !== undefined ? { state: input.state } : {}),
+    codeChallenge: input.codeChallenge,
   };
 }
 
@@ -227,10 +154,11 @@ async function loadStoredRequest(
   return stored;
 }
 
-export async function authorize(
+export async function beginAuthorization(
   runtime: OAuthRuntime,
   authfn: AuthFnPluginRuntimeContext,
   request: Request,
+  input: McpFnValidatedAuthorizationRequest,
 ): Promise<Response> {
   const rate = await consumeRateLimit(
     runtime.pool,
@@ -248,7 +176,7 @@ export async function authorize(
     );
   }
   const state = await getCookieSessionState(authfn.config, request);
-  const validated = await validateAuthorizationRequest(runtime, new URL(request.url));
+  const validated = storedAuthorizationRequest(input);
   const token = await preserveAuthorizationRequest(runtime, validated, state.user?.id);
   const consentPath = `/oauth/consent?request=${encodeURIComponent(token)}`;
   if (!state.user) {
@@ -391,16 +319,4 @@ export async function decideConsent(
   } finally {
     database.release();
   }
-}
-
-export function clientForAuthorization(
-  request: ValidatedAuthorizationRequest,
-): OAuthClient {
-  return {
-    clientId: request.clientId,
-    clientName: request.clientName,
-    redirectUris: [request.redirectUri],
-    tokenEndpointAuthMethod: "none",
-    source: request.clientId.startsWith("https://") ? "client_metadata" : "dynamic",
-  };
 }

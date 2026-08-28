@@ -27,8 +27,6 @@ export interface RegisteredTestClient {
   readonly clientId: string;
   readonly clientName: string;
   readonly redirectUri: string;
-  readonly registrationAccessToken: string;
-  readonly registrationClientUri: string;
 }
 
 export interface OAuthGrant {
@@ -118,16 +116,12 @@ export async function startOAuthTestEnvironment(
       const body = (await response.json()) as {
         readonly client_id: string;
         readonly client_name: string;
-        readonly registration_access_token: string;
-        readonly registration_client_uri: string;
       };
       clientIds.add(body.client_id);
       return {
         clientId: body.client_id,
         clientName: body.client_name,
         redirectUri,
-        registrationAccessToken: body.registration_access_token,
-        registrationClientUri: body.registration_client_uri,
       };
     },
     async authorize(client, scopes = "skills:read contexts:read") {

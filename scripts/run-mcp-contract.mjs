@@ -28,7 +28,7 @@ const result = spawnSync(
     "run",
     "--exclude",
     "dist/**",
-    "tests/conformance/mcp.official-conformance.test.ts",
+    "tests/conformance/mcp.conformance.test.ts",
   ],
   {
     cwd: repoRoot,

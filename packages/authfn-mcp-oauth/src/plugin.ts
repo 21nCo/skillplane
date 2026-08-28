@@ -3,23 +3,28 @@ import {
   type AuthFnPlugin,
   type AuthFnPluginRuntimeContext,
 } from "@authfn/core";
-import { consumeRateLimit } from "@skillplane/db";
-import { authorize, consentDetails, decideConsent } from "./authorization.js";
 import {
-  deleteRegisteredClient,
-  getRegisteredClient,
+  createMcpAuthorizationCompatibilityHandler,
+  McpFnHostedAuthorizationError,
+  type McpFnAuthorizationCompatibilityOptions,
+  type McpFnValidatedAuthorizationRequest,
+} from "@mcpfn/auth";
+import { consumeRateLimit } from "@skillplane/db";
+import { beginAuthorization, consentDetails, decideConsent } from "./authorization.js";
+import {
+  isClientMetadataDocumentUrlAllowed,
   registerClient,
-  resolveClient,
+  resolveRegisteredClient,
 } from "./clients.js";
 import {
   normalizeOAuthConfig,
+  OAUTH_SCOPES,
   type AuthFnMcpOAuthConfig,
   type OAuthRuntime,
 } from "./config.js";
 import { exchangeAuthorizationCode } from "./codes.js";
 import {
   authorizationErrorRedirect,
-  noStoreHeaders,
   OAuthError,
   oauthErrorResponse,
 } from "./errors.js";
@@ -27,121 +32,11 @@ import { exchangeRefreshToken } from "./refresh.js";
 import { revokeToken } from "./revocation.js";
 import { createOAuthSchema } from "./schema.js";
 
-function json(value: unknown, status = 200): Response {
-  return new Response(JSON.stringify(value), {
-    status,
-    headers: noStoreHeaders({ "content-type": "application/json" }),
-  });
-}
-
-async function readJson(request: Request): Promise<Record<string, unknown>> {
-  const length = Number(request.headers.get("content-length") ?? "0");
-  if (
-    length > 32_768 ||
-    !request.headers.get("content-type")?.startsWith("application/json")
-  ) {
-    throw new OAuthError(
-      "invalid_request",
-      "A small application/json body is required",
-    );
-  }
-  try {
-    const body: unknown = await request.json();
-    if (!body || typeof body !== "object" || Array.isArray(body)) {
-      throw new Error("not an object");
-    }
-    return body as Record<string, unknown>;
-  } catch {
-    throw new OAuthError("invalid_request", "The JSON request body is invalid");
-  }
-}
-
-async function readForm(request: Request): Promise<URLSearchParams> {
-  if (
-    request.headers.get("authorization")?.startsWith("Basic ") ||
-    !request.headers
-      .get("content-type")
-      ?.startsWith("application/x-www-form-urlencoded")
-  ) {
-    throw new OAuthError(
-      "invalid_client",
-      "Public clients must use an application/x-www-form-urlencoded body",
-    );
-  }
-  const length = Number(request.headers.get("content-length") ?? "0");
-  if (length > 16_384) {
-    throw new OAuthError("invalid_request", "The form request is too large");
-  }
-  const text = await request.text();
-  if (Buffer.byteLength(text, "utf8") > 16_384) {
-    throw new OAuthError("invalid_request", "The form request is too large");
-  }
-  return new URLSearchParams(text);
-}
-
-function formValue(
-  form: URLSearchParams,
-  name: string,
-  required = true,
-): string | undefined {
-  const values = form.getAll(name);
-  if (
-    values.length > 1 ||
-    (required && values.length !== 1) ||
-    values.some((value) => value.length === 0)
-  ) {
-    throw new OAuthError("invalid_request", `${name} must be provided exactly once`);
-  }
-  return values[0];
-}
-
-function requiredFormValue(form: URLSearchParams, name: string): string {
-  const value = formValue(form, name);
-  if (value === undefined) {
-    throw new OAuthError("invalid_request", `${name} is required`);
-  }
-  return value;
-}
-
-async function safeAuthorize(
+async function tokenRateLimit(
   runtime: OAuthRuntime,
-  authfn: AuthFnPluginRuntimeContext,
+  clientId: string,
   request: Request,
-): Promise<Response> {
-  try {
-    return await authorize(runtime, authfn, request);
-  } catch (error) {
-    if (!(error instanceof OAuthError)) return oauthErrorResponse(error);
-    const url = new URL(request.url);
-    const clientId = url.searchParams.get("client_id");
-    const redirectUri = url.searchParams.get("redirect_uri");
-    if (
-      clientId &&
-      redirectUri &&
-      url.searchParams.getAll("redirect_uri").length === 1
-    ) {
-      try {
-        const client = await resolveClient(runtime, clientId);
-        if (client.redirectUris.includes(redirectUri)) {
-          return authorizationErrorRedirect(
-            redirectUri,
-            error.code,
-            error.description,
-            url.searchParams.get("state") ?? undefined,
-          );
-        }
-      } catch {
-        // An untrusted redirect must never receive an OAuth error.
-      }
-    }
-    return oauthErrorResponse(error);
-  }
-}
-
-async function token(runtime: OAuthRuntime, request: Request): Promise<Response> {
-  const form = await readForm(request);
-  const grantType = requiredFormValue(form, "grant_type");
-  const clientId = requiredFormValue(form, "client_id");
+): Promise<void> {
   const rate = await consumeRateLimit(
     runtime.pool,
     `oauth-token:${clientId}:${request.headers.get("cf-connecting-ip") ?? "unknown"}`,
@@ -150,64 +45,128 @@ async function token(runtime: OAuthRuntime, request: Request): Promise<Response>
     runtime.now(),
   );
   if (!rate.allowed) {
-    throw new OAuthError(
+    throw new McpFnHostedAuthorizationError(
       "temporarily_unavailable",
       "Token requests are temporarily rate limited",
-      429,
-      rate.retryAfterSeconds,
+      {
+        status: 429,
+        details: { retryAfterSeconds: rate.retryAfterSeconds },
+      },
     );
   }
-  await resolveClient(runtime, clientId);
-  if (grantType === "authorization_code") {
-    const resource = requiredFormValue(form, "resource");
-    if (resource !== runtime.resource) {
-      throw new OAuthError("invalid_target", "The token resource is invalid");
-    }
-    return json(
-      await exchangeAuthorizationCode(runtime, {
-        code: requiredFormValue(form, "code"),
-        clientId,
-        redirectUri: requiredFormValue(form, "redirect_uri"),
-        resource,
-        codeVerifier: requiredFormValue(form, "code_verifier"),
-      }),
-    );
-  }
-  if (grantType === "refresh_token") {
-    const resource = formValue(form, "resource", false);
-    if (resource !== undefined && resource !== runtime.resource) {
-      throw new OAuthError("invalid_target", "The token resource is invalid");
-    }
-    const scope = formValue(form, "scope", false);
-    return json(
-      await exchangeRefreshToken(runtime, {
-        refreshToken: requiredFormValue(form, "refresh_token"),
-        clientId,
-        ...(resource !== undefined ? { resource } : {}),
-        ...(scope !== undefined ? { scope } : {}),
-        request,
-      }),
-    );
-  }
-  throw new OAuthError(
-    "unsupported_grant_type",
-    "Only authorization_code and refresh_token grants are supported",
-  );
 }
 
-function publicClientResponse(
-  client: Awaited<ReturnType<typeof registerClient>>,
-): Record<string, unknown> {
+async function fromTokenAuthority<T>(operation: () => Promise<T>): Promise<T> {
+  try {
+    return await operation();
+  } catch (error) {
+    if (error instanceof OAuthError) {
+      throw new McpFnHostedAuthorizationError(error.code, error.description, {
+        status: error.status,
+        ...(error.retryAfterSeconds === undefined
+          ? {}
+          : { details: { retryAfterSeconds: error.retryAfterSeconds } }),
+      });
+    }
+    throw error;
+  }
+}
+
+function safeAuthorizationResponse(
+  runtime: OAuthRuntime,
+  authfn: AuthFnPluginRuntimeContext,
+  input: McpFnValidatedAuthorizationRequest,
+  request: Request,
+): Promise<Response> {
+  return beginAuthorization(runtime, authfn, request, input).catch((error: unknown) => {
+    if (error instanceof OAuthError) {
+      return authorizationErrorRedirect(
+        input.redirectUri,
+        error.code,
+        error.description,
+        input.state,
+      );
+    }
+    return oauthErrorResponse(error);
+  });
+}
+
+function compatibilityOptions(
+  runtime: OAuthRuntime,
+  authorize: McpFnAuthorizationCompatibilityOptions["authorize"],
+): McpFnAuthorizationCompatibilityOptions {
   return {
-    client_id: client.clientId,
-    client_name: client.clientName,
-    redirect_uris: client.redirectUris,
-    token_endpoint_auth_method: client.tokenEndpointAuthMethod,
-    grant_types: ["authorization_code", "refresh_token"],
-    response_types: ["code"],
-    client_id_issued_at: client.clientIdIssuedAt,
-    registration_access_token: client.registrationAccessToken,
-    registration_client_uri: client.registrationClientUri,
+    issuer: runtime.issuer,
+    endpointPrefix: "/auth/oauth",
+    clients: {
+      resolve: (clientId) => resolveRegisteredClient(runtime, clientId),
+      register: (metadata, request) => registerClient(runtime, metadata, request),
+    },
+    authorize,
+    tokenAuthority: {
+      exchangeAuthorizationCode: (input, request) =>
+        fromTokenAuthority(async () => {
+          await tokenRateLimit(runtime, input.client.clientId, request);
+          const tokens = await exchangeAuthorizationCode(runtime, {
+            code: input.code,
+            clientId: input.client.clientId,
+            redirectUri: input.redirectUri,
+            resource: input.resource ?? runtime.resource,
+            codeVerifier: input.codeVerifier,
+          });
+          return { ...tokens };
+        }),
+      refreshToken: (input, request) =>
+        fromTokenAuthority(async () => {
+          const tokens = await exchangeRefreshToken(runtime, {
+            refreshToken: input.refreshToken,
+            clientId: input.client.clientId,
+            ...(input.resource ? { resource: input.resource } : {}),
+            ...(input.scopes.length > 0 ? { scope: input.scopes.join(" ") } : {}),
+            request,
+          });
+          return { ...tokens };
+        }),
+      revokeToken: (input, request) =>
+        fromTokenAuthority(() =>
+          revokeToken(runtime, {
+            token: input.token,
+            clientId: input.client.clientId,
+            request,
+          }),
+        ),
+    },
+    capabilities: {
+      tokenEndpointAuthMethods: ["none"],
+      requireState: true,
+      requireResource: true,
+      rotateRefreshTokens: true,
+    },
+    supportedScopes: [...OAUTH_SCOPES],
+    allowedResources: [runtime.resource],
+    clientMetadataDocuments: {
+      enabled: true,
+      allow: isClientMetadataDocumentUrlAllowed,
+      fetch: runtime.fetcher,
+      maxBytes: 65_536,
+      timeoutMs: 5_000,
+      maxRedirects: 3,
+    },
+    extraMetadata: {
+      response_modes_supported: ["query"],
+      revocation_endpoint_auth_methods_supported: ["none"],
+    },
+    diagnostics: async (event) => {
+      await runtime.emit({
+        type: `mcpfn.oauth.${event.phase}`,
+        requestId: `oauth:${crypto.randomUUID()}`,
+        outcome: event.outcome,
+        ...(event.details?.clientId && typeof event.details.clientId === "string"
+          ? { clientId: event.details.clientId }
+          : {}),
+        ...(event.code ? { metadata: { code: event.code } } : {}),
+      });
+    },
   };
 }
 
@@ -223,178 +182,97 @@ export function createAuthFnMcpOAuthPlugin(
   const plugin: AuthFnPlugin = {
     name: "skillplaneMcpOAuth",
     schema: () => createOAuthSchema(),
-    routes: (authfn) => [
-      {
-        method: "GET",
-        path: "/oauth/authorize",
-        meta:
-          createAuthFnRouteMeta(
-            "oauthAuthorize",
-            "Start an OAuth authorization code grant",
-            { mode: "none" },
-          ) ?? {},
-        handler: (request) => safeAuthorize(runtime, authfn, request),
-      },
-      {
-        method: "GET",
-        path: "/oauth/consent",
-        meta:
-          createAuthFnRouteMeta(
-            "oauthConsentDetails",
-            "Read the current OAuth consent request",
-            { mode: "cookie-session" },
-          ) ?? {},
-        handler: async (request) => {
-          try {
-            return await consentDetails(runtime, authfn, request);
-          } catch (error) {
-            return oauthErrorResponse(error);
-          }
+    routes: (authfn) => {
+      const compatibility = createMcpAuthorizationCompatibilityHandler(
+        compatibilityOptions(runtime, (input, request) =>
+          safeAuthorizationResponse(runtime, authfn, input, request),
+        ),
+      );
+      return [
+        {
+          method: "GET",
+          path: "/oauth/authorize",
+          meta:
+            createAuthFnRouteMeta(
+              "oauthAuthorize",
+              "Start an MCP OAuth authorization code grant",
+              { mode: "none" },
+            ) ?? {},
+          handler: compatibility,
         },
-      },
-      {
-        method: "POST",
-        path: "/oauth/consent",
-        meta:
-          createAuthFnRouteMeta(
-            "oauthConsentDecision",
-            "Approve or deny an OAuth consent request",
-            { mode: "cookie-session", csrf: true },
-          ) ?? {},
-        handler: async (request) => {
-          try {
-            const body = (await request.clone().json()) as {
-              readonly approved?: unknown;
-            };
-            if (typeof body.approved !== "boolean") {
-              throw new OAuthError("invalid_request", "approved must be a boolean");
+        {
+          method: "GET",
+          path: "/oauth/consent",
+          meta:
+            createAuthFnRouteMeta(
+              "oauthConsentDetails",
+              "Read the current OAuth consent request",
+              { mode: "cookie-session" },
+            ) ?? {},
+          handler: async (request) => {
+            try {
+              return await consentDetails(runtime, authfn, request);
+            } catch (error) {
+              return oauthErrorResponse(error);
             }
-            return await decideConsent(runtime, authfn, request, body.approved);
-          } catch (error) {
-            return oauthErrorResponse(error);
-          }
+          },
         },
-      },
-      {
-        method: "POST",
-        path: "/oauth/token",
-        meta:
-          createAuthFnRouteMeta(
-            "oauthToken",
-            "Exchange an authorization code or refresh token",
-            { mode: "none" },
-          ) ?? {},
-        handler: async (request) => {
-          try {
-            return await token(runtime, request);
-          } catch (error) {
-            return oauthErrorResponse(error);
-          }
+        {
+          method: "POST",
+          path: "/oauth/consent",
+          meta:
+            createAuthFnRouteMeta(
+              "oauthConsentDecision",
+              "Approve or deny an OAuth consent request",
+              { mode: "cookie-session", csrf: true },
+            ) ?? {},
+          handler: async (request) => {
+            try {
+              const body = (await request.clone().json()) as {
+                readonly approved?: unknown;
+              };
+              if (typeof body.approved !== "boolean") {
+                throw new OAuthError("invalid_request", "approved must be a boolean");
+              }
+              return await decideConsent(runtime, authfn, request, body.approved);
+            } catch (error) {
+              return oauthErrorResponse(error);
+            }
+          },
         },
-      },
-      {
-        method: "POST",
-        path: "/oauth/revoke",
-        meta:
-          createAuthFnRouteMeta("oauthRevoke", "Revoke an OAuth token", {
-            mode: "none",
-          }) ?? {},
-        handler: async (request) => {
-          try {
-            const form = await readForm(request);
-            const clientId = requiredFormValue(form, "client_id");
-            await resolveClient(runtime, clientId);
-            await revokeToken(runtime, {
-              token: requiredFormValue(form, "token"),
-              clientId,
-              request,
-            });
-            return new Response(null, { status: 200, headers: noStoreHeaders() });
-          } catch (error) {
-            return oauthErrorResponse(error);
-          }
+        {
+          method: "POST",
+          path: "/oauth/token",
+          meta:
+            createAuthFnRouteMeta(
+              "oauthToken",
+              "Exchange an authorization code or refresh token",
+              { mode: "none" },
+            ) ?? {},
+          handler: compatibility,
         },
-      },
-      {
-        method: "POST",
-        path: "/oauth/register",
-        meta:
-          createAuthFnRouteMeta(
-            "oauthRegister",
-            "Dynamically register a public OAuth client",
-            { mode: "none" },
-          ) ?? {},
-        handler: async (request) => {
-          try {
-            const body = await readJson(request);
-            const result = await registerClient(runtime, body, request);
-            return json(publicClientResponse(result), 201);
-          } catch (error) {
-            return oauthErrorResponse(error);
-          }
+        {
+          method: "POST",
+          path: "/oauth/revoke",
+          meta:
+            createAuthFnRouteMeta("oauthRevoke", "Revoke an OAuth token", {
+              mode: "none",
+            }) ?? {},
+          handler: compatibility,
         },
-      },
-      {
-        method: "GET",
-        path: "/oauth/register/:clientId",
-        meta:
-          createAuthFnRouteMeta(
-            "oauthReadRegistration",
-            "Read dynamically registered OAuth client metadata",
-            { mode: "none" },
-          ) ?? {},
-        handler: async (
-          request,
-          context: { readonly params: Readonly<Record<string, string>> },
-        ) => {
-          try {
-            const clientId = decodeURIComponent(context.params.clientId ?? "");
-            const client = await getRegisteredClient(
-              runtime,
-              clientId,
-              request.headers.get("authorization"),
-            );
-            return json({
-              client_id: client.clientId,
-              client_name: client.clientName,
-              redirect_uris: client.redirectUris,
-              token_endpoint_auth_method: "none",
-              grant_types: ["authorization_code", "refresh_token"],
-              response_types: ["code"],
-            });
-          } catch (error) {
-            return oauthErrorResponse(error);
-          }
+        {
+          method: "POST",
+          path: "/oauth/register",
+          meta:
+            createAuthFnRouteMeta(
+              "oauthRegister",
+              "Dynamically register an MCP OAuth client",
+              { mode: "none" },
+            ) ?? {},
+          handler: compatibility,
         },
-      },
-      {
-        method: "DELETE",
-        path: "/oauth/register/:clientId",
-        meta:
-          createAuthFnRouteMeta(
-            "oauthDeleteRegistration",
-            "Delete a dynamically registered OAuth client",
-            { mode: "none" },
-          ) ?? {},
-        handler: async (
-          request,
-          context: { readonly params: Readonly<Record<string, string>> },
-        ) => {
-          try {
-            const clientId = decodeURIComponent(context.params.clientId ?? "");
-            await deleteRegisteredClient(
-              runtime,
-              clientId,
-              request.headers.get("authorization"),
-              request,
-            );
-            return new Response(null, { status: 204, headers: noStoreHeaders() });
-          } catch (error) {
-            return oauthErrorResponse(error);
-          }
-        },
-      },
-    ],
+      ];
+    },
   };
   return { plugin, runtime };
 }

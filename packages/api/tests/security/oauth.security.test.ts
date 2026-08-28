@@ -76,9 +76,9 @@ describe("OAuth attack and leakage defenses", () => {
         }),
       }),
     );
-    expect(response.status).toBe(401);
+    expect(response.status).toBe(400);
     await expect(response.json()).resolves.toMatchObject({
-      error: "invalid_client",
+      error: "invalid_client_metadata",
     });
   });
 
@@ -151,7 +151,7 @@ describe("OAuth attack and leakage defenses", () => {
     );
     expect(missingResource.status).toBe(400);
     await expect(missingResource.json()).resolves.toMatchObject({
-      error: "invalid_request",
+      error: "invalid_target",
     });
 
     const duplicateGrant = await environment.authorize(client, "skills:read");

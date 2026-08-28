@@ -165,7 +165,7 @@ describe("MCP Streamable HTTP conformance", () => {
         caller: TEST_CALLER,
       },
     });
-    expect(result.isError).not.toBe(true);
+    expect(result.isError, JSON.stringify(result)).not.toBe(true);
     const structured = parseStructured<SkillsSearchOutput>(result);
     expect(structured.skills[0]).toMatchObject({
       id: environment.skill.skill.id,

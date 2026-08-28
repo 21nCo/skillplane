@@ -1,0 +1,175 @@
+{
+  "schemaVersion": 1,
+  "runner": "@modelcontextprotocol/conformance@0.1.16",
+  "suite": "active",
+  "authenticated": true,
+  "interpretation": "Exit code zero means every failure or warning belongs to the reviewed non-advertised-capability baseline; initialization, ping, tool inventory, request handling, and DNS-rebinding checks remain hard gates.",
+  "expectedFailureScenarios": [
+    "logging-set-level",
+    "completion-complete",
+    "tools-call-simple-text",
+    "tools-call-image",
+    "tools-call-audio",
+    "tools-call-embedded-resource",
+    "tools-call-mixed-content",
+    "tools-call-with-logging",
+    "tools-call-error",
+    "tools-call-with-progress",
+    "tools-call-sampling",
+    "tools-call-elicitation",
+    "server-sse-multiple-streams",
+    "elicitation-sep1034-defaults",
+    "elicitation-sep1330-enums",
+    "resources-list",
+    "resources-read-text",
+    "resources-read-binary",
+    "resources-templates-read",
+    "resources-subscribe",
+    "resources-unsubscribe",
+    "prompts-list",
+    "prompts-get-simple",
+    "prompts-get-with-args",
+    "prompts-get-embedded-resource",
+    "prompts-get-with-image"
+  ],
+  "result": {
+    "exitCode": 0,
+    "checks": [
+      {
+        "id": "completion-complete",
+        "status": "FAILURE"
+      },
+      {
+        "id": "localhost-host-rebinding-rejected",
+        "status": "SUCCESS"
+      },
+      {
+        "id": "localhost-host-valid-accepted",
+        "status": "SUCCESS"
+      },
+      {
+        "id": "elicitation-sep1034-general",
+        "status": "FAILURE"
+      },
+      {
+        "id": "elicitation-sep1330-general",
+        "status": "FAILURE"
+      },
+      {
+        "id": "logging-set-level",
+        "status": "FAILURE"
+      },
+      {
+        "id": "ping",
+        "status": "SUCCESS"
+      },
+      {
+        "id": "prompts-get-embedded-resource",
+        "status": "FAILURE"
+      },
+      {
+        "id": "prompts-get-simple",
+        "status": "FAILURE"
+      },
+      {
+        "id": "prompts-get-with-args",
+        "status": "FAILURE"
+      },
+      {
+        "id": "prompts-get-with-image",
+        "status": "FAILURE"
+      },
+      {
+        "id": "prompts-list",
+        "status": "FAILURE"
+      },
+      {
+        "id": "resources-list",
+        "status": "FAILURE"
+      },
+      {
+        "id": "resources-read-binary",
+        "status": "FAILURE"
+      },
+      {
+        "id": "resources-read-text",
+        "status": "FAILURE"
+      },
+      {
+        "id": "resources-subscribe",
+        "status": "FAILURE"
+      },
+      {
+        "id": "resources-templates-read",
+        "status": "FAILURE"
+      },
+      {
+        "id": "resources-unsubscribe",
+        "status": "FAILURE"
+      },
+      {
+        "id": "server-initialize",
+        "status": "SUCCESS"
+      },
+      {
+        "id": "server-sse-multiple-streams-session",
+        "status": "WARNING"
+      },
+      {
+        "id": "tools-call-audio",
+        "status": "FAILURE"
+      },
+      {
+        "id": "tools-call-elicitation",
+        "status": "FAILURE"
+      },
+      {
+        "id": "tools-call-embedded-resource",
+        "status": "FAILURE"
+      },
+      {
+        "id": "tools-call-error",
+        "status": "FAILURE"
+      },
+      {
+        "id": "tools-call-image",
+        "status": "FAILURE"
+      },
+      {
+        "id": "tools-call-mixed-content",
+        "status": "FAILURE"
+      },
+      {
+        "id": "tools-call-sampling",
+        "status": "FAILURE"
+      },
+      {
+        "id": "tools-call-simple-text",
+        "status": "FAILURE"
+      },
+      {
+        "id": "tools-call-with-logging",
+        "status": "FAILURE"
+      },
+      {
+        "id": "tools-call-with-progress",
+        "status": "FAILURE"
+      },
+      {
+        "id": "tools-list",
+        "status": "SUCCESS"
+      }
+    ],
+    "statusCounts": {
+      "FAILURE": 25,
+      "SUCCESS": 5,
+      "WARNING": 1
+    }
+  },
+  "artifactHygiene": {
+    "rawArtifactBytes": 17589,
+    "retainedRawArtifacts": false,
+    "secretMaterialDetected": false
+  },
+  "completedAt": "2026-08-28T11:45:00.792Z"
+}

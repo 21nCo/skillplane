@@ -1,5 +1,6 @@
 import type { Pool } from "pg";
 import { describe, expect, it } from "vitest";
+import { normalizeMcpClientRegistration } from "@mcpfn/auth";
 import {
   authorizationServerMetadata,
   base64Url,
@@ -13,9 +14,7 @@ import {
   readBearerToken,
   sha256Base64Url,
   signPayload,
-  validateClientIdMetadataUrl,
-  validateRedirectUri,
-  validateRegistration,
+  isClientMetadataDocumentUrlAllowed,
   verifySignedPayload,
 } from "./index.js";
 
@@ -43,7 +42,7 @@ describe("OAuth 2.1 metadata and configuration", () => {
   it("advertises only the authorization-code, refresh, public-client, and S256 surface", () => {
     const runtime = normalizeOAuthConfig({
       pool,
-      issuer: "https://app.skillplane.dev",
+      issuer: "https://app.skillplane.dev/",
       tokenPepper: pepper,
     });
     expect(authorizationServerMetadata(runtime)).toEqual({
@@ -52,7 +51,7 @@ describe("OAuth 2.1 metadata and configuration", () => {
       token_endpoint: "https://app.skillplane.dev/auth/oauth/token",
       revocation_endpoint: "https://app.skillplane.dev/auth/oauth/revoke",
       registration_endpoint: "https://app.skillplane.dev/auth/oauth/register",
-      scopes_supported: OAUTH_SCOPES,
+      scopes_supported: [...OAUTH_SCOPES].sort(),
       response_types_supported: ["code"],
       response_modes_supported: ["query"],
       grant_types_supported: ["authorization_code", "refresh_token"],
@@ -64,7 +63,7 @@ describe("OAuth 2.1 metadata and configuration", () => {
     expect(protectedResourceMetadata(runtime)).toEqual({
       resource: MCP_RESOURCE,
       authorization_servers: ["https://app.skillplane.dev"],
-      scopes_supported: OAUTH_SCOPES,
+      scopes_supported: [...OAUTH_SCOPES].sort(),
       bearer_methods_supported: ["header"],
       resource_name: "Skillplane MCP",
     });
@@ -74,7 +73,7 @@ describe("OAuth 2.1 metadata and configuration", () => {
         scopes: ["skills:read", "not-a-scope"],
       }),
     ).toBe(
-      'Bearer resource_metadata="https://mcp.skillplane.dev/.well-known/oauth-protected-resource/mcp", error="insufficient_scope", scope="skills:read"',
+      'Bearer resource_metadata="https://mcp.skillplane.dev/.well-known/oauth-protected-resource/mcp", error="insufficient_scope", error_description="The Bearer credential lacks required scopes", scope="skills:read"',
     );
   });
 
@@ -119,25 +118,28 @@ describe("OAuth 2.1 metadata and configuration", () => {
 });
 
 describe("OAuth client and redirect validation", () => {
-  it("accepts exact HTTPS and loopback redirect URIs", () => {
-    expect(validateRedirectUri("https://agent.example.test/callback?source=mcp")).toBe(
-      "https://agent.example.test/callback?source=mcp",
-    );
-    expect(validateRedirectUri("http://127.0.0.1:49152/callback")).toBe(
+  it("delegates exact HTTPS and loopback redirect normalization to McpFn", () => {
+    const registration = normalizeMcpClientRegistration({
+      clientId: "client",
+      source: "dynamic",
+      metadata: {
+        redirect_uris: [
+          "https://agent.example.test/callback?source=mcp",
+          "http://127.0.0.1:49152/callback",
+        ],
+      },
+    });
+    expect(registration.redirectUris).toEqual([
       "http://127.0.0.1:49152/callback",
-    );
-    expect(validateRedirectUri("http://localhost:49152/callback")).toBe(
-      "http://localhost:49152/callback",
-    );
-  });
-
-  it.each([
-    "http://agent.example.test/callback",
-    "https://user:password@agent.example.test/callback",
-    "https://agent.example.test/callback#fragment",
-    "https://*.example.test/callback",
-  ])("rejects unsafe redirect URI %s", (redirectUri) => {
-    expect(() => validateRedirectUri(redirectUri)).toThrow();
+      "https://agent.example.test/callback?source=mcp",
+    ]);
+    expect(() =>
+      normalizeMcpClientRegistration({
+        clientId: "unsafe",
+        source: "dynamic",
+        metadata: { redirect_uris: ["http://agent.example.test/callback"] },
+      }),
+    ).toThrow(/unsafe|malformed/u);
   });
 
   it.each([
@@ -148,29 +150,7 @@ describe("OAuth client and redirect validation", () => {
     "https://agent.example.test/",
     "https://agent.example.test/client.json?version=1",
   ])("rejects unsafe client metadata URL %s", (clientId) => {
-    expect(() => validateClientIdMetadataUrl(clientId)).toThrow();
-  });
-
-  it("rejects confidential, implicit, password, and unknown-scope registration", () => {
-    const base = {
-      client_name: "Review Agent",
-      redirect_uris: ["https://agent.example.test/callback"],
-    };
-    expect(() =>
-      validateRegistration({
-        ...base,
-        token_endpoint_auth_method: "client_secret_basic",
-      }),
-    ).toThrow(/public/);
-    expect(() => validateRegistration({ ...base, response_types: ["token"] })).toThrow(
-      /code/,
-    );
-    expect(() => validateRegistration({ ...base, grant_types: ["password"] })).toThrow(
-      /grant/,
-    );
-    expect(() =>
-      validateRegistration({ ...base, scope: "skills:read admin:all" }),
-    ).toThrow(/scope/);
+    expect(isClientMetadataDocumentUrlAllowed(new URL(clientId))).toBe(false);
   });
 });
 
@@ -199,10 +179,10 @@ describe("opaque token primitives", () => {
         }),
       ),
     ).toBe("spo_example");
-    expect(() =>
+    expect(
       readBearerToken(
         new Request("https://mcp.skillplane.dev/mcp?access_token=spo_example"),
       ),
-    ).toThrow(/query/);
+    ).toBeUndefined();
   });
 });

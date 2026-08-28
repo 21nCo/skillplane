@@ -325,6 +325,12 @@ importers:
 
   mcp:
     dependencies:
+      '@mcpfn/auth':
+        specifier: link:../../../../worktrees/superfunctions/MCP-2/mcpfn/auth
+        version: link:../../../../worktrees/superfunctions/MCP-2/mcpfn/auth
+      '@mcpfn/core':
+        specifier: link:../../../../worktrees/superfunctions/MCP-2/mcpfn/core
+        version: link:../../../../worktrees/superfunctions/MCP-2/mcpfn/core
       '@modelcontextprotocol/sdk':
         specifier: 'catalog:'
         version: 1.29.0(zod@4.4.3)
@@ -365,6 +371,9 @@ importers:
         specifier: 'catalog:'
         version: 4.4.3
     devDependencies:
+      '@mcpfn/testing':
+        specifier: link:../../../../worktrees/superfunctions/MCP-2/mcpfn/testing
+        version: link:../../../../worktrees/superfunctions/MCP-2/mcpfn/testing
       '@skillplane/db':
         specifier: workspace:*
         version: link:../packages/db
@@ -472,6 +481,9 @@ importers:
       '@authfn/core':
         specifier: 'catalog:'
         version: 0.1.1(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
+      '@mcpfn/auth':
+        specifier: link:../../../../../worktrees/superfunctions/MCP-2/mcpfn/auth
+        version: link:../../../../../worktrees/superfunctions/MCP-2/mcpfn/auth
       '@skillplane/db':
         specifier: workspace:*
         version: link:../db
