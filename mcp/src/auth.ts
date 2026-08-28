@@ -203,17 +203,22 @@ export function assertMcpScopes(
   }
 }
 
-export async function authenticateMcpCredential(
+export async function authenticateMcpBearerCredential(
+  token: string,
   request: Request,
   services: ApiServices,
 ): Promise<McpIdentity> {
-  const token = readBearerToken(request);
-  if (!token) {
+  if (!token.trim()) {
     throw new McpAuthenticationError(401, "A valid bearer credential is required");
   }
   let identity: McpIdentity;
   if (token.startsWith("spk_")) {
-    identity = await authenticateService(services, request);
+    const headers = new Headers(request.headers);
+    headers.set("authorization", `Bearer ${token}`);
+    identity = await authenticateService(
+      services,
+      new Request(request.url, { method: request.method, headers }),
+    );
   } else {
     try {
       const verified = await verifyAccessToken(services.auth.oauth, token, {
@@ -242,7 +247,11 @@ export async function authenticateMcpRequest(
   services: ApiServices,
   additionalScopes: readonly McpScope[] = [],
 ): Promise<McpIdentity> {
-  const identity = await authenticateMcpCredential(request, services);
+  const token = readBearerToken(request);
+  if (!token) {
+    throw new McpAuthenticationError(401, "A valid bearer credential is required");
+  }
+  const identity = await authenticateMcpBearerCredential(token, request, services);
   const requiredScopes = normalizeRequiredScopes([
     ...(await requiredScopesForRequest(request)),
     ...additionalScopes,

@@ -17,7 +17,7 @@ import icon192 from "./assets/icon-192.png";
 import icon512 from "./assets/icon-512.png";
 import gradientLogo from "./assets/skillplane-logo-gradient-transparent.png";
 import {
-  authenticateMcpCredential,
+  authenticateMcpBearerCredential,
   authenticateMcpRequest,
   McpAuthenticationError,
   mcpAuthenticationResponse,
@@ -652,8 +652,10 @@ export function createMcpApp(options: CreateMcpAppOptions = {}) {
         {
           resource: currentServices.auth.oauth.resource,
           provider: {
-            authenticate: async (request) =>
-              authSession(await authenticateMcpCredential(request, currentServices)),
+            authenticateBearer: async (token, request) =>
+              authSession(
+                await authenticateMcpBearerCredential(token, request, currentServices),
+              ),
           },
           map: (session) => ({
             subject: session.identity.actorId,
