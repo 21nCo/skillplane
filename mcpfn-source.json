@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "mode": "local-worktree",
   "sourceRoot": "../../../worktrees/superfunctions/MCP-2",
-  "baseCommit": "9134bb13f9682b5debc14d69d5927de0be2274e1",
-  "sourceDigest": "sha256:51bf866cc5ec5cb0ba3dee17fdbbd589f3dcaeab388c9685c25828fbde252da9",
+  "baseCommit": "9445258d7cb2a744e75910b78be3be3a23ff079e",
+  "sourceDigest": "sha256:d4dc426eca7ff5da0c5f0356edddf046e45f146a6f1dc80c00af02275ad6e0aa",
   "packages": {
     "@mcpfn/auth": {
       "path": "mcpfn/auth",
