@@ -7,6 +7,10 @@ import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const gitExecutable =
+  process.platform === "win32"
+    ? "C:\\Program Files\\Git\\cmd\\git.exe"
+    : "/usr/bin/git";
 const contract = JSON.parse(
   await readFile(resolve(repoRoot, "mcpfn-source.json"), "utf8"),
 );
@@ -16,7 +20,7 @@ function fail(message) {
   throw new Error(`McpFn adoption verification failed: ${message}`);
 }
 
-const head = execFileSync("git", ["-C", sourceRoot, "rev-parse", "HEAD"], {
+const head = execFileSync(gitExecutable, ["-C", sourceRoot, "rev-parse", "HEAD"], {
   encoding: "utf8",
 }).trim();
 if (head !== contract.baseCommit) {
@@ -34,15 +38,20 @@ async function sourceFiles(directory) {
 }
 
 const digest = createHash("sha256");
-for (const [name, packageContract] of Object.entries(contract.packages).sort()) {
+for (const [name, packageContract] of Object.entries(contract.packages).toSorted(
+  ([left], [right]) => left.localeCompare(right),
+)) {
   const packageRoot = resolve(sourceRoot, packageContract.path);
   const packageJsonPath = resolve(packageRoot, "package.json");
   const packageJson = JSON.parse(await readFile(packageJsonPath, "utf8"));
   if (packageJson.name !== name || packageJson.version !== packageContract.version) {
     fail(`${name} package identity does not match mcpfn-source.json`);
   }
-  const files = [packageJsonPath, ...(await sourceFiles(resolve(packageRoot, "src")))];
-  for (const path of files.sort()) {
+  const files = [
+    packageJsonPath,
+    ...(await sourceFiles(resolve(packageRoot, "src"))),
+  ].toSorted((left, right) => left.localeCompare(right));
+  for (const path of files) {
     const content = await readFile(path);
     const label = relative(sourceRoot, path);
     digest.update(label).update("\0").update(String(content.byteLength)).update("\0");
