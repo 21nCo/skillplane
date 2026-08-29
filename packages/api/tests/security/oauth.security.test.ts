@@ -82,6 +82,26 @@ describe("OAuth attack and leakage defenses", () => {
     });
   });
 
+  it("rejects dynamic registration without a client name", async () => {
+    const response = await environment.app.fetch(
+      new Request(`${OAUTH_ISSUER}/auth/oauth/register`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "cf-connecting-ip": "198.51.100.29",
+        },
+        body: JSON.stringify({
+          redirect_uris: ["https://agent.example.test/callback"],
+          token_endpoint_auth_method: "none",
+        }),
+      }),
+    );
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "invalid_client_metadata",
+    });
+  });
+
   it("never redirects authorization errors to an unregistered URI", async () => {
     const response = await environment.app.fetch(
       new Request(

@@ -2,14 +2,14 @@
 
 ## Metadata
 
-- Updated: `2026-08-29T06:20:00Z`
+- Updated: `2026-08-29T07:20:51Z`
 - Agent: Codex `/root`
 - Model: `GPT-5`
 - Launcher: `Codex Desktop`
 - Issue: Linear `SKI-6` — Adopt McpFn for Skillplane MCP runtime, authorization, and quality gates
 - Skillplane base: `main` at `c13917c360b326d6199162de63df9e61e4885944`
-- McpFn source: local `MCP-2` worktree at base `61a82af3c633332850cc1c128524507e42b8e72a`
-- McpFn source digest: `sha256:adaa175413235666da56f3850ce2d01905745777710a5ee99e01472cc28c1d6c`
+- McpFn source: local `MCP-2` worktree at base `6ba81463825455bcaf074c3faa40122d9ffeeb03`
+- McpFn source digest: `sha256:08de55b27a585c72066c930bae720e170e4031331eef65345765de881bf69f21`
 - Publication state: commits, pushes, and PR updates are authorized on `codex/ski-6-mcpfn-runtime`; package publication, merge, deployment, live-provider verification, and Linear status transition remain out of scope
 
 ## Status
@@ -30,6 +30,7 @@ Skillplane directly constructed the MCP SDK server and Streamable HTTP transport
 - Added a pinned authenticated official MCP conformance runner that proxies only to a fixed upstream and preserves the request Host header for DNS-rebinding checks.
 - Preserved complete McpFn server implementation metadata rather than replacing it with defaults.
 - Added a pre-client-resolution policy hook for authorization, token, and revocation endpoints; isolated request clones for each provider callback; provenance-safe inspector secret markers; and deadline-bound metadata fetching that remains referenced until abort.
+- Completed quoted and delimiter-bearing credential redaction, encoded URL-secret scenario replay, positive event-minimum validation, and explicitly enabled localhost issuers only through the controlled loopback option.
 
 ### Skillplane cutover
 
@@ -40,29 +41,31 @@ Skillplane directly constructed the MCP SDK server and Streamable HTTP transport
 - Enforced the production MCP Host and allowed loopback only outside production; DNS-rebinding attempts return `421`.
 - Pinned the reviewed local McpFn worktree by base commit, source digest, package identity, and explicit local links. Published package adoption is a later reviewed replacement.
 - Applied network-only limits before client resolution, retained client-and-network token limits for both authorization-code and refresh grants, returned stable `404` envelopes for removed registration-management routes, and made source verification hash the executed `dist` artifacts as well as source.
+- Preserved required client names, endpoint-accurate rate-limit errors, and direct-pnpm conformance execution; verifier checks now enforce dependency sections and inspect the reachable MCP TypeScript module graph rather than matching comments or unused imports.
 
 ### Quality gates, evidence, and rollback
 
 - Split deterministic contract tests from the authenticated official conformance suite.
 - Added a reviewed baseline only for capabilities Skillplane does not advertise and the stateless optional SSE-session warning. Initialization, ping, tool inventory, request handling, and DNS-rebinding remain hard gates.
 - Retained only `.conduct/verification/SKI-6/official-conformance-summary.json` (4,927 bytes). Raw artifacts were 17,589 bytes, were scanned for the injected service credential, and were removed after the run; the scan reported no credential material. Schema version 2 reconciles executable scenario baselines with the runner's exact emitted check IDs.
+- The conformance test now rejects oversized raw artifacts before reading them and preserves the prior completion timestamp when regenerated evidence is byte-equivalent, so a successful repeat does not dirty the tracked summary.
 - Documented runtime ownership, source pinning, conformance interpretation, observability, deployment order, and paired rollback.
 - No database or schema migration is required. Rollback restores the previous Skillplane runtime and the paired McpFn package set together.
 
 ## Verification
 
 - McpFn `npm run gate:mcpfn-release`: PASS (`67/67` steps), including focused typechecks/tests/builds, Playwright, official conformance, package dry-runs, packed consumer install, ESM/CJS imports, and the consumer round trip.
-- McpFn focused OAuth Core, Auth, and Inspector suites: PASS (`26`, `59`, and `6` tests); focused typechecks: PASS.
-- `pnpm mcpfn:verify`: PASS at base `61a82af3c633332850cc1c128524507e42b8e72a` and digest `sha256:adaa175413235666da56f3850ce2d01905745777710a5ee99e01472cc28c1d6c`.
+- McpFn focused OAuth Core, Auth, Testing, and Inspector suites: PASS (`79/79` tests); focused typechecks: PASS.
+- `pnpm mcpfn:verify`: PASS at base `6ba81463825455bcaf074c3faa40122d9ffeeb03` and digest `sha256:08de55b27a585c72066c930bae720e170e4031331eef65345765de881bf69f21`.
 - `pnpm test:mcp:contract`: PASS (`8/8`).
 - `pnpm test:mcp:conformance`: PASS (`1/1` authenticated run). Retained summary records `5` hard-gate successes, `25` reviewed non-advertised-capability failures, and `1` reviewed stateless-session warning, with exact non-success check-ID equality enforced.
 - AuthFn MCP OAuth focused typecheck and unit suite: PASS (`15/15`).
 - Auth application unit suite: PASS (`7/7`).
-- Focused API OAuth integration and security suites: PASS (`24/24` tests), including unsafe redirect registration, trusted redirect handling, code and refresh behavior, rotation/reuse, rate limits, CSRF, and secret leakage defenses.
+- Focused API OAuth security suite: PASS (`17/17` tests), including required client names, unsafe redirect registration, trusted redirect handling, rotation/reuse, rate limits, CSRF, and secret leakage defenses.
 - `pnpm typecheck`: PASS (`29/29` tasks).
 - Changed-surface Prettier and `git diff --check`: PASS.
 
-The full `pnpm test:integration` run was not green in this review-remediation pass: the OAuth integration suite's changed flow passed after the removed-route fix, while eight unrelated API suites failed during setup because their shared default test binding supplies a non-HTTPS OAuth issuer rejected by the existing McpFn issuer contract. Those cascaded suites did not execute test bodies. The focused OAuth integration and security suites passed in the controlled HTTPS environment; the unrelated default-binding cleanup was not added to this PR.
+The full `pnpm test:integration` run is green (`24/24` tasks). The explicitly enabled local loopback issuer restored all eight API suites that previously aborted during setup, while non-loopback HTTP issuers remain rejected.
 
 The stock `pnpm lint` command scans ignored generated `docs/.next`, `docs/.open-next`, and `docs/.source` output after a docs build. Excluding those generated directories produces a clean repository source lint. The stock `pnpm format:check` also reports three unchanged baseline files: `.github/workflows/pullfrog.yml`, `docs/lib/layout.shared.tsx`, and `scripts/verify-boundaries.mjs`. None were modified for `SKI-6`.
 

@@ -62,12 +62,18 @@ async function clientResolutionRateLimit(
   request: Request,
 ): Promise<void> {
   const network = request.headers.get("cf-connecting-ip") ?? "unknown";
-  const prefix =
-    endpoint === "authorization"
-      ? "oauth-authorize"
-      : endpoint === "token"
-        ? "oauth-token-request"
-        : "oauth-revoke-request";
+  let prefix: string;
+  let label: string;
+  if (endpoint === "authorization") {
+    prefix = "oauth-authorize";
+    label = "Authorization";
+  } else if (endpoint === "token") {
+    prefix = "oauth-token-request";
+    label = "Token";
+  } else {
+    prefix = "oauth-revoke-request";
+    label = "Revocation";
+  }
   const rate = await consumeRateLimit(
     runtime.pool,
     `${prefix}:${network}`,
@@ -78,7 +84,7 @@ async function clientResolutionRateLimit(
   if (!rate.allowed) {
     throw new McpFnHostedAuthorizationError(
       "temporarily_unavailable",
-      `${endpoint === "authorization" ? "Authorization" : "Token"} requests are temporarily rate limited`,
+      `${label} requests are temporarily rate limited`,
       {
         status: 429,
         details: { retryAfterSeconds: rate.retryAfterSeconds },
@@ -128,6 +134,7 @@ function compatibilityOptions(
 ): McpFnAuthorizationCompatibilityOptions {
   return {
     issuer: runtime.issuer,
+    allowInsecureLoopbackIssuer: runtime.issuer.startsWith("http://"),
     endpointPrefix: "/auth/oauth",
     clients: {
       resolve: (clientId) => resolveRegisteredClient(runtime, clientId),

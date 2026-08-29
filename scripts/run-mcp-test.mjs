@@ -5,10 +5,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const corepackExecutable = resolve(
-  dirname(process.execPath),
-  process.platform === "win32" ? "corepack.cmd" : "corepack",
-);
+const pnpmExecutable = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 
 function run(executable, args, options = {}) {
   const result = spawnSync(executable, args, {
@@ -23,11 +20,10 @@ function run(executable, args, options = {}) {
 
 export function runMcpTest(testFile) {
   run(process.execPath, ["scripts/verify-mcpfn-adoption.mjs"]);
-  run(corepackExecutable, ["pnpm", "--filter", "@skillplane/mcp...", "build"]);
+  run(pnpmExecutable, ["--filter", "@skillplane/mcp...", "build"]);
   run(
-    corepackExecutable,
+    pnpmExecutable,
     [
-      "pnpm",
       "--filter",
       "@skillplane/mcp",
       "exec",

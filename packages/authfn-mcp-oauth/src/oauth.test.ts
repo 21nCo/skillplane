@@ -60,12 +60,12 @@ describe("OAuth 2.1 metadata and configuration", () => {
       "client_id",
       "https://first-client.example.test/client.json",
     );
-    const formRequest = (clientId: string) =>
+    const formRequest = (clientId: string, requestNetwork = network) =>
       new Request("https://app.skillplane.dev/auth/oauth/token", {
         method: "POST",
         headers: {
           "content-type": "application/x-www-form-urlencoded",
-          "cf-connecting-ip": network,
+          "cf-connecting-ip": requestNetwork,
         },
         body: new URLSearchParams({
           grant_type: "authorization_code",
@@ -88,12 +88,17 @@ describe("OAuth 2.1 metadata and configuration", () => {
         formRequest("https://third-client.example.test/client.json"),
         undefined as never,
       ),
+      await token.handler(
+        formRequest("https://fourth-client.example.test/client.json", "198.51.100.43"),
+        undefined as never,
+      ),
     ];
 
-    expect(responses.map((response) => response.status)).toEqual([429, 429, 429]);
+    expect(responses.map((response) => response.status)).toEqual([429, 429, 429, 429]);
     const bucketHashes = query.mock.calls.map((call) => (call[1] as unknown[])[0]);
     expect(bucketHashes[1]).toBe(bucketHashes[2]);
     expect(bucketHashes[0]).not.toBe(bucketHashes[1]);
+    expect(bucketHashes[1]).not.toBe(bucketHashes[3]);
     expect(fetcher).not.toHaveBeenCalled();
   });
 

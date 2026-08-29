@@ -144,6 +144,7 @@ describe("official MCP server conformance", () => {
       const artifactBytes = (
         await Promise.all(artifactFiles.map(async (path) => (await stat(path)).size))
       ).reduce((sum, size) => sum + size, 0);
+      expect(artifactBytes).toBeLessThan(1_000_000);
       const artifactContents = await Promise.all(
         artifactFiles.map(async (path) => await readFile(path, "utf8")),
       );
@@ -181,34 +182,53 @@ describe("official MCP server conformance", () => {
         .map((check) => check.id)
         .toSorted();
 
-      expect(artifactBytes).toBeLessThan(1_000_000);
       expect(secretMaterialDetected).toBe(false);
       expect(nonSuccessCheckIds).toEqual(expectedNonSuccessCheckIds);
 
       await mkdir(verificationDir, { recursive: true });
+      const summaryPath = join(verificationDir, "official-conformance-summary.json");
+      const summary = {
+        schemaVersion: 2,
+        runner: "@modelcontextprotocol/conformance@0.1.16",
+        suite: "active",
+        authenticated: true,
+        interpretation:
+          "Exit code zero validates the executable scenario baseline, while exact non-success check-id equality validates the runner's emitted failure and warning evidence; initialization, ping, tool inventory, request handling, and DNS-rebinding checks remain hard gates.",
+        expectedFailureScenarios,
+        expectedNonSuccessCheckIds,
+        result: {
+          exitCode: result.exitCode,
+          checks: checks.map(({ id, status }) => ({ id, status })),
+          statusCounts,
+        },
+        artifactHygiene: {
+          rawArtifactBytes: artifactBytes,
+          retainedRawArtifacts: false,
+          secretMaterialDetected,
+        },
+      };
+      let completedAt = new Date().toISOString();
+      try {
+        const existing = JSON.parse(await readFile(summaryPath, "utf8")) as Record<
+          string,
+          unknown
+        >;
+        const { completedAt: existingCompletedAt, ...existingSummary } = existing;
+        if (
+          typeof existingCompletedAt === "string" &&
+          JSON.stringify(existingSummary) === JSON.stringify(summary)
+        ) {
+          completedAt = existingCompletedAt;
+        }
+      } catch {
+        // A missing or invalid prior summary is replaced with current evidence.
+      }
       await writeFile(
-        join(verificationDir, "official-conformance-summary.json"),
+        summaryPath,
         `${JSON.stringify(
           {
-            schemaVersion: 2,
-            runner: "@modelcontextprotocol/conformance@0.1.16",
-            suite: "active",
-            authenticated: true,
-            interpretation:
-              "Exit code zero validates the executable scenario baseline, while exact non-success check-id equality validates the runner's emitted failure and warning evidence; initialization, ping, tool inventory, request handling, and DNS-rebinding checks remain hard gates.",
-            expectedFailureScenarios,
-            expectedNonSuccessCheckIds,
-            result: {
-              exitCode: result.exitCode,
-              checks: checks.map(({ id, status }) => ({ id, status })),
-              statusCounts,
-            },
-            artifactHygiene: {
-              rawArtifactBytes: artifactBytes,
-              retainedRawArtifacts: false,
-              secretMaterialDetected,
-            },
-            completedAt: new Date().toISOString(),
+            ...summary,
+            completedAt,
           },
           null,
           2,

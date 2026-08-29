@@ -94,9 +94,7 @@ export async function resolveRegisteredClient(
 
 function normalizedClientName(metadata: ClientMetadata): string {
   const name =
-    typeof metadata.client_name === "string"
-      ? metadata.client_name.trim()
-      : "MCP client";
+    typeof metadata.client_name === "string" ? metadata.client_name.trim() : "";
   if (name.length < 1 || name.length > 200 || /[\r\n<>]/u.test(name)) {
     throw new McpFnHostedAuthorizationError(
       "invalid_client_metadata",
