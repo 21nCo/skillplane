@@ -10,3 +10,4 @@ export * from "./revocation.js";
 export * from "./schema.js";
 export * from "./tokens.js";
 export * from "./verify.js";
+export { readBearerToken } from "@mcpfn/auth";

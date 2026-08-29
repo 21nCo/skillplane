@@ -2,4 +2,4 @@
 
 import { runMcpTest } from "./run-mcp-test.mjs";
 
-runMcpTest("tests/conformance/mcp.official-conformance.test.ts");
+runMcpTest("tests/conformance/mcp.conformance.test.ts");

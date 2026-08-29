@@ -66,19 +66,3 @@ export async function verifyAccessToken(
     expiresAt: row.expires_at,
   };
 }
-
-export function readBearerToken(request: Request): string {
-  const url = new URL(request.url);
-  if (url.searchParams.has("access_token")) {
-    throw new OAuthError(
-      "invalid_request",
-      "Bearer tokens are not accepted in query parameters",
-      400,
-    );
-  }
-  const authorization = request.headers.get("authorization");
-  if (!authorization || !/^Bearer [^\s]+$/.test(authorization)) {
-    throw new OAuthError("invalid_grant", "A bearer access token is required", 401);
-  }
-  return authorization.slice(7);
-}

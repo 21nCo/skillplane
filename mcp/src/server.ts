@@ -1,5 +1,9 @@
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { Implementation } from "@modelcontextprotocol/sdk/types.js";
+import {
+  defineMcpFnServer,
+  type McpFnObjectSchema,
+  type McpFnServerInfo,
+  type McpFnToolDefinition,
+} from "@mcpfn/core";
 import {
   contextCreateInputSchema,
   contextCreateOutputSchema,
@@ -79,6 +83,7 @@ import {
 } from "./tools/skill-lifecycle.js";
 import type { McpToolRuntime } from "./tools/shared.js";
 import { skillVersionsList } from "./tools/versions.js";
+import { z, type ZodType } from "zod";
 
 const READ_ONLY_ANNOTATIONS = {
   readOnlyHint: true,
@@ -94,7 +99,7 @@ const MUTATION_ANNOTATIONS = {
   openWorldHint: false,
 } as const;
 
-export const SKILLPLANE_MCP_SERVER_INFO: Implementation = {
+export const SKILLPLANE_MCP_SERVER_INFO: McpFnServerInfo = {
   name: "skillplane",
   title: "Skillplane",
   version: "1.0.0",
@@ -115,365 +120,320 @@ export const SKILLPLANE_MCP_SERVER_INFO: Implementation = {
   ],
 };
 
-export function createSkillplaneMcpServer(runtime: McpToolRuntime): McpServer {
-  const server = new McpServer(SKILLPLANE_MCP_SERVER_INFO, {
-    capabilities: {
-      tools: { listChanged: false },
-    },
+type ToolAnnotations = typeof READ_ONLY_ANNOTATIONS | typeof MUTATION_ANNOTATIONS;
+
+function objectSchema(schema: ZodType, io: "input" | "output"): McpFnObjectSchema {
+  const converted = z.toJSONSchema(schema, { target: "draft-7", io });
+  if (converted.type !== "object") {
+    throw new TypeError("Skillplane MCP tool schemas must describe objects");
+  }
+  return converted as McpFnObjectSchema;
+}
+
+function tool<TInput>(options: {
+  name: string;
+  title: string;
+  description: string;
+  input: ZodType<TInput>;
+  output: ZodType;
+  annotations: ToolAnnotations;
+  run(runtime: McpToolRuntime, input: TInput): Promise<unknown>;
+}): McpFnToolDefinition<McpToolRuntime> {
+  return {
+    name: options.name,
+    title: options.title,
+    description: options.description,
+    inputSchema: objectSchema(options.input, "input"),
+    outputSchema: objectSchema(options.output, "output"),
+    annotations: options.annotations,
+    handler: async (args, runtime) =>
+      (await options.run(runtime, options.input.parse(args))) as Awaited<
+        ReturnType<McpFnToolDefinition<McpToolRuntime>["handler"]>
+      >,
+  };
+}
+
+export const skillplaneMcpDeclaration = defineMcpFnServer<McpToolRuntime>({
+  info: {
+    ...SKILLPLANE_MCP_SERVER_INFO,
     instructions:
       "Discover, retrieve, and manage versioned Skillplane skills and their authorized context knowledge. Start with workspaces_list, skills_list, and contexts_list when identifiers are unknown. All caller identity fields are declared metadata; authentication remains server-derived.",
-  });
-
-  server.registerTool(
-    "workspaces_list",
-    {
+  },
+  transports: ["streamable-http"],
+  tools: [
+    tool({
+      name: "workspaces_list",
       title: "List my workspaces",
       description:
         "Discover every workspace available to the authenticated OAuth user, or the single workspace bound to an agent credential, using an opaque cursor. No workspace identifier is required.",
-      inputSchema: workspacesListInputSchema,
-      outputSchema: workspacesListOutputSchema,
+      input: workspacesListInputSchema,
+      output: workspacesListOutputSchema,
       annotations: READ_ONLY_ANNOTATIONS,
-    },
-    (input) => workspacesList(runtime, input),
-  );
-
-  server.registerTool(
-    "skills_list",
-    {
+      run: workspacesList,
+    }),
+    tool({
+      name: "skills_list",
       title: "List workspace skills",
       description:
         "Enumerate authorized skills in one workspace without a search query. Includes active unpublished skill records, supports visibility and archive filters, and returns an opaque cursor until every matching skill has been listed.",
-      inputSchema: skillsListInputSchema,
-      outputSchema: skillsListOutputSchema,
+      input: skillsListInputSchema,
+      output: skillsListOutputSchema,
       annotations: READ_ONLY_ANNOTATIONS,
-    },
-    (input) => skillsList(runtime, input),
-  );
-
-  server.registerTool(
-    "skills_search",
-    {
+      run: skillsList,
+    }),
+    tool({
+      name: "skills_search",
       title: "Search skills",
       description:
         "Search one workspace using authorization-filtered Postgres full-text ranking. Returns only stable skill metadata, current published version IDs, semantic versions, digests, and an opaque cursor.",
-      inputSchema: skillsSearchInputSchema,
-      outputSchema: skillsSearchOutputSchema,
+      input: skillsSearchInputSchema,
+      output: skillsSearchOutputSchema,
       annotations: READ_ONLY_ANNOTATIONS,
-    },
-    (input) => skillsSearch(runtime, input),
-  );
-
-  server.registerTool(
-    "skill_retrieve",
-    {
+      run: skillsSearch,
+    }),
+    tool({
+      name: "skill_retrieve",
       title: "Retrieve a skill",
       description:
         "Retrieve one exact authorized immutable skill version with its canonical manifest, verified bundle digest, SKILL.md instructions, file descriptors, and optional authorized context knowledge and active notes.",
-      inputSchema: skillRetrieveInputSchema,
-      outputSchema: skillRetrieveOutputSchema,
+      input: skillRetrieveInputSchema,
+      output: skillRetrieveOutputSchema,
       annotations: READ_ONLY_ANNOTATIONS,
-    },
-    (input) => skillRetrieve(runtime, input),
-  );
-
-  server.registerTool(
-    "skill_asset_retrieve",
-    {
+      run: skillRetrieve,
+    }),
+    tool({
+      name: "skill_asset_retrieve",
       title: "Retrieve a skill asset",
       description:
         "Retrieve one traversal-safe file from an exact authorized skill version. Small safe content is returned as UTF-8 or base64; larger files use a five-minute bearer-bound authenticated download.",
-      inputSchema: skillAssetRetrieveInputSchema,
-      outputSchema: skillAssetRetrieveOutputSchema,
+      input: skillAssetRetrieveInputSchema,
+      output: skillAssetRetrieveOutputSchema,
       annotations: READ_ONLY_ANNOTATIONS,
-    },
-    (input) => skillAssetRetrieve(runtime, input),
-  );
-
-  server.registerTool(
-    "skill_versions_list",
-    {
+      run: skillAssetRetrieve,
+    }),
+    tool({
+      name: "skill_versions_list",
       title: "List skill versions",
       description:
         "List authorized immutable skill history using an opaque filter-bound cursor. Published history is public only for public skills; candidate states require an authorized workspace role.",
-      inputSchema: skillVersionsListInputSchema,
-      outputSchema: skillVersionsListOutputSchema,
+      input: skillVersionsListInputSchema,
+      output: skillVersionsListOutputSchema,
       annotations: READ_ONLY_ANNOTATIONS,
-    },
-    (input) => skillVersionsList(runtime, input),
-  );
-
-  server.registerTool(
-    "skill_versions_diff",
-    {
+      run: skillVersionsList,
+    }),
+    tool({
+      name: "skill_versions_diff",
       title: "Diff skill versions",
       description:
         "Compare two exact authorized immutable skill versions by file digest, with bounded line-level text changes when safe.",
-      inputSchema: skillVersionsDiffInputSchema,
-      outputSchema: skillVersionsDiffOutputSchema,
+      input: skillVersionsDiffInputSchema,
+      output: skillVersionsDiffOutputSchema,
       annotations: READ_ONLY_ANNOTATIONS,
-    },
-    (input) => skillVersionsDiff(runtime, input),
-  );
-
-  server.registerTool(
-    "skill_candidates_list",
-    {
+      run: skillVersionsDiff,
+    }),
+    tool({
+      name: "skill_candidates_list",
       title: "List skill candidates",
       description:
         "List authorized amendment review candidates and their immutable proposed versions using status filters and an opaque filter-bound cursor.",
-      inputSchema: skillCandidatesListInputSchema,
-      outputSchema: skillCandidatesListOutputSchema,
+      input: skillCandidatesListInputSchema,
+      output: skillCandidatesListOutputSchema,
       annotations: READ_ONLY_ANNOTATIONS,
-    },
-    (input) => skillCandidatesList(runtime, input),
-  );
-
-  server.registerTool(
-    "skill_amendment_policy_get",
-    {
+      run: skillCandidatesList,
+    }),
+    tool({
+      name: "skill_amendment_policy_get",
       title: "Get skill amendment policy",
       description:
         "Read one authorized skill's review or trusted auto-publication policy together with the skill metadata concurrency token.",
-      inputSchema: skillAmendmentPolicyGetInputSchema,
-      outputSchema: skillAmendmentPolicyOutputSchema,
+      input: skillAmendmentPolicyGetInputSchema,
+      output: skillAmendmentPolicyOutputSchema,
       annotations: READ_ONLY_ANNOTATIONS,
-    },
-    (input) => skillAmendmentPolicyGet(runtime, input),
-  );
-
-  server.registerTool(
-    "contexts_list",
-    {
+      run: skillAmendmentPolicyGet,
+    }),
+    tool({
+      name: "contexts_list",
       title: "List skill contexts",
       description:
         "Discover authorized active or archived contexts for one skill in deterministic latest-update order with current knowledge revision identity and an opaque filter-bound cursor.",
-      inputSchema: contextsListInputSchema,
-      outputSchema: contextsListOutputSchema,
+      input: contextsListInputSchema,
+      output: contextsListOutputSchema,
       annotations: READ_ONLY_ANNOTATIONS,
-    },
-    (input) => contextsList(runtime, input),
-  );
-
-  server.registerTool(
-    "context_get",
-    {
+      run: contextsList,
+    }),
+    tool({
+      name: "context_get",
       title: "Get skill context",
       description:
         "Read one authorized skill context with an exact current or selected immutable knowledge revision and, when requested, active shared notes.",
-      inputSchema: contextGetInputSchema,
-      outputSchema: contextGetOutputSchema,
+      input: contextGetInputSchema,
+      output: contextGetOutputSchema,
       annotations: READ_ONLY_ANNOTATIONS,
-    },
-    (input) => contextGet(runtime, input),
-  );
-
-  server.registerTool(
-    "context_knowledge_history",
-    {
+      run: contextGet,
+    }),
+    tool({
+      name: "context_knowledge_history",
       title: "List context knowledge history",
       description:
         "List immutable knowledge revisions for one authorized context with Markdown, digests, learning metadata, safe agent/model provenance, and an opaque filter-bound cursor.",
-      inputSchema: contextKnowledgeHistoryInputSchema,
-      outputSchema: contextKnowledgeHistoryOutputSchema,
+      input: contextKnowledgeHistoryInputSchema,
+      output: contextKnowledgeHistoryOutputSchema,
       annotations: READ_ONLY_ANNOTATIONS,
-    },
-    (input) => contextKnowledgeHistory(runtime, input),
-  );
-
-  server.registerTool(
-    "context_notes_list",
-    {
+      run: contextKnowledgeHistory,
+    }),
+    tool({
+      name: "context_notes_list",
       title: "List context notes",
       description:
         "List authorized shared context notes in deterministic latest-update order with immutable current revision IDs, digests, Markdown bodies, archive state, and an opaque cursor.",
-      inputSchema: contextNotesListInputSchema,
-      outputSchema: contextNotesListOutputSchema,
+      input: contextNotesListInputSchema,
+      output: contextNotesListOutputSchema,
       annotations: READ_ONLY_ANNOTATIONS,
-    },
-    (input) => contextNotesList(runtime, input),
-  );
-
-  server.registerTool(
-    "skill_amend",
-    {
+      run: contextNotesList,
+    }),
+    tool({
+      name: "skill_amend",
       title: "Amend a skill",
       description:
         "Create one immutable, replay-safe skill amendment from an exact current base using digest-checked add, replace, or delete operations, structured learning evidence, and the skill's review or trusted auto-publication policy.",
-      inputSchema: skillAmendInputSchema,
-      outputSchema: skillAmendOutputSchema,
+      input: skillAmendInputSchema,
+      output: skillAmendOutputSchema,
       annotations: MUTATION_ANNOTATIONS,
-    },
-    (input) => skillAmend(runtime, input),
-  );
-
-  server.registerTool(
-    "skill_create",
-    {
+      run: skillAmend,
+    }),
+    tool({
+      name: "skill_create",
       title: "Create a skill",
       description:
         "Create one authorized skill and immutable published 1.0.0 version from a bounded canonical file set with caller attribution, durable audit, and replay-safe idempotency.",
-      inputSchema: skillCreateInputSchema,
-      outputSchema: skillCreateOutputSchema,
+      input: skillCreateInputSchema,
+      output: skillCreateOutputSchema,
       annotations: MUTATION_ANNOTATIONS,
-    },
-    (input) => skillCreate(runtime, input),
-  );
-
-  server.registerTool(
-    "skill_visibility_update",
-    {
+      run: skillCreate,
+    }),
+    tool({
+      name: "skill_visibility_update",
       title: "Update skill visibility",
       description:
         "Change authorized skill visibility using the exact previously observed updatedAt value, durable audit, and replay-safe idempotency.",
-      inputSchema: skillVisibilityUpdateInputSchema,
-      outputSchema: skillLifecycleMutationOutputSchema,
+      input: skillVisibilityUpdateInputSchema,
+      output: skillLifecycleMutationOutputSchema,
       annotations: MUTATION_ANNOTATIONS,
-    },
-    (input) => skillVisibilityUpdate(runtime, input),
-  );
-
-  server.registerTool(
-    "skill_archive",
-    {
+      run: skillVisibilityUpdate,
+    }),
+    tool({
+      name: "skill_archive",
       title: "Archive a skill",
       description:
         "Archive one authorized skill while preserving immutable versions and contexts, using optimistic concurrency and replay-safe idempotency.",
-      inputSchema: skillStateMutationInputSchema,
-      outputSchema: skillLifecycleMutationOutputSchema,
+      input: skillStateMutationInputSchema,
+      output: skillLifecycleMutationOutputSchema,
       annotations: MUTATION_ANNOTATIONS,
-    },
-    (input) => skillArchive(runtime, input),
-  );
-
-  server.registerTool(
-    "skill_restore",
-    {
+      run: skillArchive,
+    }),
+    tool({
+      name: "skill_restore",
       title: "Restore a skill",
       description:
         "Restore one authorized archived skill using optimistic concurrency, durable audit, and replay-safe idempotency.",
-      inputSchema: skillStateMutationInputSchema,
-      outputSchema: skillLifecycleMutationOutputSchema,
+      input: skillStateMutationInputSchema,
+      output: skillLifecycleMutationOutputSchema,
       annotations: MUTATION_ANNOTATIONS,
-    },
-    (input) => skillRestore(runtime, input),
-  );
-
-  server.registerTool(
-    "skill_candidate_approve",
-    {
+      run: skillRestore,
+    }),
+    tool({
+      name: "skill_candidate_approve",
       title: "Approve a skill candidate",
       description:
         "Approve one pending authorized amendment review using its exact updatedAt value, publish the immutable candidate, and record durable reviewer attribution.",
-      inputSchema: skillCandidateDecisionInputSchema,
-      outputSchema: skillCandidateDecisionOutputSchema,
+      input: skillCandidateDecisionInputSchema,
+      output: skillCandidateDecisionOutputSchema,
       annotations: MUTATION_ANNOTATIONS,
-    },
-    (input) => skillCandidateApprove(runtime, input),
-  );
-
-  server.registerTool(
-    "skill_candidate_reject",
-    {
+      run: skillCandidateApprove,
+    }),
+    tool({
+      name: "skill_candidate_reject",
       title: "Reject a skill candidate",
       description:
         "Reject one pending authorized amendment review using its exact updatedAt value, preserving its immutable candidate and recording durable reviewer attribution.",
-      inputSchema: skillCandidateDecisionInputSchema,
-      outputSchema: skillCandidateDecisionOutputSchema,
+      input: skillCandidateDecisionInputSchema,
+      output: skillCandidateDecisionOutputSchema,
       annotations: MUTATION_ANNOTATIONS,
-    },
-    (input) => skillCandidateReject(runtime, input),
-  );
-
-  server.registerTool(
-    "skill_amendment_policy_update",
-    {
+      run: skillCandidateReject,
+    }),
+    tool({
+      name: "skill_amendment_policy_update",
       title: "Update skill amendment policy",
       description:
         "Replace one authorized skill's review or trusted auto-publication policy as a workspace owner using optimistic concurrency and replay-safe durable audit.",
-      inputSchema: skillAmendmentPolicyUpdateInputSchema,
-      outputSchema: skillAmendmentPolicyOutputSchema,
+      input: skillAmendmentPolicyUpdateInputSchema,
+      output: skillAmendmentPolicyOutputSchema,
       annotations: MUTATION_ANNOTATIONS,
-    },
-    (input) => skillAmendmentPolicyUpdate(runtime, input),
-  );
-
-  server.registerTool(
-    "context_create",
-    {
+      run: skillAmendmentPolicyUpdate,
+    }),
+    tool({
+      name: "context_create",
       title: "Create a skill context",
       description:
         "Atomically create one authorized skill context and its first immutable knowledge revision with bounded metadata, caller attribution, durable audit, and replay-safe idempotency.",
-      inputSchema: contextCreateInputSchema,
-      outputSchema: contextCreateOutputSchema,
+      input: contextCreateInputSchema,
+      output: contextCreateOutputSchema,
       annotations: MUTATION_ANNOTATIONS,
-    },
-    (input) => contextCreate(runtime, input),
-  );
-
-  server.registerTool(
-    "context_update",
-    {
+      run: contextCreate,
+    }),
+    tool({
+      name: "context_update",
       title: "Update context metadata",
       description:
         "Update authorized context metadata without changing knowledge, requiring the exact previously observed updatedAt value for optimistic concurrency and replay-safe idempotency.",
-      inputSchema: contextUpdateInputSchema,
-      outputSchema: contextLifecycleMutationOutputSchema,
+      input: contextUpdateInputSchema,
+      output: contextLifecycleMutationOutputSchema,
       annotations: MUTATION_ANNOTATIONS,
-    },
-    (input) => contextUpdate(runtime, input),
-  );
-
-  server.registerTool(
-    "context_archive",
-    {
+      run: contextUpdate,
+    }),
+    tool({
+      name: "context_archive",
       title: "Archive a context",
       description:
         "Archive one authorized context using the exact previously observed updatedAt value, durable transactional audit, and replay-safe idempotency.",
-      inputSchema: contextStateMutationInputSchema,
-      outputSchema: contextLifecycleMutationOutputSchema,
+      input: contextStateMutationInputSchema,
+      output: contextLifecycleMutationOutputSchema,
       annotations: MUTATION_ANNOTATIONS,
-    },
-    (input) => contextArchive(runtime, input),
-  );
-
-  server.registerTool(
-    "context_restore",
-    {
+      run: contextArchive,
+    }),
+    tool({
+      name: "context_restore",
       title: "Restore a context",
       description:
         "Restore one authorized archived context using the exact previously observed updatedAt value, durable transactional audit, and replay-safe idempotency.",
-      inputSchema: contextStateMutationInputSchema,
-      outputSchema: contextLifecycleMutationOutputSchema,
+      input: contextStateMutationInputSchema,
+      output: contextLifecycleMutationOutputSchema,
       annotations: MUTATION_ANNOTATIONS,
-    },
-    (input) => contextRestore(runtime, input),
-  );
-
-  server.registerTool(
-    "context_knowledge_update",
-    {
+      run: contextRestore,
+    }),
+    tool({
+      name: "context_knowledge_update",
       title: "Update context knowledge",
       description:
         "Create the next immutable shared context-knowledge revision using optimistic concurrency, bounded learning metadata, and replay-safe idempotency.",
-      inputSchema: contextKnowledgeUpdateInputSchema,
-      outputSchema: contextKnowledgeMutationOutputSchema,
+      input: contextKnowledgeUpdateInputSchema,
+      output: contextKnowledgeMutationOutputSchema,
       annotations: MUTATION_ANNOTATIONS,
-    },
-    (input) => contextKnowledgeUpdate(runtime, input),
-  );
-
-  server.registerTool(
-    "context_note_upsert",
-    {
+      run: contextKnowledgeUpdate,
+    }),
+    tool({
+      name: "context_note_upsert",
       title: "Create or update a context note",
       description:
         "Create a shared context note at revision one or append its next immutable revision using a stable note ID, required expected revision for updates, and replay-safe idempotency.",
-      inputSchema: contextNoteUpsertInputSchema,
-      outputSchema: contextNoteMutationOutputSchema,
+      input: contextNoteUpsertInputSchema,
+      output: contextNoteMutationOutputSchema,
       annotations: MUTATION_ANNOTATIONS,
-    },
-    (input) => contextNoteUpsert(runtime, input),
-  );
+      run: contextNoteUpsert,
+    }),
+  ],
+});
 
-  return server;
+export function createSkillplaneMcpServer(runtime: McpToolRuntime) {
+  return skillplaneMcpDeclaration.createServer({ context: () => runtime });
 }

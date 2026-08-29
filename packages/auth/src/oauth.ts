@@ -18,6 +18,5 @@ export {
   protectedResourceMetadata,
   protectedResourceChallenge,
   readBearerToken,
-  resolveClient,
   verifyAccessToken,
 } from "@skillplane/authfn-mcp-oauth";

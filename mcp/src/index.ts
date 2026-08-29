@@ -1,4 +1,4 @@
-import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
+import { createAuthProviderMcpHandler } from "@mcpfn/auth";
 import {
   createApiServiceProvider,
   type ApiServiceProvider,
@@ -17,9 +17,11 @@ import icon192 from "./assets/icon-192.png";
 import icon512 from "./assets/icon-512.png";
 import gradientLogo from "./assets/skillplane-logo-gradient-transparent.png";
 import {
+  authenticateMcpBearerCredential,
   authenticateMcpRequest,
   McpAuthenticationError,
   mcpAuthenticationResponse,
+  requiredScopesForRequest,
   type McpIdentity,
 } from "./auth.js";
 import {
@@ -323,6 +325,76 @@ function createRuntime(
   };
 }
 
+interface SkillplaneMcpAuthSession {
+  readonly id: string;
+  readonly type: string;
+  readonly subject: {
+    readonly actorId: string;
+    readonly actorType: string;
+    readonly tenantId?: string;
+  };
+  readonly resourceIds: string[];
+  readonly scopes: string[];
+  readonly methods: string[];
+  readonly expiresAt?: Date;
+  readonly identity: McpIdentity;
+}
+
+function authSession(identity: McpIdentity): SkillplaneMcpAuthSession {
+  return {
+    id: identity.credentialId,
+    type: identity.kind,
+    subject: {
+      actorId: identity.actorId,
+      actorType: identity.actorType,
+      ...(identity.kind === "service" ? { tenantId: identity.workspaceId } : {}),
+    },
+    resourceIds: identity.kind === "service" ? [identity.workspaceId] : [],
+    scopes: [...identity.scopes],
+    methods: [identity.credentialKind],
+    ...(identity.kind === "oauth" ? { expiresAt: identity.expiresAt } : {}),
+    identity,
+  };
+}
+
+function authenticatedIdentity(authInfo: unknown): McpIdentity {
+  if (!isJsonObject(authInfo) || !isJsonObject(authInfo.extra)) {
+    throw new Error("McpFn did not propagate authenticated principal context");
+  }
+  const identity = authInfo.extra.skillplaneIdentity;
+  if (
+    !isJsonObject(identity) ||
+    !["oauth", "service"].includes(String(identity.kind))
+  ) {
+    throw new Error("McpFn authenticated principal context is invalid");
+  }
+  return identity as unknown as McpIdentity;
+}
+
+function runtimeEnvironment(bindings: RuntimeBindings | undefined): string | undefined {
+  return bindings?.RUNTIME_ENV;
+}
+
+function isAllowedMcpHost(
+  request: Request,
+  services: ApiServices,
+  runtimeEnvironment: string | undefined,
+): boolean {
+  const rawHost = request.headers.get("host") ?? new URL(request.url).host;
+  if (!rawHost) return false;
+  let hostname: string;
+  try {
+    hostname = new URL(`http://${rawHost}`).hostname;
+  } catch {
+    return false;
+  }
+  if (hostname === new URL(services.auth.oauth.resource).hostname) return true;
+  return (
+    runtimeEnvironment !== "production" &&
+    ["127.0.0.1", "[::1]", "localhost"].includes(hostname)
+  );
+}
+
 async function handleDownload(
   request: Request,
   token: string,
@@ -519,60 +591,106 @@ export function createMcpApp(options: CreateMcpAppOptions = {}) {
     let services: ApiServices | null = null;
     try {
       services = await getServices(context.env);
-      const identity = await authenticateMcpRequest(context.req.raw, services);
-      const sessionId = context.req.header("mcp-session-id");
-      // PostHog's token carries analytics correlation only; it does not restore
-      // application or authorization state. Continue rejecting every other
-      // session identifier on this stateless endpoint.
-      if (sessionId && !isPostHogSessionId(sessionId)) {
-        return jsonError(
-          400,
-          "invalid_session",
-          "Skillplane uses stateless Streamable HTTP sessions",
-        );
+      const currentServices = services;
+      if (
+        !isAllowedMcpHost(
+          context.req.raw,
+          currentServices,
+          runtimeEnvironment(context.env),
+        )
+      ) {
+        return jsonError(421, "INVALID_HOST", "The MCP Host header is not allowed");
       }
-      if (context.req.raw.method !== "POST") {
-        return statelessMethodNotAllowedResponse();
-      }
-      const isLinearAgent =
-        identity.kind === "oauth" && identity.clientId === LINEAR_MCP_CLIENT_ID;
-      const protocolRequest = await withLinearAgentCaller(
-        context.req.raw,
-        isLinearAgent,
+      const handler = createAuthProviderMcpHandler(
+        async (request, handleOptions) => {
+          const identity = authenticatedIdentity(handleOptions?.authInfo);
+          const sessionId = request.headers.get("mcp-session-id");
+          // PostHog's token carries analytics correlation only; it does not
+          // restore application or authorization state.
+          if (sessionId && !isPostHogSessionId(sessionId)) {
+            return jsonError(
+              400,
+              "invalid_session",
+              "Skillplane uses stateless Streamable HTTP sessions",
+            );
+          }
+          if (request.method !== "POST") {
+            return statelessMethodNotAllowedResponse();
+          }
+          const isLinearAgent =
+            identity.kind === "oauth" && identity.clientId === LINEAR_MCP_CLIENT_ID;
+          const protocolRequest = await withLinearAgentCaller(request, isLinearAgent);
+          const runtime = createRuntime(
+            currentServices,
+            identity,
+            auditFor(currentServices),
+            protocolRequest,
+            now,
+          );
+          const server = createSkillplaneMcpServer(runtime);
+          const posthog = resolvePostHog(context.env);
+          if (posthog) instrument(server.protocol, posthog);
+          const protocolHandler = await server.createWebStandardHandler({
+            enableJsonResponse: true,
+          });
+          const response = await protocolHandler(protocolRequest, handleOptions);
+          const protocolResponse = secureProtocolResponse(
+            await compactLinearToolCatalogResponse(response, isLinearAgent),
+          );
+          if (posthog) {
+            let waitUntil: ((promise: Promise<unknown>) => void) | undefined;
+            try {
+              const executionContext = context.executionCtx;
+              waitUntil = executionContext.waitUntil.bind(executionContext);
+            } catch {
+              // Hono's direct test helpers do not provide an execution context.
+            }
+            await flushPostHog(posthog, waitUntil);
+          }
+          return protocolResponse;
+        },
+        {
+          resource: currentServices.auth.oauth.resource,
+          provider: {
+            authenticateBearer: async (token, request) => {
+              try {
+                return authSession(
+                  await authenticateMcpBearerCredential(
+                    token,
+                    request,
+                    currentServices,
+                  ),
+                );
+              } catch (error) {
+                if (error instanceof McpAuthenticationError && error.status === 401) {
+                  return null;
+                }
+                throw error;
+              }
+            },
+          },
+          map: (session) => ({
+            subject: session.identity.actorId,
+            clientId:
+              session.identity.kind === "oauth"
+                ? session.identity.clientId
+                : session.identity.servicePrincipalId,
+            scopes: [...session.identity.scopes],
+            resourceIds: [...session.resourceIds],
+            ...(session.subject.tenantId ? { tenantId: session.subject.tenantId } : {}),
+            ...(session.expiresAt
+              ? { expiresAt: Math.floor(session.expiresAt.getTime() / 1_000) }
+              : {}),
+            authMethods: [...session.methods],
+            extra: { skillplaneIdentity: session.identity },
+          }),
+          requiredScopes: async ({ request }) => [
+            ...(await requiredScopesForRequest(request)),
+          ],
+        },
       );
-      const runtime = createRuntime(
-        services,
-        identity,
-        auditFor(services),
-        protocolRequest,
-        now,
-      );
-      const server = createSkillplaneMcpServer(runtime);
-      const posthog = resolvePostHog(context.env);
-      if (posthog) instrument(server, posthog);
-      const transport = new WebStandardStreamableHTTPServerTransport({
-        enableJsonResponse: true,
-      });
-      await server.connect(transport);
-      const response = await transport.handleRequest(protocolRequest);
-      const protocolResponse = secureProtocolResponse(
-        await compactLinearToolCatalogResponse(response, isLinearAgent),
-      );
-      if (posthog) {
-        let waitUntil: ((promise: Promise<unknown>) => void) | undefined;
-        try {
-          const executionContext = context.executionCtx;
-          waitUntil = executionContext.waitUntil.bind(executionContext);
-        } catch {
-          // Hono's direct test helpers do not provide an execution context.
-        }
-        await flushPostHog(posthog, waitUntil);
-      }
-      return protocolResponse;
-    } catch (error) {
-      if (error instanceof McpAuthenticationError) {
-        return mcpAuthenticationResponse(services, error);
-      }
+      return await handler(context.req.raw);
+    } catch {
       return jsonError(500, "INTERNAL_ERROR", "The MCP request could not be completed");
     } finally {
       if (services) {

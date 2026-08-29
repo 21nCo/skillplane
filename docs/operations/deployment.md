@@ -181,6 +181,10 @@ smoke results. It records secret names only.
 
 ## Live OAuth, MCP, and email gates
 
+The McpFn ownership boundary, automated gates, controlled Claude and ChatGPT
+proof, artifact rules, and paired app/MCP rollback contract are documented in
+[`mcpfn.md`](./mcpfn.md).
+
 Create or sign in to the controlled production account, create a workspace, and
 complete an OAuth authorization-code flow for the exact resource
 `https://mcp.skillplane.dev/mcp`. Then provide:

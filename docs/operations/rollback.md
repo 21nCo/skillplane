@@ -4,6 +4,9 @@ Skillplane uses Cloudflare Worker version rollback for application recovery and
 forward-only Postgres migrations for data safety. A Worker rollback must never
 silently revert or mutate the PostgreSQL schema.
 
+For an McpFn authorization/runtime release, also follow the paired app/MCP
+compatibility and provider verification rules in [`mcpfn.md`](./mcpfn.md).
+
 ## Automated rehearsal
 
 After a successful `pnpm deploy:all`, run:

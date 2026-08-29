@@ -1,9 +1,12 @@
+import type { AuthFnPluginRuntimeContext } from "@authfn/core";
 import type { Pool } from "pg";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { normalizeMcpClientRegistration } from "@mcpfn/auth";
 import {
   authorizationServerMetadata,
   base64Url,
   createOAuthSchema,
+  createAuthFnMcpOAuthPlugin,
   keyedHash,
   MCP_RESOURCE,
   normalizeOAuthConfig,
@@ -13,9 +16,7 @@ import {
   readBearerToken,
   sha256Base64Url,
   signPayload,
-  validateClientIdMetadataUrl,
-  validateRedirectUri,
-  validateRegistration,
+  isClientMetadataDocumentUrlAllowed,
   verifySignedPayload,
 } from "./index.js";
 
@@ -40,10 +41,71 @@ describe("OAuth 2.1 metadata and configuration", () => {
     expect(response.status).toBe(204);
   });
 
+  it("rate-limits client resolution by endpoint and network before metadata fetch", async () => {
+    const query = vi.fn(async () => ({ rows: [{ request_count: 61 }] }));
+    const fetcher = vi.fn(async () => Response.json({}));
+    const { plugin } = createAuthFnMcpOAuthPlugin({
+      pool: { query } as unknown as Pool,
+      issuer: "https://app.skillplane.dev",
+      tokenPepper: pepper,
+      fetcher,
+    });
+    const routes = plugin.routes?.({} as AuthFnPluginRuntimeContext) ?? [];
+    const authorize = routes.find((route) => route.path === "/oauth/authorize");
+    const token = routes.find((route) => route.path === "/oauth/token");
+    if (!authorize || !token) throw new Error("OAuth compatibility routes are missing");
+    const network = "198.51.100.42";
+    const authorizationUrl = new URL("https://app.skillplane.dev/auth/oauth/authorize");
+    authorizationUrl.searchParams.set(
+      "client_id",
+      "https://first-client.example.test/client.json",
+    );
+    const formRequest = (clientId: string, requestNetwork = network) =>
+      new Request("https://app.skillplane.dev/auth/oauth/token", {
+        method: "POST",
+        headers: {
+          "content-type": "application/x-www-form-urlencoded",
+          "cf-connecting-ip": requestNetwork,
+        },
+        body: new URLSearchParams({
+          grant_type: "authorization_code",
+          client_id: clientId,
+        }),
+      });
+
+    const responses = [
+      await authorize.handler(
+        new Request(authorizationUrl, {
+          headers: { "cf-connecting-ip": network },
+        }),
+        undefined as never,
+      ),
+      await token.handler(
+        formRequest("https://second-client.example.test/client.json"),
+        undefined as never,
+      ),
+      await token.handler(
+        formRequest("https://third-client.example.test/client.json"),
+        undefined as never,
+      ),
+      await token.handler(
+        formRequest("https://fourth-client.example.test/client.json", "198.51.100.43"),
+        undefined as never,
+      ),
+    ];
+
+    expect(responses.map((response) => response.status)).toEqual([429, 429, 429, 429]);
+    const bucketHashes = query.mock.calls.map((call) => (call[1] as unknown[])[0]);
+    expect(bucketHashes[1]).toBe(bucketHashes[2]);
+    expect(bucketHashes[0]).not.toBe(bucketHashes[1]);
+    expect(bucketHashes[1]).not.toBe(bucketHashes[3]);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
   it("advertises only the authorization-code, refresh, public-client, and S256 surface", () => {
     const runtime = normalizeOAuthConfig({
       pool,
-      issuer: "https://app.skillplane.dev",
+      issuer: "https://app.skillplane.dev/",
       tokenPepper: pepper,
     });
     expect(authorizationServerMetadata(runtime)).toEqual({
@@ -52,7 +114,7 @@ describe("OAuth 2.1 metadata and configuration", () => {
       token_endpoint: "https://app.skillplane.dev/auth/oauth/token",
       revocation_endpoint: "https://app.skillplane.dev/auth/oauth/revoke",
       registration_endpoint: "https://app.skillplane.dev/auth/oauth/register",
-      scopes_supported: OAUTH_SCOPES,
+      scopes_supported: [...OAUTH_SCOPES].sort(),
       response_types_supported: ["code"],
       response_modes_supported: ["query"],
       grant_types_supported: ["authorization_code", "refresh_token"],
@@ -64,7 +126,7 @@ describe("OAuth 2.1 metadata and configuration", () => {
     expect(protectedResourceMetadata(runtime)).toEqual({
       resource: MCP_RESOURCE,
       authorization_servers: ["https://app.skillplane.dev"],
-      scopes_supported: OAUTH_SCOPES,
+      scopes_supported: [...OAUTH_SCOPES].sort(),
       bearer_methods_supported: ["header"],
       resource_name: "Skillplane MCP",
     });
@@ -74,7 +136,7 @@ describe("OAuth 2.1 metadata and configuration", () => {
         scopes: ["skills:read", "not-a-scope"],
       }),
     ).toBe(
-      'Bearer resource_metadata="https://mcp.skillplane.dev/.well-known/oauth-protected-resource/mcp", error="insufficient_scope", scope="skills:read"',
+      'Bearer resource_metadata="https://mcp.skillplane.dev/.well-known/oauth-protected-resource/mcp", error="insufficient_scope", error_description="The Bearer credential lacks required scopes", scope="skills:read"',
     );
   });
 
@@ -119,25 +181,28 @@ describe("OAuth 2.1 metadata and configuration", () => {
 });
 
 describe("OAuth client and redirect validation", () => {
-  it("accepts exact HTTPS and loopback redirect URIs", () => {
-    expect(validateRedirectUri("https://agent.example.test/callback?source=mcp")).toBe(
-      "https://agent.example.test/callback?source=mcp",
-    );
-    expect(validateRedirectUri("http://127.0.0.1:49152/callback")).toBe(
+  it("delegates exact HTTPS and loopback redirect normalization to McpFn", () => {
+    const registration = normalizeMcpClientRegistration({
+      clientId: "client",
+      source: "dynamic",
+      metadata: {
+        redirect_uris: [
+          "https://agent.example.test/callback?source=mcp",
+          "http://127.0.0.1:49152/callback",
+        ],
+      },
+    });
+    expect(registration.redirectUris).toEqual([
       "http://127.0.0.1:49152/callback",
-    );
-    expect(validateRedirectUri("http://localhost:49152/callback")).toBe(
-      "http://localhost:49152/callback",
-    );
-  });
-
-  it.each([
-    "http://agent.example.test/callback",
-    "https://user:password@agent.example.test/callback",
-    "https://agent.example.test/callback#fragment",
-    "https://*.example.test/callback",
-  ])("rejects unsafe redirect URI %s", (redirectUri) => {
-    expect(() => validateRedirectUri(redirectUri)).toThrow();
+      "https://agent.example.test/callback?source=mcp",
+    ]);
+    expect(() =>
+      normalizeMcpClientRegistration({
+        clientId: "unsafe",
+        source: "dynamic",
+        metadata: { redirect_uris: ["http://agent.example.test/callback"] },
+      }),
+    ).toThrow(/unsafe|malformed/u);
   });
 
   it.each([
@@ -148,29 +213,101 @@ describe("OAuth client and redirect validation", () => {
     "https://agent.example.test/",
     "https://agent.example.test/client.json?version=1",
   ])("rejects unsafe client metadata URL %s", (clientId) => {
-    expect(() => validateClientIdMetadataUrl(clientId)).toThrow();
+    expect(isClientMetadataDocumentUrlAllowed(new URL(clientId))).toBe(false);
   });
 
-  it("rejects confidential, implicit, password, and unknown-scope registration", () => {
-    const base = {
-      client_name: "Review Agent",
-      redirect_uris: ["https://agent.example.test/callback"],
-    };
-    expect(() =>
-      validateRegistration({
-        ...base,
-        token_endpoint_auth_method: "client_secret_basic",
+  it("projects metadata-document clients through the compatibility authorization route", async () => {
+    const clientId = "https://agent.example.test/client.json";
+    const redirectUri = "https://agent.example.test/callback";
+    const query = vi.fn(async (sql: string) => ({
+      rows: sql.includes("RETURNING request_count") ? [{ request_count: 1 }] : [],
+    }));
+    const transactionQuery = vi.fn(async (sql: string) => ({
+      rows: sql.includes("RETURNING client_id") ? [{ client_id: clientId }] : [],
+    }));
+    const release = vi.fn();
+    const connect = vi.fn(async () => ({ query: transactionQuery, release }));
+    const fetcher = vi.fn(async () =>
+      Response.json({
+        client_id: clientId,
+        client_name: "Metadata Agent",
+        redirect_uris: [redirectUri],
+        response_types: ["code"],
+        grant_types: ["authorization_code", "refresh_token"],
+        token_endpoint_auth_method: "none",
       }),
-    ).toThrow(/public/);
-    expect(() => validateRegistration({ ...base, response_types: ["token"] })).toThrow(
-      /code/,
     );
-    expect(() => validateRegistration({ ...base, grant_types: ["password"] })).toThrow(
-      /grant/,
+    const { plugin } = createAuthFnMcpOAuthPlugin({
+      pool: {
+        query,
+        connect,
+      } as unknown as Pool,
+      issuer: "https://app.skillplane.dev",
+      tokenPepper: pepper,
+      fetcher,
+      now: () => new Date("2026-08-29T00:00:00.000Z"),
+    });
+    const authfn = {
+      config: { plugins: [] },
+      namespace: "authfn",
+      basePath: "/auth",
+      hooks: {},
+    } as unknown as AuthFnPluginRuntimeContext;
+    const authorize = plugin
+      .routes?.(authfn)
+      .find((route) => route.path === "/oauth/authorize");
+    if (!authorize) throw new Error("OAuth authorization route is missing");
+    const authorizationUrl = new URL("https://app.skillplane.dev/auth/oauth/authorize");
+    for (const [name, value] of Object.entries({
+      response_type: "code",
+      client_id: clientId,
+      redirect_uri: redirectUri,
+      code_challenge: "c".repeat(43),
+      code_challenge_method: "S256",
+      state: "state-1",
+      resource: MCP_RESOURCE,
+      scope: "skills:read",
+    })) {
+      authorizationUrl.searchParams.set(name, value);
+    }
+
+    const response = await authorize.handler(
+      new Request(authorizationUrl),
+      undefined as never,
     );
-    expect(() =>
-      validateRegistration({ ...base, scope: "skills:read admin:all" }),
-    ).toThrow(/scope/);
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get("location")).toContain("/sign-in?next=");
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(connect).toHaveBeenCalledOnce();
+    expect(transactionQuery.mock.calls.map(([sql]) => sql)).toEqual([
+      "BEGIN",
+      expect.stringContaining("INSERT INTO authfn_oauth_clients"),
+      "DELETE FROM authfn_oauth_client_redirect_uris WHERE client_id = $1",
+      expect.stringContaining("INSERT INTO authfn_oauth_client_redirect_uris"),
+      "COMMIT",
+    ]);
+    expect(transactionQuery.mock.calls[1]?.[1]).toEqual([
+      clientId,
+      "Metadata Agent",
+      new Date("2026-08-29T00:00:00.000Z"),
+    ]);
+    expect(transactionQuery.mock.calls[3]?.[1]).toEqual([
+      expect.stringMatching(/^ocru_/u),
+      clientId,
+      redirectUri,
+    ]);
+    expect(query.mock.calls.map(([sql]) => sql)).toEqual([
+      expect.stringContaining("INSERT INTO api_rate_limits"),
+      expect.stringContaining("INSERT INTO authfn_oauth_authorization_requests"),
+    ]);
+    expect(query.mock.calls[1]?.[1]?.[2]).toMatchObject({
+      clientId,
+      redirectUri,
+      resource: MCP_RESOURCE,
+      scopes: ["skills:read"],
+    });
+    expect(release).toHaveBeenCalledOnce();
   });
 });
 
@@ -199,10 +336,10 @@ describe("opaque token primitives", () => {
         }),
       ),
     ).toBe("spo_example");
-    expect(() =>
+    expect(
       readBearerToken(
         new Request("https://mcp.skillplane.dev/mcp?access_token=spo_example"),
       ),
-    ).toThrow(/query/);
+    ).toBeUndefined();
   });
 });

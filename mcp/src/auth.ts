@@ -32,6 +32,7 @@ export interface OAuthMcpIdentity {
   readonly credentialKind: "oauth_access_token";
   readonly clientId: string;
   readonly scopes: readonly string[];
+  readonly expiresAt: Date;
 }
 
 export interface ServiceMcpIdentity {
@@ -202,24 +203,22 @@ export function assertMcpScopes(
   }
 }
 
-export async function authenticateMcpRequest(
+export async function authenticateMcpBearerCredential(
+  token: string,
   request: Request,
   services: ApiServices,
-  additionalScopes: readonly McpScope[] = [],
 ): Promise<McpIdentity> {
-  let token: string;
-  try {
-    token = readBearerToken(request);
-  } catch {
+  if (!token.trim()) {
     throw new McpAuthenticationError(401, "A valid bearer credential is required");
   }
-  const requiredScopes = normalizeRequiredScopes([
-    ...(await requiredScopesForRequest(request)),
-    ...additionalScopes,
-  ]);
   let identity: McpIdentity;
   if (token.startsWith("spk_")) {
-    identity = await authenticateService(services, request);
+    const headers = new Headers(request.headers);
+    headers.set("authorization", `Bearer ${token}`);
+    identity = await authenticateService(
+      services,
+      new Request(request.url, { method: request.method, headers }),
+    );
   } else {
     try {
       const verified = await verifyAccessToken(services.auth.oauth, token, {
@@ -234,11 +233,29 @@ export async function authenticateMcpRequest(
         credentialKind: "oauth_access_token",
         clientId: verified.clientId,
         scopes: verified.scopes,
+        expiresAt: verified.expiresAt,
       };
     } catch {
       throw new McpAuthenticationError(401, "The bearer credential is invalid");
     }
   }
+  return identity;
+}
+
+export async function authenticateMcpRequest(
+  request: Request,
+  services: ApiServices,
+  additionalScopes: readonly McpScope[] = [],
+): Promise<McpIdentity> {
+  const token = readBearerToken(request);
+  if (!token) {
+    throw new McpAuthenticationError(401, "A valid bearer credential is required");
+  }
+  const identity = await authenticateMcpBearerCredential(token, request, services);
+  const requiredScopes = normalizeRequiredScopes([
+    ...(await requiredScopesForRequest(request)),
+    ...additionalScopes,
+  ]);
   assertMcpScopes(identity, requiredScopes);
   return identity;
 }

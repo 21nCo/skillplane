@@ -323,7 +323,7 @@ describe("MCP caller and tenant boundaries", () => {
       },
     });
     expect(incomplete.isError).toBe(true);
-    expect(JSON.stringify(incomplete)).toContain("Input validation error");
+    expect(JSON.stringify(incomplete)).toContain("MCPFN_INVALID_ARGUMENTS");
     const identitySelecting = await service.client.callTool({
       name: "skill_retrieve",
       arguments: {
@@ -336,8 +336,8 @@ describe("MCP caller and tenant boundaries", () => {
       },
     });
     expect(identitySelecting.isError).toBe(true);
-    expect(JSON.stringify(identitySelecting)).toContain("unrecognized_keys");
-    expect(JSON.stringify(identitySelecting)).toContain("userId");
+    expect(JSON.stringify(identitySelecting)).toContain("MCPFN_INVALID_ARGUMENTS");
+    expect(JSON.stringify(identitySelecting)).toContain("additionalProperties");
     expect(environment.storage.getCalls).toBe(readsBefore);
   });
 
