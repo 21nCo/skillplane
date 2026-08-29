@@ -9,7 +9,7 @@ import { noStoreHeaders } from "./errors.js";
 
 export function authorizationServerMetadata(
   runtime: Pick<OAuthRuntime, "issuer" | "resource">,
-): Record<string, unknown> {
+): ReturnType<typeof createMcpAuthorizationServerMetadata> {
   return createMcpAuthorizationServerMetadata({
     issuer: runtime.issuer,
     endpointPrefix: "/auth/oauth",

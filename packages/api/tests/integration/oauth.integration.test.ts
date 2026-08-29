@@ -56,18 +56,17 @@ describe("OAuth 2.1 authorization server integration", () => {
 
   it("does not expose legacy dynamic-registration management routes", async () => {
     const registrationPath = `${OAUTH_ISSUER}/auth/oauth/register/${encodeURIComponent(client.clientId)}`;
-    expect(
-      (await environment.app.fetch(new Request(registrationPath))).status,
-    ).toBeGreaterThanOrEqual(400);
-    expect(
-      (
-        await environment.app.fetch(
-          new Request(registrationPath, {
-            method: "DELETE",
-          }),
-        )
-      ).status,
-    ).toBeGreaterThanOrEqual(400);
+    for (const request of [
+      new Request(registrationPath),
+      new Request(registrationPath, { method: "DELETE" }),
+    ]) {
+      const response = await environment.app.fetch(request);
+      expect(response.status).toBe(404);
+      await expect(response.json()).resolves.toMatchObject({
+        ok: false,
+        error: { code: "ROUTE_NOT_FOUND" },
+      });
+    }
   });
 
   it("preserves an unauthenticated request through a safe internal sign-in return", async () => {

@@ -1,9 +1,9 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "runner": "@modelcontextprotocol/conformance@0.1.16",
   "suite": "active",
   "authenticated": true,
-  "interpretation": "Exit code zero means every failure or warning belongs to the reviewed non-advertised-capability baseline; initialization, ping, tool inventory, request handling, and DNS-rebinding checks remain hard gates.",
+  "interpretation": "Exit code zero validates the executable scenario baseline, while exact non-success check-id equality validates the runner's emitted failure and warning evidence; initialization, ping, tool inventory, request handling, and DNS-rebinding checks remain hard gates.",
   "expectedFailureScenarios": [
     "logging-set-level",
     "completion-complete",
@@ -31,6 +31,34 @@
     "prompts-get-with-args",
     "prompts-get-embedded-resource",
     "prompts-get-with-image"
+  ],
+  "expectedNonSuccessCheckIds": [
+    "completion-complete",
+    "elicitation-sep1034-general",
+    "elicitation-sep1330-general",
+    "logging-set-level",
+    "prompts-get-embedded-resource",
+    "prompts-get-simple",
+    "prompts-get-with-args",
+    "prompts-get-with-image",
+    "prompts-list",
+    "resources-list",
+    "resources-read-binary",
+    "resources-read-text",
+    "resources-subscribe",
+    "resources-templates-read",
+    "resources-unsubscribe",
+    "server-sse-multiple-streams-session",
+    "tools-call-audio",
+    "tools-call-elicitation",
+    "tools-call-embedded-resource",
+    "tools-call-error",
+    "tools-call-image",
+    "tools-call-mixed-content",
+    "tools-call-sampling",
+    "tools-call-simple-text",
+    "tools-call-with-logging",
+    "tools-call-with-progress"
   ],
   "result": {
     "exitCode": 0,
@@ -171,5 +199,5 @@
     "retainedRawArtifacts": false,
     "secretMaterialDetected": false
   },
-  "completedAt": "2026-08-28T12:33:58.998Z"
+  "completedAt": "2026-08-29T06:18:44.199Z"
 }

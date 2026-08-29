@@ -5,7 +5,6 @@ import {
 } from "@authfn/core";
 import type { AuthFnPluginRuntimeContext } from "@authfn/core";
 import type { McpFnValidatedAuthorizationRequest } from "@mcpfn/auth";
-import { consumeRateLimit } from "@skillplane/db";
 import type { PoolClient } from "pg";
 import { writeOAuthAudit, oauthRequestId } from "./audit.js";
 import type { OAuthRuntime, OAuthScope } from "./config.js";
@@ -160,21 +159,6 @@ export async function beginAuthorization(
   request: Request,
   input: McpFnValidatedAuthorizationRequest,
 ): Promise<Response> {
-  const rate = await consumeRateLimit(
-    runtime.pool,
-    `oauth-authorize:${request.headers.get("cf-connecting-ip") ?? "unknown"}`,
-    60,
-    60,
-    runtime.now(),
-  );
-  if (!rate.allowed) {
-    throw new OAuthError(
-      "temporarily_unavailable",
-      "Authorization requests are temporarily rate limited",
-      429,
-      rate.retryAfterSeconds,
-    );
-  }
   const state = await getCookieSessionState(authfn.config, request);
   const validated = storedAuthorizationRequest(input);
   const token = await preserveAuthorizationRequest(runtime, validated, state.user?.id);

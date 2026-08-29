@@ -56,6 +56,37 @@ async function tokenRateLimit(
   }
 }
 
+async function clientResolutionRateLimit(
+  runtime: OAuthRuntime,
+  endpoint: "authorization" | "token" | "revocation",
+  request: Request,
+): Promise<void> {
+  const network = request.headers.get("cf-connecting-ip") ?? "unknown";
+  const prefix =
+    endpoint === "authorization"
+      ? "oauth-authorize"
+      : endpoint === "token"
+        ? "oauth-token-request"
+        : "oauth-revoke-request";
+  const rate = await consumeRateLimit(
+    runtime.pool,
+    `${prefix}:${network}`,
+    60,
+    60,
+    runtime.now(),
+  );
+  if (!rate.allowed) {
+    throw new McpFnHostedAuthorizationError(
+      "temporarily_unavailable",
+      `${endpoint === "authorization" ? "Authorization" : "Token"} requests are temporarily rate limited`,
+      {
+        status: 429,
+        details: { retryAfterSeconds: rate.retryAfterSeconds },
+      },
+    );
+  }
+}
+
 async function fromTokenAuthority<T>(operation: () => Promise<T>): Promise<T> {
   try {
     return await operation();
@@ -102,6 +133,8 @@ function compatibilityOptions(
       resolve: (clientId) => resolveRegisteredClient(runtime, clientId),
       register: (metadata, request) => registerClient(runtime, metadata, request),
     },
+    beforeClientResolution: ({ endpoint, request }) =>
+      clientResolutionRateLimit(runtime, endpoint, request),
     authorize,
     tokenAuthority: {
       exchangeAuthorizationCode: (input, request) =>
@@ -118,6 +151,7 @@ function compatibilityOptions(
         }),
       refreshToken: (input, request) =>
         fromTokenAuthority(async () => {
+          await tokenRateLimit(runtime, input.client.clientId, request);
           const tokens = await exchangeRefreshToken(runtime, {
             refreshToken: input.refreshToken,
             clientId: input.client.clientId,

@@ -2,15 +2,15 @@
 
 ## Metadata
 
-- Updated: `2026-08-27T06:51:15Z`
+- Updated: `2026-08-29T06:20:00Z`
 - Agent: Codex `/root`
 - Model: `GPT-5`
 - Launcher: `Codex Desktop`
 - Issue: Linear `SKI-6` — Adopt McpFn for Skillplane MCP runtime, authorization, and quality gates
 - Skillplane base: `main` at `c13917c360b326d6199162de63df9e61e4885944`
-- McpFn source: local `MCP-2` worktree at base `9134bb13f9682b5debc14d69d5927de0be2274e1`
-- McpFn source digest: `sha256:51bf866cc5ec5cb0ba3dee17fdbbd589f3dcaeab388c9685c25828fbde252da9`
-- Publication state: publication authorized on `codex/ski-6-mcpfn-runtime`; merge, deployment, live-provider verification, and Linear status transition remain out of scope
+- McpFn source: local `MCP-2` worktree at base `61a82af3c633332850cc1c128524507e42b8e72a`
+- McpFn source digest: `sha256:adaa175413235666da56f3850ce2d01905745777710a5ee99e01472cc28c1d6c`
+- Publication state: commits, pushes, and PR updates are authorized on `codex/ski-6-mcpfn-runtime`; package publication, merge, deployment, live-provider verification, and Linear status transition remain out of scope
 
 ## Status
 
@@ -29,6 +29,7 @@ Skillplane directly constructed the MCP SDK server and Streamable HTTP transport
 - Added secure redirect normalization for HTTPS and loopback callbacks and rejected wildcard hosts, userinfo, fragments, and unsafe schemes.
 - Added a pinned authenticated official MCP conformance runner that proxies only to a fixed upstream and preserves the request Host header for DNS-rebinding checks.
 - Preserved complete McpFn server implementation metadata rather than replacing it with defaults.
+- Added a pre-client-resolution policy hook for authorization, token, and revocation endpoints; isolated request clones for each provider callback; provenance-safe inspector secret markers; and deadline-bound metadata fetching that remains referenced until abort.
 
 ### Skillplane cutover
 
@@ -38,32 +39,30 @@ Skillplane directly constructed the MCP SDK server and Streamable HTTP transport
 - Removed the legacy dynamic-registration read/delete routes and local Client ID Metadata Document hydration. No shim, dual path, or backward-support layer remains.
 - Enforced the production MCP Host and allowed loopback only outside production; DNS-rebinding attempts return `421`.
 - Pinned the reviewed local McpFn worktree by base commit, source digest, package identity, and explicit local links. Published package adoption is a later reviewed replacement.
+- Applied network-only limits before client resolution, retained client-and-network token limits for both authorization-code and refresh grants, returned stable `404` envelopes for removed registration-management routes, and made source verification hash the executed `dist` artifacts as well as source.
 
 ### Quality gates, evidence, and rollback
 
 - Split deterministic contract tests from the authenticated official conformance suite.
 - Added a reviewed baseline only for capabilities Skillplane does not advertise and the stateless optional SSE-session warning. Initialization, ping, tool inventory, request handling, and DNS-rebinding remain hard gates.
-- Retained only `.conduct/verification/SKI-6/official-conformance-summary.json` (4,070 bytes). Raw artifacts were 17,589 bytes, were scanned for the injected service credential, and were removed after the run; the scan reported no credential material.
+- Retained only `.conduct/verification/SKI-6/official-conformance-summary.json` (4,927 bytes). Raw artifacts were 17,589 bytes, were scanned for the injected service credential, and were removed after the run; the scan reported no credential material. Schema version 2 reconciles executable scenario baselines with the runner's exact emitted check IDs.
 - Documented runtime ownership, source pinning, conformance interpretation, observability, deployment order, and paired rollback.
 - No database or schema migration is required. Rollback restores the previous Skillplane runtime and the paired McpFn package set together.
 
 ## Verification
 
-- McpFn `@mcpfn/auth`, `@mcpfn/core`, and `@mcpfn/testing` tests: PASS (`36`, `62`, and `20` tests).
-- McpFn focused typecheck and builds: PASS.
-- `pnpm mcpfn:verify`: PASS at base `9134bb13f9682b5debc14d69d5927de0be2274e1` and digest `sha256:51bf866cc5ec5cb0ba3dee17fdbbd589f3dcaeab388c9685c25828fbde252da9`.
-- `pnpm boundaries:verify`: PASS.
+- McpFn `npm run gate:mcpfn-release`: PASS (`67/67` steps), including focused typechecks/tests/builds, Playwright, official conformance, package dry-runs, packed consumer install, ESM/CJS imports, and the consumer round trip.
+- McpFn focused OAuth Core, Auth, and Inspector suites: PASS (`26`, `59`, and `6` tests); focused typechecks: PASS.
+- `pnpm mcpfn:verify`: PASS at base `61a82af3c633332850cc1c128524507e42b8e72a` and digest `sha256:adaa175413235666da56f3850ce2d01905745777710a5ee99e01472cc28c1d6c`.
 - `pnpm test:mcp:contract`: PASS (`8/8`).
-- `pnpm test:mcp:conformance`: PASS (`1/1` authenticated run). Retained summary records `5` hard-gate successes, `25` reviewed non-advertised-capability failures, and `1` reviewed stateless-session warning.
-- `pnpm test:security`: PASS, including OAuth, MCP, tenant, scope, token redaction, and DNS-rebinding coverage.
-- `pnpm test:integration`: PASS (`24/24` workspace tasks; MCP `16/16`).
-- `pnpm test:unit`: PASS (`28/28` workspace tasks plus `56/56` local TAP tests).
+- `pnpm test:mcp:conformance`: PASS (`1/1` authenticated run). Retained summary records `5` hard-gate successes, `25` reviewed non-advertised-capability failures, and `1` reviewed stateless-session warning, with exact non-success check-ID equality enforced.
+- AuthFn MCP OAuth focused typecheck and unit suite: PASS (`15/15`).
+- Auth application unit suite: PASS (`7/7`).
+- Focused API OAuth integration and security suites: PASS (`24/24` tests), including unsafe redirect registration, trusted redirect handling, code and refresh behavior, rotation/reuse, rate limits, CSRF, and secret leakage defenses.
 - `pnpm typecheck`: PASS (`29/29` tasks).
-- `pnpm build`: PASS (`16/16` tasks; MCP Wrangler dry run only).
-- Source ESLint with generated docs outputs excluded: PASS.
-- Changed-surface Prettier: PASS.
-- `git diff --check`: PASS in both Skillplane and the McpFn worktree.
-- Secret-pattern and removed-runtime scans: PASS.
+- Changed-surface Prettier and `git diff --check`: PASS.
+
+The full `pnpm test:integration` run was not green in this review-remediation pass: the OAuth integration suite's changed flow passed after the removed-route fix, while eight unrelated API suites failed during setup because their shared default test binding supplies a non-HTTPS OAuth issuer rejected by the existing McpFn issuer contract. Those cascaded suites did not execute test bodies. The focused OAuth integration and security suites passed in the controlled HTTPS environment; the unrelated default-binding cleanup was not added to this PR.
 
 The stock `pnpm lint` command scans ignored generated `docs/.next`, `docs/.open-next`, and `docs/.source` output after a docs build. Excluding those generated directories produces a clean repository source lint. The stock `pnpm format:check` also reports three unchanged baseline files: `.github/workflows/pullfrog.yml`, `docs/lib/layout.shared.tsx`, and `scripts/verify-boundaries.mjs`. None were modified for `SKI-6`.
 

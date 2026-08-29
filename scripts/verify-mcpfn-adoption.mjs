@@ -7,10 +7,7 @@ import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const gitExecutable =
-  process.platform === "win32"
-    ? "C:\\Program Files\\Git\\cmd\\git.exe"
-    : "/usr/bin/git";
+const gitExecutable = "git";
 const contract = JSON.parse(
   await readFile(resolve(repoRoot, "mcpfn-source.json"), "utf8"),
 );
@@ -37,9 +34,15 @@ async function sourceFiles(directory) {
   return files;
 }
 
+function compareCodeUnits(left, right) {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
+}
+
 const digest = createHash("sha256");
 for (const [name, packageContract] of Object.entries(contract.packages).toSorted(
-  ([left], [right]) => left.localeCompare(right),
+  ([left], [right]) => compareCodeUnits(left, right),
 )) {
   const packageRoot = resolve(sourceRoot, packageContract.path);
   const packageJsonPath = resolve(packageRoot, "package.json");
@@ -50,10 +53,11 @@ for (const [name, packageContract] of Object.entries(contract.packages).toSorted
   const files = [
     packageJsonPath,
     ...(await sourceFiles(resolve(packageRoot, "src"))),
-  ].toSorted((left, right) => left.localeCompare(right));
+    ...(await sourceFiles(resolve(packageRoot, "dist"))),
+  ].toSorted(compareCodeUnits);
   for (const path of files) {
     const content = await readFile(path);
-    const label = relative(sourceRoot, path);
+    const label = relative(sourceRoot, path).replaceAll("\\", "/");
     digest.update(label).update("\0").update(String(content.byteLength)).update("\0");
     digest.update(content);
   }

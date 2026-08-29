@@ -246,7 +246,18 @@ export function createAuthApplication(input: CreateAuthApplicationInput) {
     );
   });
 
-  app.all("/auth/*", (context) => input.authfn.router.handle(context.req.raw));
+  app.all("/auth/*", (context) => {
+    const request = context.req.raw;
+    if (!input.authfn.router.match(request.method, new URL(request.url).pathname)) {
+      return failure(
+        request,
+        404,
+        "ROUTE_NOT_FOUND",
+        "The requested authentication route does not exist",
+      );
+    }
+    return input.authfn.router.handle(request);
+  });
 
   return app;
 }

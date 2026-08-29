@@ -1,10 +1,12 @@
+import type { AuthFnPluginRuntimeContext } from "@authfn/core";
 import type { Pool } from "pg";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { normalizeMcpClientRegistration } from "@mcpfn/auth";
 import {
   authorizationServerMetadata,
   base64Url,
   createOAuthSchema,
+  createAuthFnMcpOAuthPlugin,
   keyedHash,
   MCP_RESOURCE,
   normalizeOAuthConfig,
@@ -37,6 +39,62 @@ describe("OAuth 2.1 metadata and configuration", () => {
     const response = await runtime.fetcher("https://client.example.test/metadata");
 
     expect(response.status).toBe(204);
+  });
+
+  it("rate-limits client resolution by endpoint and network before metadata fetch", async () => {
+    const query = vi.fn(async () => ({ rows: [{ request_count: 61 }] }));
+    const fetcher = vi.fn(async () => Response.json({}));
+    const { plugin } = createAuthFnMcpOAuthPlugin({
+      pool: { query } as unknown as Pool,
+      issuer: "https://app.skillplane.dev",
+      tokenPepper: pepper,
+      fetcher,
+    });
+    const routes = plugin.routes?.({} as AuthFnPluginRuntimeContext) ?? [];
+    const authorize = routes.find((route) => route.path === "/oauth/authorize");
+    const token = routes.find((route) => route.path === "/oauth/token");
+    if (!authorize || !token) throw new Error("OAuth compatibility routes are missing");
+    const network = "198.51.100.42";
+    const authorizationUrl = new URL("https://app.skillplane.dev/auth/oauth/authorize");
+    authorizationUrl.searchParams.set(
+      "client_id",
+      "https://first-client.example.test/client.json",
+    );
+    const formRequest = (clientId: string) =>
+      new Request("https://app.skillplane.dev/auth/oauth/token", {
+        method: "POST",
+        headers: {
+          "content-type": "application/x-www-form-urlencoded",
+          "cf-connecting-ip": network,
+        },
+        body: new URLSearchParams({
+          grant_type: "authorization_code",
+          client_id: clientId,
+        }),
+      });
+
+    const responses = [
+      await authorize.handler(
+        new Request(authorizationUrl, {
+          headers: { "cf-connecting-ip": network },
+        }),
+        undefined as never,
+      ),
+      await token.handler(
+        formRequest("https://second-client.example.test/client.json"),
+        undefined as never,
+      ),
+      await token.handler(
+        formRequest("https://third-client.example.test/client.json"),
+        undefined as never,
+      ),
+    ];
+
+    expect(responses.map((response) => response.status)).toEqual([429, 429, 429]);
+    const bucketHashes = query.mock.calls.map((call) => (call[1] as unknown[])[0]);
+    expect(bucketHashes[1]).toBe(bucketHashes[2]);
+    expect(bucketHashes[0]).not.toBe(bucketHashes[1]);
+    expect(fetcher).not.toHaveBeenCalled();
   });
 
   it("advertises only the authorization-code, refresh, public-client, and S256 surface", () => {

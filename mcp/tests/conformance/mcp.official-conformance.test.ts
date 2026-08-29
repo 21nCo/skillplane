@@ -67,6 +67,12 @@ interface ConformanceCheck {
   status: string;
 }
 
+const CHECK_ID_BY_SCENARIO: Readonly<Record<string, string>> = {
+  "server-sse-multiple-streams": "server-sse-multiple-streams-session",
+  "elicitation-sep1034-defaults": "elicitation-sep1034-general",
+  "elicitation-sep1330-enums": "elicitation-sep1330-general",
+};
+
 async function collectArtifactFiles(directory: string): Promise<string[]> {
   const files: string[] = [];
   for (const entry of await readdir(directory, { withFileTypes: true })) {
@@ -86,7 +92,12 @@ beforeAll(async () => {
     void webRequest(request)
       .then((converted) => environment.app.fetch(converted))
       .then((result) => writeWebResponse(result, response))
-      .catch(() => response.writeHead(500).end());
+      .catch((error: unknown) => {
+        const details =
+          error instanceof Error ? (error.stack ?? error.message) : String(error);
+        process.stderr.write(`Official conformance forwarding failed: ${details}\n`);
+        response.writeHead(500).end();
+      });
   });
   await new Promise<void>((resolveListen, reject) => {
     server.once("error", reject);
@@ -162,22 +173,31 @@ describe("official MCP server conformance", () => {
         .split("\n")
         .map((line) => /^\s+-\s+(.+)$/u.exec(line)?.[1])
         .filter((value): value is string => Boolean(value));
+      const expectedNonSuccessCheckIds = expectedFailureScenarios
+        .map((scenario) => CHECK_ID_BY_SCENARIO[scenario] ?? scenario)
+        .toSorted();
+      const nonSuccessCheckIds = checks
+        .filter((check) => check.status !== "SUCCESS")
+        .map((check) => check.id)
+        .toSorted();
 
       expect(artifactBytes).toBeLessThan(1_000_000);
       expect(secretMaterialDetected).toBe(false);
+      expect(nonSuccessCheckIds).toEqual(expectedNonSuccessCheckIds);
 
       await mkdir(verificationDir, { recursive: true });
       await writeFile(
         join(verificationDir, "official-conformance-summary.json"),
         `${JSON.stringify(
           {
-            schemaVersion: 1,
+            schemaVersion: 2,
             runner: "@modelcontextprotocol/conformance@0.1.16",
             suite: "active",
             authenticated: true,
             interpretation:
-              "Exit code zero means every failure or warning belongs to the reviewed non-advertised-capability baseline; initialization, ping, tool inventory, request handling, and DNS-rebinding checks remain hard gates.",
+              "Exit code zero validates the executable scenario baseline, while exact non-success check-id equality validates the runner's emitted failure and warning evidence; initialization, ping, tool inventory, request handling, and DNS-rebinding checks remain hard gates.",
             expectedFailureScenarios,
+            expectedNonSuccessCheckIds,
             result: {
               exitCode: result.exitCode,
               checks: checks.map(({ id, status }) => ({ id, status })),
