@@ -26,6 +26,8 @@ describe("migration chain", () => {
       "0018_public_stats_counter.sql",
       "0019_public_stats_counter_shards.sql",
       "0020_global_control_plane_regional_cells.sql",
+      "0021_authfn_identity_placement.sql",
+      "0022_global_public_stats_projection.sql",
     ]);
     expect(new Set(migrations.map((migration) => migration.sha256)).size).toBe(
       migrations.length,
@@ -33,7 +35,9 @@ describe("migration chain", () => {
     for (const migration of migrations) {
       expect(migration.sha256).toMatch(/^[a-f0-9]{64}$/);
       expect(migration.sql.trim().length).toBeGreaterThan(100);
+      expect(migration.roles.length).toBeGreaterThan(0);
     }
+    expect(migrations.at(-1)?.roles).toEqual(["control"]);
   });
 
   it("guards destructive test reset targets", () => {

@@ -56,6 +56,12 @@ export function createCloudflareTopologyConfigs(input) {
     throw new Error("A multi-cell topology with at least two cells is required");
   }
   const topology = JSON.stringify(manifest);
+  if (
+    typeof input.publicTurnstileSiteKey !== "string" ||
+    input.publicTurnstileSiteKey.length < 10
+  ) {
+    throw new Error("A production Turnstile site key is required");
+  }
   const sharedVariables = {
     RUNTIME_ENV: "production",
     DATABASE_ADAPTER: "postgres",
@@ -77,6 +83,11 @@ export function createCloudflareTopologyConfigs(input) {
     ...workerBase("skillplane-app", "app", {
       ...sharedVariables,
       SKILLPLANE_ROLE: "gateway",
+      AUTH_MODE: "otp",
+      EMAIL_PROVIDER: "cloudflare-email",
+      TURNSTILE_ALLOWED_HOSTNAMES: "app.skillplane.dev",
+      SKILLPLANE_OTP_FROM: "Skillplane <no-reply@auth.skillplane.dev>",
+      PUBLIC_TURNSTILE_SITE_KEY: input.publicTurnstileSiteKey,
     }),
     routes: [{ pattern: "app.skillplane.dev", custom_domain: true }],
     hyperdrive: [{ binding: manifest.controlPlane.databaseBinding, id: controlId }],
@@ -90,6 +101,13 @@ export function createCloudflareTopologyConfigs(input) {
       binding: cell.appServiceBinding,
       service: `skillplane-app-${cell.regionId}`,
     })),
+    send_email: [
+      {
+        name: "SEND_EMAIL",
+        allowed_sender_addresses: ["no-reply@auth.skillplane.dev"],
+        remote: true,
+      },
+    ],
   };
   const mcpGateway = {
     ...workerBase("skillplane-mcp", "mcp", {
@@ -149,6 +167,23 @@ export function createCloudflareTopologyConfigs(input) {
           mcp: {
             ...workerBase(`skillplane-mcp-${cell.regionId}`, "mcp", variables),
             ...bindings,
+          },
+          projection: {
+            ...workerBase(
+              `skillplane-projection-${cell.regionId}`,
+              "projection",
+              variables,
+            ),
+            main: "src/index.ts",
+            hyperdrive: [
+              { binding: "CONTROL_DATABASE", id: controlId },
+              { binding: "CELL_DATABASE", id: regionalId },
+            ],
+            r2_buckets: [
+              { binding: "CELL_BUNDLES", bucket_name: regionalBucket },
+              { binding: "PUBLIC_BUNDLES", bucket_name: publicBucket },
+            ],
+            triggers: { crons: ["* * * * *"] },
           },
         },
       ];

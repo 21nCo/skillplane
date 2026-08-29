@@ -15,6 +15,7 @@ import {
   mcpAuthenticationResponse,
   type McpIdentity,
 } from "./auth.js";
+import { verifyDownloadGrant } from "./downloads.js";
 
 interface McpApplication<Context = unknown> {
   fetch(
@@ -46,7 +47,17 @@ type McpScope =
       readonly workspaceSlug: string;
       readonly skillSlug: string;
       readonly allowPublic: boolean;
+    }
+  | {
+      readonly kind: "download-grant";
+      readonly token: string;
+      readonly allowPublic: true;
     };
+
+interface ResolvedMcpRoute {
+  readonly workspaceId: string;
+  readonly skillId?: string;
+}
 
 class McpRoutingError extends Error {
   readonly status: number;
@@ -78,6 +89,18 @@ function identifier(value: unknown): string | null {
     : null;
 }
 
+function downloadToken(value: string | undefined): string | null {
+  if (!value) return null;
+  try {
+    const decoded = decodeURIComponent(value);
+    return decoded.length <= 8_192 && /^[A-Za-z0-9_.-]+$/u.test(decoded)
+      ? decoded
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 function scopeForMessage(message: unknown): McpScope {
   const root = record(message);
   const params = record(root?.params);
@@ -100,7 +123,7 @@ function scopeForMessage(message: unknown): McpScope {
     return { kind: "workspace-slug", value: workspaceSlug, allowPublic: false };
   }
   const skill = record(arguments_?.skill);
-  const skillId = identifier(skill?.id);
+  const skillId = identifier(skill?.id) ?? identifier(arguments_?.skillId);
   if (skillId) return { kind: "skill-id", value: skillId, allowPublic };
   const skillWorkspaceSlug = identifier(skill?.workspaceSlug);
   const skillSlug = identifier(skill?.skillSlug);
@@ -120,7 +143,20 @@ function scopeForMessage(message: unknown): McpScope {
 }
 
 export async function classifyMcpScope(request: Request): Promise<McpScope> {
-  if (request.method !== "POST" || new URL(request.url).pathname !== "/mcp") {
+  const url = new URL(request.url);
+  if (request.method === "GET" && url.pathname.startsWith("/downloads/")) {
+    const parts = url.pathname.split("/");
+    const token = downloadToken(parts.length === 3 ? parts[2] : undefined);
+    if (!token) {
+      throw new McpRoutingError(
+        400,
+        "WORKSPACE_ROUTE_INVALID",
+        "The download route is invalid",
+      );
+    }
+    return { kind: "download-grant", token, allowPublic: true };
+  }
+  if (request.method !== "POST" || url.pathname !== "/mcp") {
     return { kind: "global" };
   }
   let body: unknown;
@@ -158,20 +194,28 @@ export async function classifyMcpScope(request: Request): Promise<McpScope> {
 async function resolveWorkspaceId(
   scope: Exclude<McpScope, { readonly kind: "global" }>,
   services: ApiServices,
-): Promise<string> {
-  if (scope.kind === "workspace-id") return scope.value;
+): Promise<ResolvedMcpRoute> {
+  if (scope.kind === "workspace-id") return { workspaceId: scope.value };
+  if (scope.kind === "download-grant") {
+    const grant = await verifyDownloadGrant(
+      scope.token,
+      services.auth.oauth.tokenPepper,
+      new Date(),
+    );
+    return { workspaceId: grant.workspaceId, skillId: grant.skillId };
+  }
   if (scope.kind === "skill-id") {
     const route = await createPostgresResourceRoutingDirectory(
       services.controlDatabase.pool,
     ).resolve("skill", scope.value);
-    if (route) return route.workspaceId;
+    if (route) return { workspaceId: route.workspaceId, skillId: scope.value };
   } else {
     const slug = scope.kind === "workspace-slug" ? scope.value : scope.workspaceSlug;
     const result = await services.controlDatabase.pool.query<{ id: string }>(
       "SELECT id FROM workspaces WHERE slug = $1 LIMIT 1",
       [slug],
     );
-    if (result.rows[0]) return result.rows[0].id;
+    if (result.rows[0]) return { workspaceId: result.rows[0].id };
   }
   throw new McpRoutingError(
     404,
@@ -183,13 +227,14 @@ async function resolveWorkspaceId(
 async function authorizeWorkspace(
   identity: McpIdentity,
   scope: Exclude<McpScope, { readonly kind: "global" }>,
-  workspaceId: string,
+  route: ResolvedMcpRoute,
   services: ApiServices,
 ): Promise<void> {
+  const { workspaceId } = route;
   const publicProjectionExists = async (): Promise<boolean> => {
     if (!scope.allowPublic) return false;
     const result = await services.controlDatabase.pool.query(
-      scope.kind === "skill-id"
+      scope.kind === "skill-id" || scope.kind === "download-grant"
         ? `SELECT 1 FROM public_skill_projections
              WHERE workspace_id = $1 AND skill_id = $2 AND state = 'published'
              LIMIT 1`
@@ -197,8 +242,8 @@ async function authorizeWorkspace(
              WHERE workspace_id = $1 AND workspace_slug = $2
                AND skill_slug = $3 AND state = 'published'
              LIMIT 1`,
-      scope.kind === "skill-id"
-        ? [workspaceId, scope.value]
+      scope.kind === "skill-id" || scope.kind === "download-grant"
+        ? [workspaceId, scope.kind === "skill-id" ? scope.value : route.skillId]
         : [workspaceId, scope.workspaceSlug, scope.skillSlug],
     );
     return Boolean(result.rows[0]);
@@ -280,8 +325,9 @@ export function createRoutedMcpApplication<Context>(input: {
           const services = await input.services(bindings);
           try {
             const identity = await authenticateMcpRequest(request, services);
-            const workspaceId = await resolveWorkspaceId(scope, services);
-            await authorizeWorkspace(identity, scope, workspaceId, services);
+            const route = await resolveWorkspaceId(scope, services);
+            const workspaceId = route.workspaceId;
+            await authorizeWorkspace(identity, scope, route, services);
             const assertions = createWorkspaceRoutingAssertions({
               activeKeyId: runtime.routing.activeKeyId,
               keys: runtime.routing.keys,

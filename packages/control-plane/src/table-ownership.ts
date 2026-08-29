@@ -4,6 +4,7 @@ export const GLOBAL_CONTROL_TABLES = [
   "authfn_otp_challenges",
   "authfn_api_keys",
   "authfn_region_profiles",
+  "authfn_identity_placements",
   "authfn_oauth_clients",
   "authfn_oauth_client_redirect_uris",
   "authfn_oauth_consents",
@@ -24,6 +25,7 @@ export const GLOBAL_CONTROL_TABLES = [
   "control_plane_audit_events",
   "control_plane_outbox",
   "public_stats_counters",
+  "public_stats_projection_events",
   "api_rate_limits",
 ] as const;
 

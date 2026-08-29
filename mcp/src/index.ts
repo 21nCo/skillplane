@@ -315,6 +315,13 @@ function createRuntime(
   request: Request,
   now: () => Date,
 ): McpToolRuntime {
+  const fencingEpoch = Number(request.headers.get("x-skillplane-routing-epoch") ?? "1");
+  if (!Number.isSafeInteger(fencingEpoch) || fencingEpoch < 1) {
+    throw new McpToolError(
+      "VALIDATION_FAILED",
+      "The workspace routing epoch is invalid",
+    );
+  }
   return {
     services,
     identity,
@@ -322,6 +329,7 @@ function createRuntime(
     cursors: new McpCursorCodec(services.tenancySecret, now),
     downloadSecret: services.auth.oauth.tokenPepper,
     origin: new URL(request.url).origin,
+    fencingEpoch,
     now,
   };
 }
@@ -538,7 +546,10 @@ export function createMcpApp(options: CreateMcpAppOptions = {}) {
     if (existing) return existing;
     const created =
       options.createAuditWriter?.(services) ??
-      new PostgresMcpAuditWriter(services.database.pool);
+      new PostgresMcpAuditWriter(
+        services.database.pool,
+        services.database.role === "regional",
+      );
     writer.set(services, created);
     return created;
   };

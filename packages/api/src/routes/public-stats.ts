@@ -16,7 +16,9 @@ export function registerPublicStatsRoutes(app: Hono<ApiEnvironment>): void {
         503,
       );
     }
-    const stats = await readPublicStats(services.controlDatabase.pool);
+    const stats = await readPublicStats(services.controlDatabase.pool, {
+      projected: services.deploymentRole !== "single",
+    });
     context.header("Cache-Control", CACHE_CONTROL);
     return context.json(
       success(context, {

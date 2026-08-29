@@ -5,11 +5,13 @@ import {
 } from "./placement.js";
 import {
   migrateWorkspaceWithJournal,
+  runWorkspaceRollbackDrill,
   type WorkspaceMigrationOperations,
 } from "./migration.js";
 
 function operations(overrides: Partial<WorkspaceMigrationOperations> = {}) {
   const base: WorkspaceMigrationOperations = {
+    prepareSource: vi.fn(async () => undefined),
     quiesceSource: vi.fn(async () => undefined),
     drainOutboxes: vi.fn(async () => undefined),
     copyDatabase: vi.fn(async () => undefined),
@@ -95,6 +97,27 @@ describe("fenced workspace migration", () => {
       "migration:bad-copy",
       "WORKSPACE_MIGRATION_VERIFICATION_FAILED",
     );
+    await expect(directory.get("workspace:a")).resolves.toMatchObject({
+      regionId: "in-south",
+      state: "active",
+    });
+  });
+
+  it("runs the production rollback drill before a final move", async () => {
+    const directory = createMemoryWorkspacePlacementDirectory();
+    await claimWorkspacePlacement({
+      directory,
+      workspaceId: "workspace:a",
+      regionId: "in-south",
+    });
+    const rollbackSource = vi.fn(async () => undefined);
+    await runWorkspaceRollbackDrill({
+      directory,
+      workspaceId: "workspace:a",
+      targetRegionId: "us-east",
+      operations: operations({ rollbackSource }),
+    });
+    expect(rollbackSource).toHaveBeenCalledOnce();
     await expect(directory.get("workspace:a")).resolves.toMatchObject({
       regionId: "in-south",
       state: "active",

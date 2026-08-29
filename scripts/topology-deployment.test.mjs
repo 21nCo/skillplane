@@ -15,6 +15,7 @@ describe("multi-cell Cloudflare topology adapter", () => {
   it("generates canonical gateways and two private least-privilege cells", async () => {
     const configs = createCloudflareTopologyConfigs({
       manifest: await readProductionTopology(),
+      publicTurnstileSiteKey: "0x4AAAAAAAAAA-production-site-key",
       controlHyperdriveId: ids.control,
       publicBucketName: "skillplane-public-bundles",
       cells: {
@@ -32,16 +33,22 @@ describe("multi-cell Cloudflare topology adapter", () => {
     assert.equal(configs.gateway.mcp.routes[0].pattern, "mcp.skillplane.dev");
     assert.deepEqual(Object.keys(configs.cells).sort(), ["in-south", "us-east"]);
     for (const [regionId, pair] of Object.entries(configs.cells)) {
-      for (const worker of Object.values(pair)) {
+      for (const [kind, worker] of Object.entries(pair)) {
         assert.equal(worker.routes, undefined);
         assert.equal(worker.services, undefined);
         assert.equal(worker.workers_dev, false);
         assert.equal(worker.vars.SKILLPLANE_ROLE, "cell");
         assert.equal(worker.vars.SKILLPLANE_REGION_ID, regionId);
         assert.equal(worker.hyperdrive.length, 2);
-        assert.equal(worker.r2_buckets.length, 1);
+        assert.equal(worker.r2_buckets.length, kind === "projection" ? 2 : 1);
         assert.equal(worker.send_email, undefined);
+        if (kind === "projection") {
+          assert.deepEqual(worker.triggers.crons, ["* * * * *"]);
+        }
       }
     }
+    assert.equal(configs.gateway.app.vars.AUTH_MODE, "otp");
+    assert.equal(configs.gateway.app.vars.EMAIL_PROVIDER, "cloudflare-email");
+    assert.equal(configs.gateway.app.send_email[0].name, "SEND_EMAIL");
   });
 });

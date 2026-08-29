@@ -28,10 +28,28 @@ const unpublishedPayload = z
   })
   .strict();
 
+const publicStatsPayload = z
+  .object({
+    workspaceId: z.string().min(1).max(200),
+    count: z.number().int().min(1).max(10_000),
+  })
+  .strict();
+
+const publicSkillCountPayload = z
+  .object({
+    workspaceId: z.string().min(1).max(200),
+    delta: z.union([z.literal(-1), z.literal(1)]),
+  })
+  .strict();
+
 export interface RegionalProjectionEvent {
   readonly id: string;
   readonly regionId: string;
-  readonly eventType: "public_skill.published" | "public_skill.unpublished";
+  readonly eventType:
+    | "public_skill.published"
+    | "public_skill.unpublished"
+    | "public_stats.agent_skill_used"
+    | "public_stats.skill_count_changed";
   readonly workspaceId: string;
   readonly fencingEpoch: number;
   readonly payload: unknown;
@@ -55,7 +73,12 @@ interface ProjectionOutboxSqlClient {
   }>;
 }
 
-const eventType = z.enum(["public_skill.published", "public_skill.unpublished"]);
+const eventType = z.enum([
+  "public_skill.published",
+  "public_skill.unpublished",
+  "public_stats.agent_skill_used",
+  "public_stats.skill_count_changed",
+]);
 
 function safeFailureCode(error: unknown): string {
   const message = error instanceof Error ? error.message : "UNKNOWN";
@@ -170,6 +193,14 @@ export async function applyRegionalPublicProjection(input: {
   readonly regionalStore: ImmutablePublicationStore;
   readonly publicStore: ImmutablePublicationStore;
   readonly directory: PublicProjectionDirectory;
+  readonly applyPublicStats?: (input: {
+    readonly eventId: string;
+    readonly workspaceId: string;
+    readonly eventType:
+      "public_stats.agent_skill_used" | "public_stats.skill_count_changed";
+    readonly agentSkillUses: number;
+    readonly totalSkills: number;
+  }) => Promise<void>;
 }): Promise<{ readonly objectKey: string | null }> {
   const placement = await input.placements.get(input.event.workspaceId);
   if (
@@ -178,6 +209,40 @@ export async function applyRegionalPublicProjection(input: {
     placement.epoch !== input.event.fencingEpoch
   ) {
     throw new Error("PUBLICATION_FENCING_EPOCH_STALE");
+  }
+  if (input.event.eventType === "public_stats.agent_skill_used") {
+    const payload = publicStatsPayload.parse(input.event.payload);
+    if (payload.workspaceId !== input.event.workspaceId) {
+      throw new Error("PUBLICATION_WORKSPACE_MISMATCH");
+    }
+    if (!input.applyPublicStats) {
+      throw new Error("PUBLIC_STATS_PROJECTOR_UNAVAILABLE");
+    }
+    await input.applyPublicStats({
+      eventId: input.event.id,
+      workspaceId: payload.workspaceId,
+      eventType: input.event.eventType,
+      agentSkillUses: payload.count,
+      totalSkills: 0,
+    });
+    return { objectKey: null };
+  }
+  if (input.event.eventType === "public_stats.skill_count_changed") {
+    const payload = publicSkillCountPayload.parse(input.event.payload);
+    if (payload.workspaceId !== input.event.workspaceId) {
+      throw new Error("PUBLICATION_WORKSPACE_MISMATCH");
+    }
+    if (!input.applyPublicStats) {
+      throw new Error("PUBLIC_STATS_PROJECTOR_UNAVAILABLE");
+    }
+    await input.applyPublicStats({
+      eventId: input.event.id,
+      workspaceId: payload.workspaceId,
+      eventType: input.event.eventType,
+      agentSkillUses: 0,
+      totalSkills: payload.delta,
+    });
+    return { objectKey: null };
   }
   if (input.event.eventType === "public_skill.unpublished") {
     const payload = unpublishedPayload.parse(input.event.payload);

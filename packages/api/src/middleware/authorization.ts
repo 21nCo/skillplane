@@ -9,7 +9,7 @@ import type { WorkspaceAction } from "@skillplane/domain";
 import type { MiddlewareHandler } from "hono";
 import { routePath } from "hono/route";
 import type { ApiEnvironment } from "../context.js";
-import { resolveWorkspaceRequestContext } from "./context.js";
+import { requestedWorkspaceId, resolveWorkspaceRequestContext } from "./context.js";
 
 export function requiredAction(path: string, method: string): WorkspaceAction | null {
   const read = ["GET", "HEAD", "OPTIONS"].includes(method);
@@ -62,7 +62,7 @@ export function authorizationMiddleware(): MiddlewareHandler<ApiEnvironment> {
         return;
       }
       const servicePrincipal = context.get("servicePrincipal");
-      const requestedWorkspace = context.req.header("x-skillplane-workspace-id");
+      const requestedWorkspace = requestedWorkspaceId(context);
       const publicSkillRead =
         action === "skills:read" && !servicePrincipal && !requestedWorkspace;
       if (publicSkillRead) {

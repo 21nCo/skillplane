@@ -15,6 +15,11 @@ import {
   type IdempotencyIdentity,
 } from "./idempotency.js";
 import { principalAuditActor, type Principal } from "./principal.js";
+import {
+  enqueueCurrentSkillProjection,
+  enqueuePublishedSkillProjection,
+  enqueueSkillCountProjection,
+} from "./projection-events.js";
 import { withDomainTransaction as withTransaction } from "./transactions.js";
 import {
   insertMutationAudit,
@@ -297,6 +302,7 @@ export class SkillService {
   constructor(
     readonly pool: Pool,
     readonly storage: R2BundleRepository,
+    private readonly controlPool: Pool = pool,
   ) {
     this.idempotency = new IdempotencyStore(pool);
   }
@@ -308,6 +314,7 @@ export class SkillService {
     readonly visibility: SkillVisibility;
     readonly idempotencyKey: string;
     readonly requestId: string;
+    readonly fencingEpoch?: number;
     readonly auditContext?: MutationAuditContext;
   }): Promise<{ readonly skill: SkillRecord; readonly version: SkillVersionRecord }> {
     if (options.principal.workspaceId !== options.workspaceId) {
@@ -532,6 +539,21 @@ export class SkillService {
               createdAt: persisted.version_created_at.toISOString(),
             } satisfies SkillVersionRecord,
           };
+          if (responseBody.skill.visibility === "public") {
+            await enqueuePublishedSkillProjection(client, {
+              skill: responseBody.skill,
+              version: responseBody.version,
+              searchText: new TextDecoder("utf-8", { fatal: true }).decode(
+                skillMarkdown,
+              ),
+              fencingEpoch: options.fencingEpoch,
+            });
+          }
+          await enqueueSkillCountProjection(client, {
+            workspaceId: options.workspaceId,
+            delta: 1,
+            fencingEpoch: options.fencingEpoch,
+          });
           await this.idempotency.complete(client, claim.identity, 201, responseBody);
           return responseBody;
         },
@@ -676,20 +698,27 @@ export class SkillService {
     readonly workspaceSlug: string;
     readonly skillSlug: string;
   }): Promise<SkillRecord> {
+    const workspace = await this.controlPool.query<{ id: string }>(
+      "SELECT id FROM workspaces WHERE slug = $1 LIMIT 1",
+      [options.workspaceSlug],
+    );
+    const workspaceId = workspace.rows[0]?.id;
+    if (!workspaceId) {
+      throw new DomainError("SKILL_NOT_FOUND", "Skill was not found", 404);
+    }
     const result = await this.pool.query<SkillRow>(
       `SELECT s.id, s.workspace_id, s.slug, s.name, s.description, s.tags,
               s.visibility, s.current_published_version_id,
               version.semantic_version, s.archived_at, s.created_at, s.updated_at
          FROM skills s
-         JOIN workspaces workspace ON workspace.id = s.workspace_id
          JOIN skill_versions version
            ON version.id = s.current_published_version_id
-        WHERE workspace.slug = $1 AND s.slug = $2
+        WHERE s.workspace_id = $1 AND s.slug = $2
           AND s.visibility = 'public'
           AND s.archived_at IS NULL
           AND version.status = 'published'
         LIMIT 1`,
-      [options.workspaceSlug, options.skillSlug],
+      [workspaceId, options.skillSlug],
     );
     const row = result.rows[0];
     if (!row) throw new DomainError("SKILL_NOT_FOUND", "Skill was not found", 404);
@@ -741,6 +770,7 @@ export class SkillService {
     readonly expectedUpdatedAt?: string;
     readonly idempotencyKey: string;
     readonly requestId: string;
+    readonly fencingEpoch?: number;
     readonly auditContext?: MutationAuditContext;
   }): Promise<SkillRecord> {
     authorize(options.principal, "skills:write");
@@ -811,6 +841,10 @@ export class SkillService {
           },
         });
         const skill = safeSkill(row);
+        await enqueueCurrentSkillProjection(client, {
+          skill,
+          fencingEpoch: options.fencingEpoch,
+        });
         await this.idempotency.complete(client, claim.identity, 200, { skill });
         return skill;
       });
@@ -827,6 +861,7 @@ export class SkillService {
     readonly expectedUpdatedAt?: string;
     readonly idempotencyKey: string;
     readonly requestId: string;
+    readonly fencingEpoch?: number;
     readonly auditContext?: MutationAuditContext;
   }): Promise<SkillRecord> {
     authorize(options.principal, "skills:write");
@@ -898,6 +933,17 @@ export class SkillService {
           },
         });
         const skill = safeSkill(row);
+        await enqueueCurrentSkillProjection(client, {
+          skill,
+          fencingEpoch: options.fencingEpoch,
+        });
+        if (Boolean(previous.archived_at) !== options.archived) {
+          await enqueueSkillCountProjection(client, {
+            workspaceId: options.principal.workspaceId,
+            delta: options.archived ? -1 : 1,
+            fencingEpoch: options.fencingEpoch,
+          });
+        }
         await this.idempotency.complete(client, claim.identity, 200, { skill });
         return skill;
       });

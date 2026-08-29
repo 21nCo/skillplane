@@ -167,4 +167,49 @@ describe("regional publication projection", () => {
       },
     ]);
   });
+
+  it("projects regional skill-use counters into the global authority", async () => {
+    const placements = createMemoryWorkspacePlacementDirectory();
+    await placements.putIfAbsent({
+      namespace: "workspace:a",
+      regionId: "in-south",
+      epoch: 5,
+      state: "active",
+      updatedAt: new Date().toISOString(),
+    });
+    const increments: unknown[] = [];
+    const empty = store();
+    await expect(
+      applyRegionalPublicProjection({
+        event: {
+          id: "event:stats",
+          regionId: "in-south",
+          eventType: "public_stats.agent_skill_used",
+          workspaceId: "workspace:a",
+          fencingEpoch: 5,
+          payload: { workspaceId: "workspace:a", count: 1 },
+        },
+        placements,
+        resolveWorkspaceSlug: async () => "acme",
+        regionalStore: empty,
+        publicStore: empty,
+        directory: {
+          publish: async () => undefined,
+          unpublish: async () => undefined,
+        },
+        async applyPublicStats(input) {
+          increments.push(input);
+        },
+      }),
+    ).resolves.toEqual({ objectKey: null });
+    expect(increments).toEqual([
+      {
+        eventId: "event:stats",
+        workspaceId: "workspace:a",
+        eventType: "public_stats.agent_skill_used",
+        agentSkillUses: 1,
+        totalSkills: 0,
+      },
+    ]);
+  });
 });

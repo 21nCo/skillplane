@@ -36,6 +36,25 @@ describe("MCP workspace routing", () => {
       value: "skill:one",
       allowPublic: true,
     });
+    await expect(
+      classifyMcpScope(call("skill_amend", { skillId: "skill:one" })),
+    ).resolves.toEqual({
+      kind: "skill-id",
+      value: "skill:one",
+      allowPublic: false,
+    });
+  });
+
+  it("routes credential-bound downloads through the owning cell", async () => {
+    await expect(
+      classifyMcpScope(
+        new Request("https://mcp.skillplane.dev/downloads/signed-grant"),
+      ),
+    ).resolves.toEqual({
+      kind: "download-grant",
+      token: "signed-grant",
+      allowPublic: true,
+    });
   });
 
   it("rejects mixed-workspace batches", async () => {

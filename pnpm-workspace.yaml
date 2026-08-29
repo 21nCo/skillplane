@@ -2,6 +2,7 @@ packages:
   - app
   - docs
   - mcp
+  - projection
   - packages/*
 
 allowBuilds:

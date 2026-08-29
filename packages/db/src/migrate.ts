@@ -7,14 +7,69 @@ import { resolve } from "node:path";
 
 const migrationsDirectory = resolve(packageRoot, "migrations");
 const migrationPattern = /^\d{4}_[a-z0-9_]+\.sql$/;
+const migrationRolesPattern =
+  /^-- skillplane:roles=(combined|control|regional)(?:,(combined|control|regional))*$/mu;
+
+export type MigrationRole = "combined" | "control" | "regional";
+
+const globalControlTables = [
+  "authfn_users",
+  "authfn_sessions",
+  "authfn_otp_challenges",
+  "authfn_api_keys",
+  "authfn_region_profiles",
+  "authfn_identity_placements",
+  "authfn_oauth_clients",
+  "authfn_oauth_client_redirect_uris",
+  "authfn_oauth_consents",
+  "authfn_oauth_authorization_requests",
+  "authfn_oauth_authorization_codes",
+  "authfn_oauth_access_tokens",
+  "authfn_oauth_refresh_tokens",
+  "workspaces",
+  "workspace_memberships",
+  "workspace_invitations",
+  "service_principals",
+  "workspace_placements",
+  "resource_routing_directory",
+  "permission_directory_records",
+  "workspace_routing_nonces",
+  "public_skill_projections",
+  "workspace_migration_runs",
+  "control_plane_audit_events",
+  "control_plane_outbox",
+  "public_stats_counters",
+  "public_stats_projection_events",
+  "api_rate_limits",
+] as const;
+
+const regionalWorkspaceTables = [
+  "skills",
+  "skill_versions",
+  "skill_version_files",
+  "skill_contexts",
+  "context_knowledge_revisions",
+  "context_notes",
+  "context_note_revisions",
+  "amendment_reviews",
+  "audit_events",
+  "analytics_daily",
+  "analytics_daily_summary",
+  "analytics_daily_dimensions",
+  "analytics_rollup_runs",
+  "idempotency_records",
+  "regional_projection_outbox",
+] as const;
 
 export interface Migration {
   readonly id: string;
   readonly sha256: string;
   readonly sql: string;
+  readonly roles: readonly MigrationRole[];
 }
 
 export interface MigrationResult {
+  readonly role: MigrationRole;
   readonly applied: readonly string[];
   readonly alreadyApplied: readonly string[];
 }
@@ -31,10 +86,17 @@ export async function loadMigrations(
   return Promise.all(
     names.map(async (id) => {
       const sql = await readFile(resolve(directory, id), "utf8");
+      const declaration = migrationRolesPattern.exec(sql)?.[0];
+      const roles = declaration
+        ? (declaration
+            .slice("-- skillplane:roles=".length)
+            .split(",") as MigrationRole[])
+        : (["combined", "control", "regional"] satisfies MigrationRole[]);
       return {
         id,
         sha256: createHash("sha256").update(sql).digest("hex"),
         sql,
+        roles,
       };
     }),
   );
@@ -51,8 +113,60 @@ async function ensureLedger(client: PoolClient): Promise<void> {
   `);
 }
 
-export async function migrateDatabase(databaseUrl: string): Promise<MigrationResult> {
-  const migrations = await loadMigrations();
+async function enforcePhysicalOwnership(
+  client: PoolClient,
+  role: Exclude<MigrationRole, "combined">,
+): Promise<void> {
+  const unowned = role === "control" ? regionalWorkspaceTables : globalControlTables;
+  await client.query("BEGIN");
+  try {
+    if (role === "regional") {
+      await client.query(
+        "DROP TRIGGER IF EXISTS audit_events_public_stats_counter_insert ON audit_events",
+      );
+      await client.query(
+        "DROP FUNCTION IF EXISTS skillplane_increment_public_agent_skill_uses()",
+      );
+    }
+    for (const table of unowned) {
+      await client.query(`DROP TABLE IF EXISTS ${table} CASCADE`);
+    }
+    const expected = new Set<string>(
+      role === "control" ? globalControlTables : regionalWorkspaceTables,
+    );
+    const actual = await client.query<{ table_name: string }>(
+      `SELECT table_name
+         FROM information_schema.tables
+        WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+          AND table_name <> 'skillplane_schema_migrations'
+        ORDER BY table_name`,
+    );
+    const unexpected = actual.rows
+      .map((row) => row.table_name)
+      .filter((table) => !expected.has(table));
+    const missing = [...expected].filter(
+      (table) => !actual.rows.some((row) => row.table_name === table),
+    );
+    if (unexpected.length > 0 || missing.length > 0) {
+      throw new Error(
+        `DATABASE_OWNERSHIP_INVALID:${role}:unexpected=${unexpected.join(",")}:missing=${missing.join(",")}`,
+      );
+    }
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  }
+}
+
+export async function migrateDatabase(
+  databaseUrl: string,
+  options: { readonly role?: MigrationRole } = {},
+): Promise<MigrationResult> {
+  const role = options.role ?? "combined";
+  const migrations = (await loadMigrations()).filter(
+    (migration) => role === "combined" || migration.roles.includes(role),
+  );
   const pool = new Pool({
     connectionString: databaseUrl,
     application_name: "skillplane-migrator",
@@ -103,7 +217,8 @@ export async function migrateDatabase(databaseUrl: string): Promise<MigrationRes
         throw error;
       }
     }
-    return { applied, alreadyApplied };
+    if (role !== "combined") await enforcePhysicalOwnership(client, role);
+    return { role, applied, alreadyApplied };
   } finally {
     await client
       .query("SELECT pg_advisory_unlock(hashtext($1))", [

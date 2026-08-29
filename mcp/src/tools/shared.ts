@@ -33,6 +33,7 @@ export interface McpToolRuntime {
   readonly cursors: McpCursorCodec;
   readonly downloadSecret: string;
   readonly origin: string;
+  readonly fencingEpoch: number;
   readonly now: () => Date;
 }
 
@@ -231,6 +232,7 @@ export async function executeReadTool<T extends object>(
         outcome: "success" as const,
         identity: runtime.identity,
         caller,
+        fencingEpoch: runtime.fencingEpoch,
         ...(auditScope.resourceType ? { resourceType: auditScope.resourceType } : {}),
         ...(auditScope.resourceId ? { resourceId: auditScope.resourceId } : {}),
         ...(auditScope.skillId ? { skillId: auditScope.skillId } : {}),
@@ -273,6 +275,7 @@ export async function executeReadTool<T extends object>(
           outcome,
           identity: runtime.identity,
           caller,
+          fencingEpoch: runtime.fencingEpoch,
           ...(scope.resourceType ? { resourceType: scope.resourceType } : {}),
           ...(scope.resourceId ? { resourceId: scope.resourceId } : {}),
           ...(scope.skillId ? { skillId: scope.skillId } : {}),

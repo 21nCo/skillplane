@@ -501,12 +501,35 @@ export const publicStatsCounters = pgTable(
   {
     id: text("id").primaryKey(),
     agentSkillUses: numeric("agent_skill_uses").notNull().default("0"),
+    totalSkills: numeric("total_skills").notNull().default("0"),
     updatedAt: utcTimestamp("updated_at").notNull().defaultNow(),
   },
   (table) => [
     check(
       "public_stats_counters_agent_skill_uses_nonnegative",
       sql`${table.agentSkillUses} >= 0`,
+    ),
+    check(
+      "public_stats_counters_total_skills_nonnegative",
+      sql`${table.totalSkills} >= 0`,
+    ),
+  ],
+);
+
+export const publicStatsProjectionEvents = pgTable(
+  "public_stats_projection_events",
+  {
+    eventId: text("event_id").primaryKey(),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    eventType: text("event_type").notNull(),
+    appliedAt: utcTimestamp("applied_at").notNull().defaultNow(),
+  },
+  (table) => [
+    index("public_stats_projection_workspace_time_idx").on(
+      table.workspaceId,
+      table.appliedAt,
     ),
   ],
 );
@@ -705,6 +728,7 @@ export const domainSchema = {
   amendmentReviews,
   auditEvents,
   publicStatsCounters,
+  publicStatsProjectionEvents,
   analyticsDaily,
   analyticsDailySummary,
   analyticsDailyDimensions,

@@ -31,6 +31,54 @@ type ApiScope =
       readonly resourceId: string;
     };
 
+type DatafnAuthority = "control" | "regional" | "mixed";
+const controlDatafnResources = new Set(["workspaces", "workspaceMemberships"]);
+
+function collectDatafnResources(
+  value: unknown,
+  found = new Set<string>(),
+): Set<string> {
+  if (!value || typeof value !== "object") return found;
+  if (Array.isArray(value)) {
+    for (const item of value) collectDatafnResources(item, found);
+    return found;
+  }
+  const record = value as Record<string, unknown>;
+  if (typeof record.resource === "string") found.add(record.resource);
+  if (Array.isArray(record.resources)) {
+    for (const resource of record.resources) {
+      if (typeof resource === "string") found.add(resource);
+    }
+  }
+  for (const child of Object.values(record)) {
+    if (child && typeof child === "object") collectDatafnResources(child, found);
+  }
+  return found;
+}
+
+export async function classifyDatafnAuthority(
+  request: Request,
+): Promise<DatafnAuthority | null> {
+  if (!new URL(request.url).pathname.startsWith("/datafn/")) return null;
+  let payload: unknown = null;
+  if (request.method !== "GET" && request.method !== "HEAD") {
+    try {
+      payload = await request.clone().json();
+    } catch {
+      return "regional";
+    }
+  }
+  const resources = collectDatafnResources(payload);
+  if (resources.size === 0) return "control";
+  const control = [...resources].some((resource) =>
+    controlDatafnResources.has(resource),
+  );
+  const regional = [...resources].some(
+    (resource) => !controlDatafnResources.has(resource),
+  );
+  return control && regional ? "mixed" : control ? "control" : "regional";
+}
+
 class ApiRoutingError extends Error {
   readonly status: number;
   readonly code: string;
@@ -220,6 +268,33 @@ function cleanPublicRequest(request: Request): Request {
   return new Request(request, { headers });
 }
 
+function isPublicSkillByIdRead(request: Request, scope: ApiScope): boolean {
+  return (
+    scope.kind === "resource" &&
+    scope.resourceType === "skill" &&
+    (request.method === "GET" || request.method === "HEAD") &&
+    /^\/api\/v1\/skills\/[^/]+\/?$/u.test(new URL(request.url).pathname)
+  );
+}
+
+async function isUnauthenticatedPublicRead(
+  request: Request,
+  scope: ApiScope,
+  services: ApiServices,
+): Promise<boolean> {
+  if (!isPublicSkillByIdRead(request, scope)) return false;
+  let service: Awaited<ReturnType<typeof authenticateServicePrincipalRequest>>;
+  try {
+    service = await authenticateServicePrincipalRequest(request, services);
+  } catch (error) {
+    // Let resolveWorkspace produce the stable authentication error response.
+    if (error instanceof InvalidAuthenticationError) return false;
+    throw error;
+  }
+  if (service) return false;
+  return !(await services.auth.provider.authenticate(request));
+}
+
 /** Canonical app edge: global routes terminate here; workspace routes use private service bindings. */
 export function createRoutedApiApplication(input: {
   readonly local: FetchApplication;
@@ -239,6 +314,17 @@ export function createRoutedApiApplication(input: {
       if (runtime.deployment.role === "single") {
         return await input.local.fetch(request, bindings);
       }
+      const datafn = await classifyDatafnAuthority(request);
+      if (datafn === "mixed") {
+        return new ApiRoutingError(
+          400,
+          "DATAFN_AUTHORITY_MIXED",
+          "A DataFn request cannot span control and regional resources",
+        ).response();
+      }
+      if (runtime.deployment.role === "gateway" && datafn === "control") {
+        return await input.local.fetch(request, bindings);
+      }
       const scope = classifyApiScope(request);
       if (runtime.deployment.role === "control") {
         return scope.kind === "global"
@@ -255,6 +341,12 @@ export function createRoutedApiApplication(input: {
         }
         const services = await input.services(bindings);
         try {
+          if (await isUnauthenticatedPublicRead(request, scope, services)) {
+            // The control-plane projection is authoritative for anonymous reads,
+            // including the non-public/not-found case. Authenticated reads still
+            // route to the owning cell so private workspace access is preserved.
+            return await input.local.fetch(request, bindings);
+          }
           const workspaceId = await resolveWorkspace(request, scope, services);
           const assertions = createWorkspaceRoutingAssertions({
             activeKeyId: runtime.routing.activeKeyId,

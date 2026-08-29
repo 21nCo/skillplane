@@ -5,6 +5,7 @@ import {
 } from "@skillplane/domain";
 import {
   retrieveBundleFile,
+  stableJson,
   type DownloadedSkillFile,
   type R2BundleRepository,
 } from "@skillplane/storage";
@@ -21,6 +22,131 @@ interface ProjectionRow {
   readonly object_key: string;
   readonly document: Record<string, unknown>;
   readonly published_at: Date;
+}
+
+interface RankedProjectionRow extends ProjectionRow {
+  readonly score: string;
+}
+
+interface ProjectionCursor {
+  readonly version: 1;
+  readonly filterHash: string;
+  readonly score: string;
+  readonly id: string;
+  readonly expiresAt: number;
+}
+
+function encode(bytes: Uint8Array): string {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/u, "");
+}
+
+function decode(value: string): Uint8Array {
+  if (!/^[A-Za-z0-9_-]+$/u.test(value)) {
+    throw new DomainError("CURSOR_INVALID", "Search cursor is invalid", 400);
+  }
+  try {
+    const bytes = Uint8Array.from(
+      atob(
+        value
+          .replaceAll("-", "+")
+          .replaceAll("_", "/")
+          .padEnd(Math.ceil(value.length / 4) * 4, "="),
+      ),
+      (character) => character.charCodeAt(0),
+    );
+    if (encode(bytes) !== value) throw new Error("non-canonical");
+    return bytes;
+  } catch {
+    throw new DomainError("CURSOR_INVALID", "Search cursor is invalid", 400);
+  }
+}
+
+function bufferSource(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
+  const copy = new Uint8Array(new ArrayBuffer(bytes.byteLength));
+  copy.set(bytes);
+  return copy;
+}
+
+async function cursorKey(secret: string): Promise<CryptoKey> {
+  if (secret.length < 32) {
+    throw new DomainError("CURSOR_INVALID", "Search is unavailable", 500);
+  }
+  return crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(`skillplane-public-search\u0000${secret}`),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign", "verify"],
+  );
+}
+
+async function projectionFilterHash(query: string, tags: readonly string[]) {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(stableJson({ query, tags })),
+  );
+  return encode(new Uint8Array(digest));
+}
+
+async function signProjectionCursor(payload: ProjectionCursor, secret: string) {
+  const body = new TextEncoder().encode(stableJson(payload));
+  const signature = await crypto.subtle.sign("HMAC", await cursorKey(secret), body);
+  return `${encode(body)}.${encode(new Uint8Array(signature))}`;
+}
+
+async function parseProjectionCursor(
+  value: string,
+  secret: string,
+  expectedFilterHash: string,
+): Promise<ProjectionCursor> {
+  const [bodyValue, signatureValue, extra] = value.split(".");
+  if (!bodyValue || !signatureValue || extra) {
+    throw new DomainError("CURSOR_INVALID", "Search cursor is invalid", 400);
+  }
+  const body = decode(bodyValue);
+  const signature = decode(signatureValue);
+  if (
+    !(await crypto.subtle.verify(
+      "HMAC",
+      await cursorKey(secret),
+      bufferSource(signature),
+      bufferSource(body),
+    ))
+  ) {
+    throw new DomainError("CURSOR_INVALID", "Search cursor is invalid", 400);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(body));
+  } catch {
+    throw new DomainError("CURSOR_INVALID", "Search cursor is invalid", 400);
+  }
+  if (
+    !parsed ||
+    typeof parsed !== "object" ||
+    (parsed as { version?: unknown }).version !== 1 ||
+    typeof (parsed as { filterHash?: unknown }).filterHash !== "string" ||
+    typeof (parsed as { score?: unknown }).score !== "string" ||
+    !/^\d+$/u.test((parsed as { score: string }).score) ||
+    typeof (parsed as { id?: unknown }).id !== "string" ||
+    typeof (parsed as { expiresAt?: unknown }).expiresAt !== "number"
+  ) {
+    throw new DomainError("CURSOR_INVALID", "Search cursor is invalid", 400);
+  }
+  const cursor = parsed as ProjectionCursor;
+  if (cursor.expiresAt <= Date.now()) {
+    throw new DomainError("CURSOR_INVALID", "Search cursor has expired", 400);
+  }
+  if (cursor.filterHash !== expectedFilterHash) {
+    throw new DomainError(
+      "CURSOR_FILTER_MISMATCH",
+      "Search cursor does not match the current filters",
+      400,
+    );
+  }
+  return cursor;
 }
 
 function object(value: unknown): Record<string, unknown> {
@@ -65,6 +191,7 @@ export class PublicSkillProjectionService {
   constructor(
     private readonly pool: Pool,
     private readonly storage: R2BundleRepository,
+    private readonly cursorSecret: string,
   ) {}
 
   private notFound(): never {
@@ -77,37 +204,72 @@ export class PublicSkillProjectionService {
     readonly limit?: number;
     readonly cursor?: string | null;
   }) {
-    if (options.cursor) {
-      throw new DomainError("CURSOR_INVALID", "Search cursor is invalid", 400);
-    }
     const limit = Math.max(1, Math.min(100, options.limit ?? 20));
     const query = options.query.trim();
-    const result = await this.pool.query<ProjectionRow>(
-      `SELECT DISTINCT ON (workspace_id, skill_id)
-              workspace_id, workspace_slug, skill_id, skill_slug, version_id,
-              semantic_version, digest, object_key, document, published_at
-         FROM public_skill_projections
-        WHERE state = 'published'
-          AND ($1 = '' OR to_tsvector('english', search_text) @@
-               websearch_to_tsquery('english', $1))
-          AND ($2::text[] = '{}'::text[] OR
-               ARRAY(SELECT jsonb_array_elements_text(
-                 COALESCE(document->'skill'->'tags', '[]'::jsonb)
-               )) @> $2::text[])
-        ORDER BY workspace_id, skill_id, published_at DESC, version_id ASC
-        LIMIT $3`,
-      [query, [...new Set(options.tags)].sort(), limit],
+    const tags = [...new Set(options.tags)].sort();
+    const filterHash = await projectionFilterHash(query, tags);
+    const cursor = options.cursor
+      ? await parseProjectionCursor(options.cursor, this.cursorSecret, filterHash)
+      : null;
+    const result = await this.pool.query<RankedProjectionRow>(
+      `WITH latest AS MATERIALIZED (
+         SELECT DISTINCT ON (workspace_id, skill_id)
+                workspace_id, workspace_slug, skill_id, skill_slug, version_id,
+                semantic_version, digest, object_key, document, published_at,
+                search_text
+           FROM public_skill_projections
+          WHERE state = 'published'
+          ORDER BY workspace_id, skill_id, published_at DESC, version_id ASC
+       ), ranked AS MATERIALIZED (
+         SELECT latest.*,
+                CASE WHEN $1::text = '' THEN 0::bigint ELSE round(
+                  ts_rank_cd(
+                    to_tsvector('english', search_text),
+                    websearch_to_tsquery('english', $1)
+                  ) * 1000000000
+                )::bigint END AS score
+           FROM latest
+          WHERE ($1::text = '' OR to_tsvector('english', search_text) @@
+                 websearch_to_tsquery('english', $1))
+            AND ($2::text[] = '{}'::text[] OR
+                 ARRAY(SELECT jsonb_array_elements_text(
+                   COALESCE(document->'skill'->'tags', '[]'::jsonb)
+                 )) @> $2::text[])
+       )
+       SELECT workspace_id, workspace_slug, skill_id, skill_slug, version_id,
+              semantic_version, digest, object_key, document, published_at,
+              score::text
+         FROM ranked
+        WHERE ($3::bigint IS NULL OR score < $3::bigint OR
+               (score = $3::bigint AND skill_id > $4::text))
+        ORDER BY score DESC, skill_id ASC
+        LIMIT $5`,
+      [query, tags, cursor?.score ?? null, cursor?.id ?? null, limit + 1],
     );
+    const hasNext = result.rows.length > limit;
+    const rows = result.rows.slice(0, limit);
+    const boundary = hasNext ? rows.at(-1) : undefined;
     return {
-      skills: result.rows.map((row) => ({
+      skills: rows.map((row) => ({
         ...skill(row),
         currentVersionId: row.version_id,
         semanticVersion: row.semantic_version,
         digest: row.digest,
         archivedAt: null,
-        score: "0",
+        score: row.score,
       })),
-      nextCursor: null,
+      nextCursor: boundary
+        ? await signProjectionCursor(
+            {
+              version: 1,
+              filterHash,
+              score: boundary.score,
+              id: boundary.skill_id,
+              expiresAt: Date.now() + 15 * 60 * 1000,
+            },
+            this.cursorSecret,
+          )
+        : null,
     };
   }
 
@@ -118,6 +280,19 @@ export class PublicSkillProjectionService {
         ORDER BY published_at DESC, version_id ASC
         LIMIT 1`,
       [workspaceSlug, skillSlug],
+    );
+    const row = result.rows[0];
+    if (!row) return this.notFound();
+    return { skill: skill(row), version: version(row) };
+  }
+
+  async getCurrentBySkillId(skillId: string) {
+    const result = await this.pool.query<ProjectionRow>(
+      `${SELECT}
+        WHERE skill_id = $1 AND state = 'published'
+        ORDER BY published_at DESC, version_id ASC
+        LIMIT 1`,
+      [skillId],
     );
     const row = result.rows[0];
     if (!row) return this.notFound();

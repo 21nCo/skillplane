@@ -235,6 +235,7 @@ export class AmendmentPolicyService {
   constructor(
     private readonly pool: Pool,
     private readonly idempotency: IdempotencyStore,
+    private readonly controlPool: Pool = pool,
   ) {}
 
   async get(options: {
@@ -368,7 +369,7 @@ export class AmendmentPolicyService {
   ): Promise<void> {
     if (policy.mode === "review_required") return;
     for (const [index, rule] of policy.rules.entries()) {
-      const credential = await this.pool.query(
+      const credential = await this.controlPool.query(
         `SELECT id
            FROM service_principals
           WHERE id = $1 AND workspace_id = $2 AND revoked_at IS NULL`,

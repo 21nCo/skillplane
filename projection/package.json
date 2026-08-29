@@ -1,0 +1,22 @@
+{
+  "name": "@skillplane/projection-worker",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc --project tsconfig.json --noEmit",
+    "typecheck": "tsc --project tsconfig.json --noEmit",
+    "test:unit": "vitest run --passWithNoTests src",
+    "deploy:check": "tsc --project tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@skillplane/control-plane": "workspace:*",
+    "@skillplane/db": "workspace:*",
+    "pg": "catalog:"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

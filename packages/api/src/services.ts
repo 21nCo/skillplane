@@ -1,5 +1,6 @@
 import {
   CloudflareTurnstileVerifier,
+  createSkillplaneAuthFnMultiRegionConfig,
   createPostgresOtpRateLimiter,
   createSkillplaneAuthServer,
 } from "@skillplane/auth";
@@ -76,6 +77,17 @@ export async function buildApiServices(
         resource: runtime.oauth.resource,
         tokenPepper: runtime.oauth.tokenPepper,
       },
+      ...(!single
+        ? {
+            multiRegion: createSkillplaneAuthFnMultiRegionConfig({
+              pool: controlDatabase.pool,
+              issuer: runtime.oauth.issuer,
+              resource: runtime.oauth.resource,
+              routingKeys: runtime.routing.keys,
+              activeRoutingKeyId: runtime.routing.activeKeyId,
+            }),
+          }
+        : {}),
       ...(email ? { delivery: email.delivery } : {}),
       ...(runtime.auth
         ? {
@@ -185,11 +197,16 @@ export async function buildApiServices(
           workerCaches?.default,
         )
       : null;
-    const skillService = new SkillService(database.pool, bundleStorage);
+    const skillService = new SkillService(
+      database.pool,
+      bundleStorage,
+      controlDatabase.pool,
+    );
     const contextService = new ContextService(database.pool, skillService.idempotency);
     const amendmentPolicyService = new AmendmentPolicyService(
       database.pool,
       skillService.idempotency,
+      controlDatabase.pool,
     );
     return {
       database,
@@ -206,6 +223,7 @@ export async function buildApiServices(
           ? new PublicSkillProjectionService(
               controlDatabase.pool,
               publicBundleStorage ?? bundleStorage,
+              tenancySecret,
             )
           : null,
       skillService,
@@ -213,6 +231,7 @@ export async function buildApiServices(
         database.pool,
         bundleStorage,
         skillService.idempotency,
+        controlDatabase.pool,
       ),
       amendmentPolicyService,
       amendmentReviewService: new AmendmentReviewService(
@@ -230,7 +249,11 @@ export async function buildApiServices(
         bundleStorage,
         skillService.idempotency,
       ),
-      skillSearchService: new SkillSearchService(database.pool, tenancySecret),
+      skillSearchService: new SkillSearchService(
+        database.pool,
+        tenancySecret,
+        controlDatabase.pool,
+      ),
       contextService,
       contextKnowledgeService: new ContextKnowledgeService(
         database.pool,

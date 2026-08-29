@@ -21,6 +21,9 @@ catalogs:
     '@axe-core/playwright':
       specifier: 4.12.1
       version: 4.12.1
+    '@cloudflare/workers-types':
+      specifier: 5.20260722.1
+      version: 5.20260722.1
     '@datafn/client':
       specifier: 0.1.0
       version: 0.1.0
@@ -829,6 +832,28 @@ importers:
       vite:
         specifier: 'catalog:'
         version: 8.1.5(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.16.9)(tsx@4.23.1)(yaml@2.9.0)
+      vitest:
+        specifier: 'catalog:'
+        version: 4.1.10(@opentelemetry/api@1.9.1)(@types/node@22.20.1)(vite@8.1.5(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.16.9)(tsx@4.23.1)(yaml@2.9.0))
+
+  projection:
+    dependencies:
+      '@skillplane/control-plane':
+        specifier: workspace:*
+        version: link:../packages/control-plane
+      '@skillplane/db':
+        specifier: workspace:*
+        version: link:../packages/db
+      pg:
+        specifier: 'catalog:'
+        version: 8.22.0
+    devDependencies:
+      '@cloudflare/workers-types':
+        specifier: 'catalog:'
+        version: 5.20260722.1
+      typescript:
+        specifier: 'catalog:'
+        version: 6.0.3
       vitest:
         specifier: 'catalog:'
         version: 4.1.10(@opentelemetry/api@1.9.1)(@types/node@22.20.1)(vite@8.1.5(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.16.9)(tsx@4.23.1)(yaml@2.9.0))

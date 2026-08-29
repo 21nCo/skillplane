@@ -350,6 +350,7 @@ export class AmendmentService {
     private readonly pool: Pool,
     private readonly storage: R2BundleRepository,
     private readonly idempotency: IdempotencyStore,
+    private readonly controlPool: Pool = pool,
   ) {}
 
   async amend(options: {
@@ -792,7 +793,7 @@ export class AmendmentService {
     caller: CallerDeclaration,
   ): Promise<void> {
     if (!caller.forUserId) return;
-    const result = await this.pool.query(
+    const result = await this.controlPool.query(
       `SELECT 1
          FROM workspace_memberships
         WHERE workspace_id = $1 AND user_id = $2

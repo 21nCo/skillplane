@@ -27,6 +27,8 @@ export interface WorkspaceMigrationProof {
 }
 
 export interface WorkspaceMigrationOperations {
+  /** Waits for asynchronous source projections while placement is still active. */
+  prepareSource(workspaceId: string): Promise<void>;
   quiesceSource(context: DatafnNamespaceMigrationContext): Promise<void>;
   drainOutboxes(context: DatafnNamespaceMigrationContext): Promise<void>;
   copyDatabase(context: DatafnNamespaceMigrationContext): Promise<void>;
@@ -107,6 +109,7 @@ export async function migrateWorkspace(input: {
   readonly targetRegionId: string;
   readonly targetDestinationRef?: string;
   readonly operations: WorkspaceMigrationOperations;
+  readonly rollbackTested?: boolean;
   readonly now?: () => number;
   readonly onEvent?: (event: DatafnRoutingEvent) => void | Promise<void>;
 }): Promise<{
@@ -120,6 +123,9 @@ export async function migrateWorkspace(input: {
   }
   const startedAt = new Date(now()).toISOString();
   const checks: MigrationCheck[] = [];
+  // Projection consumers reject events after the placement is fenced as moving,
+  // so the asynchronous backlog must converge before entering DataFn's CAS.
+  await input.operations.prepareSource(input.workspaceId);
   const placement = await migrateDatafnNamespace({
     directory: input.directory,
     namespace: input.workspaceId,
@@ -165,9 +171,61 @@ export async function migrateWorkspace(input: {
       startedAt,
       completedAt: new Date(now()).toISOString(),
       checks,
-      rollbackTested: false,
+      rollbackTested: input.rollbackTested ?? false,
     },
   };
+}
+
+/** Exercises the real fenced rollback path before a production cutover. */
+export async function runWorkspaceRollbackDrill(input: {
+  readonly directory: WorkspacePlacementDirectory;
+  readonly workspaceId: string;
+  readonly targetRegionId: string;
+  readonly targetDestinationRef?: string;
+  readonly operations: WorkspaceMigrationOperations;
+  readonly now?: () => number;
+  readonly onEvent?: (event: DatafnRoutingEvent) => void | Promise<void>;
+}): Promise<void> {
+  const source = await input.directory.get(input.workspaceId);
+  if (source?.state !== "active") {
+    throw new Error("WORKSPACE_MIGRATION_SOURCE_NOT_ACTIVE");
+  }
+  const operations: WorkspaceMigrationOperations = {
+    prepareSource: (workspaceId) => input.operations.prepareSource(workspaceId),
+    quiesceSource: (context) => input.operations.quiesceSource(context),
+    drainOutboxes: (context) => input.operations.drainOutboxes(context),
+    copyDatabase: (context) => input.operations.copyDatabase(context),
+    copyBundles: (context) => input.operations.copyBundles(context),
+    verifyDatabase: (context) => input.operations.verifyDatabase(context),
+    verifyBundles: (context) => input.operations.verifyBundles(context),
+    rebuildGlobalResourceDirectory: (context) =>
+      input.operations.rebuildGlobalResourceDirectory(context),
+    async warmTarget(context) {
+      await input.operations.warmTarget(context);
+      throw new Error("WORKSPACE_MIGRATION_ROLLBACK_DRILL");
+    },
+    resumeTarget: (context) => input.operations.resumeTarget(context),
+    rollbackSource: (context) => input.operations.rollbackSource(context),
+  };
+  try {
+    await migrateWorkspace({ ...input, operations });
+    throw new Error("WORKSPACE_MIGRATION_ROLLBACK_DRILL_DID_NOT_FAIL");
+  } catch (error) {
+    if (
+      !(error instanceof Error) ||
+      error.message !== "WORKSPACE_MIGRATION_ROLLBACK_DRILL"
+    ) {
+      throw error;
+    }
+  }
+  const restored = await input.directory.get(input.workspaceId);
+  if (
+    restored?.state !== "active" ||
+    restored.regionId !== source.regionId ||
+    restored.epoch <= source.epoch
+  ) {
+    throw new Error("WORKSPACE_MIGRATION_ROLLBACK_DRILL_FAILED");
+  }
 }
 
 /** Runs the fenced move while persisting operator-visible evidence. */

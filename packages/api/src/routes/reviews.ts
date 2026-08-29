@@ -25,6 +25,18 @@ function reviewStatus(value: string | undefined): AmendmentReviewStatus | "all" 
   return normalized as AmendmentReviewStatus | "all";
 }
 
+function routingEpoch(value: string | undefined): number {
+  const epoch = Number(value ?? "1");
+  if (!Number.isSafeInteger(epoch) || epoch < 1) {
+    throw new DomainError(
+      "VALIDATION_FAILED",
+      "The workspace routing epoch is invalid",
+      400,
+    );
+  }
+  return epoch;
+}
+
 export function registerReviewRoutes(app: Hono<ApiEnvironment>): void {
   app.get("/api/v1/skills/:skillId/candidates", async (context) => {
     const services = context.get("services");
@@ -85,6 +97,7 @@ export function registerReviewRoutes(app: Hono<ApiEnvironment>): void {
           reason: body.reason,
           idempotencyKey: requireIdempotencyKey(context),
           requestId: context.get("requestId"),
+          fencingEpoch: routingEpoch(context.req.header("x-skillplane-routing-epoch")),
         });
         context.header("Cache-Control", "private, no-store");
         return context.json(success(context, publicDetail(detail)));
