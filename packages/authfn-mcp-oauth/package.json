@@ -21,7 +21,7 @@
   },
   "dependencies": {
     "@authfn/core": "catalog:",
-    "@mcpfn/auth": "0.0.2",
+    "@mcpfn/auth": "0.0.3",
     "@skillplane/db": "workspace:*",
     "@skillplane/observability": "workspace:*",
     "@superfunctions/db": "catalog:",
