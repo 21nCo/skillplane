@@ -29,6 +29,8 @@ const localRuntimeTests = spawnSync(
     "scripts/production-smoke.test.mjs",
     "scripts/production-deployment.test.mjs",
     "scripts/rollback.test.mjs",
+    "scripts/topology-manifest.test.mjs",
+    "scripts/topology-deployment.test.mjs",
   ],
   {
     cwd: repoRoot,

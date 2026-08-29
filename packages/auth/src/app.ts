@@ -1,4 +1,4 @@
-import type { AuthFnInstance, AuthFnOtpPurpose } from "@authfn/core";
+import type { AuthFnOtpPurpose, AuthFnServer } from "authfn";
 import { Hono } from "hono";
 import type { OtpRateLimiter } from "./rate-limit.js";
 import type { TurnstileVerifier } from "./turnstile.js";
@@ -11,7 +11,7 @@ interface OtpRequestBody {
 }
 
 export interface CreateAuthApplicationInput {
-  readonly authfn: AuthFnInstance;
+  readonly authfn: AuthFnServer;
   readonly rateLimiter?: OtpRateLimiter;
   readonly turnstile?: TurnstileVerifier;
 }
@@ -98,7 +98,7 @@ function networkIdentity(request: Request): string {
 }
 
 async function delegateOtp(
-  authfn: AuthFnInstance,
+  authfn: AuthFnServer,
   request: Request,
   body: Record<string, unknown>,
 ): Promise<Response> {

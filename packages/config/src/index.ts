@@ -1,4 +1,9 @@
 import { z } from "zod";
+import {
+  createSingleCellTopology,
+  parseTopologyManifest,
+  type SkillplaneTopologyManifest,
+} from "@skillplane/control-plane";
 
 export type RuntimeEnvironment = "local" | "preview" | "production";
 
@@ -31,6 +36,7 @@ export interface EmailServiceBinding {
 }
 
 export interface RuntimeBindings {
+  readonly [binding: string]: unknown;
   readonly RUNTIME_ENV?: string;
   readonly DATABASE_ADAPTER?: string;
   readonly DATABASE_URL?: string;
@@ -40,6 +46,10 @@ export interface RuntimeBindings {
   readonly OAUTH_TOKEN_PEPPER?: string;
   readonly OAUTH_ISSUER?: string;
   readonly OAUTH_RESOURCE?: string;
+  readonly SKILLPLANE_ROLE?: string;
+  readonly SKILLPLANE_REGION_ID?: string;
+  readonly SKILLPLANE_TOPOLOGY?: string;
+  readonly WORKSPACE_ROUTING_KEYS?: string;
   readonly POSTHOG_HOST?: string;
   readonly POSTHOG_PROJECT_TOKEN?: string;
   readonly TURNSTILE_SECRET_KEY?: string;
@@ -47,7 +57,11 @@ export interface RuntimeBindings {
   readonly PUBLIC_TURNSTILE_SITE_KEY?: string;
   readonly SKILLPLANE_OTP_FROM?: string;
   readonly HYPERDRIVE?: HyperdriveBinding;
+  readonly CONTROL_HYPERDRIVE?: HyperdriveBinding;
+  readonly CELL_HYPERDRIVE?: HyperdriveBinding;
   readonly SKILL_BUNDLES?: ObjectStorageBinding;
+  readonly PUBLIC_SKILL_BUNDLES?: ObjectStorageBinding;
+  readonly CELL_SKILL_BUNDLES?: ObjectStorageBinding;
   readonly SEND_EMAIL?: EmailServiceBinding;
 }
 
@@ -81,14 +95,31 @@ export interface RuntimeDiagnostics {
   };
 }
 
+export interface RuntimeDatabaseConfig {
+  readonly adapter: "postgres";
+  readonly connectionString: string;
+  readonly source: "direct-postgres" | "hyperdrive";
+}
+
 export interface RuntimeConfig {
   readonly environment: RuntimeEnvironment;
-  readonly database: {
-    readonly adapter: "postgres";
-    readonly connectionString: string;
-    readonly source: "direct-postgres" | "hyperdrive";
-  };
+  readonly database: RuntimeDatabaseConfig;
   readonly objectStorage: ObjectStorageBinding;
+  readonly deployment: {
+    readonly role: "single" | "gateway" | "control" | "cell";
+    readonly regionId: string | null;
+    readonly topology: SkillplaneTopologyManifest;
+  };
+  readonly controlDatabase: RuntimeDatabaseConfig;
+  readonly regionalDatabase: RuntimeDatabaseConfig | null;
+  readonly publicObjectStorage: ObjectStorageBinding | null;
+  readonly regionalObjectStorage: ObjectStorageBinding | null;
+  readonly routing: {
+    readonly activeKeyId: string;
+    readonly keys: Readonly<Record<string, string>>;
+    readonly audience: string;
+    readonly ttlMs: number;
+  };
   readonly email: {
     readonly provider: "cloudflare-email";
     readonly binding: EmailServiceBinding;
@@ -461,6 +492,203 @@ function parseOAuthConfiguration(
   };
 }
 
+type RuntimeBaseConfig = Omit<
+  RuntimeConfig,
+  | "deployment"
+  | "controlDatabase"
+  | "regionalDatabase"
+  | "publicObjectStorage"
+  | "regionalObjectStorage"
+  | "routing"
+>;
+
+function databaseFromBinding(
+  value: unknown,
+  environment: RuntimeEnvironment,
+): RuntimeDatabaseConfig | null {
+  if (isHyperdriveBinding(value)) {
+    return {
+      adapter: "postgres",
+      connectionString: value.connectionString,
+      source: "hyperdrive",
+    };
+  }
+  if (environment === "local" && typeof value === "string" && isPostgresUrl(value)) {
+    return {
+      adapter: "postgres",
+      connectionString: value,
+      source: "direct-postgres",
+    };
+  }
+  return null;
+}
+
+function routingKeys(
+  bindings: RuntimeBindings,
+  base: RuntimeBaseConfig,
+  topology: SkillplaneTopologyManifest,
+): RuntimeConfig["routing"] {
+  let keys: Record<string, string> = {};
+  if (typeof bindings.WORKSPACE_ROUTING_KEYS === "string") {
+    try {
+      const parsed: unknown = JSON.parse(bindings.WORKSPACE_ROUTING_KEYS);
+      if (
+        parsed &&
+        typeof parsed === "object" &&
+        !Array.isArray(parsed) &&
+        Object.values(parsed).every(
+          (value) => typeof value === "string" && value.length >= 32,
+        )
+      ) {
+        keys = parsed as Record<string, string>;
+      }
+    } catch {
+      // The stable diagnostic below deliberately omits secret parsing details.
+    }
+  }
+  if (topology.mode === "single-cell" && Object.keys(keys).length === 0) {
+    keys = {
+      [topology.routing.activeKeyId]: base.secrets.authfn ?? base.secrets.oauth,
+    };
+  }
+  const expected = new Set(topology.routing.verificationKeyIds);
+  const received = new Set(Object.keys(keys));
+  if (
+    expected.size !== received.size ||
+    [...expected].some((keyId) => !received.has(keyId)) ||
+    !keys[topology.routing.activeKeyId]
+  ) {
+    throw new ConfigError(
+      "PRODUCTION_BINDING_MISSING",
+      "The workspace routing keyring is unavailable",
+      ["WORKSPACE_ROUTING_KEYS"],
+    );
+  }
+  if (
+    topology.mode === "multi-cell" &&
+    Object.values(keys).some(
+      (secret) => secret === base.secrets.authfn || secret === base.secrets.oauth,
+    )
+  ) {
+    throw new ConfigError(
+      "CONFIG_INVALID",
+      "Workspace routing keys must be independent from authentication secrets",
+      ["WORKSPACE_ROUTING_KEYS"],
+    );
+  }
+  return {
+    activeKeyId: topology.routing.activeKeyId,
+    keys,
+    audience: topology.routing.assertionAudience,
+    ttlMs: topology.routing.assertionTtlSeconds * 1_000,
+  };
+}
+
+function attachTopology(
+  base: RuntimeBaseConfig,
+  bindings: RuntimeBindings,
+): RuntimeConfig {
+  const explicit = typeof bindings.SKILLPLANE_TOPOLOGY === "string";
+  const topology = explicit
+    ? parseTopologyManifest(bindings.SKILLPLANE_TOPOLOGY, {
+        production: base.environment === "production",
+      })
+    : createSingleCellTopology({
+        appAuthority: base.oauth.issuer,
+        mcpResource: base.oauth.resource,
+        controlDatabaseBinding: "HYPERDRIVE",
+        publicObjectStorageBinding: "SKILL_BUNDLES",
+        regionId: "legacy",
+        regionalDatabaseBinding: "CELL_HYPERDRIVE",
+        regionalObjectStorageBinding: "CELL_SKILL_BUNDLES",
+      });
+  const role = explicit ? bindings.SKILLPLANE_ROLE : "single";
+  if (!role || !["single", "gateway", "control", "cell"].includes(role)) {
+    throw new ConfigError("CONFIG_INVALID", "Deployment role is invalid", [
+      "SKILLPLANE_ROLE",
+    ]);
+  }
+  if (explicit && role === "single") {
+    throw new ConfigError(
+      "CONFIG_INVALID",
+      "An explicit topology requires a gateway, control, or cell role",
+      ["SKILLPLANE_ROLE"],
+    );
+  }
+  const selectedRegion =
+    role === "cell"
+      ? topology.cells.find((cell) => cell.regionId === bindings.SKILLPLANE_REGION_ID)
+      : undefined;
+  if (role === "cell" && !selectedRegion) {
+    throw new ConfigError(
+      "CONFIG_INVALID",
+      "The regional cell is not declared by the topology",
+      ["SKILLPLANE_REGION_ID"],
+    );
+  }
+  const controlDatabase = explicit
+    ? databaseFromBinding(
+        bindings[topology.controlPlane.databaseBinding],
+        base.environment,
+      )
+    : base.database;
+  const regionalDatabase = selectedRegion
+    ? databaseFromBinding(bindings[selectedRegion.databaseBinding], base.environment)
+    : role === "single"
+      ? base.database
+      : null;
+  const publicObjectStorage = explicit
+    ? bindings[topology.controlPlane.publicObjectStorageBinding]
+    : base.objectStorage;
+  const regionalObjectStorage = selectedRegion
+    ? bindings[selectedRegion.objectStorageBinding]
+    : role === "single"
+      ? base.objectStorage
+      : null;
+  const missing: string[] = [];
+  if (!controlDatabase) missing.push(topology.controlPlane.databaseBinding);
+  if (role === "cell" && !regionalDatabase) {
+    missing.push(selectedRegion?.databaseBinding ?? "SKILLPLANE_REGION_ID");
+  }
+  if (
+    ["single", "gateway", "control"].includes(role) &&
+    !isObjectStorageBinding(publicObjectStorage)
+  ) {
+    missing.push(topology.controlPlane.publicObjectStorageBinding);
+  }
+  if (role === "cell" && !isObjectStorageBinding(regionalObjectStorage)) {
+    missing.push(selectedRegion?.objectStorageBinding ?? "SKILLPLANE_REGION_ID");
+  }
+  if (missing.length > 0 || !controlDatabase) {
+    throw new ConfigError(
+      "PRODUCTION_BINDING_MISSING",
+      "Topology database or object-storage bindings are unavailable",
+      [...new Set(missing)].sort(),
+    );
+  }
+  const publicStorage = isObjectStorageBinding(publicObjectStorage)
+    ? publicObjectStorage
+    : null;
+  const regionalStorage = isObjectStorageBinding(regionalObjectStorage)
+    ? regionalObjectStorage
+    : null;
+  return {
+    ...base,
+    database: regionalDatabase ?? controlDatabase,
+    objectStorage: regionalStorage ?? publicStorage ?? base.objectStorage,
+    deployment: {
+      role: role as RuntimeConfig["deployment"]["role"],
+      regionId: selectedRegion?.regionId ?? (role === "single" ? "legacy" : null),
+      topology,
+    },
+    controlDatabase,
+    regionalDatabase,
+    publicObjectStorage: publicStorage,
+    regionalObjectStorage: regionalStorage,
+    routing: routingKeys(bindings, base, topology),
+  };
+}
+
 export function parseRuntimeConfig(
   bindings: RuntimeBindings,
   options: RuntimeConfigOptions = {},
@@ -469,68 +697,102 @@ export function parseRuntimeConfig(
   const oauthOnly = options.authentication === "oauth-only";
   validateDatabaseAdapter(bindings);
   const oauth = parseOAuthConfiguration(bindings, environment);
+  const explicitTopology =
+    typeof bindings.SKILLPLANE_TOPOLOGY === "string"
+      ? parseTopologyManifest(bindings.SKILLPLANE_TOPOLOGY, {
+          production: environment === "production",
+        })
+      : null;
+  const configuredRole = explicitTopology ? bindings.SKILLPLANE_ROLE : "single";
+  const configuredCell =
+    explicitTopology && configuredRole === "cell"
+      ? explicitTopology.cells.find(
+          (cell) => cell.regionId === bindings.SKILLPLANE_REGION_ID,
+        )
+      : null;
+  const baseStorageBinding = explicitTopology
+    ? configuredRole === "cell"
+      ? configuredCell?.objectStorageBinding
+      : explicitTopology.controlPlane.publicObjectStorageBinding
+    : "SKILL_BUNDLES";
+  const baseObjectStorage = baseStorageBinding
+    ? bindings[baseStorageBinding]
+    : undefined;
 
-  if (!isObjectStorageBinding(bindings.SKILL_BUNDLES)) {
+  if (!isObjectStorageBinding(baseObjectStorage)) {
     throw new ConfigError(
       "PRODUCTION_BINDING_MISSING",
       "Object storage binding is unavailable",
-      ["SKILL_BUNDLES"],
+      [baseStorageBinding ?? "SKILLPLANE_REGION_ID"],
     );
   }
 
   if (environment === "local") {
-    if (
-      typeof bindings.DATABASE_URL !== "string" ||
-      !isPostgresUrl(bindings.DATABASE_URL)
-    ) {
+    const explicitDatabase = explicitTopology
+      ? databaseFromBinding(
+          bindings[explicitTopology.controlPlane.databaseBinding],
+          environment,
+        )
+      : null;
+    const legacyDatabase = databaseFromBinding(bindings.DATABASE_URL, environment);
+    const baseDatabase = explicitDatabase ?? legacyDatabase;
+    if (!baseDatabase) {
       throw new ConfigError(
         "CONFIG_INVALID",
         "Local Postgres configuration is invalid",
-        ["DATABASE_URL"],
+        [
+          explicitTopology
+            ? explicitTopology.controlPlane.databaseBinding
+            : "DATABASE_URL",
+        ],
       );
     }
 
     const authentication = oauthOnly
       ? { auth: null, email: null }
       : parseAuthConfiguration(bindings, environment);
-    return {
-      environment,
-      database: {
-        adapter: "postgres",
-        connectionString: bindings.DATABASE_URL,
-        source: "direct-postgres",
-      },
-      objectStorage: bindings.SKILL_BUNDLES,
-      email: authentication.email,
-      auth: authentication.auth,
-      oauth,
-      secrets: {
-        authfn: authentication.auth?.rateLimitPepper ?? null,
-        turnstile: authentication.auth?.turnstile.secretKey ?? null,
-        oauth: oauth.tokenPepper,
-      },
-      diagnostics: {
+    return attachTopology(
+      {
         environment,
-        database: "direct-postgres",
-        objectStorage: "r2",
-        email: oauthOnly
-          ? "not-required-oauth-only"
-          : authentication.email
-            ? "cloudflare-email"
-            : "not-required-local",
-        secretPresence: {
-          authfn: Boolean(authentication.auth),
-          turnstile: Boolean(authentication.auth),
-          oauth: true,
+        database: baseDatabase,
+        objectStorage: baseObjectStorage,
+        email: authentication.email,
+        auth: authentication.auth,
+        oauth,
+        secrets: {
+          authfn: authentication.auth?.rateLimitPepper ?? null,
+          turnstile: authentication.auth?.turnstile.secretKey ?? null,
+          oauth: oauth.tokenPepper,
+        },
+        diagnostics: {
+          environment,
+          database: "direct-postgres",
+          objectStorage: "r2",
+          email: oauthOnly
+            ? "not-required-oauth-only"
+            : authentication.email
+              ? "cloudflare-email"
+              : "not-required-local",
+          secretPresence: {
+            authfn: Boolean(authentication.auth),
+            turnstile: Boolean(authentication.auth),
+            oauth: true,
+          },
         },
       },
-    };
+      bindings,
+    );
   }
 
+  const productionDatabaseBinding = explicitTopology
+    ? explicitTopology.controlPlane.databaseBinding
+    : "HYPERDRIVE";
+  const productionDatabase = databaseFromBinding(
+    bindings[productionDatabaseBinding],
+    environment,
+  );
   const missing: string[] = [];
-  if (!isHyperdriveBinding(bindings.HYPERDRIVE)) {
-    missing.push("HYPERDRIVE");
-  }
+  if (!productionDatabase) missing.push(productionDatabaseBinding);
   if (missing.length > 0) {
     throw new ConfigError(
       "PRODUCTION_BINDING_MISSING",
@@ -547,45 +809,44 @@ export function parseRuntimeConfig(
     );
   }
 
-  if (!isHyperdriveBinding(bindings.HYPERDRIVE)) {
+  if (!productionDatabase) {
     throw new ConfigError(
       "PRODUCTION_BINDING_MISSING",
       "Hyperdrive binding is unavailable",
-      ["HYPERDRIVE"],
+      [productionDatabaseBinding],
     );
   }
   const authentication = oauthOnly
     ? { auth: null, email: null }
     : parseAuthConfiguration(bindings, environment);
 
-  return {
-    environment,
-    database: {
-      adapter: "postgres",
-      connectionString: bindings.HYPERDRIVE.connectionString,
-      source: "hyperdrive",
-    },
-    objectStorage: bindings.SKILL_BUNDLES,
-    email: authentication.email,
-    auth: authentication.auth,
-    oauth,
-    secrets: {
-      authfn: authentication.auth?.rateLimitPepper ?? null,
-      turnstile: authentication.auth?.turnstile.secretKey ?? null,
-      oauth: oauth.tokenPepper,
-    },
-    diagnostics: {
+  return attachTopology(
+    {
       environment,
-      database: "hyperdrive",
-      objectStorage: "r2",
-      email: oauthOnly ? "not-required-oauth-only" : "cloudflare-email",
-      secretPresence: {
-        authfn: !oauthOnly,
-        turnstile: !oauthOnly,
-        oauth: true,
+      database: productionDatabase,
+      objectStorage: baseObjectStorage,
+      email: authentication.email,
+      auth: authentication.auth,
+      oauth,
+      secrets: {
+        authfn: authentication.auth?.rateLimitPepper ?? null,
+        turnstile: authentication.auth?.turnstile.secretKey ?? null,
+        oauth: oauth.tokenPepper,
+      },
+      diagnostics: {
+        environment,
+        database: "hyperdrive",
+        objectStorage: "r2",
+        email: oauthOnly ? "not-required-oauth-only" : "cloudflare-email",
+        secretPresence: {
+          authfn: !oauthOnly,
+          turnstile: !oauthOnly,
+          oauth: true,
+        },
       },
     },
-  };
+    bindings,
+  );
 }
 
 export function safeConfigDiagnostic(error: unknown): {

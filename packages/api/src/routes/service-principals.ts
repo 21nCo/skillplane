@@ -5,15 +5,17 @@ import {
   parseServicePrincipalRole,
   parseServicePrincipalScopes,
 } from "@skillplane/domain";
-import { writeAuditEvent } from "@skillplane/observability";
 import type { Hono } from "hono";
+import {
+  writeControlPlaneAudit,
+  writePrincipalControlPlaneAudit,
+} from "../control-audit.js";
 import type { ApiEnvironment, ApiServices } from "../context.js";
 import { success } from "../envelopes.js";
 import {
   isPostgresUniqueViolation,
   parseOptionalExpiry,
   readJsonObject,
-  writeApiAudit,
   workspaceUser,
 } from "./shared.js";
 
@@ -101,7 +103,7 @@ async function revokeAuthFnCredentialBestEffort(
   } catch {
     let auditRecorded = false;
     try {
-      await writeAuditEvent(services.database.pool, {
+      await writeControlPlaneAudit(services.controlDatabase.pool, {
         workspaceId: input.workspaceId,
         eventType: "service_principal.authfn_key_cleanup_failed",
         action: "members:write",
@@ -147,7 +149,7 @@ export function registerServicePrincipalRoutes(app: Hono<ApiEnvironment>): void 
     }
     const principal = await workspaceUser(context);
     authorize(principal, "members:read");
-    const result = await services.database.pool.query<ServicePrincipalRow>(
+    const result = await services.controlDatabase.pool.query<ServicePrincipalRow>(
       `SELECT id, name, role, scopes, delegated_user_id, expires_at,
                 credential_version, authfn_api_key_id,
                 last_used_at, revoked_at, created_at, updated_at
@@ -193,7 +195,7 @@ export function registerServicePrincipalRoutes(app: Hono<ApiEnvironment>): void 
               );
             })();
     if (delegatedUserId) {
-      const membership = await services.database.pool.query(
+      const membership = await services.controlDatabase.pool.query(
         `SELECT 1 FROM workspace_memberships
             WHERE workspace_id = $1 AND user_id = $2`,
         [principal.workspaceId, delegatedUserId],
@@ -219,7 +221,7 @@ export function registerServicePrincipalRoutes(app: Hono<ApiEnvironment>): void 
       credentialVersion: 1,
       requestId,
     });
-    const client = await services.database.pool
+    const client = await services.controlDatabase.pool
       .connect()
       .catch(async (error: unknown) => {
         await revokeAuthFnCredentialBestEffort(services, {
@@ -262,7 +264,7 @@ export function registerServicePrincipalRoutes(app: Hono<ApiEnvironment>): void 
       );
       const created = result.rows[0];
       if (!created) throw new Error("Service principal insert returned no row");
-      await writeApiAudit(client, principal, {
+      await writePrincipalControlPlaneAudit(client, principal, {
         eventType: "service_principal.created",
         action: "members:write",
         requestId,
@@ -329,14 +331,15 @@ export function registerServicePrincipalRoutes(app: Hono<ApiEnvironment>): void 
         body.expiresAt === undefined ? undefined : parseOptionalExpiry(body.expiresAt);
       const servicePrincipalId = context.req.param("servicePrincipalId");
       const requestId = context.get("requestId");
-      const snapshotResult = await services.database.pool.query<ServicePrincipalRow>(
-        `SELECT id, name, role, scopes, delegated_user_id, expires_at,
+      const snapshotResult =
+        await services.controlDatabase.pool.query<ServicePrincipalRow>(
+          `SELECT id, name, role, scopes, delegated_user_id, expires_at,
                 credential_version, authfn_api_key_id,
                 last_used_at, revoked_at, created_at, updated_at
            FROM service_principals
           WHERE workspace_id = $1 AND id = $2 AND revoked_at IS NULL`,
-        [principal.workspaceId, servicePrincipalId],
-      );
+          [principal.workspaceId, servicePrincipalId],
+        );
       const snapshot = snapshotResult.rows[0];
       if (!snapshot) {
         throw new DomainError(
@@ -357,7 +360,7 @@ export function registerServicePrincipalRoutes(app: Hono<ApiEnvironment>): void 
         credentialVersion: nextVersion,
         requestId,
       });
-      const client = await services.database.pool
+      const client = await services.controlDatabase.pool
         .connect()
         .catch(async (error: unknown) => {
           await revokeAuthFnCredentialBestEffort(services, {
@@ -428,7 +431,7 @@ export function registerServicePrincipalRoutes(app: Hono<ApiEnvironment>): void 
             404,
           );
         }
-        await writeApiAudit(client, principal, {
+        await writePrincipalControlPlaneAudit(client, principal, {
           eventType: "service_principal.credential_rotated",
           action: "members:write",
           requestId,
@@ -492,7 +495,7 @@ export function registerServicePrincipalRoutes(app: Hono<ApiEnvironment>): void 
       authorize(principal, "members:write");
       const servicePrincipalId = context.req.param("servicePrincipalId");
       const requestId = context.get("requestId");
-      const client = await services.database.pool.connect();
+      const client = await services.controlDatabase.pool.connect();
       let authFnKeyId: string | null;
       try {
         await client.query("BEGIN");
@@ -525,7 +528,7 @@ export function registerServicePrincipalRoutes(app: Hono<ApiEnvironment>): void 
             404,
           );
         }
-        await writeApiAudit(client, principal, {
+        await writePrincipalControlPlaneAudit(client, principal, {
           eventType: "service_principal.revoked",
           action: "members:write",
           requestId,

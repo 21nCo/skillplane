@@ -39,6 +39,7 @@ import { McpCursorCodec } from "./pagination.js";
 import { createSkillplaneMcpServer } from "./server.js";
 import { resolveSkill, resolveVersion } from "./tools/resolve.js";
 import { loadExactCanonicalBundle } from "./tools/retrieve.js";
+import { createRoutedMcpApplication } from "./workspace-routing.js";
 import {
   mapMcpToolError,
   type McpToolRuntime,
@@ -750,7 +751,9 @@ export function createMcpApp(options: CreateMcpAppOptions = {}) {
   return app;
 }
 
-export const app = createMcpApp();
+const services = createApiServiceProvider({ authentication: "oauth-only" });
+export const app = createMcpApp({ getServices: services });
+const routedApp = createRoutedMcpApplication({ local: app, services });
 
 interface WorkerHandler<Bindings> {
   fetch(
@@ -766,6 +769,6 @@ interface WorkerHandler<Bindings> {
 
 export default {
   fetch(request, environment, context) {
-    return app.fetch(request, environment, context);
+    return routedApp.fetch(request, environment, context);
   },
 } satisfies WorkerHandler<RuntimeBindings>;

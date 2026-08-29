@@ -47,6 +47,16 @@ export function registerSkillSearchRoutes(app: Hono<ApiEnvironment>): void {
         .map((value) => value.trim())
         .filter(Boolean) ?? []),
     ].map(parseSkillVisibility);
+    if (services.publicProjectionService && !context.req.query("workspaceId")) {
+      const page = await services.publicProjectionService.discover({
+        query: context.req.query("q") ?? "",
+        tags: [...repeatedTags, ...commaTags],
+        ...(limit !== undefined ? { limit } : {}),
+        cursor: context.req.query("cursor") ?? null,
+      });
+      context.header("Cache-Control", "private, no-store");
+      return context.json(success(context, page));
+    }
     const page = await services.skillSearchService.search({
       query: context.req.query("q") ?? "",
       tags: [...repeatedTags, ...commaTags],

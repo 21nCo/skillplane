@@ -1,8 +1,5 @@
-import {
-  createAuthFnRouteMeta,
-  type AuthFnPlugin,
-  type AuthFnPluginRuntimeContext,
-} from "@authfn/core";
+import type { AuthFnPlugin, AuthFnPluginRuntimeContext } from "authfn";
+import { createAuthFnRouteMeta } from "authfn/http/router";
 import {
   createMcpAuthorizationCompatibilityHandler,
   McpFnHostedAuthorizationError,

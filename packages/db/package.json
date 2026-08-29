@@ -30,10 +30,13 @@
     "verify": "pnpm run build && node --enable-source-maps dist/src/verify-cli.js"
   },
   "dependencies": {
-    "@authfn/core": "catalog:",
+    "@authfn/api-keys": "catalog:",
+    "@authfn/email-otp": "catalog:",
+    "@authfn/multi-region": "catalog:",
     "@skillplane/config": "workspace:*",
     "@skillplane/domain": "workspace:*",
     "@superfunctions/db": "catalog:",
+    "authfn": "catalog:",
     "drizzle-orm": "catalog:",
     "pg": "catalog:"
   },

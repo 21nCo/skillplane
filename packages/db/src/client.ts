@@ -3,7 +3,11 @@ import { drizzleAdapter } from "@superfunctions/db/adapters/drizzle";
 import type { Adapter } from "@superfunctions/db";
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import { Pool, type PoolConfig } from "pg";
-import { schema } from "./schema/index.js";
+import {
+  globalControlSchema,
+  regionalWorkspaceSchema,
+  schema,
+} from "./schema/index.js";
 
 const adapterSchema = {
   ...schema,
@@ -11,11 +15,26 @@ const adapterSchema = {
   sessions: schema.authfn_sessions,
   otp_challenges: schema.authfn_otp_challenges,
   api_keys: schema.authfn_api_keys,
+  region_profiles: schema.authfn_region_profiles,
 };
+
+const controlAdapterSchema = {
+  ...globalControlSchema,
+  users: globalControlSchema.authfn_users,
+  sessions: globalControlSchema.authfn_sessions,
+  otp_challenges: globalControlSchema.authfn_otp_challenges,
+  api_keys: globalControlSchema.authfn_api_keys,
+  region_profiles: globalControlSchema.authfn_region_profiles,
+};
+
+const regionalAdapterSchema = { ...regionalWorkspaceSchema };
+
+export type DatabaseRole = "combined" | "control" | "regional";
 
 export type SkillplaneDatabase = NodePgDatabase<typeof adapterSchema>;
 
 export interface DatabaseClient {
+  readonly role: DatabaseRole;
   readonly pool: Pool;
   readonly db: SkillplaneDatabase;
   readonly adapter: Adapter;
@@ -27,9 +46,11 @@ export interface DatabaseClientOptions {
   readonly applicationName?: string;
   readonly maxConnections?: number;
   readonly ssl?: PoolConfig["ssl"];
+  readonly role?: DatabaseRole;
 }
 
 export function createDatabaseClient(options: DatabaseClientOptions): DatabaseClient {
+  const role = options.role ?? "combined";
   const pool = new Pool({
     connectionString: options.connectionString,
     application_name: options.applicationName ?? "skillplane",
@@ -39,12 +60,22 @@ export function createDatabaseClient(options: DatabaseClientOptions): DatabaseCl
     keepAlive: true,
     ssl: options.ssl,
   });
-  const db = drizzle(pool, { schema: adapterSchema });
+  const selectedSchema =
+    role === "control"
+      ? controlAdapterSchema
+      : role === "regional"
+        ? regionalAdapterSchema
+        : adapterSchema;
+  // Consumers use the pool for domain SQL and the adapter for AuthFn/DataFn.
+  // The declared superset type preserves compatibility while the runtime
+  // adapter is deliberately restricted to its database owner's tables.
+  const db = drizzle(pool, { schema: selectedSchema }) as SkillplaneDatabase;
   const adapter = drizzleAdapter({
     db,
     dialect: "postgres",
   });
   return {
+    role,
     pool,
     db,
     adapter,
@@ -58,4 +89,16 @@ export function createRuntimeDatabaseClient(config: RuntimeConfig): DatabaseClie
     applicationName: `skillplane-${config.environment}`,
     maxConnections: config.database.source === "hyperdrive" ? 5 : 10,
   });
+}
+
+export function createControlDatabaseClient(
+  options: Omit<DatabaseClientOptions, "role">,
+): DatabaseClient {
+  return createDatabaseClient({ ...options, role: "control" });
+}
+
+export function createRegionalDatabaseClient(
+  options: Omit<DatabaseClientOptions, "role">,
+): DatabaseClient {
+  return createDatabaseClient({ ...options, role: "regional" });
 }

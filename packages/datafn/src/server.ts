@@ -1,7 +1,13 @@
-import type { AuthFnSession } from "@authfn/core";
-import { createDatafnServer, type DatafnServer } from "@datafn/server";
+import type { AuthFnSession } from "authfn";
+import {
+  createDatafnServer,
+  datafnMultiRegionPlugin,
+  type DatafnPlacementRuntimeConfig,
+  type DatafnServer,
+} from "@datafn/server";
 import { resolveUserPrincipal, type DatabaseClient } from "@skillplane/db";
 import type { Principal } from "@skillplane/domain";
+import type { IndexedDirectoryStoreAdapter } from "@superfunctions/db";
 import { DATAFN_RESOURCE_NAMES, skillplaneDatafnSchema } from "./schema.js";
 
 export interface DatafnAuthProvider {
@@ -15,7 +21,13 @@ export interface SkillplaneDatafnContext {
 
 export interface CreateSkillplaneDatafnServerInput {
   readonly database: DatabaseClient;
+  /** Global identity and membership authority; defaults to database in legacy mode. */
+  readonly controlDatabase?: DatabaseClient;
   readonly auth: DatafnAuthProvider;
+  readonly regionId?: string;
+  readonly permissionDirectory?: IndexedDirectoryStoreAdapter;
+  readonly placement?: DatafnPlacementRuntimeConfig;
+  readonly trustDirectWorkspaceHeader?: boolean;
   readonly debug?: boolean;
   readonly onTiming?: (event: Readonly<Record<string, unknown>>) => void;
 }
@@ -45,17 +57,31 @@ export async function createSkillplaneDatafnServer(
   input: CreateSkillplaneDatafnServerInput,
 ): Promise<DatafnServer<SkillplaneDatafnContext>> {
   const allowedResources = new Set<string>(DATAFN_RESOURCE_NAMES);
+  const multiRegion =
+    input.regionId && input.permissionDirectory
+      ? datafnMultiRegionPlugin({
+          regionId: input.regionId,
+          directory: input.permissionDirectory,
+          ...(input.placement ? { placement: input.placement } : {}),
+        })
+      : null;
   return createDatafnServer<SkillplaneDatafnContext>({
     schema: skillplaneDatafnSchema,
-    db: input.database.adapter,
+    database: input.database.adapter,
+    ...(multiRegion ? { plugins: [multiRegion] } : {}),
     allowUnknownResources: false,
     debug: input.debug ?? false,
     rest: false,
     context: async (request) => {
       const session = await input.auth.authenticate(request);
-      const workspaceId = request.headers.get("x-skillplane-workspace-id") ?? undefined;
+      const routedWorkspaceId = request.headers.get("x-skillplane-routed-workspace-id");
+      const workspaceId =
+        routedWorkspaceId ??
+        (input.trustDirectWorkspaceHeader === false
+          ? undefined
+          : (request.headers.get("x-skillplane-workspace-id") ?? undefined));
       const principal = await resolveUserPrincipal(
-        input.database.pool,
+        (input.controlDatabase ?? input.database).pool,
         session,
         workspaceId,
       );
@@ -107,26 +133,6 @@ export async function createSkillplaneDatafnServer(
               input.onTiming?.(event as Readonly<Record<string, unknown>>),
           }
         : {}),
-    },
-    logger: {
-      info: () => undefined,
-      warn: () =>
-        console.warn(
-          JSON.stringify({
-            component: "datafn",
-            level: "warn",
-            event: "datafn.warning",
-          }),
-        ),
-      error: () =>
-        console.error(
-          JSON.stringify({
-            component: "datafn",
-            level: "error",
-            event: "datafn.error",
-          }),
-        ),
-      debug: () => undefined,
     },
   });
 }

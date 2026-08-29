@@ -31,6 +31,49 @@ const email = {
 };
 
 const fixtureSecret = "fixture-only-secret-material-32-bytes";
+const routingSecret = "routing-only-secret-material-32-bytes";
+
+function topology() {
+  return {
+    version: 1,
+    mode: "multi-cell",
+    public: {
+      appAuthority: "https://app.skillplane.dev",
+      mcpResource: "https://mcp.skillplane.dev/mcp",
+    },
+    controlPlane: {
+      regionId: "global",
+      databaseBinding: "CONTROL_HYPERDRIVE",
+      publicObjectStorageBinding: "PUBLIC_SKILL_BUNDLES",
+      issuer: "https://app.skillplane.dev",
+      oauthResource: "https://mcp.skillplane.dev/mcp",
+    },
+    cells: [
+      {
+        regionId: "in-south",
+        databaseBinding: "CELL_IN_SOUTH_HYPERDRIVE",
+        objectStorageBinding: "CELL_IN_SOUTH_BUNDLES",
+        appServiceBinding: "CELL_IN_SOUTH_APP",
+        mcpServiceBinding: "CELL_IN_SOUTH_MCP",
+        publiclyRoutable: false,
+      },
+      {
+        regionId: "us-east",
+        databaseBinding: "CELL_US_EAST_HYPERDRIVE",
+        objectStorageBinding: "CELL_US_EAST_BUNDLES",
+        appServiceBinding: "CELL_US_EAST_APP",
+        mcpServiceBinding: "CELL_US_EAST_MCP",
+        publiclyRoutable: false,
+      },
+    ],
+    routing: {
+      activeKeyId: "current",
+      verificationKeyIds: ["current"],
+      assertionAudience: "skillplane-cell",
+      assertionTtlSeconds: 20,
+    },
+  } as const;
+}
 
 function productionBindings(overrides: Partial<RuntimeBindings> = {}): RuntimeBindings {
   const environment = overrides.RUNTIME_ENV ?? "production";
@@ -233,6 +276,60 @@ describe("parseRuntimeConfig", () => {
       email: "not-required-oauth-only",
       secretPresence: { authfn: false, turnstile: false, oauth: true },
     });
+  });
+
+  it("uses explicit gateway bindings without legacy aliases", () => {
+    const config = parseRuntimeConfig(
+      productionBindings({
+        HYPERDRIVE: undefined,
+        SKILL_BUNDLES: undefined,
+        SKILLPLANE_ROLE: "gateway",
+        SKILLPLANE_TOPOLOGY: JSON.stringify(topology()),
+        CONTROL_HYPERDRIVE: {
+          connectionString:
+            "postgresql://fixture:fixture@control.invalid:5432/skillplane",
+        },
+        PUBLIC_SKILL_BUNDLES: objectStorage,
+        WORKSPACE_ROUTING_KEYS: JSON.stringify({ current: routingSecret }),
+      }),
+      { authentication: "oauth-only" },
+    );
+
+    expect(config.deployment).toMatchObject({ role: "gateway", regionId: null });
+    expect(config.controlDatabase.connectionString).toContain("control.invalid");
+    expect(config.regionalDatabase).toBeNull();
+    expect(config.publicObjectStorage).toBe(objectStorage);
+  });
+
+  it("selects an explicit private regional cell without public storage", () => {
+    const config = parseRuntimeConfig(
+      productionBindings({
+        HYPERDRIVE: undefined,
+        SKILL_BUNDLES: undefined,
+        SKILLPLANE_ROLE: "cell",
+        SKILLPLANE_REGION_ID: "in-south",
+        SKILLPLANE_TOPOLOGY: JSON.stringify(topology()),
+        CONTROL_HYPERDRIVE: {
+          connectionString:
+            "postgresql://fixture:fixture@control.invalid:5432/skillplane",
+        },
+        CELL_IN_SOUTH_HYPERDRIVE: {
+          connectionString:
+            "postgresql://fixture:fixture@regional.invalid:5432/skillplane",
+        },
+        CELL_IN_SOUTH_BUNDLES: objectStorage,
+        WORKSPACE_ROUTING_KEYS: JSON.stringify({ current: routingSecret }),
+      }),
+      { authentication: "oauth-only" },
+    );
+
+    expect(config.deployment).toMatchObject({
+      role: "cell",
+      regionId: "in-south",
+    });
+    expect(config.regionalDatabase?.connectionString).toContain("regional.invalid");
+    expect(config.publicObjectStorage).toBeNull();
+    expect(config.regionalObjectStorage).toBe(objectStorage);
   });
 
   it("requires a distinct production OAuth token pepper", () => {

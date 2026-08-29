@@ -151,9 +151,9 @@ export const skills = pgTable(
   "skills",
   {
     id: text("id").primaryKey(),
-    workspaceId: text("workspace_id")
-      .notNull()
-      .references(() => workspaces.id, { onDelete: "cascade" }),
+    // Global workspace existence is validated by the control-plane service.
+    // Regional databases deliberately have no cross-database foreign key.
+    workspaceId: text("workspace_id").notNull(),
     slug: text("slug").notNull(),
     name: text("name").notNull(),
     description: text("description").notNull().default(""),
@@ -174,9 +174,7 @@ export const skills = pgTable(
       )`,
     ),
     currentPublishedVersionId: text("current_published_version_id"),
-    createdByUserId: text("created_by_user_id").references(() => authfnUsers.id, {
-      onDelete: "set null",
-    }),
+    createdByUserId: text("created_by_user_id"),
     createdAt: utcTimestamp("created_at").notNull().defaultNow(),
     updatedAt: utcTimestamp("updated_at").notNull().defaultNow(),
     archivedAt: utcTimestamp("archived_at"),
@@ -192,9 +190,7 @@ export const skillVersions = pgTable(
   "skill_versions",
   {
     id: text("id").primaryKey(),
-    workspaceId: text("workspace_id")
-      .notNull()
-      .references(() => workspaces.id, { onDelete: "cascade" }),
+    workspaceId: text("workspace_id").notNull(),
     skillId: text("skill_id")
       .notNull()
       .references(() => skills.id, { onDelete: "cascade" }),
@@ -252,9 +248,7 @@ export const skillVersionFiles = pgTable(
   "skill_version_files",
   {
     id: text("id").primaryKey(),
-    workspaceId: text("workspace_id")
-      .notNull()
-      .references(() => workspaces.id, { onDelete: "cascade" }),
+    workspaceId: text("workspace_id").notNull(),
     skillVersionId: text("skill_version_id")
       .notNull()
       .references(() => skillVersions.id, { onDelete: "cascade" }),
@@ -281,9 +275,7 @@ export const skillContexts = pgTable(
   "skill_contexts",
   {
     id: text("id").primaryKey(),
-    workspaceId: text("workspace_id")
-      .notNull()
-      .references(() => workspaces.id, { onDelete: "cascade" }),
+    workspaceId: text("workspace_id").notNull(),
     skillId: text("skill_id")
       .notNull()
       .references(() => skills.id, { onDelete: "cascade" }),
@@ -315,9 +307,7 @@ export const contextKnowledgeRevisions = pgTable(
   "context_knowledge_revisions",
   {
     id: text("id").primaryKey(),
-    workspaceId: text("workspace_id")
-      .notNull()
-      .references(() => workspaces.id, { onDelete: "cascade" }),
+    workspaceId: text("workspace_id").notNull(),
     contextId: text("context_id")
       .notNull()
       .references(() => skillContexts.id, { onDelete: "cascade" }),
@@ -357,9 +347,7 @@ export const contextNotes = pgTable(
   "context_notes",
   {
     id: text("id").primaryKey(),
-    workspaceId: text("workspace_id")
-      .notNull()
-      .references(() => workspaces.id, { onDelete: "cascade" }),
+    workspaceId: text("workspace_id").notNull(),
     contextId: text("context_id")
       .notNull()
       .references(() => skillContexts.id, { onDelete: "cascade" }),
@@ -384,9 +372,7 @@ export const contextNoteRevisions = pgTable(
   "context_note_revisions",
   {
     id: text("id").primaryKey(),
-    workspaceId: text("workspace_id")
-      .notNull()
-      .references(() => workspaces.id, { onDelete: "cascade" }),
+    workspaceId: text("workspace_id").notNull(),
     noteId: text("note_id")
       .notNull()
       .references(() => contextNotes.id, { onDelete: "cascade" }),
@@ -423,9 +409,7 @@ export const amendmentReviews = pgTable(
   "amendment_reviews",
   {
     id: text("id").primaryKey(),
-    workspaceId: text("workspace_id")
-      .notNull()
-      .references(() => workspaces.id, { onDelete: "cascade" }),
+    workspaceId: text("workspace_id").notNull(),
     skillId: text("skill_id")
       .notNull()
       .references(() => skills.id, { onDelete: "cascade" }),
@@ -442,9 +426,7 @@ export const amendmentReviews = pgTable(
     policyDecision: metadata("policy_decision"),
     reviewedByActorType: text("reviewed_by_actor_type"),
     reviewedByActorId: text("reviewed_by_actor_id"),
-    reviewedByUserId: text("reviewed_by_user_id").references(() => authfnUsers.id, {
-      onDelete: "set null",
-    }),
+    reviewedByUserId: text("reviewed_by_user_id"),
     reviewedAt: utcTimestamp("reviewed_at"),
     createdAt: utcTimestamp("created_at").notNull().defaultNow(),
     updatedAt: utcTimestamp("updated_at").notNull().defaultNow(),
@@ -471,9 +453,7 @@ export const auditEvents = pgTable(
   "audit_events",
   {
     id: text("id").primaryKey(),
-    workspaceId: text("workspace_id")
-      .notNull()
-      .references(() => workspaces.id, { onDelete: "restrict" }),
+    workspaceId: text("workspace_id").notNull(),
     occurredAt: utcTimestamp("occurred_at").notNull().defaultNow(),
     eventType: text("event_type").notNull(),
     action: text("action").notNull(),
@@ -534,9 +514,7 @@ export const publicStatsCounters = pgTable(
 export const analyticsDaily = pgTable(
   "analytics_daily",
   {
-    workspaceId: text("workspace_id")
-      .notNull()
-      .references(() => workspaces.id, { onDelete: "cascade" }),
+    workspaceId: text("workspace_id").notNull(),
     day: date("day", { mode: "string" }).notNull(),
     skillId: text("skill_id").notNull().default(""),
     contextId: text("context_id").notNull().default(""),
@@ -568,9 +546,7 @@ export const analyticsDaily = pgTable(
 export const analyticsDailySummary = pgTable(
   "analytics_daily_summary",
   {
-    workspaceId: text("workspace_id")
-      .notNull()
-      .references(() => workspaces.id, { onDelete: "cascade" }),
+    workspaceId: text("workspace_id").notNull(),
     day: date("day", { mode: "string" }).notNull(),
     skillId: text("skill_id").notNull().default(""),
     eventCount: bigint("event_count", { mode: "number" }).notNull().default(0),
@@ -620,9 +596,7 @@ export const analyticsDailySummary = pgTable(
 export const analyticsDailyDimensions = pgTable(
   "analytics_daily_dimensions",
   {
-    workspaceId: text("workspace_id")
-      .notNull()
-      .references(() => workspaces.id, { onDelete: "cascade" }),
+    workspaceId: text("workspace_id").notNull(),
     day: date("day", { mode: "string" }).notNull(),
     skillId: text("skill_id").notNull().default(""),
     dimensionType: text("dimension_type").notNull(),
@@ -658,9 +632,7 @@ export const analyticsDailyDimensions = pgTable(
 export const analyticsRollupRuns = pgTable(
   "analytics_rollup_runs",
   {
-    workspaceId: text("workspace_id")
-      .notNull()
-      .references(() => workspaces.id, { onDelete: "cascade" }),
+    workspaceId: text("workspace_id").notNull(),
     day: date("day", { mode: "string" }).notNull(),
     sourceEventCount: bigint("source_event_count", { mode: "number" })
       .notNull()
@@ -680,9 +652,7 @@ export const analyticsRollupRuns = pgTable(
 export const idempotencyRecords = pgTable(
   "idempotency_records",
   {
-    workspaceId: text("workspace_id")
-      .notNull()
-      .references(() => workspaces.id, { onDelete: "cascade" }),
+    workspaceId: text("workspace_id").notNull(),
     principalKey: text("principal_key").notNull(),
     key: text("key").notNull(),
     operation: text("operation").notNull(),

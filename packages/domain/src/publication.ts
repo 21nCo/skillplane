@@ -32,6 +32,13 @@ interface PublicationRow {
   readonly change_summary: string;
   readonly published_at: Date | null;
   readonly created_at: Date;
+  readonly skill_slug?: string;
+  readonly skill_name?: string;
+  readonly skill_description?: string;
+  readonly skill_tags?: string[];
+  readonly skill_visibility?: string;
+  readonly skill_created_at?: Date;
+  readonly skill_updated_at?: Date;
 }
 
 export function nextSemanticVersion(current: string, bump: SemanticBump): string {
@@ -91,6 +98,7 @@ export class PublicationService {
     readonly principal: Principal;
     readonly idempotencyKey: string;
     readonly requestId: string;
+    readonly fencingEpoch?: number;
   }): Promise<SkillVersionRecord> {
     authorize(options.principal, "skills:publish");
     const requestHash = await hashIdempotentRequest({
@@ -160,6 +168,12 @@ export class PublicationService {
                     candidate.created_at, skill.current_published_version_id,
                     current.semantic_version AS current_semantic_version,
                     skill.archived_at
+                    , skill.slug AS skill_slug, skill.name AS skill_name,
+                    skill.description AS skill_description,
+                    skill.tags AS skill_tags,
+                    skill.visibility AS skill_visibility,
+                    skill.created_at AS skill_created_at,
+                    skill.updated_at AS skill_updated_at
                FROM skills skill
                JOIN skill_versions candidate
                  ON candidate.id = $2 AND candidate.skill_id = skill.id
@@ -240,6 +254,49 @@ export class PublicationService {
           },
         });
         const record = toSkillVersionRecord(version);
+        if (row.skill_visibility === "public") {
+          await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
+            options.principal.workspaceId,
+          ]);
+          await client.query(
+            `INSERT INTO regional_projection_outbox
+               (id, workspace_id, event_type, payload, fencing_epoch, sequence)
+             SELECT $1, $2, 'public_skill.published', $3::jsonb, $4,
+                    COALESCE(MAX(sequence), 0) + 1
+               FROM regional_projection_outbox
+              WHERE workspace_id = $2`,
+            [
+              `regional-projection:${crypto.randomUUID()}`,
+              options.principal.workspaceId,
+              JSON.stringify({
+                workspaceId: options.principal.workspaceId,
+                skillId: options.skillId,
+                skillSlug: row.skill_slug,
+                versionId: record.id,
+                semanticVersion,
+                sourceObjectKey: record.objectKey,
+                digest: record.digest,
+                searchText: instructions,
+                document: {
+                  skill: {
+                    id: options.skillId,
+                    workspaceId: options.principal.workspaceId,
+                    slug: row.skill_slug,
+                    name: row.skill_name,
+                    description: row.skill_description,
+                    tags: row.skill_tags ?? [],
+                    visibility: "public",
+                    currentPublishedVersionId: record.id,
+                    createdAt: row.skill_created_at?.toISOString(),
+                    updatedAt: row.skill_updated_at?.toISOString(),
+                  },
+                  version: record,
+                },
+              }),
+              options.fencingEpoch ?? 1,
+            ],
+          );
+        }
         await this.idempotency.complete(client, claim.identity, 200, {
           version: record,
         });

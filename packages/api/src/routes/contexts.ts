@@ -7,6 +7,7 @@ import {
 import type { Hono } from "hono";
 import type { ApiEnvironment } from "../context.js";
 import { success } from "../envelopes.js";
+import { registerResourceRoutes } from "../resource-routing.js";
 import { readJsonObject, requireIdempotencyKey, requirePrincipal } from "./shared.js";
 
 function objectField(
@@ -107,6 +108,9 @@ export function registerContextRoutes(app: Hono<ApiEnvironment>): void {
       idempotencyKey: requireIdempotencyKey(context),
       requestId: context.get("requestId"),
     });
+    await registerResourceRoutes(services, requirePrincipal(context).workspaceId, [
+      { resourceType: "context", resourceId: created.context.id },
+    ]);
     context.header("Cache-Control", "private, no-store");
     return context.json(success(context, created), 201);
   });
@@ -217,6 +221,9 @@ export function registerContextRoutes(app: Hono<ApiEnvironment>): void {
       idempotencyKey: requireIdempotencyKey(context),
       requestId: context.get("requestId"),
     });
+    await registerResourceRoutes(services, requirePrincipal(context).workspaceId, [
+      { resourceType: "context_note", resourceId: note.id },
+    ]);
     context.header("Cache-Control", "private, no-store");
     return context.json(success(context, { note }), 201);
   });

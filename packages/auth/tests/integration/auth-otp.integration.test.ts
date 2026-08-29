@@ -95,7 +95,7 @@ describe("Skillplane email OTP integration", () => {
         code: "123456",
       },
     });
-    expect(verified.status).toBe(200);
+    expect(verified.status, await verified.clone().text()).toBe(200);
     const cookies = cookieHeader(verified);
     expect(verified.headers.get("set-cookie")).toContain(
       "__Secure-skillplane.session=",

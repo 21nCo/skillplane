@@ -4,6 +4,7 @@ import type { MiddlewareHandler } from "hono";
 import type { ApiEnvironment, ApiServiceProvider } from "../context.js";
 import { authenticateServicePrincipalRequest } from "../service-principal-auth.js";
 import { ensurePersonalWorkspace } from "../tenancy.js";
+import { selectInitialWorkspaceRegion } from "@skillplane/control-plane";
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
@@ -64,7 +65,11 @@ export function authenticationMiddleware(
         : await services.auth.provider.authenticate(context.req.raw);
       context.set("session", session);
       if (session) {
-        await ensurePersonalWorkspace(services.database.pool, session);
+        await ensurePersonalWorkspace(
+          services.controlDatabase.pool,
+          session,
+          selectInitialWorkspaceRegion(session.actorId, services.workspaceRegions),
+        );
       }
       enforceCookieCsrf(context.req.raw, Boolean(session), Boolean(servicePrincipal));
       await next();

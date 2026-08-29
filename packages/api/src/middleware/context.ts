@@ -11,7 +11,7 @@ export async function resolveWorkspaceRequestContext(
     throw new AuthenticationRequiredError();
   }
   return resolveUserPrincipal(
-    services.database.pool,
+    services.controlDatabase.pool,
     context.get("session"),
     context.req.header("x-skillplane-workspace-id"),
   );

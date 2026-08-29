@@ -1,4 +1,4 @@
-import type { AuthFnSession } from "@authfn/core";
+import type { AuthFnSession } from "authfn";
 import type { SkillplaneAuthServer } from "@skillplane/auth";
 import type { RuntimeBindings } from "@skillplane/config";
 import type { DatabaseClient } from "@skillplane/db";
@@ -19,14 +19,21 @@ import type { DatafnServer } from "@datafn/server";
 import type { SkillplaneDatafnContext } from "@skillplane/datafn";
 import type { SkillplaneSendFn } from "@skillplane/email";
 import type { R2BundleRepository } from "@skillplane/storage";
+import type { PublicSkillProjectionService } from "./public-projections.js";
 
 export interface ApiServices {
+  /** Regional workspace database, or the combined database in compatibility mode. */
   readonly database: DatabaseClient;
+  /** Global identity, membership, OAuth, placement, and projection authority. */
+  readonly controlDatabase: DatabaseClient;
+  readonly workspaceRegions: readonly string[];
+  readonly deploymentRole: "single" | "gateway" | "control" | "cell";
   readonly auth: SkillplaneAuthServer;
   readonly email: SkillplaneSendFn | null;
   readonly datafn: DatafnServer<SkillplaneDatafnContext>;
   readonly tenancySecret: string;
   readonly bundleStorage: R2BundleRepository;
+  readonly publicProjectionService: PublicSkillProjectionService | null;
   readonly skillService: SkillService;
   readonly amendmentService: AmendmentService;
   readonly amendmentPolicyService: AmendmentPolicyService;

@@ -3,6 +3,7 @@ import { skillFileResponse } from "@skillplane/storage";
 import type { Hono } from "hono";
 import type { ApiEnvironment } from "../context.js";
 import { success } from "../envelopes.js";
+import { registerResourceRoutes } from "../resource-routing.js";
 import {
   parseStringField,
   publicSkillVersion,
@@ -50,6 +51,9 @@ export function registerSkillVersionRoutes(app: Hono<ApiEnvironment>): void {
       idempotencyKey: requireIdempotencyKey(context),
       requestId: context.get("requestId"),
     });
+    await registerResourceRoutes(services, principal.workspaceId, [
+      { resourceType: "skill_version", resourceId: version.id },
+    ]);
     context.header("Cache-Control", "private, no-store");
     return context.json(
       success(context, { version: publicSkillVersion(version) }),
@@ -185,6 +189,7 @@ export function registerSkillVersionRoutes(app: Hono<ApiEnvironment>): void {
       principal: requirePrincipal(context),
       idempotencyKey: requireIdempotencyKey(context),
       requestId: context.get("requestId"),
+      fencingEpoch: Number(context.req.header("x-skillplane-routing-epoch") ?? "1"),
     });
     context.header("Cache-Control", "private, no-store");
     return context.json(success(context, { version: publicSkillVersion(version) }));

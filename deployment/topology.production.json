@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "mode": "multi-cell",
+  "public": {
+    "appAuthority": "https://app.skillplane.dev",
+    "mcpResource": "https://mcp.skillplane.dev/mcp"
+  },
+  "controlPlane": {
+    "regionId": "global",
+    "databaseBinding": "CONTROL_HYPERDRIVE",
+    "publicObjectStorageBinding": "PUBLIC_SKILL_BUNDLES",
+    "issuer": "https://app.skillplane.dev",
+    "oauthResource": "https://mcp.skillplane.dev/mcp"
+  },
+  "cells": [
+    {
+      "regionId": "in-south",
+      "databaseBinding": "CELL_IN_SOUTH_HYPERDRIVE",
+      "objectStorageBinding": "CELL_IN_SOUTH_BUNDLES",
+      "appServiceBinding": "CELL_IN_SOUTH_APP",
+      "mcpServiceBinding": "CELL_IN_SOUTH_MCP",
+      "publiclyRoutable": false
+    },
+    {
+      "regionId": "us-east",
+      "databaseBinding": "CELL_US_EAST_HYPERDRIVE",
+      "objectStorageBinding": "CELL_US_EAST_BUNDLES",
+      "appServiceBinding": "CELL_US_EAST_APP",
+      "mcpServiceBinding": "CELL_US_EAST_MCP",
+      "publiclyRoutable": false
+    }
+  ],
+  "routing": {
+    "activeKeyId": "current",
+    "verificationKeyIds": ["current", "previous"],
+    "assertionAudience": "skillplane-cell",
+    "assertionTtlSeconds": 20
+  }
+}

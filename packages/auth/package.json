@@ -22,9 +22,12 @@
     "test:security": "vitest run --exclude 'dist/**' tests/security"
   },
   "dependencies": {
-    "@authfn/core": "catalog:",
+    "@authfn/api-keys": "catalog:",
+    "@authfn/email-otp": "catalog:",
+    "@authfn/multi-region": "catalog:",
     "@skillplane/authfn-mcp-oauth": "workspace:*",
     "@skillplane/db": "workspace:*",
+    "authfn": "catalog:",
     "hono": "catalog:",
     "pg": "catalog:"
   },

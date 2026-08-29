@@ -9,21 +9,27 @@ catalogs:
     '@21n/fonts':
       specifier: 1.0.1
       version: 1.0.1
-    '@authfn/core':
+    '@authfn/api-keys':
+      specifier: 0.1.1
+      version: 0.1.1
+    '@authfn/email-otp':
+      specifier: 0.1.1
+      version: 0.1.1
+    '@authfn/multi-region':
       specifier: 0.1.1
       version: 0.1.1
     '@axe-core/playwright':
       specifier: 4.12.1
       version: 4.12.1
     '@datafn/client':
-      specifier: 0.0.3
-      version: 0.0.3
+      specifier: 0.1.0
+      version: 0.1.0
     '@datafn/core':
-      specifier: 0.0.3
-      version: 0.0.3
+      specifier: 0.1.0
+      version: 0.1.0
     '@datafn/server':
-      specifier: 0.0.3
-      version: 0.0.3
+      specifier: 0.1.0
+      version: 0.1.0
     '@fontsource-variable/dm-sans':
       specifier: 5.3.0
       version: 5.3.0
@@ -40,8 +46,8 @@ catalogs:
       specifier: 1.62.0
       version: 1.62.0
     '@superfunctions/db':
-      specifier: 0.1.4
-      version: 0.1.4
+      specifier: 0.2.0
+      version: 0.2.0
     '@sveltejs/adapter-cloudflare':
       specifier: 7.2.9
       version: 7.2.9
@@ -69,6 +75,9 @@ catalogs:
     '@types/react-dom':
       specifier: 19.2.3
       version: 19.2.3
+    authfn:
+      specifier: 0.2.0
+      version: 0.2.0
     diff:
       specifier: 9.0.0
       version: 9.0.0
@@ -327,7 +336,7 @@ importers:
     dependencies:
       '@mcpfn/auth':
         specifier: 0.0.2
-        version: 0.0.2(@superfunctions/auth@0.1.2)(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))(hono@4.12.32)(zod@4.4.3)
+        version: 0.0.2(@superfunctions/auth@0.2.0)(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))(hono@4.12.32)(zod@4.4.3)
       '@mcpfn/core':
         specifier: 0.0.2
         version: 0.0.2(hono@4.12.32)(zod@4.4.3)
@@ -346,6 +355,9 @@ importers:
       '@skillplane/config':
         specifier: workspace:*
         version: link:../packages/config
+      '@skillplane/control-plane':
+        specifier: workspace:*
+        version: link:../packages/control-plane
       '@skillplane/domain':
         specifier: workspace:*
         version: link:../packages/domain
@@ -395,18 +407,18 @@ importers:
 
   packages/api:
     dependencies:
-      '@authfn/core':
-        specifier: 'catalog:'
-        version: 0.1.1(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
       '@datafn/server':
         specifier: 'catalog:'
-        version: 0.0.3(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
+        version: 0.1.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
       '@skillplane/auth':
         specifier: workspace:*
         version: link:../auth
       '@skillplane/config':
         specifier: workspace:*
         version: link:../config
+      '@skillplane/control-plane':
+        specifier: workspace:*
+        version: link:../control-plane
       '@skillplane/datafn':
         specifier: workspace:*
         version: link:../datafn
@@ -425,6 +437,9 @@ importers:
       '@skillplane/storage':
         specifier: workspace:*
         version: link:../storage
+      authfn:
+        specifier: 'catalog:'
+        version: 0.2.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
       hono:
         specifier: 'catalog:'
         version: 4.12.32
@@ -447,7 +462,13 @@ importers:
 
   packages/auth:
     dependencies:
-      '@authfn/core':
+      '@authfn/api-keys':
+        specifier: 'catalog:'
+        version: 0.1.1(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
+      '@authfn/email-otp':
+        specifier: 'catalog:'
+        version: 0.1.1(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
+      '@authfn/multi-region':
         specifier: 'catalog:'
         version: 0.1.1(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
       '@skillplane/authfn-mcp-oauth':
@@ -456,6 +477,9 @@ importers:
       '@skillplane/db':
         specifier: workspace:*
         version: link:../db
+      authfn:
+        specifier: 'catalog:'
+        version: 0.2.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
       hono:
         specifier: 'catalog:'
         version: 4.12.32
@@ -478,12 +502,9 @@ importers:
 
   packages/authfn-mcp-oauth:
     dependencies:
-      '@authfn/core':
-        specifier: 'catalog:'
-        version: 0.1.1(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
       '@mcpfn/auth':
         specifier: 0.0.2
-        version: 0.0.2(@superfunctions/auth@0.1.2)(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))(hono@4.12.32)(zod@4.4.3)
+        version: 0.0.2(@superfunctions/auth@0.2.0)(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))(hono@4.12.32)(zod@4.4.3)
       '@skillplane/db':
         specifier: workspace:*
         version: link:../db
@@ -492,7 +513,10 @@ importers:
         version: link:../observability
       '@superfunctions/db':
         specifier: 'catalog:'
-        version: 0.1.4(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
+        version: 0.2.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
+      authfn:
+        specifier: 'catalog:'
+        version: 0.2.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
       pg:
         specifier: 'catalog:'
         version: 8.22.0
@@ -509,6 +533,28 @@ importers:
 
   packages/config:
     dependencies:
+      '@skillplane/control-plane':
+        specifier: workspace:*
+        version: link:../control-plane
+      zod:
+        specifier: 'catalog:'
+        version: 4.4.3
+    devDependencies:
+      typescript:
+        specifier: 'catalog:'
+        version: 6.0.3
+      vitest:
+        specifier: 'catalog:'
+        version: 4.1.10(@opentelemetry/api@1.9.1)(@types/node@22.20.1)(vite@8.1.5(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.16.9)(tsx@4.23.1)(yaml@2.9.0))
+
+  packages/control-plane:
+    dependencies:
+      '@datafn/server':
+        specifier: 'catalog:'
+        version: 0.1.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
+      '@superfunctions/db':
+        specifier: 'catalog:'
+        version: 0.2.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
       zod:
         specifier: 'catalog:'
         version: 4.4.3
@@ -522,18 +568,15 @@ importers:
 
   packages/datafn:
     dependencies:
-      '@authfn/core':
-        specifier: 'catalog:'
-        version: 0.1.1(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
       '@datafn/client':
         specifier: 'catalog:'
-        version: 0.0.3
+        version: 0.1.0
       '@datafn/core':
         specifier: 'catalog:'
-        version: 0.0.3
+        version: 0.1.0
       '@datafn/server':
         specifier: 'catalog:'
-        version: 0.0.3(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
+        version: 0.1.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
       '@skillplane/db':
         specifier: workspace:*
         version: link:../db
@@ -542,7 +585,10 @@ importers:
         version: link:../domain
       '@superfunctions/db':
         specifier: 'catalog:'
-        version: 0.1.4(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
+        version: 0.2.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
+      authfn:
+        specifier: 'catalog:'
+        version: 0.2.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
       pg:
         specifier: 'catalog:'
         version: 8.22.0
@@ -562,7 +608,13 @@ importers:
 
   packages/db:
     dependencies:
-      '@authfn/core':
+      '@authfn/api-keys':
+        specifier: 'catalog:'
+        version: 0.1.1(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
+      '@authfn/email-otp':
+        specifier: 'catalog:'
+        version: 0.1.1(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
+      '@authfn/multi-region':
         specifier: 'catalog:'
         version: 0.1.1(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
       '@skillplane/config':
@@ -573,7 +625,10 @@ importers:
         version: link:../domain
       '@superfunctions/db':
         specifier: 'catalog:'
-        version: 0.1.4(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
+        version: 0.2.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
+      authfn:
+        specifier: 'catalog:'
+        version: 0.2.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
       drizzle-orm:
         specifier: 'catalog:'
         version: 0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0)
@@ -621,9 +676,9 @@ importers:
 
   packages/email:
     dependencies:
-      '@authfn/core':
+      authfn:
         specifier: 'catalog:'
-        version: 0.1.1(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
+        version: 0.2.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
       sendfn:
         specifier: 'catalog:'
         version: 0.0.2(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
@@ -685,9 +740,6 @@ importers:
 
   packages/testing:
     dependencies:
-      '@authfn/core':
-        specifier: 'catalog:'
-        version: 0.1.1(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
       '@skillplane/auth':
         specifier: workspace:*
         version: link:../auth
@@ -706,6 +758,9 @@ importers:
       '@skillplane/storage':
         specifier: workspace:*
         version: link:../storage
+      authfn:
+        specifier: 'catalog:'
+        version: 0.2.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
       fflate:
         specifier: 'catalog:'
         version: 0.8.3
@@ -850,8 +905,14 @@ packages:
     resolution: {integrity: sha512-hJA62OeBKUQT68DD2gDyhOqJxZxycqg8wLxbqjgqSzYttCMSDL9tiAQ9abgekBYNHudbJosm9sWOEbmCDfpX2A==}
     engines: {node: '>= 10'}
 
-  '@authfn/core@0.1.1':
-    resolution: {integrity: sha512-xWl7a2n9nmIQ6vpXyLqNp2nPVvYr1xza12xz3W/+q3HeLMi4dab5XNuv+ERJpQ0oQO0j8EPy6qbAP5mqgr+Pfw==}
+  '@authfn/api-keys@0.1.1':
+    resolution: {integrity: sha512-jElGOelDr1Qjj3NwfOZ1PH9r9plwZiltTC4dhIc2Ob4OrSTVR2WN58tAThcIBLlKsgbRGP/boiXJWqROQZYPgA==}
+
+  '@authfn/email-otp@0.1.1':
+    resolution: {integrity: sha512-IIx60/tqJ6h5eaxtONo5jflVaj2yhySxDUWOopVAuP1c9YlejoRTviYgoppsRjkCZ1Mrga6gngplGtXvMasEyQ==}
+
+  '@authfn/multi-region@0.1.1':
+    resolution: {integrity: sha512-QLstm0vqubJEmat46+iSy86Ob9AewLT/Ho7XzJMa5gJco2SPAdz8rvB7EnLcCIEeH1SGSfEM3fvSS+4tnvVkSQ==}
 
   '@aws-crypto/sha1-browser@5.2.0':
     resolution: {integrity: sha512-OH6lveCFfcDjX4dbAvCFSYUjJZjDr/3XJ3xHtjn3Oj5b9RjojQo8npoLeA/bNwkOkrSQ0wgrHzXk4tDRxGKJeg==}
@@ -899,13 +960,6 @@ packages:
 
   '@aws-sdk/core@3.977.1':
     resolution: {integrity: sha512-KVtQRtc00ES/y+Sc3vYXeP6pCIcNlBJCZOwvqSy8ZpVGmbM5+IG+AfhuTKQ2oXmIVqZJewaGMMpzPkywC6xg0w==}
-    engines: {node: '>=20.0.0'}
-    deprecated: |-
-      Deprecated due to Document number parsing bug in JSON, see
-        https://github.com/aws/aws-sdk-js-v3/issues/8246. Newer version available.
-
-  '@aws-sdk/core@3.977.4':
-    resolution: {integrity: sha512-CEkcQlMOQJCvul60U7wdAOACjtdgFWDsfJI+6wUOGdhGNV2lGbuJpi/R50QLpFG3Tp+sQxa/RmzC3X7KHbhuTA==}
     engines: {node: '>=20.0.0'}
     deprecated: |-
       Deprecated due to Document number parsing bug in JSON, see
@@ -1021,10 +1075,6 @@ packages:
     resolution: {integrity: sha512-TaWbfYCwnuOSvDSrgs7QgoaoXse49E7LzUkVOUhoezwB7bkmhp+iojADm7UepCEu4021SquD7NG1xA+WCvmldA==}
     engines: {node: '>=20.0.0'}
 
-  '@aws-sdk/signature-v4-multi-region@3.996.42':
-    resolution: {integrity: sha512-DBV4naZP6HYBlAvPpoQzOP12Wvfou/5rN8yJPXjBTBylU5qwCbh/tXr2MddHoIjgoRkEl/eS+IljiUqvmwey1Q==}
-    engines: {node: '>=20.0.0'}
-
   '@aws-sdk/signature-v4-multi-region@3.996.43':
     resolution: {integrity: sha512-lKekx8bLBXSv4O+cslk9Zfnw2XKSkWBs3uWL5QGhH2ZAQfNS7FE0vcSSN2vD/AhxX54ZTywWxR4STThoeOXlBA==}
     engines: {node: '>=20.0.0'}
@@ -1132,15 +1182,15 @@ packages:
     resolution: {integrity: sha512-IchNf6dN4tHoMFIn/7OE8LWZ19Y6q/67Bmf6vnGREv8RSbBVb9LPJxEcnwrcwX6ixSvaiGoomAUvu4YSxXrVgw==}
     engines: {node: '>=12'}
 
-  '@datafn/client@0.0.3':
-    resolution: {integrity: sha512-u0aLxccu7OiQfzOfviuHKIOgkqZ/BqxYDw4/1fnOAo9ioGXuYHtbjbW41VH/RZUiKlvI5E59RIONtYqWSqRCeQ==}
+  '@datafn/client@0.1.0':
+    resolution: {integrity: sha512-ITYg9/lfK+jnHiZ8NNdo4ocsdsyAbQnAFPb8EZr5zr8MxyNpXuq5Eo6DuGnWw8uT6nWvVXM3DepRRKXDrtg8LA==}
 
-  '@datafn/core@0.0.3':
-    resolution: {integrity: sha512-+BsVb9TjLoYK92s6jLE0GMQlMviFZ9rn4evGpPlygB4wB7Ni3K++gRPQLgDeCbIpFDpGQSNzL+dxuOciY9vo/w==}
+  '@datafn/core@0.1.0':
+    resolution: {integrity: sha512-23m5c1bqkATc8IdqS6BIHktClkNcSHW+9pTcanov4q++GKx6gOQ09oIA1DHToqDD9fPyFK3iW0Nh5syaM3aDgA==}
     engines: {node: '>=18.18.0'}
 
-  '@datafn/server@0.0.3':
-    resolution: {integrity: sha512-kiviPVSK7drsT7ZR3XU2bcbKMdVxj4iKViR5MRCXQuxDmjYexCUIs5lH6iK6zXCDQf3H47KCxCr+bfHPAYjvgA==}
+  '@datafn/server@0.1.0':
+    resolution: {integrity: sha512-fzbsZl2JiCxyyCHnEGZDfNP7fUMcBRvpJEcqM8hTascinekN3cP3ONwbJVIHUvi54WHqY3QjLfRNid0iA8Kdvw==}
     engines: {node: '>=18.18.0'}
 
   '@dotenvx/dotenvx@1.31.0':
@@ -3016,10 +3066,6 @@ packages:
     resolution: {integrity: sha512-dl2yRglDxfzH9uJ4fSo4zTaAHa0zH7+V7BZMRWy8hEYIKT1BiqMUK/CN6T3ADQ3kbA5N1tmUulroJ2UtONS7Kw==}
     engines: {node: '>=18.0.0'}
 
-  '@smithy/core@3.31.1':
-    resolution: {integrity: sha512-CyogUINxvi7C7LDsh8Syo6hVJOT9ckz4rG8dRZfTJ8r91HkMY59PnNooaj7WcHyxEkxPfBAmbgztZU+xTo76lg==}
-    engines: {node: '>=18.0.0'}
-
   '@smithy/core@3.33.3':
     resolution: {integrity: sha512-CsOeKq/9kA3y6VJHt+/+VTCtBaxJ4OTFpgrjIUhPpDIKxBci1k2bJaQASF2h/ELWrulGp+t97DZ0mevfAD8idg==}
     engines: {node: '>=18.0.0'}
@@ -3182,8 +3228,8 @@ packages:
   '@standard-schema/spec@1.1.0':
     resolution: {integrity: sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w==}
 
-  '@superfunctions/auth@0.1.2':
-    resolution: {integrity: sha512-H4PNnKz9D9+2zwWwZcSOCfdSp5h1vjP/QK5t0w0WEPd/VTdpmZ+VeBd/Sx60HRAuQmfjrYPFLY2t6Z6AEE/ukg==}
+  '@superfunctions/auth@0.2.0':
+    resolution: {integrity: sha512-e2Iz3Nf4IyiKr0dU0AgyGARzMchJbWW/sBYsjjdm9TW+EmFKAyYViJP0yXbgrHb9Xa3Ke2wzFMvRpX692u6jHA==}
 
   '@superfunctions/db@0.1.3':
     resolution: {integrity: sha512-GfinBRUGY6wwOo5cZ3C5pdndECyDfUb3K3VE6egQeKbcWh7hMZIfyIUoGdvrTb2rqTQixcgr6GO1Hpv9BNfrNw==}
@@ -3196,21 +3242,6 @@ packages:
       '@prisma/client':
         optional: true
       drizzle-orm:
-        optional: true
-      kysely:
-        optional: true
-      mongodb:
-        optional: true
-
-  '@superfunctions/db@0.1.4':
-    resolution: {integrity: sha512-b/E1VZd2TMLjzn3yT3RfOnlTyNvi24Y8NYJjIeSqv/PivnTLxqfuXCf/L874Ez9lvSElpZhqabjrWVgJN9JSCg==}
-    peerDependencies:
-      '@prisma/client': '>=6.0.0'
-      drizzle-orm: '>=0.35.0'
-      kysely: '>=0.28.0'
-      mongodb: '>=6.0.0'
-    peerDependenciesMeta:
-      '@prisma/client':
         optional: true
       kysely:
         optional: true
@@ -3232,33 +3263,21 @@ packages:
       mongodb:
         optional: true
 
-  '@superfunctions/http-openapi@0.0.1':
-    resolution: {integrity: sha512-Pva4r5vXy1h1a/shdsn9vzU4pfJpPwk9cNNXtM2OEbmDboTsaQ1ZGmrROYn/L6OE7eHidVETcRoWHFAp4TbMDw==}
+  '@superfunctions/delivery@0.1.0':
+    resolution: {integrity: sha512-ZszY8CArsOgl36eWLHUPMT12o3Q9gaOoFK70vG8cqXqt3GIxPG+YJNRu9hA3Eq8e0hVjbVSqrD0zXGxtTo0wLA==}
+
+  '@superfunctions/http-openapi@0.1.0':
+    resolution: {integrity: sha512-eGVHy2f4L6RlBVhW9/zkowdir6OHP6LMNXnVLMt2asg8QWkFOgOmxsNmGnQyLNXRmw3asS/gISIouPjAFExNog==}
 
   '@superfunctions/http@0.1.2':
     resolution: {integrity: sha512-6Zuw9A/+XqReK7RqI7I5/PKkJgH9a9a2q/PYBxk7/Aj5fPhMOVM/K1ZPOcdXgtsef3ZGJlaMhxdaie2zbH7BcQ==}
 
-  '@superfunctions/http@0.1.3':
-    resolution: {integrity: sha512-gGn6hyUxbFBFG6Q+mwHFMVL0w1CTbEhqY5UJ5CMkwP0ZFoYlcIcqyIzy7dGBiDmMso4Rz+PLvtrX9jsylcS0bg==}
-
-  '@superfunctions/oauth-core@0.0.1':
-    resolution: {integrity: sha512-rInZ3CdZ5oGmV5FuZ/lqJm6SPj8nSRW+qqKq1PWgTOtd0mLCQzQBAiDxhRnfofetQjCHA/8KKTCbjYz0B2sPTA==}
+  '@superfunctions/http@0.2.0':
+    resolution: {integrity: sha512-t4vDDXGu+h0/Yjn0KiEYuNsNB84JyOAJToZaYodDtAHIT3HVAIT6GbSxMOQJV83gw8XxyuCE8JqhFqKXFGfmog==}
 
   '@superfunctions/oauth-core@0.1.1':
     resolution: {integrity: sha512-+ebX7P4vwFfPKehLTpsvpVpxlKoONECFJgciuGdug0tkYnz6pmVXzNCWVb4NDDfyPHo/W76Z17PPbV2afuVEww==}
     engines: {node: '>=18.18.0'}
-
-  '@superfunctions/oauth-flow@0.0.1':
-    resolution: {integrity: sha512-V2n6iQR8y0eJ/DfzgzIiMzKcJHNk5tRB7+b7Q5TYe8Fk6mpIV8aLTJ1lmHOgIzellYu8Xm7m+TObZ5YmKWCUSw==}
-
-  '@superfunctions/oauth-http@0.0.1':
-    resolution: {integrity: sha512-WHiDO7y20T+fducaCC40LbfUqoObQBeUnfdwGInSTf7w9TF0z0lc2FzqKeX7xEFM4z0E2OE4o+7h1jjZ7M8DYw==}
-
-  '@superfunctions/oauth-providers@0.0.1':
-    resolution: {integrity: sha512-RCZBtur+lic4zhTLd8Zpd7QY92+dPf8fOaSGCfyRo+7L7skjVhgeoeUKx5zkXc/pU8NyMHeRU7Nq9TYxqZnTxg==}
-
-  '@superfunctions/oauth-storage@0.0.1':
-    resolution: {integrity: sha512-FPPIjR0sPba51hCZqme+94P6r+N45sMbqjpDOQ4NiuU6wJjAwwvsbhD31zODv9y4P6Bk+z6/B0Ud+sUfjy8/yQ==}
 
   '@superfunctions/oauth-storage@0.1.0':
     resolution: {integrity: sha512-0x7bMvGspqwD7TsBIQv6A4baxa7VJt5Wehf3Qx6sJ0ZHrWeIDp37Vj/pI7pfuMnXlDAU3/qooengFYWZChtcHA==}
@@ -3789,6 +3808,9 @@ packages:
 
   asynckit@0.4.0:
     resolution: {integrity: sha512-Oei9OH4tRh0YqU3GxhX79dM/mwVgvbZJaSNaRk+bshkj0S5cfHcgYakreBjrHwatXKbz+IoIdYLxrKim2MjW0Q==}
+
+  authfn@0.2.0:
+    resolution: {integrity: sha512-7mDFWQL95CDBwEM4L8HM90faGMBLY1Esq5I8/HCndFujW/SExRhhejLAubOspdTiwOUeRXIIAjIua0b2ZU7UDQ==}
 
   aws4fetch@1.0.20:
     resolution: {integrity: sha512-/djoAN709iY65ETD6LKCtyyEI04XIBP5xVvfmNxsEP0uJB5tyaGBztSryRr4HqMStr9R06PisQE7m9zDTXKu6g==}
@@ -4913,9 +4935,6 @@ packages:
 
   jose@4.15.9:
     resolution: {integrity: sha512-1vUQX+IdDMVPj4k8kOxgUqlcK518yluMuGZwqlr44FS1ppZB/5GWh4rZG89erpOBOJjU/OBsnCVFfapsRz6nEA==}
-
-  jose@5.10.0:
-    resolution: {integrity: sha512-s+3Al/p9g32Iq+oqXxkW//7jk2Vig6FF1CFqzVXoTUXt2qz89YWbL+OwS17NFYEvxC35n0FKeGO2LGYSxeM2Gg==}
 
   jose@6.2.4:
     resolution: {integrity: sha512-N8acGzVsQy6M/fjFcxtysNc4Q379TcM5dM/qKkNtsHFji88yANnXTr7BLeP75iPnFwBfQzM/jg2BZ9+HZrHCZA==}
@@ -6640,17 +6659,31 @@ snapshots:
       '@ast-grep/napi-win32-ia32-msvc': 0.40.5
       '@ast-grep/napi-win32-x64-msvc': 0.40.5
 
-  '@authfn/core@0.1.1(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))':
+  '@authfn/api-keys@0.1.1(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))':
     dependencies:
-      '@superfunctions/auth': 0.1.2
-      '@superfunctions/db': 0.1.4(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
-      '@superfunctions/http': 0.1.3
-      '@superfunctions/http-openapi': 0.0.1
-      '@superfunctions/oauth-flow': 0.0.1(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
-      '@superfunctions/oauth-http': 0.0.1(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
-      '@superfunctions/oauth-providers': 0.0.1(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
-      '@superfunctions/oauth-storage': 0.0.1(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
-      jose: 5.10.0
+      '@superfunctions/http': 0.2.0
+      authfn: 0.2.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
+    transitivePeerDependencies:
+      - '@prisma/client'
+      - drizzle-orm
+      - kysely
+      - mongodb
+
+  '@authfn/email-otp@0.1.1(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))':
+    dependencies:
+      '@superfunctions/http': 0.2.0
+      authfn: 0.2.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
+    transitivePeerDependencies:
+      - '@prisma/client'
+      - drizzle-orm
+      - kysely
+      - mongodb
+
+  '@authfn/multi-region@0.1.1(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))':
+    dependencies:
+      '@superfunctions/http': 0.2.0
+      '@superfunctions/observability': 0.0.1
+      authfn: 0.2.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
     transitivePeerDependencies:
       - '@prisma/client'
       - drizzle-orm
@@ -6661,7 +6694,7 @@ snapshots:
     dependencies:
       '@aws-crypto/supports-web-crypto': 5.2.0
       '@aws-crypto/util': 5.2.0
-      '@aws-sdk/types': 3.974.2
+      '@aws-sdk/types': 3.974.5
       '@aws-sdk/util-locate-window': 3.965.8
       '@smithy/util-utf8': 2.3.0
       tslib: 2.8.1
@@ -6671,7 +6704,7 @@ snapshots:
       '@aws-crypto/sha256-js': 5.2.0
       '@aws-crypto/supports-web-crypto': 5.2.0
       '@aws-crypto/util': 5.2.0
-      '@aws-sdk/types': 3.974.2
+      '@aws-sdk/types': 3.974.5
       '@aws-sdk/util-locate-window': 3.965.8
       '@smithy/util-utf8': 2.3.0
       tslib: 2.8.1
@@ -6679,7 +6712,7 @@ snapshots:
   '@aws-crypto/sha256-js@5.2.0':
     dependencies:
       '@aws-crypto/util': 5.2.0
-      '@aws-sdk/types': 3.974.2
+      '@aws-sdk/types': 3.974.5
       tslib: 2.8.1
 
   '@aws-crypto/supports-web-crypto@5.2.0':
@@ -6688,35 +6721,35 @@ snapshots:
 
   '@aws-crypto/util@5.2.0':
     dependencies:
-      '@aws-sdk/types': 3.974.2
+      '@aws-sdk/types': 3.974.5
       '@smithy/util-utf8': 2.3.0
       tslib: 2.8.1
 
   '@aws-sdk/checksums@3.1000.24':
     dependencies:
-      '@aws-sdk/core': 3.977.4
-      '@aws-sdk/types': 3.974.2
-      '@smithy/core': 3.31.1
-      '@smithy/types': 4.16.1
+      '@aws-sdk/core': 3.977.9
+      '@aws-sdk/types': 3.974.5
+      '@smithy/core': 3.33.3
+      '@smithy/types': 4.17.2
       tslib: 2.8.1
 
   '@aws-sdk/client-cloudfront@3.984.0':
     dependencies:
       '@aws-crypto/sha256-browser': 5.2.0
       '@aws-crypto/sha256-js': 5.2.0
-      '@aws-sdk/core': 3.977.1
+      '@aws-sdk/core': 3.977.9
       '@aws-sdk/credential-provider-node': 3.972.72
       '@aws-sdk/middleware-host-header': 3.972.40
       '@aws-sdk/middleware-logger': 3.972.39
       '@aws-sdk/middleware-recursion-detection': 3.972.41
       '@aws-sdk/middleware-user-agent': 3.972.69
       '@aws-sdk/region-config-resolver': 3.972.43
-      '@aws-sdk/types': 3.974.2
+      '@aws-sdk/types': 3.974.5
       '@aws-sdk/util-endpoints': 3.984.0
       '@aws-sdk/util-user-agent-browser': 3.972.40
       '@aws-sdk/util-user-agent-node': 3.973.55
       '@smithy/config-resolver': 4.6.16
-      '@smithy/core': 3.30.0
+      '@smithy/core': 3.33.3
       '@smithy/fetch-http-handler': 5.6.11
       '@smithy/hash-node': 4.4.16
       '@smithy/invalid-dependency': 4.4.16
@@ -6729,7 +6762,7 @@ snapshots:
       '@smithy/node-http-handler': 4.9.11
       '@smithy/protocol-http': 5.5.16
       '@smithy/smithy-client': 4.14.16
-      '@smithy/types': 4.16.1
+      '@smithy/types': 4.17.2
       '@smithy/url-parser': 4.4.16
       '@smithy/util-base64': 4.5.16
       '@smithy/util-body-length-browser': 4.4.16
@@ -6748,7 +6781,7 @@ snapshots:
     dependencies:
       '@aws-crypto/sha256-browser': 5.2.0
       '@aws-crypto/sha256-js': 5.2.0
-      '@aws-sdk/core': 3.977.1
+      '@aws-sdk/core': 3.977.9
       '@aws-sdk/credential-provider-node': 3.972.72
       '@aws-sdk/dynamodb-codec': 3.973.39
       '@aws-sdk/middleware-endpoint-discovery': 3.972.27
@@ -6757,12 +6790,12 @@ snapshots:
       '@aws-sdk/middleware-recursion-detection': 3.972.41
       '@aws-sdk/middleware-user-agent': 3.972.69
       '@aws-sdk/region-config-resolver': 3.972.43
-      '@aws-sdk/types': 3.974.2
+      '@aws-sdk/types': 3.974.5
       '@aws-sdk/util-endpoints': 3.984.0
       '@aws-sdk/util-user-agent-browser': 3.972.40
       '@aws-sdk/util-user-agent-node': 3.973.55
       '@smithy/config-resolver': 4.6.16
-      '@smithy/core': 3.30.0
+      '@smithy/core': 3.33.3
       '@smithy/fetch-http-handler': 5.6.11
       '@smithy/hash-node': 4.4.16
       '@smithy/invalid-dependency': 4.4.16
@@ -6775,7 +6808,7 @@ snapshots:
       '@smithy/node-http-handler': 4.9.11
       '@smithy/protocol-http': 5.5.16
       '@smithy/smithy-client': 4.14.16
-      '@smithy/types': 4.16.1
+      '@smithy/types': 4.17.2
       '@smithy/url-parser': 4.4.16
       '@smithy/util-base64': 4.5.16
       '@smithy/util-body-length-browser': 4.4.16
@@ -6793,19 +6826,19 @@ snapshots:
     dependencies:
       '@aws-crypto/sha256-browser': 5.2.0
       '@aws-crypto/sha256-js': 5.2.0
-      '@aws-sdk/core': 3.977.1
+      '@aws-sdk/core': 3.977.9
       '@aws-sdk/credential-provider-node': 3.972.72
       '@aws-sdk/middleware-host-header': 3.972.40
       '@aws-sdk/middleware-logger': 3.972.39
       '@aws-sdk/middleware-recursion-detection': 3.972.41
       '@aws-sdk/middleware-user-agent': 3.972.69
       '@aws-sdk/region-config-resolver': 3.972.43
-      '@aws-sdk/types': 3.974.2
+      '@aws-sdk/types': 3.974.5
       '@aws-sdk/util-endpoints': 3.984.0
       '@aws-sdk/util-user-agent-browser': 3.972.40
       '@aws-sdk/util-user-agent-node': 3.973.55
       '@smithy/config-resolver': 4.6.16
-      '@smithy/core': 3.30.0
+      '@smithy/core': 3.33.3
       '@smithy/eventstream-serde-browser': 4.4.16
       '@smithy/eventstream-serde-config-resolver': 4.5.16
       '@smithy/eventstream-serde-node': 4.4.16
@@ -6821,7 +6854,7 @@ snapshots:
       '@smithy/node-http-handler': 4.9.11
       '@smithy/protocol-http': 5.5.16
       '@smithy/smithy-client': 4.14.16
-      '@smithy/types': 4.16.1
+      '@smithy/types': 4.17.2
       '@smithy/url-parser': 4.4.16
       '@smithy/util-base64': 4.5.16
       '@smithy/util-body-length-browser': 4.4.16
@@ -6841,7 +6874,7 @@ snapshots:
       '@aws-crypto/sha1-browser': 5.2.0
       '@aws-crypto/sha256-browser': 5.2.0
       '@aws-crypto/sha256-js': 5.2.0
-      '@aws-sdk/core': 3.977.1
+      '@aws-sdk/core': 3.977.9
       '@aws-sdk/credential-provider-node': 3.972.72
       '@aws-sdk/middleware-bucket-endpoint': 3.972.43
       '@aws-sdk/middleware-expect-continue': 3.972.39
@@ -6855,12 +6888,12 @@ snapshots:
       '@aws-sdk/middleware-user-agent': 3.972.69
       '@aws-sdk/region-config-resolver': 3.972.43
       '@aws-sdk/signature-v4-multi-region': 3.984.0
-      '@aws-sdk/types': 3.974.2
+      '@aws-sdk/types': 3.974.5
       '@aws-sdk/util-endpoints': 3.984.0
       '@aws-sdk/util-user-agent-browser': 3.972.40
       '@aws-sdk/util-user-agent-node': 3.973.55
       '@smithy/config-resolver': 4.6.16
-      '@smithy/core': 3.30.0
+      '@smithy/core': 3.33.3
       '@smithy/eventstream-serde-browser': 4.4.16
       '@smithy/eventstream-serde-config-resolver': 4.5.16
       '@smithy/eventstream-serde-node': 4.4.16
@@ -6879,7 +6912,7 @@ snapshots:
       '@smithy/node-http-handler': 4.9.11
       '@smithy/protocol-http': 5.5.16
       '@smithy/smithy-client': 4.14.16
-      '@smithy/types': 4.16.1
+      '@smithy/types': 4.17.2
       '@smithy/url-parser': 4.4.16
       '@smithy/util-base64': 4.5.16
       '@smithy/util-body-length-browser': 4.4.16
@@ -6909,7 +6942,7 @@ snapshots:
     dependencies:
       '@aws-crypto/sha256-browser': 5.2.0
       '@aws-crypto/sha256-js': 5.2.0
-      '@aws-sdk/core': 3.977.1
+      '@aws-sdk/core': 3.977.9
       '@aws-sdk/credential-provider-node': 3.972.72
       '@aws-sdk/middleware-host-header': 3.972.40
       '@aws-sdk/middleware-logger': 3.972.39
@@ -6917,12 +6950,12 @@ snapshots:
       '@aws-sdk/middleware-sdk-sqs': 3.972.39
       '@aws-sdk/middleware-user-agent': 3.972.69
       '@aws-sdk/region-config-resolver': 3.972.43
-      '@aws-sdk/types': 3.974.2
+      '@aws-sdk/types': 3.974.5
       '@aws-sdk/util-endpoints': 3.984.0
       '@aws-sdk/util-user-agent-browser': 3.972.40
       '@aws-sdk/util-user-agent-node': 3.973.55
       '@smithy/config-resolver': 4.6.16
-      '@smithy/core': 3.30.0
+      '@smithy/core': 3.33.3
       '@smithy/fetch-http-handler': 5.6.11
       '@smithy/hash-node': 4.4.16
       '@smithy/invalid-dependency': 4.4.16
@@ -6936,7 +6969,7 @@ snapshots:
       '@smithy/node-http-handler': 4.9.11
       '@smithy/protocol-http': 5.5.16
       '@smithy/smithy-client': 4.14.16
-      '@smithy/types': 4.16.1
+      '@smithy/types': 4.17.2
       '@smithy/url-parser': 4.4.16
       '@smithy/util-base64': 4.5.16
       '@smithy/util-body-length-browser': 4.4.16
@@ -6960,17 +6993,6 @@ snapshots:
       bowser: 2.14.1
       tslib: 2.8.1
 
-  '@aws-sdk/core@3.977.4':
-    dependencies:
-      '@aws-sdk/types': 3.974.2
-      '@aws-sdk/xml-builder': 3.972.37
-      '@aws/lambda-invoke-store': 0.3.0
-      '@smithy/core': 3.31.1
-      '@smithy/signature-v4': 5.6.12
-      '@smithy/types': 4.16.1
-      bowser: 2.14.1
-      tslib: 2.8.1
-
   '@aws-sdk/core@3.977.9':
     dependencies:
       '@aws-sdk/types': 3.974.5
@@ -6984,25 +7006,25 @@ snapshots:
 
   '@aws-sdk/credential-provider-env@3.972.61':
     dependencies:
-      '@aws-sdk/core': 3.977.1
-      '@aws-sdk/types': 3.974.2
-      '@smithy/core': 3.30.0
-      '@smithy/types': 4.16.1
+      '@aws-sdk/core': 3.977.9
+      '@aws-sdk/types': 3.974.5
+      '@smithy/core': 3.33.3
+      '@smithy/types': 4.17.2
       tslib: 2.8.1
 
   '@aws-sdk/credential-provider-http@3.972.63':
     dependencies:
-      '@aws-sdk/core': 3.977.1
-      '@aws-sdk/types': 3.974.2
-      '@smithy/core': 3.30.0
+      '@aws-sdk/core': 3.977.9
+      '@aws-sdk/types': 3.974.5
+      '@smithy/core': 3.33.3
       '@smithy/fetch-http-handler': 5.6.11
       '@smithy/node-http-handler': 4.9.11
-      '@smithy/types': 4.16.1
+      '@smithy/types': 4.17.2
       tslib: 2.8.1
 
   '@aws-sdk/credential-provider-ini@3.973.6':
     dependencies:
-      '@aws-sdk/core': 3.977.1
+      '@aws-sdk/core': 3.977.9
       '@aws-sdk/credential-provider-env': 3.972.61
       '@aws-sdk/credential-provider-http': 3.972.63
       '@aws-sdk/credential-provider-login': 3.972.68
@@ -7010,19 +7032,19 @@ snapshots:
       '@aws-sdk/credential-provider-sso': 3.973.5
       '@aws-sdk/credential-provider-web-identity': 3.972.67
       '@aws-sdk/nested-clients': 3.997.35
-      '@aws-sdk/types': 3.974.2
-      '@smithy/core': 3.30.0
+      '@aws-sdk/types': 3.974.5
+      '@smithy/core': 3.33.3
       '@smithy/credential-provider-imds': 4.4.14
-      '@smithy/types': 4.16.1
+      '@smithy/types': 4.17.2
       tslib: 2.8.1
 
   '@aws-sdk/credential-provider-login@3.972.68':
     dependencies:
-      '@aws-sdk/core': 3.977.1
+      '@aws-sdk/core': 3.977.9
       '@aws-sdk/nested-clients': 3.997.35
-      '@aws-sdk/types': 3.974.2
-      '@smithy/core': 3.30.0
-      '@smithy/types': 4.16.1
+      '@aws-sdk/types': 3.974.5
+      '@smithy/core': 3.33.3
+      '@smithy/types': 4.17.2
       tslib: 2.8.1
 
   '@aws-sdk/credential-provider-node@3.972.72':
@@ -7033,44 +7055,44 @@ snapshots:
       '@aws-sdk/credential-provider-process': 3.972.61
       '@aws-sdk/credential-provider-sso': 3.973.5
       '@aws-sdk/credential-provider-web-identity': 3.972.67
-      '@aws-sdk/types': 3.974.2
-      '@smithy/core': 3.30.0
+      '@aws-sdk/types': 3.974.5
+      '@smithy/core': 3.33.3
       '@smithy/credential-provider-imds': 4.4.14
-      '@smithy/types': 4.16.1
+      '@smithy/types': 4.17.2
       tslib: 2.8.1
 
   '@aws-sdk/credential-provider-process@3.972.61':
     dependencies:
-      '@aws-sdk/core': 3.977.1
-      '@aws-sdk/types': 3.974.2
-      '@smithy/core': 3.30.0
-      '@smithy/types': 4.16.1
+      '@aws-sdk/core': 3.977.9
+      '@aws-sdk/types': 3.974.5
+      '@smithy/core': 3.33.3
+      '@smithy/types': 4.17.2
       tslib: 2.8.1
 
   '@aws-sdk/credential-provider-sso@3.973.5':
     dependencies:
-      '@aws-sdk/core': 3.977.1
+      '@aws-sdk/core': 3.977.9
       '@aws-sdk/nested-clients': 3.997.35
       '@aws-sdk/token-providers': 3.1095.0
-      '@aws-sdk/types': 3.974.2
-      '@smithy/core': 3.30.0
-      '@smithy/types': 4.16.1
+      '@aws-sdk/types': 3.974.5
+      '@smithy/core': 3.33.3
+      '@smithy/types': 4.17.2
       tslib: 2.8.1
 
   '@aws-sdk/credential-provider-web-identity@3.972.67':
     dependencies:
-      '@aws-sdk/core': 3.977.1
+      '@aws-sdk/core': 3.977.9
       '@aws-sdk/nested-clients': 3.997.35
-      '@aws-sdk/types': 3.974.2
-      '@smithy/core': 3.30.0
-      '@smithy/types': 4.16.1
+      '@aws-sdk/types': 3.974.5
+      '@smithy/core': 3.33.3
+      '@smithy/types': 4.17.2
       tslib: 2.8.1
 
   '@aws-sdk/dynamodb-codec@3.973.39':
     dependencies:
-      '@aws-sdk/core': 3.977.4
-      '@smithy/core': 3.31.1
-      '@smithy/types': 4.16.1
+      '@aws-sdk/core': 3.977.9
+      '@smithy/core': 3.33.3
+      '@smithy/types': 4.17.2
       tslib: 2.8.1
 
   '@aws-sdk/endpoint-cache@3.972.9':
@@ -7095,9 +7117,9 @@ snapshots:
   '@aws-sdk/middleware-endpoint-discovery@3.972.27':
     dependencies:
       '@aws-sdk/endpoint-cache': 3.972.9
-      '@aws-sdk/types': 3.974.2
-      '@smithy/core': 3.31.1
-      '@smithy/types': 4.16.1
+      '@aws-sdk/types': 3.974.5
+      '@smithy/core': 3.33.3
+      '@smithy/types': 4.17.2
       tslib: 2.8.1
 
   '@aws-sdk/middleware-expect-continue@3.972.39':
@@ -7112,7 +7134,7 @@ snapshots:
 
   '@aws-sdk/middleware-host-header@3.972.40':
     dependencies:
-      '@aws-sdk/core': 3.977.4
+      '@aws-sdk/core': 3.977.9
       tslib: 2.8.1
 
   '@aws-sdk/middleware-location-constraint@3.972.36':
@@ -7122,28 +7144,28 @@ snapshots:
 
   '@aws-sdk/middleware-logger@3.972.39':
     dependencies:
-      '@aws-sdk/core': 3.977.4
+      '@aws-sdk/core': 3.977.9
       tslib: 2.8.1
 
   '@aws-sdk/middleware-recursion-detection@3.972.41':
     dependencies:
-      '@aws-sdk/core': 3.977.4
+      '@aws-sdk/core': 3.977.9
       tslib: 2.8.1
 
   '@aws-sdk/middleware-sdk-s3@3.972.70':
     dependencies:
-      '@aws-sdk/core': 3.977.4
+      '@aws-sdk/core': 3.977.9
       '@aws-sdk/signature-v4-multi-region': 3.996.43
-      '@aws-sdk/types': 3.974.2
-      '@smithy/core': 3.31.1
-      '@smithy/types': 4.16.1
+      '@aws-sdk/types': 3.974.5
+      '@smithy/core': 3.33.3
+      '@smithy/types': 4.17.2
       tslib: 2.8.1
 
   '@aws-sdk/middleware-sdk-sqs@3.972.39':
     dependencies:
-      '@aws-sdk/types': 3.974.2
-      '@smithy/core': 3.31.1
-      '@smithy/types': 4.16.1
+      '@aws-sdk/types': 3.974.5
+      '@smithy/core': 3.33.3
+      '@smithy/types': 4.17.2
       tslib: 2.8.1
 
   '@aws-sdk/middleware-ssec@3.972.36':
@@ -7153,55 +7175,48 @@ snapshots:
 
   '@aws-sdk/middleware-user-agent@3.972.69':
     dependencies:
-      '@aws-sdk/core': 3.977.4
+      '@aws-sdk/core': 3.977.9
       tslib: 2.8.1
 
   '@aws-sdk/nested-clients@3.997.35':
     dependencies:
-      '@aws-sdk/core': 3.977.1
-      '@aws-sdk/signature-v4-multi-region': 3.996.42
-      '@aws-sdk/types': 3.974.2
-      '@smithy/core': 3.30.0
+      '@aws-sdk/core': 3.977.9
+      '@aws-sdk/signature-v4-multi-region': 3.996.43
+      '@aws-sdk/types': 3.974.5
+      '@smithy/core': 3.33.3
       '@smithy/fetch-http-handler': 5.6.11
       '@smithy/node-http-handler': 4.9.11
-      '@smithy/types': 4.16.1
+      '@smithy/types': 4.17.2
       tslib: 2.8.1
 
   '@aws-sdk/region-config-resolver@3.972.43':
     dependencies:
-      '@aws-sdk/core': 3.977.4
+      '@aws-sdk/core': 3.977.9
       tslib: 2.8.1
 
   '@aws-sdk/signature-v4-multi-region@3.984.0':
     dependencies:
       '@aws-sdk/middleware-sdk-s3': 3.972.70
-      '@aws-sdk/types': 3.974.2
+      '@aws-sdk/types': 3.974.5
       '@smithy/protocol-http': 5.5.16
       '@smithy/signature-v4': 5.6.10
-      '@smithy/types': 4.16.1
-      tslib: 2.8.1
-
-  '@aws-sdk/signature-v4-multi-region@3.996.42':
-    dependencies:
-      '@aws-sdk/types': 3.974.2
-      '@smithy/signature-v4': 5.6.12
-      '@smithy/types': 4.16.1
+      '@smithy/types': 4.17.2
       tslib: 2.8.1
 
   '@aws-sdk/signature-v4-multi-region@3.996.43':
     dependencies:
-      '@aws-sdk/types': 3.974.2
+      '@aws-sdk/types': 3.974.5
       '@smithy/signature-v4': 5.6.12
-      '@smithy/types': 4.16.1
+      '@smithy/types': 4.17.2
       tslib: 2.8.1
 
   '@aws-sdk/token-providers@3.1095.0':
     dependencies:
-      '@aws-sdk/core': 3.977.4
+      '@aws-sdk/core': 3.977.9
       '@aws-sdk/nested-clients': 3.997.35
-      '@aws-sdk/types': 3.974.2
-      '@smithy/core': 3.31.1
-      '@smithy/types': 4.16.1
+      '@aws-sdk/types': 3.974.5
+      '@smithy/core': 3.33.3
+      '@smithy/types': 4.17.2
       tslib: 2.8.1
 
   '@aws-sdk/types@3.974.2':
@@ -7221,8 +7236,8 @@ snapshots:
 
   '@aws-sdk/util-endpoints@3.984.0':
     dependencies:
-      '@aws-sdk/types': 3.974.2
-      '@smithy/types': 4.16.1
+      '@aws-sdk/types': 3.974.5
+      '@smithy/types': 4.17.2
       '@smithy/url-parser': 4.4.16
       '@smithy/util-endpoints': 3.6.16
       tslib: 2.8.1
@@ -7233,17 +7248,17 @@ snapshots:
 
   '@aws-sdk/util-user-agent-browser@3.972.40':
     dependencies:
-      '@aws-sdk/core': 3.977.4
+      '@aws-sdk/core': 3.977.9
       tslib: 2.8.1
 
   '@aws-sdk/util-user-agent-node@3.973.55':
     dependencies:
-      '@aws-sdk/core': 3.977.4
+      '@aws-sdk/core': 3.977.9
       tslib: 2.8.1
 
   '@aws-sdk/xml-builder@3.972.37':
     dependencies:
-      '@smithy/types': 4.16.1
+      '@smithy/types': 4.17.2
       tslib: 2.8.1
 
   '@aws-sdk/xml-builder@3.972.40':
@@ -7289,18 +7304,20 @@ snapshots:
     dependencies:
       '@jridgewell/trace-mapping': 0.3.9
 
-  '@datafn/client@0.0.3':
+  '@datafn/client@0.1.0':
     dependencies:
-      '@datafn/core': 0.0.3
+      '@datafn/core': 0.1.0
+      '@superfunctions/http': 0.2.0
       minisearch: 7.2.0
 
-  '@datafn/core@0.0.3': {}
+  '@datafn/core@0.1.0': {}
 
-  '@datafn/server@0.0.3(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))':
+  '@datafn/server@0.1.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))':
     dependencies:
-      '@datafn/core': 0.0.3
-      '@superfunctions/db': 0.1.4(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
-      '@superfunctions/http': 0.1.3
+      '@datafn/core': 0.1.0
+      '@superfunctions/db': 0.2.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
+      '@superfunctions/http': 0.2.0
+      '@superfunctions/observability': 0.0.1
     transitivePeerDependencies:
       - '@prisma/client'
       - drizzle-orm
@@ -8095,13 +8112,13 @@ snapshots:
 
   '@lukeed/ms@2.0.2': {}
 
-  '@mcpfn/auth@0.0.2(@superfunctions/auth@0.1.2)(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))(hono@4.12.32)(zod@4.4.3)':
+  '@mcpfn/auth@0.0.2(@superfunctions/auth@0.2.0)(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))(hono@4.12.32)(zod@4.4.3)':
     dependencies:
       '@modelcontextprotocol/sdk': 1.25.2(hono@4.12.32)(zod@4.4.3)
       '@superfunctions/oauth-core': 0.1.1(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
       '@superfunctions/oauth-storage': 0.1.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
     optionalDependencies:
-      '@superfunctions/auth': 0.1.2
+      '@superfunctions/auth': 0.2.0
     transitivePeerDependencies:
       - '@cfworker/json-schema'
       - '@prisma/client'
@@ -8853,15 +8870,10 @@ snapshots:
 
   '@smithy/config-resolver@4.6.16':
     dependencies:
-      '@smithy/core': 3.31.1
+      '@smithy/core': 3.33.3
       tslib: 2.8.1
 
   '@smithy/core@3.30.0':
-    dependencies:
-      '@smithy/types': 4.16.1
-      tslib: 2.8.1
-
-  '@smithy/core@3.31.1':
     dependencies:
       '@smithy/types': 4.16.1
       tslib: 2.8.1
@@ -8873,49 +8885,49 @@ snapshots:
 
   '@smithy/credential-provider-imds@4.4.14':
     dependencies:
-      '@smithy/core': 3.30.0
-      '@smithy/types': 4.16.1
+      '@smithy/core': 3.33.3
+      '@smithy/types': 4.17.2
       tslib: 2.8.1
 
   '@smithy/eventstream-serde-browser@4.4.16':
     dependencies:
-      '@smithy/core': 3.31.1
+      '@smithy/core': 3.33.3
       tslib: 2.8.1
 
   '@smithy/eventstream-serde-config-resolver@4.5.16':
     dependencies:
-      '@smithy/core': 3.31.1
+      '@smithy/core': 3.33.3
       tslib: 2.8.1
 
   '@smithy/eventstream-serde-node@4.4.16':
     dependencies:
-      '@smithy/core': 3.31.1
+      '@smithy/core': 3.33.3
       tslib: 2.8.1
 
   '@smithy/fetch-http-handler@5.6.11':
     dependencies:
-      '@smithy/core': 3.30.0
-      '@smithy/types': 4.16.1
+      '@smithy/core': 3.33.3
+      '@smithy/types': 4.17.2
       tslib: 2.8.1
 
   '@smithy/hash-blob-browser@4.4.16':
     dependencies:
-      '@smithy/core': 3.31.1
+      '@smithy/core': 3.33.3
       tslib: 2.8.1
 
   '@smithy/hash-node@4.4.16':
     dependencies:
-      '@smithy/core': 3.31.1
+      '@smithy/core': 3.33.3
       tslib: 2.8.1
 
   '@smithy/hash-stream-node@4.4.16':
     dependencies:
-      '@smithy/core': 3.31.1
+      '@smithy/core': 3.33.3
       tslib: 2.8.1
 
   '@smithy/invalid-dependency@4.4.16':
     dependencies:
-      '@smithy/core': 3.31.1
+      '@smithy/core': 3.33.3
       tslib: 2.8.1
 
   '@smithy/is-array-buffer@2.2.0':
@@ -8924,66 +8936,66 @@ snapshots:
 
   '@smithy/md5-js@4.4.16':
     dependencies:
-      '@smithy/core': 3.31.1
+      '@smithy/core': 3.33.3
       tslib: 2.8.1
 
   '@smithy/middleware-content-length@4.4.16':
     dependencies:
-      '@smithy/core': 3.31.1
+      '@smithy/core': 3.33.3
       tslib: 2.8.1
 
   '@smithy/middleware-endpoint@4.6.16':
     dependencies:
-      '@smithy/core': 3.31.1
+      '@smithy/core': 3.33.3
       tslib: 2.8.1
 
   '@smithy/middleware-retry@4.7.16':
     dependencies:
-      '@smithy/core': 3.31.1
+      '@smithy/core': 3.33.3
       tslib: 2.8.1
 
   '@smithy/middleware-serde@4.4.16':
     dependencies:
-      '@smithy/core': 3.31.1
+      '@smithy/core': 3.33.3
       tslib: 2.8.1
 
   '@smithy/middleware-stack@4.4.16':
     dependencies:
-      '@smithy/core': 3.31.1
+      '@smithy/core': 3.33.3
       tslib: 2.8.1
 
   '@smithy/node-config-provider@4.5.16':
     dependencies:
-      '@smithy/core': 3.31.1
+      '@smithy/core': 3.33.3
       tslib: 2.8.1
 
   '@smithy/node-http-handler@4.9.11':
     dependencies:
-      '@smithy/core': 3.30.0
-      '@smithy/types': 4.16.1
+      '@smithy/core': 3.33.3
+      '@smithy/types': 4.17.2
       tslib: 2.8.1
 
   '@smithy/protocol-http@5.5.16':
     dependencies:
-      '@smithy/core': 3.31.1
+      '@smithy/core': 3.33.3
       tslib: 2.8.1
 
   '@smithy/signature-v4@5.6.10':
     dependencies:
-      '@smithy/core': 3.30.0
-      '@smithy/types': 4.16.1
+      '@smithy/core': 3.33.3
+      '@smithy/types': 4.17.2
       tslib: 2.8.1
 
   '@smithy/signature-v4@5.6.12':
     dependencies:
-      '@smithy/core': 3.31.1
-      '@smithy/types': 4.16.1
+      '@smithy/core': 3.33.3
+      '@smithy/types': 4.17.2
       tslib: 2.8.1
 
   '@smithy/smithy-client@4.14.16':
     dependencies:
-      '@smithy/core': 3.31.1
-      '@smithy/types': 4.16.1
+      '@smithy/core': 3.33.3
+      '@smithy/types': 4.17.2
       tslib: 2.8.1
 
   '@smithy/types@4.16.1':
@@ -8996,22 +9008,22 @@ snapshots:
 
   '@smithy/url-parser@4.4.16':
     dependencies:
-      '@smithy/core': 3.31.1
+      '@smithy/core': 3.33.3
       tslib: 2.8.1
 
   '@smithy/util-base64@4.5.16':
     dependencies:
-      '@smithy/core': 3.31.1
+      '@smithy/core': 3.33.3
       tslib: 2.8.1
 
   '@smithy/util-body-length-browser@4.4.16':
     dependencies:
-      '@smithy/core': 3.31.1
+      '@smithy/core': 3.33.3
       tslib: 2.8.1
 
   '@smithy/util-body-length-node@4.4.16':
     dependencies:
-      '@smithy/core': 3.31.1
+      '@smithy/core': 3.33.3
       tslib: 2.8.1
 
   '@smithy/util-buffer-from@2.2.0':
@@ -9021,32 +9033,32 @@ snapshots:
 
   '@smithy/util-defaults-mode-browser@4.5.16':
     dependencies:
-      '@smithy/core': 3.31.1
+      '@smithy/core': 3.33.3
       tslib: 2.8.1
 
   '@smithy/util-defaults-mode-node@4.4.16':
     dependencies:
-      '@smithy/core': 3.31.1
+      '@smithy/core': 3.33.3
       tslib: 2.8.1
 
   '@smithy/util-endpoints@3.6.16':
     dependencies:
-      '@smithy/core': 3.31.1
+      '@smithy/core': 3.33.3
       tslib: 2.8.1
 
   '@smithy/util-middleware@4.4.16':
     dependencies:
-      '@smithy/core': 3.31.1
+      '@smithy/core': 3.33.3
       tslib: 2.8.1
 
   '@smithy/util-retry@4.5.16':
     dependencies:
-      '@smithy/core': 3.31.1
+      '@smithy/core': 3.33.3
       tslib: 2.8.1
 
   '@smithy/util-stream@4.7.16':
     dependencies:
-      '@smithy/core': 3.31.1
+      '@smithy/core': 3.33.3
       tslib: 2.8.1
 
   '@smithy/util-utf8@2.3.0':
@@ -9056,26 +9068,22 @@ snapshots:
 
   '@smithy/util-utf8@4.4.16':
     dependencies:
-      '@smithy/core': 3.31.1
+      '@smithy/core': 3.33.3
       tslib: 2.8.1
 
   '@smithy/util-waiter@4.5.16':
     dependencies:
-      '@smithy/core': 3.31.1
+      '@smithy/core': 3.33.3
       tslib: 2.8.1
 
   '@speed-highlight/core@1.2.17': {}
 
   '@standard-schema/spec@1.1.0': {}
 
-  '@superfunctions/auth@0.1.2': {}
+  '@superfunctions/auth@0.2.0': {}
 
   '@superfunctions/db@0.1.3(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))':
     optionalDependencies:
-      drizzle-orm: 0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0)
-
-  '@superfunctions/db@0.1.4(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))':
-    dependencies:
       drizzle-orm: 0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0)
 
   '@superfunctions/db@0.2.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))':
@@ -9085,64 +9093,21 @@ snapshots:
       '@superfunctions/observability': 0.0.1
       drizzle-orm: 0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0)
 
-  '@superfunctions/http-openapi@0.0.1':
+  '@superfunctions/delivery@0.1.0': {}
+
+  '@superfunctions/http-openapi@0.1.0':
     dependencies:
-      '@superfunctions/http': 0.1.3
+      '@superfunctions/http': 0.2.0
 
   '@superfunctions/http@0.1.2': {}
 
-  '@superfunctions/http@0.1.3': {}
-
-  '@superfunctions/oauth-core@0.0.1(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))':
+  '@superfunctions/http@0.2.0':
     dependencies:
-      '@superfunctions/oauth-storage': 0.0.1(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
-    transitivePeerDependencies:
-      - '@prisma/client'
-      - drizzle-orm
-      - kysely
-      - mongodb
+      '@superfunctions/observability': 0.0.1
 
   '@superfunctions/oauth-core@0.1.1(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))':
     dependencies:
       '@superfunctions/oauth-storage': 0.1.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
-    transitivePeerDependencies:
-      - '@prisma/client'
-      - drizzle-orm
-      - kysely
-      - mongodb
-
-  '@superfunctions/oauth-flow@0.0.1(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))':
-    dependencies:
-      '@superfunctions/oauth-core': 0.0.1(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
-      '@superfunctions/oauth-http': 0.0.1(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
-      '@superfunctions/oauth-storage': 0.0.1(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
-    transitivePeerDependencies:
-      - '@prisma/client'
-      - drizzle-orm
-      - kysely
-      - mongodb
-
-  '@superfunctions/oauth-http@0.0.1(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))':
-    dependencies:
-      '@superfunctions/oauth-core': 0.0.1(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
-    transitivePeerDependencies:
-      - '@prisma/client'
-      - drizzle-orm
-      - kysely
-      - mongodb
-
-  '@superfunctions/oauth-providers@0.0.1(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))':
-    dependencies:
-      '@superfunctions/oauth-core': 0.0.1(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
-    transitivePeerDependencies:
-      - '@prisma/client'
-      - drizzle-orm
-      - kysely
-      - mongodb
-
-  '@superfunctions/oauth-storage@0.0.1(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))':
-    dependencies:
-      '@superfunctions/db': 0.1.4(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
     transitivePeerDependencies:
       - '@prisma/client'
       - drizzle-orm
@@ -9671,6 +9636,21 @@ snapshots:
     optional: true
 
   asynckit@0.4.0: {}
+
+  authfn@0.2.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0)):
+    dependencies:
+      '@superfunctions/auth': 0.2.0
+      '@superfunctions/db': 0.2.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
+      '@superfunctions/delivery': 0.1.0
+      '@superfunctions/http': 0.2.0
+      '@superfunctions/http-openapi': 0.1.0
+      '@superfunctions/oauth-storage': 0.1.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
+      '@superfunctions/observability': 0.0.1
+    transitivePeerDependencies:
+      - '@prisma/client'
+      - drizzle-orm
+      - kysely
+      - mongodb
 
   aws4fetch@1.0.20: {}
 
@@ -10941,8 +10921,6 @@ snapshots:
   jiti@2.7.0: {}
 
   jose@4.15.9: {}
-
-  jose@5.10.0: {}
 
   jose@6.2.4: {}
 

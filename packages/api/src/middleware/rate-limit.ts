@@ -23,7 +23,7 @@ export function rateLimitMiddleware(): MiddlewareHandler<ApiEnvironment> {
     const servicePrincipal = context.get("servicePrincipal");
     const forwarded = context.req.header("cf-connecting-ip") ?? "unknown";
     const decision = await consumeRateLimit(
-      services.database.pool,
+      services.controlDatabase.pool,
       `${rateLimitRouteKey(context.req.path)}:${session?.actorId ?? servicePrincipal?.actorId ?? forwarded}`,
       240,
       60,

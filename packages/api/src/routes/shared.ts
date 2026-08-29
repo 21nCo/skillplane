@@ -35,7 +35,7 @@ export async function workspaceUser(context: Context<ApiEnvironment>) {
   const workspaceId = context.req.param("workspaceId");
   if (!workspaceId) throw new WorkspaceAccessError();
   return requireUserPrincipal(
-    services.database.pool,
+    services.controlDatabase.pool,
     context.get("session"),
     workspaceId,
   );

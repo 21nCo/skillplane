@@ -1,7 +1,22 @@
 # Production deployment
 
-This repository deploys the Skillplane app and MCP Cloudflare Workers backed by
-one PostgreSQL database through Hyperdrive and one private R2 bucket. The
+For the global-control/regional-cell ownership model, routing assertions,
+failure behavior, workspace moves, outages, and key rotation, see
+[`global-control-plane.md`](./global-control-plane.md). The topology manifest
+must be validated and every private cell deployed before enabling gateway mode.
+
+The checked-in transition deployment still deploys the single-cell Skillplane
+app and MCP Workers backed by one PostgreSQL database and one private R2 bucket.
+The multi-cell renderer in `scripts/lib/topology-deployment.mjs` generates the
+next-stage canonical app/MCP gateways plus private app/MCP workers for every
+cell in `deployment/topology.production.json`. It requires separate control and
+cell Hyperdrive IDs and separate public/regional bucket names. Generated cell
+workers have no route, no `workers.dev` exposure, no downstream service
+bindings, and no Email Service binding. Promotion of those generated configs is
+an explicit rollout step after the cells and projection drainer are provisioned;
+it is not an automatic side effect of the legacy `deploy:all` command.
+
+The
 landing Worker is maintained and deployed independently from the 21n monorepo's
 `landing/skillplane` workspace. The production hosts are
 `skillplane.dev`, `app.skillplane.dev`, `mcp.skillplane.dev`, and the PostHog

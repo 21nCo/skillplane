@@ -7,8 +7,9 @@ import {
   normalizeWorkspaceSlug,
   parseWorkspaceRole,
 } from "@skillplane/domain";
-import { writeAuditEvent } from "@skillplane/observability";
+import { selectInitialWorkspaceRegion } from "@skillplane/control-plane";
 import type { Hono } from "hono";
+import { writeControlPlaneAudit } from "../control-audit.js";
 import type { ApiEnvironment } from "../context.js";
 import { success } from "../envelopes.js";
 import { lockWorkspaceMemberships, membershipRole } from "../tenancy.js";
@@ -29,7 +30,7 @@ export function registerWorkspaceRoutes(app: Hono<ApiEnvironment>): void {
         401,
       );
     }
-    const result = await services.database.pool.query<{
+    const result = await services.controlDatabase.pool.query<{
       id: string;
       kind: string;
       slug: string;
@@ -72,7 +73,11 @@ export function registerWorkspaceRoutes(app: Hono<ApiEnvironment>): void {
     const name = normalizeWorkspaceName(body.name);
     const slug = normalizeWorkspaceSlug(body.slug);
     const workspaceId = id("workspace");
-    const client = await services.database.pool.connect();
+    const homeRegionId = selectInitialWorkspaceRegion(
+      workspaceId,
+      services.workspaceRegions,
+    );
+    const client = await services.controlDatabase.pool.connect();
     try {
       await client.query("BEGIN");
       await client.query(
@@ -87,7 +92,19 @@ export function registerWorkspaceRoutes(app: Hono<ApiEnvironment>): void {
          VALUES ($1, $2, $3, 'owner')`,
         [id("membership"), workspaceId, session.actorId],
       );
-      await writeAuditEvent(client, {
+      await client.query(
+        `INSERT INTO workspace_placements
+           (workspace_id, region_id, epoch, state)
+         VALUES ($1, $2, 1, 'active')`,
+        [workspaceId, homeRegionId],
+      );
+      await client.query(
+        `INSERT INTO resource_routing_directory
+           (resource_type, resource_id, workspace_id, state)
+         VALUES ('workspace', $1, $1, 'active')`,
+        [workspaceId],
+      );
+      await writeControlPlaneAudit(client, {
         workspaceId,
         eventType: "workspace.created",
         action: "workspace:write",
@@ -100,7 +117,7 @@ export function registerWorkspaceRoutes(app: Hono<ApiEnvironment>): void {
         resourceId: workspaceId,
         channel: "app",
         retentionClass: "permanent",
-        metadata: { kind: "organization" },
+        metadata: { kind: "organization", homeRegionId, placementEpoch: 1 },
       });
       await client.query("COMMIT");
     } catch (error) {
@@ -164,7 +181,7 @@ export function registerWorkspaceRoutes(app: Hono<ApiEnvironment>): void {
     }
     values.push(principal.workspaceId);
     try {
-      const result = await services.database.pool.query<{
+      const result = await services.controlDatabase.pool.query<{
         id: string;
         kind: string;
         slug: string;
@@ -216,7 +233,7 @@ export function registerWorkspaceRoutes(app: Hono<ApiEnvironment>): void {
       );
     const principal = await workspaceUser(context);
     authorize(principal, "members:read");
-    const result = await services.database.pool.query<{
+    const result = await services.controlDatabase.pool.query<{
       user_id: string;
       role: string;
       email: string | null;
@@ -258,7 +275,7 @@ export function registerWorkspaceRoutes(app: Hono<ApiEnvironment>): void {
     }
     const body = await readJsonObject(context);
     const nextRole = parseWorkspaceRole(body.role, { allowOwner: true });
-    const client = await services.database.pool.connect();
+    const client = await services.controlDatabase.pool.connect();
     try {
       await client.query("BEGIN");
       const rows = await lockWorkspaceMemberships(
@@ -278,7 +295,7 @@ export function registerWorkspaceRoutes(app: Hono<ApiEnvironment>): void {
             WHERE workspace_id = $2 AND user_id = $3`,
         [nextRole, context.req.param("workspaceId"), context.req.param("userId")],
       );
-      await writeAuditEvent(client, {
+      await writeControlPlaneAudit(client, {
         workspaceId: context.req.param("workspaceId"),
         eventType: "workspace.membership.role_changed",
         action: "members:write",
@@ -317,7 +334,7 @@ export function registerWorkspaceRoutes(app: Hono<ApiEnvironment>): void {
         401,
       );
     }
-    const client = await services.database.pool.connect();
+    const client = await services.controlDatabase.pool.connect();
     try {
       await client.query("BEGIN");
       const rows = await lockWorkspaceMemberships(
@@ -335,7 +352,7 @@ export function registerWorkspaceRoutes(app: Hono<ApiEnvironment>): void {
         "DELETE FROM workspace_memberships WHERE workspace_id = $1 AND user_id = $2",
         [context.req.param("workspaceId"), context.req.param("userId")],
       );
-      await writeAuditEvent(client, {
+      await writeControlPlaneAudit(client, {
         workspaceId: context.req.param("workspaceId"),
         eventType: "workspace.membership.removed",
         action: "members:write",
@@ -373,7 +390,7 @@ export function registerWorkspaceRoutes(app: Hono<ApiEnvironment>): void {
         401,
       );
     }
-    const client = await services.database.pool.connect();
+    const client = await services.controlDatabase.pool.connect();
     try {
       await client.query("BEGIN");
       const rows = await lockWorkspaceMemberships(
@@ -389,7 +406,7 @@ export function registerWorkspaceRoutes(app: Hono<ApiEnvironment>): void {
         "DELETE FROM workspace_memberships WHERE workspace_id = $1 AND user_id = $2",
         [context.req.param("workspaceId"), session.actorId],
       );
-      await writeAuditEvent(client, {
+      await writeControlPlaneAudit(client, {
         workspaceId: context.req.param("workspaceId"),
         eventType: "workspace.membership.left",
         action: "members:write",

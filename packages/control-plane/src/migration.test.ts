@@ -1,0 +1,103 @@
+import { describe, expect, it, vi } from "vitest";
+import {
+  claimWorkspacePlacement,
+  createMemoryWorkspacePlacementDirectory,
+} from "./placement.js";
+import {
+  migrateWorkspaceWithJournal,
+  type WorkspaceMigrationOperations,
+} from "./migration.js";
+
+function operations(overrides: Partial<WorkspaceMigrationOperations> = {}) {
+  const base: WorkspaceMigrationOperations = {
+    quiesceSource: vi.fn(async () => undefined),
+    drainOutboxes: vi.fn(async () => undefined),
+    copyDatabase: vi.fn(async () => undefined),
+    copyBundles: vi.fn(async () => undefined),
+    verifyDatabase: vi.fn(async () => [
+      { name: "rows", source: 10, target: 10, matched: true },
+    ]),
+    verifyBundles: vi.fn(async () => [
+      { name: "bundle-digests", source: "same", target: "same", matched: true },
+    ]),
+    rebuildGlobalResourceDirectory: vi.fn(async () => undefined),
+    warmTarget: vi.fn(async () => undefined),
+    resumeTarget: vi.fn(async () => undefined),
+    rollbackSource: vi.fn(async () => undefined),
+  };
+  return { ...base, ...overrides };
+}
+
+describe("fenced workspace migration", () => {
+  it("moves only after database and bundle verification and journals proof", async () => {
+    const directory = createMemoryWorkspacePlacementDirectory();
+    await claimWorkspacePlacement({
+      directory,
+      workspaceId: "workspace:a",
+      regionId: "in-south",
+    });
+    const journal = {
+      started: vi.fn(async () => undefined),
+      completed: vi.fn(async () => undefined),
+      failed: vi.fn(async () => undefined),
+    };
+    const result = await migrateWorkspaceWithJournal({
+      migrationId: "migration:a",
+      directory,
+      workspaceId: "workspace:a",
+      targetRegionId: "us-east",
+      operations: operations(),
+      journal,
+    });
+    expect(result.placement).toMatchObject({
+      regionId: "us-east",
+      state: "active",
+    });
+    expect(result.proof.checks).toHaveLength(2);
+    expect(result.proof.finalEpoch).toBeGreaterThan(result.proof.sourceEpoch);
+    expect(journal.completed).toHaveBeenCalledWith(
+      "migration:a",
+      expect.objectContaining({ workspaceId: "workspace:a" }),
+    );
+    expect(journal.failed).not.toHaveBeenCalled();
+  });
+
+  it("rolls back and records failure when target verification differs", async () => {
+    const directory = createMemoryWorkspacePlacementDirectory();
+    await claimWorkspacePlacement({
+      directory,
+      workspaceId: "workspace:a",
+      regionId: "in-south",
+    });
+    const rollbackSource = vi.fn(async () => undefined);
+    const journal = {
+      started: vi.fn(async () => undefined),
+      completed: vi.fn(async () => undefined),
+      failed: vi.fn(async () => undefined),
+    };
+    await expect(
+      migrateWorkspaceWithJournal({
+        migrationId: "migration:bad-copy",
+        directory,
+        workspaceId: "workspace:a",
+        targetRegionId: "us-east",
+        operations: operations({
+          rollbackSource,
+          verifyBundles: async () => [
+            { name: "bundle-digests", source: "a", target: "b", matched: false },
+          ],
+        }),
+        journal,
+      }),
+    ).rejects.toThrow("WORKSPACE_MIGRATION_VERIFICATION_FAILED");
+    expect(rollbackSource).toHaveBeenCalledOnce();
+    expect(journal.failed).toHaveBeenCalledWith(
+      "migration:bad-copy",
+      "WORKSPACE_MIGRATION_VERIFICATION_FAILED",
+    );
+    await expect(directory.get("workspace:a")).resolves.toMatchObject({
+      regionId: "in-south",
+      state: "active",
+    });
+  });
+});

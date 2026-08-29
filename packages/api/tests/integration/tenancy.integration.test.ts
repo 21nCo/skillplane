@@ -401,12 +401,12 @@ describe("tenancy integration", () => {
     serviceCredential = reconciled.data.credential;
     revokeSpy.mockRestore();
 
-    const cleanupAudit = await services.database.pool.query<{
+    const cleanupAudit = await services.controlDatabase.pool.query<{
       error_code: string | null;
       metadata: Record<string, unknown>;
     }>(
       `SELECT metadata->>'errorCode' AS error_code, metadata
-         FROM audit_events
+         FROM control_plane_audit_events
         WHERE resource_id = $1
           AND event_type = 'service_principal.authfn_key_cleanup_failed'
         ORDER BY occurred_at DESC, id DESC
@@ -435,11 +435,11 @@ describe("tenancy integration", () => {
       revoked_at: Date | null;
     }>("SELECT revoked_at FROM service_principals WHERE id = $1", [servicePrincipalId]);
     expect(locallyRevoked.rows[0]?.revoked_at).toBeInstanceOf(Date);
-    const revocationCleanupAudit = await services.database.pool.query<{
+    const revocationCleanupAudit = await services.controlDatabase.pool.query<{
       metadata: Record<string, unknown>;
     }>(
       `SELECT metadata
-         FROM audit_events
+         FROM control_plane_audit_events
         WHERE resource_id = $1
           AND event_type = 'service_principal.authfn_key_cleanup_failed'
           AND metadata->>'cleanupReason' = 'revocation'
@@ -484,12 +484,12 @@ describe("tenancy integration", () => {
     );
     expect(activeKey.rows[0]?.revoked_at).toBeInstanceOf(Date);
 
-    const lifecycleAudit = await services.database.pool.query<{
+    const lifecycleAudit = await services.controlDatabase.pool.query<{
       event_type: string;
       metadata: Record<string, unknown>;
     }>(
       `SELECT event_type, metadata
-         FROM audit_events
+         FROM control_plane_audit_events
         WHERE resource_id = $1
           AND event_type IN (
             'service_principal.created',

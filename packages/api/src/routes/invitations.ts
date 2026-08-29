@@ -7,8 +7,11 @@ import {
   parseInvitationRole,
 } from "@skillplane/domain";
 import { renderInvitationEmail } from "@skillplane/email";
-import { writeAuditEvent } from "@skillplane/observability";
 import type { Hono } from "hono";
+import {
+  writeControlPlaneAudit,
+  writePrincipalControlPlaneAudit,
+} from "../control-audit.js";
 import type { ApiEnvironment } from "../context.js";
 import { success } from "../envelopes.js";
 import {
@@ -18,12 +21,7 @@ import {
   hashEmail,
   hashOpaqueToken,
 } from "../tenancy-crypto.js";
-import {
-  isPostgresUniqueViolation,
-  readJsonObject,
-  workspaceUser,
-  writeApiAudit,
-} from "./shared.js";
+import { isPostgresUniqueViolation, readJsonObject, workspaceUser } from "./shared.js";
 
 interface InvitationRow {
   readonly id: string;
@@ -54,7 +52,7 @@ export function registerInvitationRoutes(app: Hono<ApiEnvironment>): void {
     }
     const principal = await workspaceUser(context);
     authorize(principal, "members:read");
-    const result = await services.database.pool.query<InvitationRow>(
+    const result = await services.controlDatabase.pool.query<InvitationRow>(
       `SELECT i.id, i.workspace_id, w.name AS workspace_name, i.email_hash,
                 i.email_ciphertext, i.role, i.expires_at, i.accepted_at,
                 i.revoked_at, i.created_at
@@ -99,7 +97,7 @@ export function registerInvitationRoutes(app: Hono<ApiEnvironment>): void {
     const body = await readJsonObject(context);
     const email = normalizeInvitationEmail(body.email);
     const role = parseInvitationRole(body.role);
-    const workspace = await services.database.pool.query<{
+    const workspace = await services.controlDatabase.pool.query<{
       name: string;
       kind: string;
     }>("SELECT name, kind FROM workspaces WHERE id = $1", [principal.workspaceId]);
@@ -117,7 +115,7 @@ export function registerInvitationRoutes(app: Hono<ApiEnvironment>): void {
     const token = createOpaqueToken("spi");
     const id = invitationId();
     const emailLookup = await hashEmail(services.tenancySecret, email);
-    const membership = await services.database.pool.query(
+    const membership = await services.controlDatabase.pool.query(
       `SELECT 1
            FROM workspace_memberships m
            JOIN authfn_users u ON u.id = m.user_id
@@ -133,7 +131,7 @@ export function registerInvitationRoutes(app: Hono<ApiEnvironment>): void {
         { field: "email" },
       );
     }
-    await services.database.pool.query(
+    await services.controlDatabase.pool.query(
       `UPDATE workspace_invitations
             SET revoked_at = now()
           WHERE workspace_id = $1 AND email_hash = $2
@@ -141,7 +139,7 @@ export function registerInvitationRoutes(app: Hono<ApiEnvironment>): void {
             AND expires_at <= now()`,
       [principal.workspaceId, emailLookup],
     );
-    const duplicate = await services.database.pool.query(
+    const duplicate = await services.controlDatabase.pool.query(
       `SELECT 1 FROM workspace_invitations
           WHERE workspace_id = $1 AND email_hash = $2
             AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > now()
@@ -156,7 +154,7 @@ export function registerInvitationRoutes(app: Hono<ApiEnvironment>): void {
       );
     }
     const expiresAt = invitationExpiry();
-    const client = await services.database.pool.connect();
+    const client = await services.controlDatabase.pool.connect();
     try {
       await client.query("BEGIN");
       await client.query(
@@ -175,7 +173,7 @@ export function registerInvitationRoutes(app: Hono<ApiEnvironment>): void {
           expiresAt,
         ],
       );
-      await writeApiAudit(client, principal, {
+      await writePrincipalControlPlaneAudit(client, principal, {
         eventType: "workspace.invitation.created",
         action: "members:write",
         requestId: context.get("requestId"),
@@ -241,7 +239,7 @@ export function registerInvitationRoutes(app: Hono<ApiEnvironment>): void {
         201,
       );
     } catch (error) {
-      await services.database.pool.query(
+      await services.controlDatabase.pool.query(
         "DELETE FROM workspace_invitations WHERE id = $1 AND accepted_at IS NULL",
         [id],
       );
@@ -262,7 +260,7 @@ export function registerInvitationRoutes(app: Hono<ApiEnvironment>): void {
       }
       const principal = await workspaceUser(context);
       authorize(principal, "members:write");
-      const client = await services.database.pool.connect();
+      const client = await services.controlDatabase.pool.connect();
       try {
         await client.query("BEGIN");
         const result = await client.query(
@@ -280,7 +278,7 @@ export function registerInvitationRoutes(app: Hono<ApiEnvironment>): void {
             404,
           );
         }
-        await writeApiAudit(client, principal, {
+        await writePrincipalControlPlaneAudit(client, principal, {
           eventType: "workspace.invitation.revoked",
           action: "members:write",
           requestId: context.get("requestId"),
@@ -308,7 +306,7 @@ export function registerInvitationRoutes(app: Hono<ApiEnvironment>): void {
         401,
       );
     }
-    const result = await services.database.pool.query<InvitationRow>(
+    const result = await services.controlDatabase.pool.query<InvitationRow>(
       `SELECT i.id, i.workspace_id, w.name AS workspace_name, i.email_hash,
               i.email_ciphertext, i.role, i.expires_at, i.accepted_at,
               i.revoked_at, i.created_at
@@ -329,7 +327,7 @@ export function registerInvitationRoutes(app: Hono<ApiEnvironment>): void {
     const email = normalizeInvitationEmail(
       session.subject.email ??
         (
-          await services.database.pool.query<{ primary_email: string | null }>(
+          await services.controlDatabase.pool.query<{ primary_email: string | null }>(
             "SELECT primary_email FROM authfn_users WHERE id = $1",
             [session.actorId],
           )
@@ -364,7 +362,7 @@ export function registerInvitationRoutes(app: Hono<ApiEnvironment>): void {
       );
     }
     const tokenHash = await hashOpaqueToken(context.req.param("token"));
-    const client = await services.database.pool.connect();
+    const client = await services.controlDatabase.pool.connect();
     try {
       await client.query("BEGIN");
       const result = await client.query<InvitationRow>(
@@ -419,7 +417,7 @@ export function registerInvitationRoutes(app: Hono<ApiEnvironment>): void {
           WHERE id = $2`,
         [session.actorId, row.id],
       );
-      await writeAuditEvent(client, {
+      await writeControlPlaneAudit(client, {
         workspaceId: row.workspace_id,
         eventType: "workspace.invitation.accepted",
         action: "members:write",

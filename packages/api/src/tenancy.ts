@@ -1,4 +1,4 @@
-import type { AuthFnSession } from "@authfn/core";
+import type { AuthFnSession } from "authfn";
 import {
   DomainError,
   WorkspaceAccessError,
@@ -36,6 +36,7 @@ async function stablePersonalSlug(userId: string): Promise<string> {
 export async function ensurePersonalWorkspace(
   pool: Pool,
   session: AuthFnSession,
+  homeRegionId = "legacy",
 ): Promise<string> {
   const client = await pool.connect();
   try {
@@ -75,6 +76,22 @@ export async function ensurePersonalWorkspace(
        ON CONFLICT (workspace_id, user_id)
        DO UPDATE SET role = 'owner', updated_at = now()`,
       [id("membership"), workspaceId, session.actorId],
+    );
+    await client.query(
+      `INSERT INTO workspace_placements
+         (workspace_id, region_id, epoch, state)
+       VALUES ($1, $2, 1, 'active')
+       ON CONFLICT (workspace_id) DO NOTHING`,
+      [workspaceId, homeRegionId],
+    );
+    await client.query(
+      `INSERT INTO resource_routing_directory
+         (resource_type, resource_id, workspace_id, state)
+       VALUES ('workspace', $1, $1, 'active')
+       ON CONFLICT (resource_type, resource_id)
+       DO UPDATE SET workspace_id = EXCLUDED.workspace_id,
+                     state = 'active', updated_at = now()`,
+      [workspaceId],
     );
     await client.query("COMMIT");
     return workspaceId;
