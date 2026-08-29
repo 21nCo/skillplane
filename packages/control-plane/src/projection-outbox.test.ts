@@ -62,6 +62,7 @@ describe("regional publication projection", () => {
         eventType: "public_skill.published",
         workspaceId: "workspace:a",
         fencingEpoch: 2,
+        sequence: 1,
         payload: {
           workspaceId: "workspace:a",
           skillId: "skill:a",
@@ -101,6 +102,7 @@ describe("regional publication projection", () => {
           eventType: "public_skill.published",
           workspaceId: "workspace:a",
           fencingEpoch: 2,
+          sequence: 1,
           payload: {},
         },
         placements,
@@ -138,6 +140,7 @@ describe("regional publication projection", () => {
           eventType: "public_skill.unpublished",
           workspaceId: "workspace:a",
           fencingEpoch: 4,
+          sequence: 7,
           payload: {
             workspaceId: "workspace:a",
             skillId: "skill:a",
@@ -164,6 +167,7 @@ describe("regional publication projection", () => {
         workspaceId: "workspace:a",
         skillId: "skill:a",
         versionId: "version:a",
+        projectionSequence: 7,
       },
     ]);
   });
@@ -187,6 +191,7 @@ describe("regional publication projection", () => {
           eventType: "public_stats.agent_skill_used",
           workspaceId: "workspace:a",
           fencingEpoch: 5,
+          sequence: 1,
           payload: { workspaceId: "workspace:a", count: 1 },
         },
         placements,

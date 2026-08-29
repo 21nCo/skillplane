@@ -116,6 +116,9 @@ export const publicSkillProjections = pgTable(
     objectKey: text("object_key").notNull(),
     document: jsonb("document").$type<Record<string, unknown>>().notNull().default({}),
     searchText: text("search_text").notNull().default(""),
+    projectionSequence: bigint("projection_sequence", { mode: "number" })
+      .notNull()
+      .default(0),
     state: text("state")
       .$type<"published" | "unpublished">()
       .notNull()
@@ -148,6 +151,10 @@ export const publicSkillProjections = pgTable(
     check(
       "public_skill_projection_digest_valid",
       sql`${table.digest} ~ '^sha256:[0-9a-f]{64}$'`,
+    ),
+    check(
+      "public_skill_projection_sequence_valid",
+      sql`${table.projectionSequence} >= 0`,
     ),
   ],
 );

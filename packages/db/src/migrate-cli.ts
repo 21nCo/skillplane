@@ -8,5 +8,8 @@ if (role && !["combined", "control", "regional"].includes(role)) {
 }
 const result = await migrateDatabase(databaseUrl, {
   role: (role ?? "combined") as "combined" | "control" | "regional",
+  ...(process.env.SKILLPLANE_INITIAL_WORKSPACE_REGION
+    ? { initialWorkspaceRegion: process.env.SKILLPLANE_INITIAL_WORKSPACE_REGION }
+    : {}),
 });
 process.stdout.write(`${JSON.stringify({ ok: true, ...result }, null, 2)}\n`);

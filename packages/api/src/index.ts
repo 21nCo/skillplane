@@ -7,4 +7,5 @@ export * from "./services.js";
 export * from "./service-principal-auth.js";
 export * from "./workspace-routing.js";
 export * from "./public-projections.js";
+export * from "./resource-routing.js";
 export * from "./routes/oauth-metadata.js";

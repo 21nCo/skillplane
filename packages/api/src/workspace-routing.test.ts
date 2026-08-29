@@ -208,6 +208,46 @@ describe("API scope classification", () => {
     });
   });
 
+  it("uses the public projection for authenticated non-members", async () => {
+    const query = async (text: string) => {
+      if (text.includes("FROM resource_routing_directory")) {
+        return {
+          rows: [
+            {
+              resource_type: "skill",
+              resource_id: "skill:public",
+              workspace_id: "workspace:one",
+              state: "active",
+              updated_at: new Date("2026-07-26T00:00:00.000Z"),
+            },
+          ],
+        };
+      }
+      if (text.includes("FROM workspace_memberships")) return { rows: [] };
+      throw new Error(`Unexpected SQL in routing test: ${text}`);
+    };
+    const routed = createRoutedApiApplication({
+      local: { fetch: async () => new Response("global public projection") },
+      services: async () =>
+        ({
+          auth: {
+            provider: {
+              authenticate: async () => ({ actorId: "user:outsider" }),
+            },
+          },
+          controlDatabase: { pool: { query } },
+        }) as never,
+    });
+
+    const response = await routed.fetch(
+      new Request("http://localhost:5700/api/v1/skills/skill%3Apublic"),
+      gatewayBindings,
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.text()).resolves.toBe("global public projection");
+  });
+
   it("boots a private cell without gateway-only OTP or email bindings", async () => {
     const local = { fetch: async () => new Response("unexpected") };
     const services = async () => {

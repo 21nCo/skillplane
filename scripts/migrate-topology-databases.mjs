@@ -12,7 +12,14 @@ export async function migrateTopologyDatabases(options = {}) {
   const manifest = options.manifest ?? (await readProductionTopology());
   const controlUrl =
     options.controlDatabaseUrl ?? requireEnvironment("SKILLPLANE_CONTROL_DATABASE_URL");
-  const control = await migrateDatabase(controlUrl, { role: "control" });
+  const initialWorkspaceRegion = manifest.cells[0]?.regionId;
+  if (!initialWorkspaceRegion) {
+    throw new Error("The topology must declare an initial workspace cell");
+  }
+  const control = await migrateDatabase(controlUrl, {
+    role: "control",
+    initialWorkspaceRegion,
+  });
   const cells = {};
   for (const cell of manifest.cells) {
     cells[cell.regionId] = await migrateDatabase(

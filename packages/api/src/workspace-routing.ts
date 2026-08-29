@@ -277,7 +277,7 @@ function isPublicSkillByIdRead(request: Request, scope: ApiScope): boolean {
   );
 }
 
-async function isUnauthenticatedPublicRead(
+async function shouldUsePublicProjection(
   request: Request,
   scope: ApiScope,
   services: ApiServices,
@@ -292,7 +292,21 @@ async function isUnauthenticatedPublicRead(
     throw error;
   }
   if (service) return false;
-  return !(await services.auth.provider.authenticate(request));
+  const session = await services.auth.provider.authenticate(request);
+  if (!session) return true;
+  if (scope.kind !== "resource") return false;
+  const route = await createPostgresResourceRoutingDirectory(
+    services.controlDatabase.pool,
+  ).resolve(scope.resourceType, scope.resourceId);
+  if (!route) return true;
+  const membership = await services.controlDatabase.pool.query<{ present: number }>(
+    `SELECT 1 AS present
+       FROM workspace_memberships
+      WHERE workspace_id = $1 AND user_id = $2
+      LIMIT 1`,
+    [route.workspaceId, session.actorId],
+  );
+  return !membership.rows[0];
 }
 
 /** Canonical app edge: global routes terminate here; workspace routes use private service bindings. */
@@ -341,10 +355,10 @@ export function createRoutedApiApplication(input: {
         }
         const services = await input.services(bindings);
         try {
-          if (await isUnauthenticatedPublicRead(request, scope, services)) {
+          if (await shouldUsePublicProjection(request, scope, services)) {
             // The control-plane projection is authoritative for anonymous reads,
-            // including the non-public/not-found case. Authenticated reads still
-            // route to the owning cell so private workspace access is preserved.
+            // including authenticated callers who are not workspace members.
+            // Member reads still route to the cell so private access is preserved.
             return await input.local.fetch(request, bindings);
           }
           const workspaceId = await resolveWorkspace(request, scope, services);

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   globalPublishedBundleKey,
+  PostgresPublicProjectionDirectory,
   publishGlobalProjection,
   type ImmutablePublicationStore,
   type PublicProjectionDirectory,
@@ -64,6 +65,7 @@ describe("global public projection", () => {
       versionId: "skill-version:a",
       semanticVersion: "1.0.0",
       digest: sha,
+      projectionSequence: 3,
     });
     expect(key).toBe(
       globalPublishedBundleKey({
@@ -76,5 +78,40 @@ describe("global public projection", () => {
     expect(destination.objects.get(key)).toEqual(bytes);
     expect(published).toHaveLength(1);
     expect(published[0]).toMatchObject({ objectKey: key, digest: sha });
+  });
+
+  it("guards publish and unpublish writes with the regional event sequence", async () => {
+    const calls: { readonly text: string; readonly values?: readonly unknown[] }[] = [];
+    const directory = new PostgresPublicProjectionDirectory({
+      async query(text, values) {
+        calls.push({ text, ...(values ? { values } : {}) });
+        return {};
+      },
+    });
+    const digestValue = `sha256:${"a".repeat(64)}` as const;
+    await directory.publish({
+      workspaceId: "workspace:a",
+      workspaceSlug: "acme",
+      skillId: "skill:a",
+      skillSlug: "review",
+      versionId: "version:a",
+      semanticVersion: "1.0.0",
+      digest: digestValue,
+      objectKey: "public/review.zip",
+      projectionSequence: 9,
+    });
+    await directory.unpublish({
+      workspaceId: "workspace:a",
+      skillId: "skill:a",
+      versionId: "version:a",
+      projectionSequence: 8,
+    });
+
+    expect(calls[0]?.text).toContain(
+      "public_skill_projections.projection_sequence <=",
+    );
+    expect(calls[0]?.values?.[8]).toBe(9);
+    expect(calls[1]?.text).toContain("projection_sequence <= $3");
+    expect(calls[1]?.values).toEqual(["workspace:a", "skill:a", 8]);
   });
 });

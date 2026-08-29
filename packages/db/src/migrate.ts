@@ -161,9 +161,23 @@ async function enforcePhysicalOwnership(
 
 export async function migrateDatabase(
   databaseUrl: string,
-  options: { readonly role?: MigrationRole } = {},
+  options: {
+    readonly role?: MigrationRole;
+    readonly initialWorkspaceRegion?: string;
+  } = {},
 ): Promise<MigrationResult> {
   const role = options.role ?? "combined";
+  const initialWorkspaceRegion =
+    options.initialWorkspaceRegion ?? (role === "combined" ? "legacy" : undefined);
+  if (
+    initialWorkspaceRegion !== undefined &&
+    !/^[a-z0-9][a-z0-9-]{0,62}$/u.test(initialWorkspaceRegion)
+  ) {
+    throw new Error("INITIAL_WORKSPACE_REGION_INVALID");
+  }
+  if (role === "control" && initialWorkspaceRegion === undefined) {
+    throw new Error("INITIAL_WORKSPACE_REGION_REQUIRED");
+  }
   const migrations = (await loadMigrations()).filter(
     (migration) => role === "combined" || migration.roles.includes(role),
   );
@@ -176,6 +190,12 @@ export async function migrateDatabase(
   const applied: string[] = [];
   const alreadyApplied: string[] = [];
   try {
+    if (initialWorkspaceRegion !== undefined) {
+      await client.query(
+        "SELECT set_config('skillplane.initial_workspace_region', $1, false)",
+        [initialWorkspaceRegion],
+      );
+    }
     await client.query("SELECT pg_advisory_lock(hashtext($1))", [
       "skillplane-schema-migrations-v1",
     ]);
@@ -216,6 +236,14 @@ export async function migrateDatabase(
         await client.query("ROLLBACK");
         throw error;
       }
+    }
+    if (role === "control" && initialWorkspaceRegion !== undefined) {
+      await client.query(
+        `UPDATE workspace_placements
+            SET region_id = $1, updated_at = now()
+          WHERE region_id = 'legacy'`,
+        [initialWorkspaceRegion],
+      );
     }
     if (role !== "combined") await enforcePhysicalOwnership(client, role);
     return { role, applied, alreadyApplied };

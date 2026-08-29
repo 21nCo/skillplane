@@ -89,6 +89,7 @@ export interface PublicProjectionDirectory {
     readonly semanticVersion: string;
     readonly digest: `sha256:${string}`;
     readonly objectKey: string;
+    readonly projectionSequence: number;
     readonly document?: Readonly<Record<string, unknown>>;
     readonly searchText?: string;
   }): Promise<void>;
@@ -96,6 +97,7 @@ export interface PublicProjectionDirectory {
     readonly workspaceId: string;
     readonly skillId: string;
     readonly versionId: string;
+    readonly projectionSequence: number;
   }): Promise<void>;
 }
 
@@ -111,9 +113,9 @@ export class PostgresPublicProjectionDirectory implements PublicProjectionDirect
     await this.database.query(
       `INSERT INTO public_skill_projections
          (workspace_id, workspace_slug, skill_id, skill_slug, version_id,
-          semantic_version, digest, object_key, document, search_text, state,
-          published_at, unpublished_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10,
+          semantic_version, digest, object_key, projection_sequence, document,
+          search_text, state, published_at, unpublished_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11,
                'published', now(), NULL, now())
        ON CONFLICT (workspace_id, skill_id, version_id)
        DO UPDATE SET workspace_slug = EXCLUDED.workspace_slug,
@@ -121,10 +123,13 @@ export class PostgresPublicProjectionDirectory implements PublicProjectionDirect
                      semantic_version = EXCLUDED.semantic_version,
                      digest = EXCLUDED.digest,
                      object_key = EXCLUDED.object_key,
+                     projection_sequence = EXCLUDED.projection_sequence,
                      document = EXCLUDED.document,
                      search_text = EXCLUDED.search_text,
                      state = 'published', unpublished_at = NULL,
-                     updated_at = now()`,
+                     updated_at = now()
+       WHERE public_skill_projections.projection_sequence <=
+             EXCLUDED.projection_sequence`,
       [
         input.workspaceId,
         input.workspaceSlug,
@@ -134,6 +139,7 @@ export class PostgresPublicProjectionDirectory implements PublicProjectionDirect
         input.semanticVersion,
         input.digest,
         input.objectKey,
+        input.projectionSequence,
         JSON.stringify(input.document ?? {}),
         input.searchText ?? "",
       ],
@@ -143,10 +149,11 @@ export class PostgresPublicProjectionDirectory implements PublicProjectionDirect
   async unpublish(input: Parameters<PublicProjectionDirectory["unpublish"]>[0]) {
     await this.database.query(
       `UPDATE public_skill_projections
-          SET state = 'unpublished', unpublished_at = now(), updated_at = now()
+          SET state = 'unpublished', projection_sequence = $3,
+              unpublished_at = now(), updated_at = now()
         WHERE workspace_id = $1 AND skill_id = $2
-          AND state = 'published'`,
-      [input.workspaceId, input.skillId],
+          AND state = 'published' AND projection_sequence <= $3`,
+      [input.workspaceId, input.skillId, input.projectionSequence],
     );
   }
 }
@@ -173,6 +180,7 @@ export async function publishGlobalProjection(input: {
   readonly versionId: string;
   readonly semanticVersion: string;
   readonly digest: `sha256:${string}`;
+  readonly projectionSequence: number;
   readonly document?: Readonly<Record<string, unknown>>;
   readonly searchText?: string;
 }): Promise<string> {
@@ -208,6 +216,7 @@ export async function publishGlobalProjection(input: {
     semanticVersion: input.semanticVersion,
     digest: input.digest,
     objectKey,
+    projectionSequence: input.projectionSequence,
     ...(input.document ? { document: input.document } : {}),
     ...(input.searchText !== undefined ? { searchText: input.searchText } : {}),
   });

@@ -52,6 +52,7 @@ export interface RegionalProjectionEvent {
     | "public_stats.skill_count_changed";
   readonly workspaceId: string;
   readonly fencingEpoch: number;
+  readonly sequence: number;
   readonly payload: unknown;
 }
 
@@ -61,6 +62,7 @@ interface ProjectionOutboxRow extends Record<string, unknown> {
   readonly event_type: RegionalProjectionEvent["eventType"];
   readonly payload: unknown;
   readonly fencing_epoch: number;
+  readonly sequence: number;
 }
 
 interface ProjectionOutboxSqlClient {
@@ -85,6 +87,14 @@ function safeFailureCode(error: unknown): string {
   return /^[A-Z0-9_:-]{1,160}$/u.test(message)
     ? message
     : "PUBLICATION_PROJECTION_FAILED";
+}
+
+function projectionSequence(value: unknown): number {
+  const sequence = Number(value);
+  if (!Number.isSafeInteger(sequence) || sequence < 1) {
+    throw new Error("PUBLICATION_OUTBOX_SEQUENCE_INVALID");
+  }
+  return sequence;
 }
 
 /**
@@ -138,7 +148,7 @@ export async function drainRegionalProjectionOutbox(input: {
        FROM candidates
       WHERE event.id = candidates.id
       RETURNING event.id, event.workspace_id, event.event_type,
-                event.payload, event.fencing_epoch`,
+                event.payload, event.fencing_epoch, event.sequence`,
     [limit, leaseSeconds, claimToken],
   );
   let processed = 0;
@@ -150,6 +160,7 @@ export async function drainRegionalProjectionOutbox(input: {
       eventType: eventType.parse(row.event_type),
       workspaceId: row.workspace_id,
       fencingEpoch: row.fencing_epoch,
+      sequence: projectionSequence(row.sequence),
       payload: row.payload,
     };
     try {
@@ -249,7 +260,10 @@ export async function applyRegionalPublicProjection(input: {
     if (payload.workspaceId !== input.event.workspaceId) {
       throw new Error("PUBLICATION_WORKSPACE_MISMATCH");
     }
-    await input.directory.unpublish(payload);
+    await input.directory.unpublish({
+      ...payload,
+      projectionSequence: input.event.sequence,
+    });
     return { objectKey: null };
   }
   const payload = publishedPayload.parse(input.event.payload);
@@ -270,6 +284,7 @@ export async function applyRegionalPublicProjection(input: {
     versionId: payload.versionId,
     semanticVersion: payload.semanticVersion,
     digest: payload.digest as `sha256:${string}`,
+    projectionSequence: input.event.sequence,
     document: payload.document,
     searchText: payload.searchText,
   });

@@ -41,6 +41,7 @@
     "pg": "catalog:"
   },
   "devDependencies": {
+    "@skillplane/control-plane": "workspace:*",
     "@types/pg": "catalog:",
     "drizzle-kit": "catalog:",
     "typescript": "catalog:",

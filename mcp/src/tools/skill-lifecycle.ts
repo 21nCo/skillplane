@@ -25,6 +25,7 @@ import type {
   SkillVersionRecord,
 } from "@skillplane/domain";
 import { canonicalizeBundleFiles } from "@skillplane/storage";
+import { registerResourceRoutes } from "@skillplane/api";
 import { principalForWorkspace } from "../auth.js";
 import { resolveSkill, type ResolvedSkill } from "./resolve.js";
 import {
@@ -269,6 +270,10 @@ export function skillCreate(runtime: McpToolRuntime, input: SkillCreateInput) {
         fencingEpoch: runtime.fencingEpoch,
         auditContext: mutationAuditContext(runtime, input.caller),
       });
+      await registerResourceRoutes(runtime.services, resolved.workspace.id, [
+        { resourceType: "skill", resourceId: created.skill.id },
+        { resourceType: "skill_version", resourceId: created.version.id },
+      ]);
       execution.setScope({
         resourceType: "skill",
         resourceId: created.skill.id,

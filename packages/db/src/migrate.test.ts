@@ -28,6 +28,9 @@ describe("migration chain", () => {
       "0020_global_control_plane_regional_cells.sql",
       "0021_authfn_identity_placement.sql",
       "0022_global_public_stats_projection.sql",
+      "0023_control_initial_workspace_placements.sql",
+      "0024_regional_workspace_migration_cleanup.sql",
+      "0025_control_projection_ordering.sql",
     ]);
     expect(new Set(migrations.map((migration) => migration.sha256)).size).toBe(
       migrations.length,

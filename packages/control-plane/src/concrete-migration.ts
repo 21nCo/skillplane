@@ -91,13 +91,32 @@ async function insertRows(
   table: string,
   rows: readonly Record<string, unknown>[],
 ): Promise<void> {
+  const writable = await client.query<{
+    column_name: string;
+    data_type: string;
+  }>(
+    `SELECT column_name, data_type
+       FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = $1
+        AND is_generated = 'NEVER' AND is_identity = 'NO'
+      ORDER BY ordinal_position`,
+    [table],
+  );
   for (const row of rows) {
-    const columns = Object.keys(row).sort();
+    const selected = writable.rows.filter((column) =>
+      Object.hasOwn(row, column.column_name),
+    );
+    const columns = selected.map((column) => column.column_name);
     if (columns.length === 0) continue;
     await client.query(
       `INSERT INTO ${identifier(table)} (${columns.map(identifier).join(", ")})
        VALUES (${columns.map((_, index) => `$${String(index + 1)}`).join(", ")})`,
-      columns.map((column) => row[column]),
+      selected.map((column) => {
+        const value = row[column.column_name];
+        return value !== null && ["json", "jsonb"].includes(column.data_type)
+          ? JSON.stringify(value)
+          : value;
+      }),
     );
   }
 }
@@ -212,6 +231,10 @@ export class PostgresWorkspaceMigrationOperations implements WorkspaceMigrationO
     try {
       await target.query("BEGIN ISOLATION LEVEL SERIALIZABLE");
       await target.query("SET CONSTRAINTS ALL DEFERRED");
+      await target.query(
+        "SELECT set_config('skillplane.workspace_migration_cleanup', $1, true)",
+        [context.namespace],
+      );
       for (const table of [...dynamic, ...regionalTables].toReversed()) {
         const column = dynamic.includes(table) ? "__ns" : "workspace_id";
         await target.query(
@@ -355,6 +378,10 @@ export class PostgresWorkspaceMigrationOperations implements WorkspaceMigrationO
       try {
         await client.query("BEGIN");
         await client.query("SET CONSTRAINTS ALL DEFERRED");
+        await client.query(
+          "SELECT set_config('skillplane.workspace_migration_cleanup', $1, true)",
+          [context.namespace],
+        );
         for (const table of [...dynamic, ...regionalTables].toReversed()) {
           const column = dynamic.includes(table) ? "__ns" : "workspace_id";
           await client.query(

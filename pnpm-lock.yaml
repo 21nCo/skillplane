@@ -639,6 +639,9 @@ importers:
         specifier: 'catalog:'
         version: 8.22.0
     devDependencies:
+      '@skillplane/control-plane':
+        specifier: workspace:*
+        version: link:../control-plane
       '@types/pg':
         specifier: 'catalog:'
         version: 8.20.0
