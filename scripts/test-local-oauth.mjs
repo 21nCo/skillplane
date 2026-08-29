@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { Client as McpClient } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
@@ -8,6 +8,7 @@ import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { Pool } from "pg";
 import { isMain } from "./lib/production-deployment.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -26,22 +27,43 @@ async function json(response, label) {
 
 async function configuration(options = {}) {
   if (options.issuer && options.resource) {
-    return { schemaVersion: 1, issuer: options.issuer, resource: options.resource };
+    assert(
+      typeof options.databaseUrl === "string" && options.databaseUrl.length > 0,
+      "OAuth verification requires a direct database URL for client cleanup",
+    );
+    return {
+      schemaVersion: 1,
+      issuer: options.issuer,
+      resource: options.resource,
+      databaseUrl: options.databaseUrl,
+    };
   }
-  const state = JSON.parse(
-    await readFile(resolve(root, ".data", "local-oauth.json"), "utf8").catch(
-      (error) => {
+  const [state, runtime] = await Promise.all([
+    readFile(resolve(root, ".data", "local-oauth.json"), "utf8")
+      .then((value) => JSON.parse(value))
+      .catch((error) => {
         if (error?.code === "ENOENT") {
           throw new Error(
             "Local OAuth is not configured; run pnpm local:oauth:configure first",
           );
         }
         throw error;
-      },
-    ),
-  );
+      }),
+    readFile(resolve(root, ".data", "local-runtime.json"), "utf8")
+      .then((value) => JSON.parse(value))
+      .catch((error) => {
+        if (error?.code === "ENOENT") {
+          throw new Error("Local runtime is missing; run pnpm db:up first");
+        }
+        throw error;
+      }),
+  ]);
   assert(state.schemaVersion === 1, "Local OAuth configuration has an unknown schema");
-  return state;
+  assert(
+    typeof runtime.databaseUrl === "string" && runtime.databaseUrl.length > 0,
+    "Local runtime omitted databaseUrl",
+  );
+  return { ...state, databaseUrl: runtime.databaseUrl };
 }
 
 function callbackServer(state) {
@@ -139,6 +161,44 @@ export async function waitForOAuthCallback(
   }
 }
 
+export function registrationManagement(registration, issuer) {
+  const accessToken = registration.registration_access_token;
+  const clientUri = registration.registration_client_uri;
+  const hasAccessToken = accessToken !== undefined;
+  const hasClientUri = clientUri !== undefined;
+  assert(
+    hasAccessToken === hasClientUri,
+    "Dynamic registration returned incomplete management credentials",
+  );
+  if (!hasAccessToken) return undefined;
+  assert(
+    typeof accessToken === "string" && accessToken.length >= 32,
+    "Dynamic registration returned an invalid registration_access_token",
+  );
+  assert(
+    typeof clientUri === "string" &&
+      new URL(clientUri).origin === new URL(issuer).origin,
+    "Dynamic registration returned an invalid registration_client_uri",
+  );
+  return { accessToken, clientUri };
+}
+
+export async function deleteDynamicRegistration(databaseUrl, clientId, options = {}) {
+  const PoolConstructor = options.Pool ?? Pool;
+  const pool = new PoolConstructor({ connectionString: databaseUrl, max: 1 });
+  try {
+    const result = await pool.query(
+      `DELETE FROM authfn_oauth_clients
+       WHERE client_id = $1 AND source = 'dynamic'
+       RETURNING client_id`,
+      [clientId],
+    );
+    assert(result.rowCount === 1, "OAuth client cleanup failed");
+  } finally {
+    await pool.end();
+  }
+}
+
 export async function testLocalOAuth(options = {}) {
   const configured = await configuration(options);
   const resourceMetadataUrl = new URL(
@@ -180,7 +240,7 @@ export async function testLocalOAuth(options = {}) {
   let primaryError;
   let cleanupError;
   let verificationResult;
-  const client = new Client({
+  const client = new McpClient({
     name: "skillplane-local-oauth-verifier",
     version: "1.0.0",
   });
@@ -203,19 +263,9 @@ export async function testLocalOAuth(options = {}) {
     );
     clientId = registration.client_id;
     assert(typeof clientId === "string", "Dynamic registration omitted client_id");
-    const registeredAccessToken = registration.registration_access_token;
-    const registeredClientUri = registration.registration_client_uri;
-    assert(
-      typeof registeredAccessToken === "string" && registeredAccessToken.length >= 32,
-      "Dynamic registration omitted registration_access_token",
-    );
-    assert(
-      typeof registeredClientUri === "string" &&
-        new URL(registeredClientUri).origin === new URL(configured.issuer).origin,
-      "Dynamic registration omitted a valid registration_client_uri",
-    );
-    registrationAccessToken = registeredAccessToken;
-    registrationClientUri = registeredClientUri;
+    const management = registrationManagement(registration, configured.issuer);
+    registrationAccessToken = management?.accessToken;
+    registrationClientUri = management?.clientUri;
     const authorize = new URL(authorizationMetadata.authorization_endpoint);
     authorize.search = new URLSearchParams({
       response_type: "code",
@@ -295,6 +345,9 @@ export async function testLocalOAuth(options = {}) {
       oauth: {
         discovery: true,
         dynamicRegistration: true,
+        registrationCleanup: registrationClientUri
+          ? "management-endpoint"
+          : "direct-database",
         pkce: "S256",
         tokenExchange: true,
       },
@@ -352,6 +405,8 @@ export async function testLocalOAuth(options = {}) {
           signal: AbortSignal.timeout(15_000),
         });
         assert(response.status === 204, "OAuth client cleanup failed");
+      } else if (clientId) {
+        await deleteDynamicRegistration(configured.databaseUrl, clientId);
       }
     });
     if (cleanupErrors.length > 0) {
