@@ -19,26 +19,27 @@ protocol mechanics around that authority. Tool handlers consume only the
 server-derived Skillplane identity propagated through McpFn `authInfo`; caller
 body fields never establish identity or authorization.
 
-## Source pin
+## Registry package pin
 
-Until reviewed McpFn packages are published, `mcpfn-source.json` pins the exact
-local worktree base commit, package identities, and a digest of each consumed
-package's `package.json` and `src` tree. Workspace packages use explicit local
-links to that worktree. Run:
+Skillplane consumes the reviewed stable npm releases directly:
+
+- `@mcpfn/auth@0.0.2`
+- `@mcpfn/core@0.0.2`
+- `@mcpfn/testing@0.0.2`
+
+Consumer manifests use exact versions and `pnpm-lock.yaml` records the registry
+artifacts and integrity hashes. Run:
 
 ```bash
 pnpm mcpfn:verify
 ```
 
-The command fails if the worktree moves, relevant source bytes change, a link
-resolves elsewhere, Skillplane constructs the SDK server or transport again,
-legacy registration-management routes return, or Skillplane resumes local
-Client ID Metadata Document hydration.
-
-When published packages are available, replace the links with exact versions
-in one reviewed change. Do not introduce a compatibility shim or dual runtime.
-Update the source contract only after the same gates below pass against the
-replacement packages.
+The command fails if a consumer uses a range, local link, or mismatched McpFn
+version; if Skillplane constructs the SDK server or transport again; if legacy
+registration-management routes return; or if Skillplane resumes local Client ID
+Metadata Document hydration. Package upgrades must update the exact manifest
+versions and frozen lockfile together, then pass the same gates below. Do not
+introduce a compatibility shim or dual runtime.
 
 ## Required release gates
 

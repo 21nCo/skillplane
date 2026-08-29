@@ -1,9 +1,7 @@
 #!/usr/bin/env node
 
-import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
-import { dirname, extname, isAbsolute, relative, resolve } from "node:path";
+import { dirname, extname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 
@@ -11,32 +9,6 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 function fail(message) {
   throw new Error(`McpFn adoption verification failed: ${message}`);
-}
-
-function resolveGitExecutable() {
-  const configured = process.env.GIT_EXECUTABLE;
-  if (configured) {
-    if (!isAbsolute(configured)) {
-      fail("GIT_EXECUTABLE must be an absolute path");
-    }
-    return configured;
-  }
-  return process.platform === "win32"
-    ? String.raw`C:\Program Files\Git\cmd\git.exe`
-    : "/usr/bin/git";
-}
-
-const gitExecutable = resolveGitExecutable();
-const contract = JSON.parse(
-  await readFile(resolve(repoRoot, "mcpfn-source.json"), "utf8"),
-);
-const sourceRoot = resolve(repoRoot, contract.sourceRoot);
-
-const head = execFileSync(gitExecutable, ["-C", sourceRoot, "rev-parse", "HEAD"], {
-  encoding: "utf8",
-}).trim();
-if (head !== contract.baseCommit) {
-  fail(`expected base commit ${contract.baseCommit}, received ${head}`);
 }
 
 async function sourceFiles(directory) {
@@ -47,43 +19,6 @@ async function sourceFiles(directory) {
     else if (entry.isFile()) files.push(path);
   }
   return files;
-}
-
-function compareCodeUnits(left, right) {
-  if (left < right) return -1;
-  if (left > right) return 1;
-  return 0;
-}
-
-const digest = createHash("sha256");
-for (const [name, packageContract] of Object.entries(contract.packages).toSorted(
-  ([left], [right]) => compareCodeUnits(left, right),
-)) {
-  const packageRoot = resolve(sourceRoot, packageContract.path);
-  const packageJsonPath = resolve(packageRoot, "package.json");
-  const packageJson = JSON.parse(await readFile(packageJsonPath, "utf8"));
-  if (packageJson.name !== name || packageJson.version !== packageContract.version) {
-    fail(`${name} package identity does not match mcpfn-source.json`);
-  }
-  const files = [
-    packageJsonPath,
-    ...(await sourceFiles(resolve(packageRoot, "src"))),
-    ...(await sourceFiles(resolve(packageRoot, "dist"))),
-  ].toSorted(compareCodeUnits);
-  for (const path of files) {
-    const content = await readFile(path);
-    const label = relative(sourceRoot, path).replaceAll("\\", "/");
-    digest.update(label).update("\0").update(String(content.byteLength)).update("\0");
-    digest.update(content);
-  }
-}
-const actualDigest = `sha256:${digest.digest("hex")}`;
-if (process.argv.includes("--print-digest")) {
-  process.stdout.write(`${actualDigest}\n`);
-  process.exit(0);
-}
-if (actualDigest !== contract.sourceDigest) {
-  fail(`expected source digest ${contract.sourceDigest}, received ${actualDigest}`);
 }
 
 const consumers = [
@@ -101,6 +36,8 @@ const consumers = [
     required: { dependencies: ["@mcpfn/auth"], devDependencies: [] },
   },
 ];
+const exactStableVersion = /^\d+\.\d+\.\d+$/u;
+const selectedVersions = new Map();
 for (const { label, packageJsonPath, required } of consumers) {
   const packageJson = JSON.parse(await readFile(packageJsonPath, "utf8"));
   for (const [section, names] of Object.entries(required)) {
@@ -109,17 +46,17 @@ for (const { label, packageJsonPath, required } of consumers) {
       if (Object.hasOwn(packageJson[opposite] ?? {}, name)) {
         fail(`${label} must declare ${name} only in ${section}`);
       }
-      const link = packageJson[section]?.[name];
-      if (typeof link !== "string" || !link.startsWith("link:")) {
+      const version = packageJson[section]?.[name];
+      if (typeof version !== "string" || !exactStableVersion.test(version)) {
         fail(
-          `${label} must consume ${name} from ${section} through an explicit local link`,
+          `${label} must consume ${name} from ${section} at an exact stable version`,
         );
       }
-      const resolved = resolve(dirname(packageJsonPath), link.slice("link:".length));
-      const expected = resolve(sourceRoot, contract.packages[name].path);
-      if (resolved !== expected) {
-        fail(`${label} ${name} link resolves outside the pinned worktree`);
+      const selected = selectedVersions.get(name);
+      if (selected && selected !== version) {
+        fail(`${name} versions disagree across consumers: ${selected} and ${version}`);
       }
+      selectedVersions.set(name, version);
     }
   }
 }
@@ -444,4 +381,7 @@ if (/\.fetcher\s*\(/u.test(oauthClients)) {
   fail("Skillplane still hydrates Client ID Metadata Documents itself");
 }
 
-process.stdout.write(`McpFn adoption verified at ${head} (${actualDigest}).\n`);
+const selection = [...selectedVersions]
+  .map(([name, version]) => `${name}@${version}`)
+  .join(", ");
+process.stdout.write(`McpFn adoption verified with ${selection}.\n`);

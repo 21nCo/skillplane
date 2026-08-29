@@ -2,15 +2,15 @@
 
 ## Metadata
 
-- Updated: `2026-08-29T11:38:45Z`
+- Updated: `2026-08-29T12:43:15Z`
 - Agent: Codex `/root`
 - Model: `GPT-5`
 - Launcher: `Codex Desktop`
 - Issue: Linear `SKI-6` — Adopt McpFn for Skillplane MCP runtime, authorization, and quality gates
 - Skillplane base: `main` at `c13917c360b326d6199162de63df9e61e4885944`
-- McpFn source: local `MCP-2` worktree at base `5705aada0b6667132b5de324999e1d40e4df638f`
-- McpFn source digest: `sha256:9c0919b61d87ca6c1619a6b56cdd65c62c4a3ac6c734166b29376a86f2f8e900`
-- Publication state: commits, pushes, and PR updates are authorized on `codex/ski-6-mcpfn-runtime`; package publication, merge, deployment, live-provider verification, and Linear status transition remain out of scope
+- McpFn release commit: `c95b3f50d7b8f51a37a35da65a5ca7d02d53abe4`
+- McpFn packages: `@mcpfn/auth@0.0.2`, `@mcpfn/core@0.0.2`, and `@mcpfn/testing@0.0.2` from npm
+- Publication state: the consumed stable packages are published and registry-verified; deployment, live-provider verification, and Linear status transition remain out of scope
 
 ## Status
 
@@ -39,8 +39,8 @@ Skillplane directly constructed the MCP SDK server and Streamable HTTP transport
 - Reduced AuthFn MCP OAuth to persistence and consent authority behind McpFn's validated hosted-authorization contract.
 - Removed the legacy dynamic-registration read/delete routes and local Client ID Metadata Document hydration. No shim, dual path, or backward-support layer remains.
 - Enforced the production MCP Host and allowed loopback only outside production; DNS-rebinding attempts return `421`.
-- Pinned the reviewed local McpFn worktree by base commit, source digest, package identity, and explicit local links. Published package adoption is a later reviewed replacement.
-- Applied network-only limits before client resolution, retained client-and-network token limits for both authorization-code and refresh grants, returned stable `404` envelopes for removed registration-management routes, and made source verification hash the executed `dist` artifacts as well as source.
+- Replaced the reviewed local McpFn links with exact stable npm versions and a frozen registry lockfile; no local-source fallback remains.
+- Applied network-only limits before client resolution, retained client-and-network token limits for both authorization-code and refresh grants, returned stable `404` envelopes for removed registration-management routes, and pinned reviewed registry artifacts through exact manifest versions plus the frozen integrity lockfile.
 - Preserved required client names, endpoint-accurate rate-limit errors, and direct-pnpm conformance execution; verifier checks now enforce dependency sections and inspect the reachable MCP TypeScript module graph rather than matching comments or unused imports.
 
 ### Quality gates, evidence, and rollback
@@ -56,13 +56,15 @@ Skillplane directly constructed the MCP SDK server and Streamable HTTP transport
 
 - McpFn `npm run gate:mcpfn-release`: PASS (`67/67` steps), including focused typechecks/tests/builds, Playwright, official conformance, package dry-runs, packed consumer install, ESM/CJS imports, and the consumer round trip.
 - McpFn OAuth Core focused suite: PASS (`30/30` tests); OAuth Core typecheck: PASS. Auth, Testing, and Inspector suites and typechecks also passed within the full release gate.
-- `pnpm mcpfn:verify`: PASS at base `5705aada0b6667132b5de324999e1d40e4df638f` and digest `sha256:9c0919b61d87ca6c1619a6b56cdd65c62c4a3ac6c734166b29376a86f2f8e900`.
-- `pnpm test:mcp:contract`: the current rerun was blocked before assertions because the local PostgreSQL test service was stopped and Docker was unavailable. The most recent retained run remains PASS (`8/8`); the selected McpFn package digest is unchanged from that run.
-- `pnpm test:mcp:conformance`: not rerun in this round because it requires the same unavailable database service. The most recent retained authenticated run remains PASS (`1/1`), with `5` hard-gate successes, `25` reviewed non-advertised-capability failures, and `1` reviewed stateless-session warning.
+- `pnpm mcpfn:verify`: PASS with exact stable registry dependencies and no local-link or range-based McpFn consumers.
+- `pnpm test:mcp:contract`: the current registry-backed rerun built the complete MCP dependency graph and Worker, then stopped before assertions because `.data/local-runtime.json` is absent and Docker is unavailable. The retained `8/8` pass predates this registry-package replacement and is historical evidence only.
+- `pnpm test:mcp:conformance`: the current registry-backed rerun built the complete MCP dependency graph and Worker, then stopped before assertions for the same missing local runtime. The retained authenticated `1/1` pass, with `5` hard-gate successes, `25` reviewed non-advertised-capability failures, and `1` reviewed stateless-session warning, predates this registry-package replacement and is historical evidence only.
 - AuthFn MCP OAuth focused typecheck and unit suite: PASS (`16/16`), including Client ID Metadata Document persistence through the production compatibility authorization route.
 - Auth application unit suite: PASS (`7/7`).
 - Focused API OAuth security suite: PASS (`17/17` tests), including required client names, unsafe redirect registration, trusted redirect handling, rotation/reuse, rate limits, CSRF, and secret leakage defenses.
+- `pnpm test:unit`: PASS (`28/28` tasks).
 - `pnpm typecheck`: PASS (`29/29` tasks).
+- `pnpm build`: PASS (`16/16` tasks), including the MCP Worker dry-run bundle.
 - Changed-surface Prettier and `git diff --check`: PASS.
 
 The full `pnpm test:integration` run is green (`24/24` tasks). The explicitly enabled local loopback issuer restored all eight API suites that previously aborted during setup, while non-loopback HTTP issuers remain rejected.
@@ -79,10 +81,10 @@ Run fresh controlled-development connections from both Claude and ChatGPT agains
 - reconnect and OAuth refresh behavior;
 - provider-visible errors and logs without token or secret material.
 
-Only after both provider runs pass should `SKI-6` be marked Done or the rollout proceed. McpFn package publication, deployment, and production verification remain separate explicitly approved actions.
+Only after both provider runs pass should `SKI-6` be marked Done or the rollout proceed. Deployment and production verification remain separate explicitly approved actions.
 
 ## Preserved work
 
 - Existing untracked deployment records and the unrelated local-authority spec were not modified or included.
-- Existing `.conduct` changes in the McpFn worktree were not modified.
+- Existing `.conduct` changes in the original McpFn and Skillplane checkouts were not modified.
 - Unrelated `.conduct` and deployment artifacts remain unstaged and outside the Skillplane publication allowlist.
