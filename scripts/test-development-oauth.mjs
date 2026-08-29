@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import {
+  developmentDatabase,
   developmentIssuer,
   developmentResource,
 } from "./lib/development-deployment.mjs";
@@ -9,6 +10,7 @@ import { testLocalOAuth } from "./test-local-oauth.mjs";
 
 export async function testDevelopmentOAuth() {
   return testLocalOAuth({
+    databaseUrl: developmentDatabase().url,
     issuer: developmentIssuer,
     resource: developmentResource,
   });
