@@ -186,15 +186,30 @@ export function registrationManagement(registration, issuer) {
 export async function deleteDynamicRegistration(databaseUrl, clientId, options = {}) {
   const PoolConstructor = options.Pool ?? Pool;
   const pool = new PoolConstructor({ connectionString: databaseUrl, max: 1 });
+  let client;
+  let transactionStarted = false;
   try {
-    const result = await pool.query(
+    client = await pool.connect();
+    await client.query("BEGIN");
+    transactionStarted = true;
+    await client.query(
+      `DELETE FROM authfn_oauth_authorization_requests
+       WHERE payload->>'clientId' = $1`,
+      [clientId],
+    );
+    const result = await client.query(
       `DELETE FROM authfn_oauth_clients
        WHERE client_id = $1 AND source = 'dynamic'
        RETURNING client_id`,
       [clientId],
     );
     assert(result.rowCount === 1, "OAuth client cleanup failed");
+    await client.query("COMMIT");
+  } catch (error) {
+    if (client && transactionStarted) await client.query("ROLLBACK");
+    throw error;
   } finally {
+    client?.release();
     await pool.end();
   }
 }

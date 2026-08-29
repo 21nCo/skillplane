@@ -92,16 +92,24 @@ describe("dynamic registration cleanup", () => {
     );
   });
 
-  it("deletes only the verifier's dynamic client and closes the pool", async () => {
+  it("deletes the verifier request and dynamic client in one transaction", async () => {
     const calls = [];
     class FakePool {
       constructor(options) {
         calls.push(["construct", options]);
       }
 
-      async query(statement, parameters) {
-        calls.push(["query", statement, parameters]);
-        return { rowCount: 1 };
+      async connect() {
+        calls.push(["connect"]);
+        return {
+          async query(statement, parameters) {
+            calls.push(["query", statement, parameters]);
+            return { rowCount: 1 };
+          },
+          release() {
+            calls.push(["release"]);
+          },
+        };
       }
 
       async end() {
@@ -122,16 +130,36 @@ describe("dynamic registration cleanup", () => {
         max: 1,
       },
     ]);
-    assert.match(calls[1][1], /source = 'dynamic'/u);
-    assert.deepEqual(calls[1][2], ["dynamic-client"]);
-    assert.deepEqual(calls[2], ["end"]);
+    assert.deepEqual(calls[1], ["connect"]);
+    assert.deepEqual(calls[2], ["query", "BEGIN", undefined]);
+    assert.match(calls[3][1], /authfn_oauth_authorization_requests/u);
+    assert.match(calls[3][1], /payload->>'clientId' = \$1/u);
+    assert.deepEqual(calls[3][2], ["dynamic-client"]);
+    assert.match(calls[4][1], /authfn_oauth_clients/u);
+    assert.match(calls[4][1], /source = 'dynamic'/u);
+    assert.deepEqual(calls[4][2], ["dynamic-client"]);
+    assert.deepEqual(calls[5], ["query", "COMMIT", undefined]);
+    assert.deepEqual(calls[6], ["release"]);
+    assert.deepEqual(calls[7], ["end"]);
   });
 
-  it("fails when the dynamic client was not deleted", async () => {
+  it("rolls back when the dynamic client was not deleted", async () => {
     let ended = false;
+    let released = false;
+    const statements = [];
     class FakePool {
-      async query() {
-        return { rowCount: 0 };
+      async connect() {
+        return {
+          async query(statement) {
+            statements.push(statement);
+            return {
+              rowCount: statement.includes("authfn_oauth_clients") ? 0 : 1,
+            };
+          },
+          release() {
+            released = true;
+          },
+        };
       }
 
       async end() {
@@ -145,6 +173,8 @@ describe("dynamic registration cleanup", () => {
       }),
       /OAuth client cleanup failed/u,
     );
+    assert.deepEqual(statements.slice(-1), ["ROLLBACK"]);
+    assert.equal(released, true);
     assert.equal(ended, true);
   });
 });
