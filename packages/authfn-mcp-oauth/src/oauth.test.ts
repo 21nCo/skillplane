@@ -17,6 +17,7 @@ import {
   sha256Base64Url,
   signPayload,
   isClientMetadataDocumentUrlAllowed,
+  persistClientMetadataDocument,
   verifySignedPayload,
 } from "./index.js";
 
@@ -214,6 +215,53 @@ describe("OAuth client and redirect validation", () => {
     "https://agent.example.test/client.json?version=1",
   ])("rejects unsafe client metadata URL %s", (clientId) => {
     expect(isClientMetadataDocumentUrlAllowed(new URL(clientId))).toBe(false);
+  });
+
+  it("atomically projects validated metadata-document clients into grant storage", async () => {
+    const query = vi.fn(async (sql: string) => ({
+      rows: sql.includes("RETURNING client_id")
+        ? [{ client_id: "https://agent.example.test/client.json" }]
+        : [],
+    }));
+    const release = vi.fn();
+    const runtime = normalizeOAuthConfig({
+      pool: {
+        connect: vi.fn(async () => ({ query, release })),
+      } as unknown as Pool,
+      issuer: "https://app.skillplane.dev",
+      tokenPepper: pepper,
+      now: () => new Date("2026-08-29T00:00:00.000Z"),
+    });
+    const client = normalizeMcpClientRegistration({
+      clientId: "https://agent.example.test/client.json",
+      source: "client-metadata-document",
+      metadata: {
+        client_name: "Metadata Agent",
+        redirect_uris: ["https://agent.example.test/callback"],
+        token_endpoint_auth_method: "none",
+      },
+    });
+
+    await persistClientMetadataDocument(runtime, client);
+
+    expect(query.mock.calls.map(([sql]) => sql)).toEqual([
+      "BEGIN",
+      expect.stringContaining("INSERT INTO authfn_oauth_clients"),
+      "DELETE FROM authfn_oauth_client_redirect_uris WHERE client_id = $1",
+      expect.stringContaining("INSERT INTO authfn_oauth_client_redirect_uris"),
+      "COMMIT",
+    ]);
+    expect(query.mock.calls[1]?.[1]).toEqual([
+      "https://agent.example.test/client.json",
+      "Metadata Agent",
+      new Date("2026-08-29T00:00:00.000Z"),
+    ]);
+    expect(query.mock.calls[3]?.[1]).toEqual([
+      expect.stringMatching(/^ocru_/u),
+      "https://agent.example.test/client.json",
+      "https://agent.example.test/callback",
+    ]);
+    expect(release).toHaveBeenCalledOnce();
   });
 });
 

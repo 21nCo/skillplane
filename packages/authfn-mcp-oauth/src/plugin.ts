@@ -13,6 +13,7 @@ import { consumeRateLimit } from "@skillplane/db";
 import { beginAuthorization, consentDetails, decideConsent } from "./authorization.js";
 import {
   isClientMetadataDocumentUrlAllowed,
+  persistClientMetadataDocument,
   registerClient,
   resolveRegisteredClient,
 } from "./clients.js";
@@ -109,13 +110,16 @@ async function fromTokenAuthority<T>(operation: () => Promise<T>): Promise<T> {
   }
 }
 
-function safeAuthorizationResponse(
+async function safeAuthorizationResponse(
   runtime: OAuthRuntime,
   authfn: AuthFnPluginRuntimeContext,
   input: McpFnValidatedAuthorizationRequest,
   request: Request,
 ): Promise<Response> {
-  return beginAuthorization(runtime, authfn, request, input).catch((error: unknown) => {
+  try {
+    await persistClientMetadataDocument(runtime, input.client);
+    return await beginAuthorization(runtime, authfn, request, input);
+  } catch (error: unknown) {
     if (error instanceof OAuthError) {
       return authorizationErrorRedirect(
         input.redirectUri,
@@ -125,7 +129,7 @@ function safeAuthorizationResponse(
       );
     }
     return oauthErrorResponse(error);
-  });
+  }
 }
 
 function compatibilityOptions(

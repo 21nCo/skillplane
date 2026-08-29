@@ -652,10 +652,22 @@ export function createMcpApp(options: CreateMcpAppOptions = {}) {
         {
           resource: currentServices.auth.oauth.resource,
           provider: {
-            authenticateBearer: async (token, request) =>
-              authSession(
-                await authenticateMcpBearerCredential(token, request, currentServices),
-              ),
+            authenticateBearer: async (token, request) => {
+              try {
+                return authSession(
+                  await authenticateMcpBearerCredential(
+                    token,
+                    request,
+                    currentServices,
+                  ),
+                );
+              } catch (error) {
+                if (error instanceof McpAuthenticationError && error.status === 401) {
+                  return null;
+                }
+                throw error;
+              }
+            },
           },
           map: (session) => ({
             subject: session.identity.actorId,

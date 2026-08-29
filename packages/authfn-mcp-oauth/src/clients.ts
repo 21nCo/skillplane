@@ -104,6 +104,73 @@ function normalizedClientName(metadata: ClientMetadata): string {
   return name;
 }
 
+function metadataDocumentClientName(
+  registration: McpFnNormalizedClientRegistration,
+): string {
+  const declaredName = registration.metadata.client_name;
+  return normalizedClientName({
+    ...registration.metadata,
+    client_name:
+      typeof declaredName === "string" && declaredName.trim().length > 0
+        ? declaredName
+        : new URL(registration.clientId).hostname,
+  });
+}
+
+export async function persistClientMetadataDocument(
+  runtime: OAuthRuntime,
+  registration: McpFnNormalizedClientRegistration,
+): Promise<void> {
+  if (registration.source !== "client-metadata-document") return;
+  if (registration.tokenEndpointAuthMethod !== "none") {
+    throw new McpFnHostedAuthorizationError(
+      "unauthorized_client",
+      "Skillplane supports public Client ID Metadata Document clients only",
+    );
+  }
+  const database = await runtime.pool.connect();
+  try {
+    await database.query("BEGIN");
+    const persisted = await database.query<{ client_id: string }>(
+      `INSERT INTO authfn_oauth_clients
+         (client_id, client_name, source, token_endpoint_auth_method,
+          registration_access_token_hash, updated_at)
+       VALUES ($1, $2, 'client_metadata', 'none', NULL, $3)
+       ON CONFLICT (client_id)
+       DO UPDATE SET client_name = EXCLUDED.client_name,
+                     token_endpoint_auth_method = 'none',
+                     registration_access_token_hash = NULL,
+                     updated_at = EXCLUDED.updated_at
+       WHERE authfn_oauth_clients.source = 'client_metadata'
+       RETURNING client_id`,
+      [registration.clientId, metadataDocumentClientName(registration), runtime.now()],
+    );
+    if (persisted.rows.length !== 1) {
+      throw new McpFnHostedAuthorizationError(
+        "invalid_client",
+        "The client_id conflicts with an existing registered client",
+      );
+    }
+    await database.query(
+      "DELETE FROM authfn_oauth_client_redirect_uris WHERE client_id = $1",
+      [registration.clientId],
+    );
+    for (const redirectUri of registration.redirectUris) {
+      await database.query(
+        `INSERT INTO authfn_oauth_client_redirect_uris (id, client_id, redirect_uri)
+         VALUES ($1, $2, $3)`,
+        [id("ocru_", runtime.randomBytes), registration.clientId, redirectUri],
+      );
+    }
+    await database.query("COMMIT");
+  } catch (error) {
+    await database.query("ROLLBACK");
+    throw error;
+  } finally {
+    database.release();
+  }
+}
+
 export async function registerClient(
   runtime: OAuthRuntime,
   metadata: ClientMetadata,
