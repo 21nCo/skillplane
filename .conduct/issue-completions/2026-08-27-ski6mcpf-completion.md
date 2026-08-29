@@ -2,14 +2,14 @@
 
 ## Metadata
 
-- Updated: `2026-08-29T07:20:51Z`
+- Updated: `2026-08-29T11:38:45Z`
 - Agent: Codex `/root`
 - Model: `GPT-5`
 - Launcher: `Codex Desktop`
 - Issue: Linear `SKI-6` — Adopt McpFn for Skillplane MCP runtime, authorization, and quality gates
 - Skillplane base: `main` at `c13917c360b326d6199162de63df9e61e4885944`
-- McpFn source: local `MCP-2` worktree at base `6ba81463825455bcaf074c3faa40122d9ffeeb03`
-- McpFn source digest: `sha256:08de55b27a585c72066c930bae720e170e4031331eef65345765de881bf69f21`
+- McpFn source: local `MCP-2` worktree at base `5705aada0b6667132b5de324999e1d40e4df638f`
+- McpFn source digest: `sha256:9c0919b61d87ca6c1619a6b56cdd65c62c4a3ac6c734166b29376a86f2f8e900`
 - Publication state: commits, pushes, and PR updates are authorized on `codex/ski-6-mcpfn-runtime`; package publication, merge, deployment, live-provider verification, and Linear status transition remain out of scope
 
 ## Status
@@ -55,11 +55,11 @@ Skillplane directly constructed the MCP SDK server and Streamable HTTP transport
 ## Verification
 
 - McpFn `npm run gate:mcpfn-release`: PASS (`67/67` steps), including focused typechecks/tests/builds, Playwright, official conformance, package dry-runs, packed consumer install, ESM/CJS imports, and the consumer round trip.
-- McpFn focused OAuth Core, Auth, Testing, and Inspector suites: PASS (`79/79` tests); focused typechecks: PASS.
-- `pnpm mcpfn:verify`: PASS at base `6ba81463825455bcaf074c3faa40122d9ffeeb03` and digest `sha256:08de55b27a585c72066c930bae720e170e4031331eef65345765de881bf69f21`.
-- `pnpm test:mcp:contract`: PASS (`8/8`).
-- `pnpm test:mcp:conformance`: PASS (`1/1` authenticated run). Retained summary records `5` hard-gate successes, `25` reviewed non-advertised-capability failures, and `1` reviewed stateless-session warning, with exact non-success check-ID equality enforced.
-- AuthFn MCP OAuth focused typecheck and unit suite: PASS (`15/15`).
+- McpFn OAuth Core focused suite: PASS (`30/30` tests); OAuth Core typecheck: PASS. Auth, Testing, and Inspector suites and typechecks also passed within the full release gate.
+- `pnpm mcpfn:verify`: PASS at base `5705aada0b6667132b5de324999e1d40e4df638f` and digest `sha256:9c0919b61d87ca6c1619a6b56cdd65c62c4a3ac6c734166b29376a86f2f8e900`.
+- `pnpm test:mcp:contract`: the current rerun was blocked before assertions because the local PostgreSQL test service was stopped and Docker was unavailable. The most recent retained run remains PASS (`8/8`); the selected McpFn package digest is unchanged from that run.
+- `pnpm test:mcp:conformance`: not rerun in this round because it requires the same unavailable database service. The most recent retained authenticated run remains PASS (`1/1`), with `5` hard-gate successes, `25` reviewed non-advertised-capability failures, and `1` reviewed stateless-session warning.
+- AuthFn MCP OAuth focused typecheck and unit suite: PASS (`16/16`), including Client ID Metadata Document persistence through the production compatibility authorization route.
 - Auth application unit suite: PASS (`7/7`).
 - Focused API OAuth security suite: PASS (`17/17` tests), including required client names, unsafe redirect registration, trusted redirect handling, rotation/reuse, rate limits, CSRF, and secret leakage defenses.
 - `pnpm typecheck`: PASS (`29/29` tasks).

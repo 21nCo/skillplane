@@ -17,7 +17,6 @@ import {
   sha256Base64Url,
   signPayload,
   isClientMetadataDocumentUrlAllowed,
-  persistClientMetadataDocument,
   verifySignedPayload,
 } from "./index.js";
 
@@ -217,50 +216,97 @@ describe("OAuth client and redirect validation", () => {
     expect(isClientMetadataDocumentUrlAllowed(new URL(clientId))).toBe(false);
   });
 
-  it("atomically projects validated metadata-document clients into grant storage", async () => {
+  it("projects metadata-document clients through the compatibility authorization route", async () => {
+    const clientId = "https://agent.example.test/client.json";
+    const redirectUri = "https://agent.example.test/callback";
     const query = vi.fn(async (sql: string) => ({
-      rows: sql.includes("RETURNING client_id")
-        ? [{ client_id: "https://agent.example.test/client.json" }]
-        : [],
+      rows: sql.includes("RETURNING request_count") ? [{ request_count: 1 }] : [],
+    }));
+    const transactionQuery = vi.fn(async (sql: string) => ({
+      rows: sql.includes("RETURNING client_id") ? [{ client_id: clientId }] : [],
     }));
     const release = vi.fn();
-    const runtime = normalizeOAuthConfig({
+    const connect = vi.fn(async () => ({ query: transactionQuery, release }));
+    const fetcher = vi.fn(async () =>
+      Response.json({
+        client_id: clientId,
+        client_name: "Metadata Agent",
+        redirect_uris: [redirectUri],
+        response_types: ["code"],
+        grant_types: ["authorization_code", "refresh_token"],
+        token_endpoint_auth_method: "none",
+      }),
+    );
+    const { plugin } = createAuthFnMcpOAuthPlugin({
       pool: {
-        connect: vi.fn(async () => ({ query, release })),
+        query,
+        connect,
       } as unknown as Pool,
       issuer: "https://app.skillplane.dev",
       tokenPepper: pepper,
+      fetcher,
       now: () => new Date("2026-08-29T00:00:00.000Z"),
     });
-    const client = normalizeMcpClientRegistration({
-      clientId: "https://agent.example.test/client.json",
-      source: "client-metadata-document",
-      metadata: {
-        client_name: "Metadata Agent",
-        redirect_uris: ["https://agent.example.test/callback"],
-        token_endpoint_auth_method: "none",
-      },
-    });
+    const authfn = {
+      config: { plugins: [] },
+      namespace: "authfn",
+      basePath: "/auth",
+      hooks: {},
+    } as unknown as AuthFnPluginRuntimeContext;
+    const authorize = plugin
+      .routes?.(authfn)
+      .find((route) => route.path === "/oauth/authorize");
+    if (!authorize) throw new Error("OAuth authorization route is missing");
+    const authorizationUrl = new URL("https://app.skillplane.dev/auth/oauth/authorize");
+    for (const [name, value] of Object.entries({
+      response_type: "code",
+      client_id: clientId,
+      redirect_uri: redirectUri,
+      code_challenge: "c".repeat(43),
+      code_challenge_method: "S256",
+      state: "state-1",
+      resource: MCP_RESOURCE,
+      scope: "skills:read",
+    })) {
+      authorizationUrl.searchParams.set(name, value);
+    }
 
-    await persistClientMetadataDocument(runtime, client);
+    const response = await authorize.handler(
+      new Request(authorizationUrl),
+      undefined as never,
+    );
 
-    expect(query.mock.calls.map(([sql]) => sql)).toEqual([
+    expect(response.status).toBe(302);
+    expect(response.headers.get("location")).toContain("/sign-in?next=");
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(connect).toHaveBeenCalledOnce();
+    expect(transactionQuery.mock.calls.map(([sql]) => sql)).toEqual([
       "BEGIN",
       expect.stringContaining("INSERT INTO authfn_oauth_clients"),
       "DELETE FROM authfn_oauth_client_redirect_uris WHERE client_id = $1",
       expect.stringContaining("INSERT INTO authfn_oauth_client_redirect_uris"),
       "COMMIT",
     ]);
-    expect(query.mock.calls[1]?.[1]).toEqual([
-      "https://agent.example.test/client.json",
+    expect(transactionQuery.mock.calls[1]?.[1]).toEqual([
+      clientId,
       "Metadata Agent",
       new Date("2026-08-29T00:00:00.000Z"),
     ]);
-    expect(query.mock.calls[3]?.[1]).toEqual([
+    expect(transactionQuery.mock.calls[3]?.[1]).toEqual([
       expect.stringMatching(/^ocru_/u),
-      "https://agent.example.test/client.json",
-      "https://agent.example.test/callback",
+      clientId,
+      redirectUri,
     ]);
+    expect(query.mock.calls.map(([sql]) => sql)).toEqual([
+      expect.stringContaining("INSERT INTO api_rate_limits"),
+      expect.stringContaining("INSERT INTO authfn_oauth_authorization_requests"),
+    ]);
+    expect(query.mock.calls[1]?.[1]?.[2]).toMatchObject({
+      clientId,
+      redirectUri,
+      resource: MCP_RESOURCE,
+      scopes: ["skills:read"],
+    });
     expect(release).toHaveBeenCalledOnce();
   });
 });
