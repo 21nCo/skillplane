@@ -13,8 +13,8 @@
     "deploy:check": "wrangler deploy --config wrangler.jsonc --dry-run --outdir dist-worker"
   },
   "dependencies": {
-    "@mcpfn/auth": "0.0.2",
-    "@mcpfn/core": "0.0.2",
+    "@mcpfn/auth": "0.0.3",
+    "@mcpfn/core": "0.0.4",
     "@modelcontextprotocol/sdk": "catalog:",
     "@posthog/mcp": "0.10.9",
     "@skillplane/api": "workspace:*",
@@ -30,7 +30,7 @@
     "zod": "catalog:"
   },
   "devDependencies": {
-    "@mcpfn/testing": "0.0.2",
+    "@mcpfn/testing": "0.0.4",
     "@skillplane/db": "workspace:*",
     "@skillplane/testing": "workspace:*",
     "@types/pg": "catalog:",

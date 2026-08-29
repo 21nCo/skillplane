@@ -23,9 +23,9 @@ body fields never establish identity or authorization.
 
 Skillplane consumes the reviewed stable npm releases directly:
 
-- `@mcpfn/auth@0.0.2`
-- `@mcpfn/core@0.0.2`
-- `@mcpfn/testing@0.0.2`
+- `@mcpfn/auth@0.0.3`
+- `@mcpfn/core@0.0.4`
+- `@mcpfn/testing@0.0.4`
 
 Consumer manifests use exact versions and `pnpm-lock.yaml` records the registry
 artifacts and integrity hashes. Run:
