@@ -6,6 +6,41 @@ import {
   registrationManagement,
   waitForOAuthCallback,
 } from "./test-local-oauth.mjs";
+import {
+  developmentOAuthConfiguration,
+  testDevelopmentOAuth,
+} from "./test-development-oauth.mjs";
+
+describe("development OAuth topology", () => {
+  it("uses the global control database for OAuth verifier cleanup", async () => {
+    const databases = {
+      control: { url: "postgresql://control.example/skillplane" },
+      cells: {
+        "in-south": { url: "postgresql://india.example/skillplane" },
+      },
+    };
+    const configured = developmentOAuthConfiguration({
+      databases,
+      workspaceSlugs: ["india-workspace"],
+    });
+
+    assert.equal(configured.databaseUrl, databases.control.url);
+    assert.notEqual(configured.databaseUrl, databases.cells["in-south"].url);
+    assert.deepEqual(configured.workspaceSlugs, ["india-workspace"]);
+
+    let received;
+    const result = await testDevelopmentOAuth({
+      databases,
+      workspaceSlugs: ["india-workspace"],
+      verify: async (options) => {
+        received = options;
+        return { ok: true };
+      },
+    });
+    assert.equal(received.databaseUrl, databases.control.url);
+    assert.deepEqual(result, { ok: true });
+  });
+});
 
 describe("local OAuth browser launch", () => {
   it("selects the platform browser launcher", () => {
