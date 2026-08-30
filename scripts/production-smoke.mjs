@@ -72,16 +72,23 @@ async function readJson(response, label) {
   }
 }
 
-export async function productionSmoke(options = {}) {
-  const attempts = options.attempts ?? 1;
-  const landing = await request(
-    endpoints.landing,
+async function readBrandIcon(origin, attempts) {
+  const response = await request(
+    `${origin}/icon-512.png`,
     {},
-    {
-      attempts,
-      acceptStatus: [200],
-    },
+    { attempts, acceptStatus: [200] },
   );
+  assert(
+    response.headers.get("content-type")?.includes("image/png"),
+    `${origin} did not serve the Skillplane PNG icon`,
+  );
+  const bytes = Buffer.from(await response.arrayBuffer());
+  assert(bytes.byteLength > 1_000, `${origin} served an empty brand icon`);
+  return bytes;
+}
+
+export async function productionReleaseSmoke(options = {}) {
+  const attempts = options.attempts ?? 1;
   const app = await request(
     endpoints.app,
     {},
@@ -90,57 +97,19 @@ export async function productionSmoke(options = {}) {
       acceptStatus: [200],
     },
   );
-  assertTls(landing, "skillplane.dev");
   assertTls(app, "app.skillplane.dev");
-  const [landingHtml, appHtml] = await Promise.all([landing.text(), app.text()]);
-  assert(
-    landingHtml.includes("Skills that self-improve"),
-    "The landing host returned unexpected content",
-  );
+  const appHtml = await app.text();
   assert(
     appHtml.includes("Sign in · Skillplane"),
     "The app host returned unexpected content",
   );
-  assert(landingHtml !== appHtml, "Landing and app hosts returned identical content");
-  assert(
-    (landing.headers.get("cache-control") ?? "").startsWith("public,"),
-    "The public landing page is not explicitly cacheable",
-  );
-  const immutableUrl = immutableAssetUrl(landingHtml, landing.url);
-  assert(immutableUrl, "The landing page omitted immutable assets");
-  const immutableAsset = await request(
-    immutableUrl,
-    {},
-    {
-      attempts,
-      acceptStatus: [200],
-    },
-  );
-  assert(
-    (immutableAsset.headers.get("cache-control") ?? "").includes("immutable"),
-    "A digest-named landing asset is missing immutable caching",
-  );
 
-  const brandOrigins = [endpoints.landing, endpoints.app, endpoints.mcp];
   const brandIcons = await Promise.all(
-    brandOrigins.map(async (origin) => {
-      const response = await request(
-        `${origin}/icon-512.png`,
-        {},
-        { attempts, acceptStatus: [200] },
-      );
-      assert(
-        response.headers.get("content-type")?.includes("image/png"),
-        `${origin} did not serve the Skillplane PNG icon`,
-      );
-      const bytes = Buffer.from(await response.arrayBuffer());
-      assert(bytes.byteLength > 1_000, `${origin} served an empty brand icon`);
-      return bytes;
-    }),
+    [endpoints.app, endpoints.mcp].map((origin) => readBrandIcon(origin, attempts)),
   );
   assert(
     brandIcons.every((icon) => icon.equals(brandIcons[0])),
-    "Landing, app, and MCP hosts do not serve the same Skillplane icon",
+    "App and MCP hosts do not serve the same Skillplane icon",
   );
 
   const mcpHome = await request(endpoints.mcp, {}, { attempts, acceptStatus: [200] });
@@ -320,9 +289,9 @@ export async function productionSmoke(options = {}) {
 
   return {
     ok: true,
+    scope: "app-mcp-release",
     checkedAt: new Date().toISOString(),
     hosts: {
-      landing: { status: landing.status, tls: true, cache: "public" },
       app: { status: app.status, tls: true },
       mcp: { status: unauthorizedMcp.status, tls: true },
     },
@@ -339,7 +308,7 @@ export async function productionSmoke(options = {}) {
     boundaries: {
       privateNoStore: true,
       privateCorsWildcard: false,
-      publicAssetImmutable: true,
+      appMcpBrandConsistent: true,
       datafnAuthenticationRequired: true,
       mcpBearerChallenge: true,
       originlessOAuthFormAccepted: true,
@@ -347,7 +316,75 @@ export async function productionSmoke(options = {}) {
   };
 }
 
+export async function productionTopologySmoke(options = {}) {
+  const attempts = options.attempts ?? 1;
+  const release = await productionReleaseSmoke(options);
+  const landing = await request(
+    endpoints.landing,
+    {},
+    {
+      attempts,
+      acceptStatus: [200],
+    },
+  );
+  assertTls(landing, "skillplane.dev");
+  const landingHtml = await landing.text();
+  assert(
+    landingHtml.includes("Skills that self-improve"),
+    "The landing host returned unexpected content",
+  );
+  assert(
+    (landing.headers.get("cache-control") ?? "").startsWith("public,"),
+    "The public landing page is not explicitly cacheable",
+  );
+  const immutableUrl = immutableAssetUrl(landingHtml, landing.url);
+  assert(immutableUrl, "The landing page omitted immutable assets");
+  const immutableAsset = await request(
+    immutableUrl,
+    {},
+    {
+      attempts,
+      acceptStatus: [200],
+    },
+  );
+  assert(
+    (immutableAsset.headers.get("cache-control") ?? "").includes("immutable"),
+    "A digest-named landing asset is missing immutable caching",
+  );
+
+  const [landingIcon, appIcon] = await Promise.all(
+    [endpoints.landing, endpoints.app].map((origin) => readBrandIcon(origin, attempts)),
+  );
+  assert(
+    landingIcon.equals(appIcon),
+    "Landing, app, and MCP hosts do not serve the same Skillplane icon",
+  );
+
+  return {
+    ...release,
+    scope: "production-topology",
+    checkedAt: new Date().toISOString(),
+    hosts: {
+      landing: { status: landing.status, tls: true, cache: "public" },
+      ...release.hosts,
+    },
+    boundaries: {
+      ...release.boundaries,
+      publicAssetImmutable: true,
+      landingAppMcpBrandConsistent: true,
+    },
+  };
+}
+
 if (isMain(import.meta.url)) {
-  const result = await productionSmoke();
+  const mode = process.argv[2] ?? "release";
+  assert(
+    mode === "release" || mode === "topology",
+    "Production smoke mode must be either release or topology",
+  );
+  const result =
+    mode === "topology"
+      ? await productionTopologySmoke()
+      : await productionReleaseSmoke();
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }

@@ -125,15 +125,32 @@ accepted.
 
 ## Release sequence
 
-Run from the repository root:
+Run the blocking app/MCP release sequence from the repository root:
 
 ```bash
 pnpm deploy:check
 pnpm db:backup:production
 pnpm db:migrate:production
 pnpm deploy:all
-pnpm smoke:production
+pnpm smoke:production:release
 ```
+
+`deploy:all` already runs `smoke:production:release` before it writes the
+release manifest. The explicit invocation above is the final operator-visible
+verification of the recorded app/MCP pair.
+
+Run the cross-system topology check separately before and after the release, or
+from the landing deployment's own operational workflow:
+
+```bash
+pnpm smoke:production:topology
+```
+
+That check adds the independently deployed `skillplane.dev` landing Worker,
+including its TLS, caching, immutable assets, and shared icon contract. A
+landing failure is an environment incident that must be escalated to the
+landing owner, but it does not invalidate or prevent recording a healthy
+app/MCP deployment that this repository can roll back.
 
 The commands enforce these boundaries:
 
@@ -168,6 +185,10 @@ The commands enforce these boundaries:
   Service or Turnstile bindings.
 - Deployment order is app, then MCP. On a first deployment, each Worker receives
   an identical rollback baseline followed by a distinct release version.
+- The blocking release smoke and rollback rehearsal cover only the app and MCP
+  Workers that this repository deploys and can restore. The separate topology
+  smoke covers the landing, app, and MCP public surfaces without becoming a
+  release-manifest dependency.
 - The app and MCP Workers use Custom Domains with `workers_dev: false`. The
   independently deployed landing Worker uses the proxied zone route
   `skillplane.dev/*` because the apex has an externally managed DNS origin record
@@ -176,8 +197,10 @@ The commands enforce these boundaries:
 
 The successful command writes a sanitized, append-only manifest under
 `.conduct/deployments/`. It records Worker release/prior versions, Hyperdrive
-ID, R2 policy, lock/config digests, migration and backup identifiers, hosts, and
-smoke results. It records secret names only.
+ID, R2 policy, lock/config digests, migration and backup identifiers, the host
+inventory, and app/MCP release-smoke results. Listing the landing host describes
+the production topology; it does not claim that `deploy:all` deployed or
+validated the landing Worker. The manifest records secret names only.
 
 ## Live OAuth, MCP, and email gates
 
@@ -238,6 +261,9 @@ both application Custom Domains as active, and the PostHog proxy as live. In the
 browser network panel, trigger an explicit product event, confirm its request to
 `user.skillplane.dev` returns `200`, and confirm the event appears in PostHog.
 Verify the independently managed landing zone route from its own workspace.
+The repository-level `pnpm smoke:production:topology` command may be used as a
+cross-system confirmation, but landing repair and rollback remain owned by that
+workspace.
 
 ## Failure handling
 
@@ -249,6 +275,10 @@ Verify the independently managed landing zone route from its own workspace.
 - A partial Worker deployment leaves
   `.data/production/release-in-progress.json` with sanitized completed-version
   state. Inspect it and active Cloudflare deployments before retrying.
+- A failing `smoke:production:topology` with a passing
+  `smoke:production:release` identifies an independently owned landing or
+  cross-origin consistency incident; do not treat it as evidence that the
+  recorded app/MCP versions failed to deploy.
 - Never select another account's Hyperdrive configuration by position or infer
   an ID from unrelated resources.
 - Never retry a deployment by bypassing `--strict`, changing the canonical

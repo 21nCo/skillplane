@@ -78,7 +78,9 @@
     "deploy:dev": "node --env-file-if-exists=.env.development.local scripts/deploy-development.mjs",
     "smoke:dev": "node --env-file-if-exists=.env.development.local scripts/smoke-development.mjs",
     "test:dev:oauth": "node --env-file-if-exists=.env.development.local scripts/test-development-oauth.mjs",
-    "smoke:production": "node --env-file-if-exists=.env.production.local scripts/production-smoke.mjs",
+    "smoke:production": "node --env-file-if-exists=.env.production.local scripts/production-smoke.mjs release",
+    "smoke:production:release": "node --env-file-if-exists=.env.production.local scripts/production-smoke.mjs release",
+    "smoke:production:topology": "node --env-file-if-exists=.env.production.local scripts/production-smoke.mjs topology",
     "test:mcp:production": "node --env-file-if-exists=.env.production.local scripts/test-mcp-production.mjs",
     "verify:email:production": "node --env-file-if-exists=.env.production.local scripts/verify-email-production.mjs",
     "verify:rollback:production": "node --env-file-if-exists=.env.production.local scripts/rollback.mjs"
