@@ -30,6 +30,7 @@ import {
   oauthErrorResponse,
 } from "./errors.js";
 import { exchangeRefreshToken } from "./refresh.js";
+import { SKILLPLANE_MCP_REDIRECT_POLICY } from "./redirect-policy.js";
 import { revokeToken } from "./revocation.js";
 import { createOAuthSchema } from "./schema.js";
 
@@ -139,6 +140,7 @@ function compatibilityOptions(
   return {
     issuer: runtime.issuer,
     allowInsecureLoopbackIssuer: runtime.issuer.startsWith("http://"),
+    redirectPolicy: SKILLPLANE_MCP_REDIRECT_POLICY,
     endpointPrefix: "/auth/oauth",
     clients: {
       resolve: (clientId) => resolveRegisteredClient(runtime, clientId),
