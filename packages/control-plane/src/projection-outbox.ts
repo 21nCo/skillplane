@@ -274,11 +274,15 @@ export async function applyRegionalPublicProjection(input: {
   }) => Promise<void>;
 }): Promise<{ readonly objectKey: string | null }> {
   const placement = await input.placements.get(input.event.workspaceId);
-  if (
-    placement?.state !== "active" ||
-    placement.regionId !== input.event.regionId ||
-    placement.epoch !== input.event.fencingEpoch
-  ) {
+  const currentActiveSource =
+    placement?.state === "active" &&
+    placement.regionId === input.event.regionId &&
+    placement.epoch === input.event.fencingEpoch;
+  const quiescingSource =
+    placement?.state === "moving" &&
+    placement.migration?.sourceRegionId === input.event.regionId &&
+    placement.migration.sourceEpoch === input.event.fencingEpoch;
+  if (!currentActiveSource && !quiescingSource) {
     throw new Error("PUBLICATION_FENCING_EPOCH_STALE");
   }
   if (input.event.eventType === "resource_route.upsert") {

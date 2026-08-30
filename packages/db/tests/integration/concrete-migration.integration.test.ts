@@ -160,6 +160,7 @@ describe("concrete workspace migration rollback", () => {
     let rolledBack = false;
     await operations.quiesceSource(context);
     try {
+      await operations.drainOutboxes(context);
       await operations.copyDatabase(context);
       await operations.copyDatabase(context);
       await operations.copyBundles(context);
@@ -215,8 +216,18 @@ describe("concrete workspace migration rollback", () => {
       recoveryLeaseExpiresAt: Date.now() + 60_000,
     };
     const delayed = await source.connect();
+    const drainEventId = `event:drain-${suffix}`;
     let rolledBack = false;
     try {
+      await source.query(
+        `INSERT INTO regional_projection_outbox
+           (id, workspace_id, event_type, payload, fencing_epoch, sequence)
+         SELECT $1, $2, 'resource_route.upsert', '{}'::jsonb, 1,
+                COALESCE(max(sequence), 0) + 1
+           FROM regional_projection_outbox
+          WHERE workspace_id = $2`,
+        [drainEventId, workspaceId],
+      );
       await delayed.query("BEGIN ISOLATION LEVEL REPEATABLE READ");
       await delayed.query("SELECT 1");
       await operations.quiesceSource(context);
@@ -230,6 +241,27 @@ describe("concrete workspace migration rollback", () => {
         ),
       ).rejects.toMatchObject({ code: "40001" });
       await delayed.query("ROLLBACK");
+
+      await expect(
+        source.query(
+          `UPDATE regional_projection_outbox
+              SET processed_at = now()
+            WHERE id = $1`,
+          [drainEventId],
+        ),
+      ).resolves.toMatchObject({ rowCount: 1 });
+      await expect(
+        source.query(
+          `INSERT INTO regional_projection_outbox
+             (id, workspace_id, event_type, payload, fencing_epoch, sequence)
+           SELECT $1, $2, 'resource_route.upsert', '{}'::jsonb, 1,
+                  COALESCE(max(sequence), 0) + 1
+             FROM regional_projection_outbox
+            WHERE workspace_id = $2`,
+          [`event:late-outbox-${suffix}`, workspaceId],
+        ),
+      ).rejects.toMatchObject({ code: "55000" });
+      await operations.drainOutboxes(context);
       await operations.rollbackSource({
         ...context,
         cause: new Error("late-write test cleanup"),

@@ -124,6 +124,60 @@ describe("regional publication projection", () => {
     ).rejects.toThrow("PUBLICATION_FENCING_EPOCH_STALE");
   });
 
+  it("settles source-epoch events while that source is being quiesced", async () => {
+    const placements = createMemoryWorkspacePlacementDirectory();
+    await placements.putIfAbsent({
+      namespace: "workspace:moving",
+      regionId: "in-south",
+      epoch: 3,
+      state: "moving",
+      movingToRegionId: "us-east",
+      previousRegionId: "in-south",
+      updatedAt: new Date().toISOString(),
+      migration: {
+        phase: "moving",
+        sourceRegionId: "in-south",
+        targetRegionId: "us-east",
+        sourceEpoch: 2,
+        movingEpoch: 3,
+        recoveryFence: 3,
+        recoveryOwnerId: "migration:test",
+        recoveryLeaseExpiresAt: Date.now() + 60_000,
+      },
+    });
+    const unpublished: unknown[] = [];
+    const empty = store();
+
+    await expect(
+      applyRegionalPublicProjection({
+        event: {
+          id: "event:moving-source",
+          regionId: "in-south",
+          eventType: "public_skill.unpublished",
+          workspaceId: "workspace:moving",
+          fencingEpoch: 2,
+          sequence: 1,
+          payload: {
+            workspaceId: "workspace:moving",
+            skillId: "skill:moving",
+            versionId: "version:moving",
+          },
+        },
+        placements,
+        resolveWorkspaceSlug: async () => "moving",
+        regionalStore: empty,
+        publicStore: empty,
+        directory: {
+          publish: async () => undefined,
+          async unpublish(value) {
+            unpublished.push(value);
+          },
+        },
+      }),
+    ).resolves.toEqual({ objectKey: null });
+    expect(unpublished).toHaveLength(1);
+  });
+
   it("removes global metadata for a current-epoch unpublish event", async () => {
     const placements = createMemoryWorkspacePlacementDirectory();
     await placements.putIfAbsent({

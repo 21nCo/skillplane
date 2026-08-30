@@ -155,6 +155,7 @@ async function digest(bytes: Uint8Array): Promise<string> {
 /** Concrete, retry-safe PostgreSQL and object-store implementation of a fenced move. */
 export class PostgresWorkspaceMigrationOperations implements WorkspaceMigrationOperations {
   private quiescedSource: MigrationSqlClient | null = null;
+  private sourceQuiesced = false;
 
   constructor(
     private readonly source: MigrationSqlPool,
@@ -189,6 +190,10 @@ export class PostgresWorkspaceMigrationOperations implements WorkspaceMigrationO
   }
 
   async prepareSource(workspaceId: string): Promise<void> {
+    await this.waitForOutboxes(workspaceId);
+  }
+
+  private async waitForOutboxes(workspaceId: string): Promise<void> {
     const deadline = Date.now() + 75_000;
     while ((await this.pendingOutboxes(workspaceId)) > 0) {
       if (Date.now() >= deadline) {
@@ -199,7 +204,7 @@ export class PostgresWorkspaceMigrationOperations implements WorkspaceMigrationO
   }
 
   async quiesceSource(context: DatafnNamespaceMigrationContext): Promise<void> {
-    if (this.quiescedSource) return;
+    if (this.sourceQuiesced) return;
     const dynamic = await dynamicNamespaceTables(this.source);
     await installDynamicMigrationFences(this.source, dynamic);
     await this.source.query(
@@ -213,27 +218,21 @@ export class PostgresWorkspaceMigrationOperations implements WorkspaceMigrationO
     const lockTables = [...regionalTables, ...dynamic];
     // The durable namespace trigger rejects a request admitted under the old
     // placement epoch even if it reaches DML late. The brief table barrier then
-    // drains writes which entered before the trigger fence and stays held only
-    // until the retained repeatable-read snapshot has been materialized.
+    // drains writes which entered before the trigger fence. Outbox consumers
+    // can settle those writes after the barrier without admitting new domain
+    // mutations; drainOutboxes retains the source snapshot once they converge.
     const barrier = lockTables.length > 0 ? await this.source.connect() : null;
-    const client = await this.source.connect();
     try {
       if (barrier) {
         await barrier.query("BEGIN");
         await barrier.query(
           `LOCK TABLE ${lockTables.map(identifier).join(", ")} IN SHARE MODE`,
         );
+        await barrier.query("COMMIT");
       }
-      await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ");
-      await client.query("SELECT count(*) FROM skills WHERE workspace_id = $1", [
-        context.namespace,
-      ]);
-      if (barrier) await barrier.query("COMMIT");
-      this.quiescedSource = client;
+      this.sourceQuiesced = true;
     } catch (error) {
       if (barrier) await barrier.query("ROLLBACK").catch(() => undefined);
-      await client.query("ROLLBACK").catch(() => undefined);
-      client.release();
       throw error;
     } finally {
       barrier?.release();
@@ -241,8 +240,28 @@ export class PostgresWorkspaceMigrationOperations implements WorkspaceMigrationO
   }
 
   async drainOutboxes(context: DatafnNamespaceMigrationContext): Promise<void> {
-    if ((await this.pendingOutboxes(context.namespace)) !== 0) {
-      throw new Error("WORKSPACE_MIGRATION_OUTBOX_NOT_DRAINED");
+    // This is the authoritative drain: quiesceSource has installed the
+    // database fence and drained pre-fence DML, so no accepted workspace write
+    // can enqueue another event. Drain-table mutations remain permitted so
+    // consumers can settle a write that committed in the narrow window between
+    // the optimistic pre-drain and the placement CAS. Retain the source
+    // snapshot only after those acknowledgements converge.
+    await this.waitForOutboxes(context.namespace);
+    if (this.quiescedSource) return;
+    if (!this.sourceQuiesced) {
+      throw new Error("WORKSPACE_MIGRATION_SOURCE_NOT_QUIESCED");
+    }
+    const client = await this.source.connect();
+    try {
+      await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ");
+      await client.query("SELECT count(*) FROM skills WHERE workspace_id = $1", [
+        context.namespace,
+      ]);
+      this.quiescedSource = client;
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      client.release();
+      throw error;
     }
   }
 
@@ -386,6 +405,7 @@ export class PostgresWorkspaceMigrationOperations implements WorkspaceMigrationO
   private async releaseSource(): Promise<void> {
     const source = this.quiescedSource;
     this.quiescedSource = null;
+    this.sourceQuiesced = false;
     if (source) {
       await source.query("COMMIT").catch(async () => {
         await source.query("ROLLBACK").catch(() => undefined);

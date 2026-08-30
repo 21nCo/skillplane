@@ -13,7 +13,52 @@ function client() {
 }
 
 describe("concrete workspace migration", () => {
-  it("retains the snapshot before releasing the write-drain barrier", async () => {
+  it("waits for the authoritative post-fence outbox drain", async () => {
+    vi.useFakeTimers();
+    try {
+      let projectionChecks = 0;
+      const source = {
+        query: vi.fn(async (sql: string) => {
+          if (sql.includes("FROM regional_projection_outbox")) {
+            projectionChecks += 1;
+            return { rows: [{ count: projectionChecks === 1 ? "1" : "0" }] };
+          }
+          if (sql.includes("to_regclass")) {
+            return { rows: [{ present: false }] };
+          }
+          return { rows: [] };
+        }),
+        connect: vi.fn(async () => client()),
+      } satisfies MigrationSqlPool;
+      const unusedObjects = {
+        read: vi.fn(async () => new Uint8Array()),
+        put: vi.fn(async () => undefined),
+        delete: vi.fn(async () => undefined),
+      };
+      const operations = new PostgresWorkspaceMigrationOperations(
+        source,
+        source,
+        source,
+        unusedObjects,
+        unusedObjects,
+      );
+
+      await operations.quiesceSource({
+        namespace: "workspace:a",
+        sourceEpoch: 1,
+      } as never);
+      const draining = operations.drainOutboxes({
+        namespace: "workspace:a",
+      } as never);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await expect(draining).resolves.toBeUndefined();
+      expect(projectionChecks).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retains the snapshot only after the fenced outbox drain", async () => {
     const barrier = client();
     const snapshot = client();
     const calls: string[] = [];
@@ -53,6 +98,7 @@ describe("concrete workspace migration", () => {
       namespace: "workspace:a",
       sourceEpoch: 1,
     } as never);
+    await operations.drainOutboxes({ namespace: "workspace:a" } as never);
 
     expect(source.query).toHaveBeenCalledWith(
       expect.stringContaining("INSERT INTO regional_workspace_migration_fences"),
@@ -60,7 +106,7 @@ describe("concrete workspace migration", () => {
     );
     expect(
       calls.findIndex((call) => call.startsWith("snapshot:SELECT count(*)")),
-    ).toBeLessThan(calls.indexOf("barrier:COMMIT"));
+    ).toBeGreaterThan(calls.indexOf("barrier:COMMIT"));
     expect(barrier.release).toHaveBeenCalledOnce();
     expect(snapshot.query).toHaveBeenCalledWith(
       "SELECT count(*) FROM skills WHERE workspace_id = $1",
@@ -94,6 +140,7 @@ describe("concrete workspace migration", () => {
 
     const context = { namespace: "workspace:a", sourceEpoch: 1 } as never;
     await operations.quiesceSource(context);
+    await operations.drainOutboxes(context);
     expect(source.query).not.toHaveBeenCalledWith(
       expect.stringContaining("DELETE FROM regional_workspace_migration_fences"),
       expect.anything(),

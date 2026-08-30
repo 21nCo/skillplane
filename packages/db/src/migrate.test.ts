@@ -35,6 +35,7 @@ describe("migration chain", () => {
       "0027_control_projection_workspace_slug.sql",
       "0028_regional_published_row_updates.sql",
       "0029_regional_workspace_migration_fence.sql",
+      "0030_regional_workspace_migration_outbox_drain.sql",
     ]);
     expect(new Set(migrations.map((migration) => migration.sha256)).size).toBe(
       migrations.length,

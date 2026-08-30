@@ -191,7 +191,7 @@ export function registerSkillVersionRoutes(app: Hono<ApiEnvironment>): void {
       principal: requirePrincipal(context),
       idempotencyKey: requireIdempotencyKey(context),
       requestId: context.get("requestId"),
-      fencingEpoch: Number(context.req.header("x-skillplane-routing-epoch") ?? "1"),
+      fencingEpoch: routingEpoch(context),
     });
     context.header("Cache-Control", "private, no-store");
     return context.json(success(context, { version: publicSkillVersion(version) }));
