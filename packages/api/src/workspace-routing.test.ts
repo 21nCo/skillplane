@@ -132,6 +132,31 @@ describe("API scope classification", () => {
     );
   });
 
+  it("returns the stable routing error for malformed gateway input", async () => {
+    const routed = createRoutedApiApplication({
+      local: { fetch: async () => new Response("unexpected local response") },
+      services: async () => {
+        throw new Error("services must not be initialized for invalid routing input");
+      },
+    });
+
+    const response = await routed.fetch(
+      new Request("http://localhost:5700/api/v1/skills/search", {
+        headers: { "x-skillplane-workspace-id": "%E0%A4%A" },
+      }),
+      gatewayBindings,
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      ok: false,
+      error: {
+        code: "WORKSPACE_ROUTE_INVALID",
+        message: "The workspace route is invalid",
+      },
+    });
+  });
+
   it("separates control and regional DataFn resources", async () => {
     const request = (body: unknown) =>
       new Request("https://app.skillplane.dev/datafn/query", {

@@ -365,7 +365,13 @@ export function createRoutedApiApplication(input: {
       if (runtime.deployment.role === "gateway" && datafn === "control") {
         return await input.local.fetch(request, bindings);
       }
-      const scope = classifyApiScope(request);
+      let scope: ApiScope;
+      try {
+        scope = classifyApiScope(request);
+      } catch (error) {
+        if (error instanceof ApiRoutingError) return error.response();
+        throw error;
+      }
       if (runtime.deployment.role === "control") {
         return scope.kind === "global"
           ? await input.local.fetch(request, bindings)
