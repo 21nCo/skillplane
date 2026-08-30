@@ -334,6 +334,39 @@ describe("combined database topology cutover", () => {
           WHERE id = 'legacy-to-cells'`,
       );
       await expect(
+        control.query(
+          `INSERT INTO workspaces (id, workspace_id, slug, name)
+           VALUES ($1, $1, $2, 'Steady unplaced compatibility workspace')`,
+          [
+            `workspace:cutover-steady-unplaced-${suffix}`,
+            `cutover-steady-unplaced-${suffix}`,
+          ],
+        ),
+      ).rejects.toMatchObject({ code: "55000" });
+
+      const steadyWorkspaceId = `workspace:cutover-steady-us-east-${suffix}`;
+      const steadyClient = await control.connect();
+      try {
+        await steadyClient.query("BEGIN");
+        await steadyClient.query(
+          `INSERT INTO workspaces (id, workspace_id, slug, name)
+           VALUES ($1, $1, $2, 'Steady cross-region workspace')`,
+          [steadyWorkspaceId, `cutover-steady-us-east-${suffix}`],
+        );
+        await steadyClient.query(
+          `INSERT INTO workspace_placements
+             (workspace_id, region_id, epoch, state)
+           VALUES ($1, 'us-east', 1, 'active')`,
+          [steadyWorkspaceId],
+        );
+        await steadyClient.query("COMMIT");
+      } catch (error) {
+        await steadyClient.query("ROLLBACK");
+        throw error;
+      } finally {
+        steadyClient.release();
+      }
+      await expect(
         control.query("UPDATE skills SET name = 'late stale write' WHERE id = $1", [
           skillId,
         ]),
