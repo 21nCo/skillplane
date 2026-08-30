@@ -63,6 +63,7 @@ describe("global public projection", () => {
       skillId: "skill:a",
       skillSlug: "review",
       versionId: "skill-version:a",
+      currentVersionId: "skill-version:a",
       semanticVersion: "1.0.0",
       digest: sha,
       projectionSequence: 3,
@@ -100,6 +101,7 @@ describe("global public projection", () => {
       skillId: "skill:a",
       skillSlug: "review",
       versionId: "version:a",
+      currentVersionId: "version:a",
       semanticVersion: "1.0.0",
       digest: digestValue,
       objectKey: "public/review.zip",
@@ -113,11 +115,13 @@ describe("global public projection", () => {
       projectionSequence: 8,
     });
 
-    expect(calls[0]?.text).toContain("public_skill_projections.projection_sequence <=");
+    expect(calls[0]?.text).toContain(
+      "public_skill_projection_heads.projection_sequence <=",
+    );
     expect(calls[0]?.text).toContain("published_at = EXCLUDED.published_at");
-    expect(calls[0]?.values?.[8]).toBe(9);
-    expect(calls[0]?.values?.[11]).toBe("2026-08-01T00:00:00.000Z");
-    expect(calls[1]?.text).toContain("projection_sequence <= $3");
-    expect(calls[1]?.values).toEqual(["workspace:a", "skill:a", 8]);
+    expect(calls[0]?.values?.[9]).toBe(9);
+    expect(calls[0]?.values?.[12]).toBe("2026-08-01T00:00:00.000Z");
+    expect(calls[1]?.text).toContain("projection_sequence <= $4");
+    expect(calls[1]?.values).toEqual(["workspace:a", "skill:a", "version:a", 8]);
   });
 });

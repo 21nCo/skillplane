@@ -291,6 +291,7 @@ export async function backfillLegacyPublicSkillProjections(input: {
         skillId: row.skill_id,
         skillSlug: row.skill_slug,
         versionId: row.version_id,
+        currentVersionId: row.current_version_id,
         semanticVersion: row.semantic_version,
         digest: row.content_digest,
         projectionSequence: 0,

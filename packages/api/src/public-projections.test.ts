@@ -89,9 +89,8 @@ describe("global public projection search", () => {
     expect(current.skill.id).toBe("skill:public");
     expect(current.skill.visibility).toBe("public");
     expect(current.version.publishedAt).toBe("2026-08-01T00:00:00.000Z");
-    expect(calls[0]).toContain(
-      "version_id = document->'skill'->>'currentPublishedVersionId'",
-    );
+    expect(calls[0]).toContain("JOIN public_skill_projection_heads head");
+    expect(calls[0]).toContain("head.current_version_id = projection.version_id");
   });
 
   it("applies the domain search bounds before querying the global projection", async () => {
@@ -133,9 +132,7 @@ describe("global public projection search", () => {
     await service.getCurrent("one", "tied");
     await service.listVersions("one", "tied");
 
-    expect(calls[0]).toContain(
-      "version_id = document->'skill'->>'currentPublishedVersionId'",
-    );
+    expect(calls[0]).toContain("head.current_version_id = projection.version_id");
     expect(calls[1]).toContain(
       "(document->'version'->>'revision')::bigint DESC NULLS LAST",
     );

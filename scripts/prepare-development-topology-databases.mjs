@@ -2,6 +2,7 @@
 
 import { resolve } from "node:path";
 import { Pool } from "pg";
+import { GLOBAL_CONTROL_TABLES } from "../packages/control-plane/dist/index.js";
 import { migrateDatabase } from "../packages/db/dist/src/index.js";
 import { backupProductionDatabase } from "./production-backup.mjs";
 import {
@@ -27,22 +28,25 @@ async function relationExists(pool, relation) {
   return Boolean(result.rows[0]?.relation);
 }
 
-async function tableCount(pool) {
+async function baseTableNames(pool) {
   const result = await pool.query(
-    `SELECT count(*)::integer AS count
+    `SELECT table_name
        FROM information_schema.tables
-      WHERE table_schema = 'public' AND table_type = 'BASE TABLE'`,
+      WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+      ORDER BY table_name`,
   );
-  return Number(result.rows[0]?.count ?? 0);
+  return result.rows.map((row) => row.table_name);
 }
 
 export function assertDevelopmentControlDatabaseShape(input) {
+  const allowed = new Set([...GLOBAL_CONTROL_TABLES, "skillplane_schema_migrations"]);
+  const unexpected = input.tableNames.filter((table) => !allowed.has(table));
   if (
-    input.existingTables > 0 &&
-    (!input.hasControlTables || input.hasRegionalTables)
+    input.tableNames.length > 0 &&
+    (!input.tableNames.includes("workspace_placements") || unexpected.length > 0)
   ) {
     throw new Error(
-      "The development control database must be empty or already control-only",
+      `The development control database must be empty or already control-only; unexpected=${unexpected.join(",")}`,
     );
   }
 }
@@ -68,15 +72,8 @@ export async function prepareDevelopmentTopologyDatabases(options = {}) {
     max: 1,
   });
   try {
-    const existingTables = await tableCount(controlPool);
-    const [hasControlTables, hasRegionalTables] = await Promise.all([
-      relationExists(controlPool, "workspace_placements"),
-      relationExists(controlPool, "skills"),
-    ]);
     assertDevelopmentControlDatabaseShape({
-      existingTables,
-      hasControlTables,
-      hasRegionalTables,
+      tableNames: await baseTableNames(controlPool),
     });
   } finally {
     await controlPool.end();

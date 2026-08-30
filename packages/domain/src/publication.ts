@@ -273,6 +273,7 @@ export class PublicationService {
                 skillId: options.skillId,
                 skillSlug: row.skill_slug,
                 versionId: record.id,
+                currentVersionId: record.id,
                 semanticVersion,
                 sourceObjectKey: record.objectKey,
                 digest: record.digest,

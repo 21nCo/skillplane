@@ -48,6 +48,13 @@ const regionalTables = [
   "regional_projection_outbox",
 ] as const;
 
+type NamespaceColumn = "workspace_id" | "__ns" | "namespace";
+
+interface DynamicNamespaceTable {
+  readonly tableName: string;
+  readonly namespaceColumn: "__ns" | "namespace";
+}
+
 function identifier(value: string): string {
   if (!/^[a-z_][a-z0-9_]{0,62}$/u.test(value)) {
     throw new Error("WORKSPACE_MIGRATION_IDENTIFIER_INVALID");
@@ -55,39 +62,66 @@ function identifier(value: string): string {
   return `"${value}"`;
 }
 
-async function dynamicNamespaceTables(pool: MigrationSqlPool): Promise<string[]> {
-  const result = await pool.query<{ table_name: string }>(
-    `SELECT table_name
+async function dynamicNamespaceTables(
+  pool: MigrationSqlPool,
+): Promise<DynamicNamespaceTable[]> {
+  const result = await pool.query<{
+    table_name: string;
+    namespace_column: "__ns" | "namespace";
+  }>(
+    `SELECT table_name,
+            CASE WHEN bool_or(column_name = '__ns') THEN '__ns'
+                 ELSE 'namespace' END AS namespace_column
        FROM information_schema.columns
-      WHERE table_schema = 'public' AND column_name = '__ns'
+      WHERE table_schema = 'public'
       GROUP BY table_name
+     HAVING bool_or(column_name = '__ns')
+         OR (left(table_name, 9) = '__datafn_' AND
+             bool_or(column_name = 'namespace'))
       ORDER BY table_name`,
   );
   return result.rows
-    .map((row) => row.table_name)
     .filter(
-      (table) => !regionalTables.includes(table as (typeof regionalTables)[number]),
-    );
+      (row) =>
+        !regionalTables.includes(row.table_name as (typeof regionalTables)[number]),
+    )
+    .map((row) => ({
+      tableName: row.table_name,
+      namespaceColumn: row.namespace_column,
+    }));
 }
 
 async function installDynamicMigrationFences(
   pool: MigrationSqlPool,
-  tables: readonly string[],
+  tables: readonly DynamicNamespaceTable[],
 ): Promise<void> {
-  for (const table of tables) {
+  for (const { tableName } of tables) {
     await pool.query(
       `CREATE OR REPLACE TRIGGER skillplane_fence_workspace_migration_write
-       BEFORE INSERT OR UPDATE OR DELETE ON ${identifier(table)}
+       BEFORE INSERT OR UPDATE OR DELETE ON ${identifier(tableName)}
        FOR EACH ROW EXECUTE FUNCTION skillplane_fence_workspace_migration_write()`,
     );
   }
+}
+
+function migrationTables(dynamic: readonly DynamicNamespaceTable[]): readonly {
+  readonly tableName: string;
+  readonly namespaceColumn: NamespaceColumn;
+}[] {
+  return [
+    ...regionalTables.map((tableName) => ({
+      tableName,
+      namespaceColumn: "workspace_id" as const,
+    })),
+    ...dynamic,
+  ];
 }
 
 async function rowsForWorkspace(
   client: MigrationSqlClient,
   table: string,
   workspaceId: string,
-  namespaceColumn: "workspace_id" | "__ns",
+  namespaceColumn: NamespaceColumn,
 ): Promise<readonly string[]> {
   return (
     await client.query<{ row_json: string }>(
@@ -131,7 +165,7 @@ async function checksum(
   pool: MigrationSqlQueryable,
   table: string,
   workspaceId: string,
-  namespaceColumn: "workspace_id" | "__ns",
+  namespaceColumn: NamespaceColumn,
 ): Promise<{ readonly count: string; readonly checksum: string }> {
   const result = await pool.query<{ count: string; checksum: string }>(
     `SELECT count(*)::text AS count,
@@ -181,7 +215,7 @@ export class PostgresWorkspaceMigrationOperations implements WorkspaceMigrationO
           await this.source.query<{ count: string }>(
             `SELECT count(*)::text AS count
                FROM __datafn_permission_directory_outbox
-              WHERE __ns = $1`,
+              WHERE namespace = $1`,
             [workspaceId],
           )
         ).rows[0]?.count
@@ -215,7 +249,7 @@ export class PostgresWorkspaceMigrationOperations implements WorkspaceMigrationO
        DO UPDATE SET source_epoch = EXCLUDED.source_epoch, fenced_at = now()`,
       [context.namespace, context.sourceEpoch],
     );
-    const lockTables = [...regionalTables, ...dynamic];
+    const lockTables = [...regionalTables, ...dynamic.map((table) => table.tableName)];
     // The durable namespace trigger rejects a request admitted under the old
     // placement epoch even if it reaches DML late. The brief table barrier then
     // drains writes which entered before the trigger fence. Outbox consumers
@@ -270,6 +304,7 @@ export class PostgresWorkspaceMigrationOperations implements WorkspaceMigrationO
     if (!source) throw new Error("WORKSPACE_MIGRATION_SOURCE_NOT_QUIESCED");
     const target = await this.target.connect();
     const dynamic = await dynamicNamespaceTables(this.source);
+    const tables = migrationTables(dynamic);
     try {
       await target.query("BEGIN ISOLATION LEVEL SERIALIZABLE");
       // Preserve the source row image exactly. Application triggers derive
@@ -283,19 +318,22 @@ export class PostgresWorkspaceMigrationOperations implements WorkspaceMigrationO
         "SELECT set_config('skillplane.workspace_migration_cleanup', $1, true)",
         [context.namespace],
       );
-      for (const table of [...dynamic, ...regionalTables].toReversed()) {
-        const column = dynamic.includes(table) ? "__ns" : "workspace_id";
+      for (const table of tables.toReversed()) {
         await target.query(
-          `DELETE FROM ${identifier(table)} WHERE ${identifier(column)} = $1`,
+          `DELETE FROM ${identifier(table.tableName)} WHERE ${identifier(table.namespaceColumn)} = $1`,
           [context.namespace],
         );
       }
-      for (const table of [...regionalTables, ...dynamic]) {
-        const column = dynamic.includes(table) ? "__ns" : "workspace_id";
+      for (const table of tables) {
         await insertRows(
           target,
-          table,
-          await rowsForWorkspace(source, table, context.namespace, column),
+          table.tableName,
+          await rowsForWorkspace(
+            source,
+            table.tableName,
+            context.namespace,
+            table.namespaceColumn,
+          ),
         );
       }
       await target.query("COMMIT");
@@ -330,14 +368,23 @@ export class PostgresWorkspaceMigrationOperations implements WorkspaceMigrationO
   ): Promise<readonly MigrationCheck[]> {
     const dynamic = await dynamicNamespaceTables(this.source);
     const checks: MigrationCheck[] = [];
-    for (const table of [...regionalTables, ...dynamic]) {
-      const column = dynamic.includes(table) ? "__ns" : "workspace_id";
+    for (const table of migrationTables(dynamic)) {
       const [source, target] = await Promise.all([
-        checksum(this.quiescedSource ?? this.source, table, context.namespace, column),
-        checksum(this.target, table, context.namespace, column),
+        checksum(
+          this.quiescedSource ?? this.source,
+          table.tableName,
+          context.namespace,
+          table.namespaceColumn,
+        ),
+        checksum(
+          this.target,
+          table.tableName,
+          context.namespace,
+          table.namespaceColumn,
+        ),
       ]);
       checks.push({
-        name: `database:${table}`,
+        name: `database:${table.tableName}`,
         source: `${source.count}:${source.checksum}`,
         target: `${target.count}:${target.checksum}`,
         matched: source.count === target.count && source.checksum === target.checksum,
@@ -426,6 +473,7 @@ export class PostgresWorkspaceMigrationOperations implements WorkspaceMigrationO
   ): Promise<void> {
     try {
       const dynamic = await dynamicNamespaceTables(this.target);
+      const tables = migrationTables(dynamic);
       const client = await this.target.connect();
       try {
         await client.query("BEGIN");
@@ -434,10 +482,9 @@ export class PostgresWorkspaceMigrationOperations implements WorkspaceMigrationO
           "SELECT set_config('skillplane.workspace_migration_cleanup', $1, true)",
           [context.namespace],
         );
-        for (const table of [...dynamic, ...regionalTables].toReversed()) {
-          const column = dynamic.includes(table) ? "__ns" : "workspace_id";
+        for (const table of tables.toReversed()) {
           await client.query(
-            `DELETE FROM ${identifier(table)} WHERE ${identifier(column)} = $1`,
+            `DELETE FROM ${identifier(table.tableName)} WHERE ${identifier(table.namespaceColumn)} = $1`,
             [context.namespace],
           );
         }

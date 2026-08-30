@@ -131,6 +131,9 @@ export async function enqueuePublishedSkillProjection(
   if (!input.version.semanticVersion) {
     throw new Error("PUBLICATION_SEMVER_MISSING");
   }
+  if (!input.skill.currentPublishedVersionId) {
+    throw new Error("PUBLICATION_CURRENT_VERSION_MISSING");
+  }
   await enqueue(client, {
     workspaceId: input.skill.workspaceId,
     eventType: "public_skill.published",
@@ -140,6 +143,7 @@ export async function enqueuePublishedSkillProjection(
       skillId: input.skill.id,
       skillSlug: input.skill.slug,
       versionId: input.version.id,
+      currentVersionId: input.skill.currentPublishedVersionId,
       semanticVersion: input.version.semanticVersion,
       sourceObjectKey: input.version.objectKey,
       digest: input.version.digest,

@@ -159,6 +159,39 @@ export const publicSkillProjections = pgTable(
   ],
 );
 
+export const publicSkillProjectionHeads = pgTable(
+  "public_skill_projection_heads",
+  {
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    skillId: text("skill_id").notNull(),
+    currentVersionId: text("current_version_id").notNull(),
+    state: text("state")
+      .$type<"published" | "unpublished">()
+      .notNull()
+      .default("published"),
+    projectionSequence: bigint("projection_sequence", { mode: "number" })
+      .notNull()
+      .default(0),
+    updatedAt: utcTimestamp("updated_at").notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({
+      name: "public_skill_projection_heads_pk",
+      columns: [table.workspaceId, table.skillId],
+    }),
+    check(
+      "public_skill_projection_head_state_valid",
+      sql`${table.state} IN ('published', 'unpublished')`,
+    ),
+    check(
+      "public_skill_projection_head_sequence_valid",
+      sql`${table.projectionSequence} >= 0`,
+    ),
+  ],
+);
+
 export const workspaceMigrationRuns = pgTable(
   "workspace_migration_runs",
   {
@@ -303,6 +336,7 @@ export const controlPlaneSchema = {
   permission_directory_records: permissionDirectoryRecords,
   workspace_routing_nonces: workspaceRoutingNonces,
   public_skill_projections: publicSkillProjections,
+  public_skill_projection_heads: publicSkillProjectionHeads,
   workspace_migration_runs: workspaceMigrationRuns,
   topology_cutover_state: topologyCutoverState,
   control_plane_audit_events: controlPlaneAuditEvents,

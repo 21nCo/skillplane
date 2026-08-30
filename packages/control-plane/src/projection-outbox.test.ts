@@ -68,6 +68,7 @@ describe("regional publication projection", () => {
           skillId: "skill:a",
           skillSlug: "review",
           versionId: "version:a",
+          currentVersionId: "version:a",
           semanticVersion: "1.0.0",
           sourceObjectKey: "source.zip",
           digest: sha,

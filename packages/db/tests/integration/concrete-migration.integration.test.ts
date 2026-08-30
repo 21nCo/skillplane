@@ -49,8 +49,25 @@ describe("concrete workspace migration rollback", () => {
     sourceAddress.pathname = `/${targetDatabase}`;
     targetUrl = sourceAddress.toString();
     await migrateDatabase(targetUrl);
-    source = new Pool({ connectionString: sourceUrl, max: 3 });
+    source = new Pool({ connectionString: sourceUrl, max: 5 });
     target = new Pool({ connectionString: targetUrl, max: 3 });
+    for (const database of [source, target]) {
+      await database.query(
+        `CREATE TABLE IF NOT EXISTS __datafn_meta (
+           id text PRIMARY KEY,
+           namespace text NOT NULL,
+           next_server_seq integer NOT NULL
+         )`,
+      );
+    }
+    await source.query(
+      `INSERT INTO __datafn_meta (id, namespace, next_server_seq)
+       VALUES ($1, $2, 7)
+       ON CONFLICT (id) DO UPDATE
+         SET namespace = EXCLUDED.namespace,
+             next_server_seq = EXCLUDED.next_server_seq`,
+      [`datafn-meta:${suffix}`, workspaceId],
+    );
     await source.query(
       `INSERT INTO workspaces (id, workspace_id, slug, name)
        VALUES ($1, $1, $2, 'Migration rollback fixture')`,
@@ -111,6 +128,9 @@ describe("concrete workspace migration rollback", () => {
       try {
         await client.query("BEGIN");
         await client.query("SET LOCAL session_replication_role = replica");
+        await client.query("DELETE FROM __datafn_meta WHERE namespace = $1", [
+          workspaceId,
+        ]);
         await client.query("DELETE FROM workspaces WHERE id = $1", [workspaceId]);
         await client.query("COMMIT");
       } catch (error) {
@@ -165,6 +185,14 @@ describe("concrete workspace migration rollback", () => {
       await operations.copyDatabase(context);
       await operations.copyBundles(context);
       await expect(
+        target.query(
+          `SELECT next_server_seq
+             FROM __datafn_meta
+            WHERE namespace = $1`,
+          [workspaceId],
+        ),
+      ).resolves.toMatchObject({ rows: [{ next_server_seq: 7 }] });
+      await expect(
         target.query("DELETE FROM skill_version_files WHERE workspace_id = $1", [
           workspaceId,
         ]),
@@ -188,6 +216,14 @@ describe("concrete workspace migration rollback", () => {
         `SELECT count(*)::text AS count
            FROM skill_versions
           WHERE workspace_id = $1`,
+        [workspaceId],
+      ),
+    ).resolves.toMatchObject({ rows: [{ count: "0" }] });
+    await expect(
+      target.query<{ count: string }>(
+        `SELECT count(*)::text AS count
+           FROM __datafn_meta
+          WHERE namespace = $1`,
         [workspaceId],
       ),
     ).resolves.toMatchObject({ rows: [{ count: "0" }] });
@@ -216,6 +252,7 @@ describe("concrete workspace migration rollback", () => {
       recoveryLeaseExpiresAt: Date.now() + 60_000,
     };
     const delayed = await source.connect();
+    const delayedDatafn = await source.connect();
     const drainEventId = `event:drain-${suffix}`;
     let rolledBack = false;
     try {
@@ -230,6 +267,8 @@ describe("concrete workspace migration rollback", () => {
       );
       await delayed.query("BEGIN ISOLATION LEVEL REPEATABLE READ");
       await delayed.query("SELECT 1");
+      await delayedDatafn.query("BEGIN ISOLATION LEVEL REPEATABLE READ");
+      await delayedDatafn.query("SELECT 1");
       await operations.quiesceSource(context);
 
       await expect(
@@ -240,7 +279,22 @@ describe("concrete workspace migration rollback", () => {
           [`skill:late-${suffix}`, workspaceId],
         ),
       ).rejects.toMatchObject({ code: "40001" });
-      await delayed.query("ROLLBACK");
+      await expect(
+        delayedDatafn.query(
+          `INSERT INTO __datafn_meta (id, namespace, next_server_seq)
+           VALUES ($1, $2, 8)`,
+          [`datafn-meta:late-${suffix}`, workspaceId],
+        ),
+      ).rejects.toMatchObject({ code: "40001" });
+      await Promise.all([delayed.query("ROLLBACK"), delayedDatafn.query("ROLLBACK")]);
+
+      await expect(
+        source.query(
+          `INSERT INTO __datafn_meta (id, namespace, next_server_seq)
+           VALUES ($1, $2, 8)`,
+          [`datafn-meta:fenced-${suffix}`, workspaceId],
+        ),
+      ).rejects.toMatchObject({ code: "55000" });
 
       await expect(
         source.query(
@@ -268,8 +322,12 @@ describe("concrete workspace migration rollback", () => {
       });
       rolledBack = true;
     } finally {
-      await delayed.query("ROLLBACK").catch(() => undefined);
+      await Promise.all([
+        delayed.query("ROLLBACK").catch(() => undefined),
+        delayedDatafn.query("ROLLBACK").catch(() => undefined),
+      ]);
       delayed.release();
+      delayedDatafn.release();
       if (!rolledBack) {
         await operations
           .rollbackSource({ ...context, cause: new Error("test cleanup") })
@@ -293,6 +351,7 @@ describe("concrete workspace migration rollback", () => {
       skillId: `skill:projection-${suffix}`,
       skillSlug: "projection-fixture",
       versionId: `version:projection-${suffix}`,
+      currentVersionId: `version:projection-${suffix}`,
       semanticVersion: "2.0.0",
       digest: `sha256:${"1".repeat(64)}`,
       objectKey: `public/${suffix}/projection.zip`,
@@ -314,6 +373,47 @@ describe("concrete workspace migration rollback", () => {
       ),
     ).resolves.toMatchObject({
       rows: [{ state: "published", projection_sequence: "2" }],
+    });
+
+    await directory.unpublish({
+      workspaceId: publicWorkspace,
+      skillId: `skill:projection-${suffix}`,
+      versionId: `version:projection-${suffix}`,
+      projectionSequence: 3,
+    });
+    await directory.publish({
+      workspaceId: publicWorkspace,
+      workspaceSlug: `projection-${suffix}`,
+      skillId: `skill:projection-${suffix}`,
+      skillSlug: "projection-fixture",
+      versionId: `version:stale-${suffix}`,
+      currentVersionId: `version:stale-${suffix}`,
+      semanticVersion: "1.5.0",
+      digest: `sha256:${"2".repeat(64)}`,
+      objectKey: `public/${suffix}/stale-projection.zip`,
+      projectionSequence: 2,
+    });
+    await expect(
+      target.query<{
+        current_version_id: string;
+        head_state: string;
+        projection_count: string;
+      }>(
+        `SELECT head.current_version_id, head.state AS head_state,
+                (SELECT count(*)::text FROM public_skill_projections
+                  WHERE workspace_id = $1) AS projection_count
+           FROM public_skill_projection_heads head
+          WHERE head.workspace_id = $1 AND head.skill_id = $2`,
+        [publicWorkspace, `skill:projection-${suffix}`],
+      ),
+    ).resolves.toMatchObject({
+      rows: [
+        {
+          current_version_id: `version:projection-${suffix}`,
+          head_state: "unpublished",
+          projection_count: "1",
+        },
+      ],
     });
     await target.query("DELETE FROM workspaces WHERE id = $1", [publicWorkspace]);
   });

@@ -86,6 +86,7 @@ export interface PublicProjectionDirectory {
     readonly skillId: string;
     readonly skillSlug: string;
     readonly versionId: string;
+    readonly currentVersionId: string;
     readonly semanticVersion: string;
     readonly digest: `sha256:${string}`;
     readonly objectKey: string;
@@ -112,12 +113,27 @@ export class PostgresPublicProjectionDirectory implements PublicProjectionDirect
 
   async publish(input: Parameters<PublicProjectionDirectory["publish"]>[0]) {
     await this.database.query(
-      `INSERT INTO public_skill_projections
+      `WITH accepted_head AS (
+         INSERT INTO public_skill_projection_heads
+           (workspace_id, skill_id, current_version_id, state,
+            projection_sequence, updated_at)
+         VALUES ($1, $3, $6, 'published', $10, now())
+         ON CONFLICT (workspace_id, skill_id)
+         DO UPDATE SET current_version_id = EXCLUDED.current_version_id,
+                       state = 'published',
+                       projection_sequence = EXCLUDED.projection_sequence,
+                       updated_at = now()
+         WHERE public_skill_projection_heads.projection_sequence <=
+               EXCLUDED.projection_sequence
+         RETURNING workspace_id
+       )
+       INSERT INTO public_skill_projections
          (workspace_id, workspace_slug, skill_id, skill_slug, version_id,
           semantic_version, digest, object_key, projection_sequence, document,
           search_text, state, published_at, unpublished_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11,
-               'published', COALESCE($12::timestamptz, now()), NULL, now())
+       SELECT $1, $2, $3, $4, $5, $7, $8, $9, $10, $11::jsonb, $12,
+              'published', COALESCE($13::timestamptz, now()), NULL, now()
+         FROM accepted_head
        ON CONFLICT (workspace_id, skill_id, version_id)
        DO UPDATE SET workspace_slug = EXCLUDED.workspace_slug,
                      skill_slug = EXCLUDED.skill_slug,
@@ -138,6 +154,7 @@ export class PostgresPublicProjectionDirectory implements PublicProjectionDirect
         input.skillId,
         input.skillSlug,
         input.versionId,
+        input.currentVersionId,
         input.semanticVersion,
         input.digest,
         input.objectKey,
@@ -151,12 +168,27 @@ export class PostgresPublicProjectionDirectory implements PublicProjectionDirect
 
   async unpublish(input: Parameters<PublicProjectionDirectory["unpublish"]>[0]) {
     await this.database.query(
-      `UPDATE public_skill_projections
-          SET state = 'unpublished', projection_sequence = $3,
+      `WITH accepted_head AS (
+         INSERT INTO public_skill_projection_heads
+           (workspace_id, skill_id, current_version_id, state,
+            projection_sequence, updated_at)
+         VALUES ($1, $2, $3, 'unpublished', $4, now())
+         ON CONFLICT (workspace_id, skill_id)
+         DO UPDATE SET current_version_id = EXCLUDED.current_version_id,
+                       state = 'unpublished',
+                       projection_sequence = EXCLUDED.projection_sequence,
+                       updated_at = now()
+         WHERE public_skill_projection_heads.projection_sequence <=
+               EXCLUDED.projection_sequence
+         RETURNING workspace_id
+       )
+       UPDATE public_skill_projections
+          SET state = 'unpublished', projection_sequence = $4,
               unpublished_at = now(), updated_at = now()
         WHERE workspace_id = $1 AND skill_id = $2
-          AND state = 'published' AND projection_sequence <= $3`,
-      [input.workspaceId, input.skillId, input.projectionSequence],
+          AND state = 'published' AND projection_sequence <= $4
+          AND EXISTS (SELECT 1 FROM accepted_head)`,
+      [input.workspaceId, input.skillId, input.versionId, input.projectionSequence],
     );
   }
 }
@@ -181,6 +213,7 @@ export async function publishGlobalProjection(input: {
   readonly skillId: string;
   readonly skillSlug: string;
   readonly versionId: string;
+  readonly currentVersionId: string;
   readonly semanticVersion: string;
   readonly digest: `sha256:${string}`;
   readonly projectionSequence: number;
@@ -217,6 +250,7 @@ export async function publishGlobalProjection(input: {
     skillId: input.skillId,
     skillSlug: input.skillSlug,
     versionId: input.versionId,
+    currentVersionId: input.currentVersionId,
     semanticVersion: input.semanticVersion,
     digest: input.digest,
     objectKey,

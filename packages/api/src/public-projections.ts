@@ -215,9 +215,15 @@ export function mapPublicProjectionFileError(error: unknown): never {
   throw error;
 }
 
-const SELECT = `SELECT workspace_id, workspace_slug, skill_id, skill_slug,
-       version_id, semantic_version, digest, object_key, document, published_at
-  FROM public_skill_projections`;
+const SELECT = `SELECT projection.workspace_id, projection.workspace_slug,
+       projection.skill_id, projection.skill_slug, projection.version_id,
+       projection.semantic_version, projection.digest, projection.object_key,
+       projection.document, projection.published_at
+  FROM public_skill_projections projection
+  JOIN public_skill_projection_heads head
+    ON head.workspace_id = projection.workspace_id
+   AND head.skill_id = projection.skill_id
+   AND head.state = 'published'`;
 
 /** Read-only global discovery/retrieval projection used by canonical public hosts. */
 export class PublicSkillProjectionService {
@@ -244,14 +250,21 @@ export class PublicSkillProjectionService {
       : null;
     const result = await this.pool.query<RankedProjectionRow>(
       `WITH latest AS MATERIALIZED (
-         SELECT DISTINCT ON (workspace_id, skill_id)
-                workspace_id, workspace_slug, skill_id, skill_slug, version_id,
-                semantic_version, digest, object_key, document, published_at,
-                search_text
-           FROM public_skill_projections
-          WHERE state = 'published'
-            AND version_id = document->'skill'->>'currentPublishedVersionId'
-          ORDER BY workspace_id, skill_id, published_at DESC, version_id ASC
+         SELECT DISTINCT ON (projection.workspace_id, projection.skill_id)
+                projection.workspace_id, projection.workspace_slug,
+                projection.skill_id, projection.skill_slug,
+                projection.version_id, projection.semantic_version,
+                projection.digest, projection.object_key, projection.document,
+                projection.published_at, projection.search_text
+           FROM public_skill_projections projection
+           JOIN public_skill_projection_heads head
+             ON head.workspace_id = projection.workspace_id
+            AND head.skill_id = projection.skill_id
+            AND head.current_version_id = projection.version_id
+            AND head.state = 'published'
+          WHERE projection.state = 'published'
+          ORDER BY projection.workspace_id, projection.skill_id,
+                   projection.published_at DESC, projection.version_id ASC
        ), ranked AS MATERIALIZED (
          SELECT latest.*,
                 CASE WHEN $1::text = '' THEN 0::bigint ELSE round(
@@ -308,8 +321,9 @@ export class PublicSkillProjectionService {
   async getCurrent(workspaceSlug: string, skillSlug: string) {
     const result = await this.pool.query<ProjectionRow>(
       `${SELECT}
-        WHERE workspace_slug = $1 AND skill_slug = $2 AND state = 'published'
-          AND version_id = document->'skill'->>'currentPublishedVersionId'
+        WHERE projection.workspace_slug = $1 AND projection.skill_slug = $2
+          AND projection.state = 'published'
+          AND head.current_version_id = projection.version_id
         ORDER BY published_at DESC, version_id ASC
         LIMIT 1`,
       [workspaceSlug, skillSlug],
@@ -322,8 +336,8 @@ export class PublicSkillProjectionService {
   async getCurrentBySkillId(skillId: string) {
     const result = await this.pool.query<ProjectionRow>(
       `${SELECT}
-        WHERE skill_id = $1 AND state = 'published'
-          AND version_id = document->'skill'->>'currentPublishedVersionId'
+        WHERE projection.skill_id = $1 AND projection.state = 'published'
+          AND head.current_version_id = projection.version_id
         ORDER BY published_at DESC, version_id ASC
         LIMIT 1`,
       [skillId],
@@ -336,7 +350,8 @@ export class PublicSkillProjectionService {
   async listVersions(workspaceSlug: string, skillSlug: string, limit?: number) {
     const result = await this.pool.query<ProjectionRow>(
       `${SELECT}
-        WHERE workspace_slug = $1 AND skill_slug = $2 AND state = 'published'
+        WHERE projection.workspace_slug = $1 AND projection.skill_slug = $2
+          AND projection.state = 'published'
         ORDER BY published_at DESC,
                  (document->'version'->>'revision')::bigint DESC NULLS LAST,
                  version_id ASC
@@ -356,8 +371,9 @@ export class PublicSkillProjectionService {
   }): Promise<DownloadedSkillFile> {
     const result = await this.pool.query<ProjectionRow>(
       `${SELECT}
-        WHERE workspace_slug = $1 AND skill_slug = $2 AND version_id = $3
-          AND digest = $4 AND state = 'published'
+        WHERE projection.workspace_slug = $1 AND projection.skill_slug = $2
+          AND projection.version_id = $3 AND projection.digest = $4
+          AND projection.state = 'published'
         LIMIT 1`,
       [options.workspaceSlug, options.skillSlug, options.versionId, options.digest],
     );

@@ -1,4 +1,5 @@
 import { migrateDatabase, resolveTestDatabaseUrl } from "@skillplane/db";
+import { PostgresPublicProjectionDirectory } from "@skillplane/control-plane";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PublicSkillProjectionService } from "../../src/public-projections.js";
@@ -23,51 +24,56 @@ describe("global public projection current-version selection", () => {
        VALUES ($1, $1, $2, 'Projection current fixture')`,
       [workspaceId, workspaceSlug],
     );
-    for (const [versionId, semanticVersion, revision] of [
-      [oldVersionId, "1.0.0", 1],
-      [currentVersionId, "2.0.0", 2],
+    const directory = new PostgresPublicProjectionDirectory(pool);
+    for (const [versionId, currentPointer, semanticVersion, revision] of [
+      [oldVersionId, oldVersionId, "1.0.0", 1],
+      [currentVersionId, currentVersionId, "2.0.0", 2],
     ] as const) {
-      await pool.query(
-        `INSERT INTO public_skill_projections
-           (workspace_id, workspace_slug, skill_id, skill_slug, version_id,
-            semantic_version, digest, object_key, document, search_text,
-            state, published_at, projection_sequence)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'tied timestamp',
-                 'published', $10, $11)`,
-        [
-          workspaceId,
-          workspaceSlug,
-          skillId,
-          skillSlug,
-          versionId,
-          semanticVersion,
-          `sha256:${String(revision).repeat(64)}`,
-          `public/${versionId}.zip`,
-          {
-            skill: {
-              id: skillId,
-              workspaceId,
-              slug: skillSlug,
-              name: "Projection current fixture",
-              description: "Tied source timestamps",
-              tags: ["projection"],
-              visibility: "public",
-              currentPublishedVersionId: currentVersionId,
-            },
-            version: {
-              id: versionId,
-              workspaceId,
-              skillId,
-              revision,
-              semanticVersion,
-              publishedAt,
-            },
+      await directory.publish({
+        workspaceId,
+        workspaceSlug,
+        skillId,
+        skillSlug,
+        versionId,
+        currentVersionId: currentPointer,
+        semanticVersion,
+        digest: `sha256:${String(revision).repeat(64)}`,
+        objectKey: `public/${versionId}.zip`,
+        publishedAt,
+        projectionSequence: revision,
+        searchText: "tied timestamp",
+        document: {
+          skill: {
+            id: skillId,
+            workspaceId,
+            slug: skillSlug,
+            name: "Projection current fixture",
+            description: "Tied source timestamps",
+            tags: ["projection"],
+            visibility: "public",
+            currentPublishedVersionId: currentPointer,
           },
-          publishedAt,
-          revision,
-        ],
-      );
+          version: {
+            id: versionId,
+            workspaceId,
+            skillId,
+            revision,
+            semanticVersion,
+            publishedAt,
+          },
+        },
+      });
     }
+    /* The historical row still contains its original self-pointer. The
+       skill-wide head, not mutable history, decides the current version. */
+    await expect(
+      pool.query<{ pointer: string }>(
+        `SELECT document->'skill'->>'currentPublishedVersionId' AS pointer
+           FROM public_skill_projections
+          WHERE workspace_id = $1 AND skill_id = $2 AND version_id = $3`,
+        [workspaceId, skillId, oldVersionId],
+      ),
+    ).resolves.toMatchObject({ rows: [{ pointer: oldVersionId }] });
   });
 
   afterAll(async () => {

@@ -21,6 +21,7 @@ export const GLOBAL_CONTROL_TABLES = [
   "permission_directory_records",
   "workspace_routing_nonces",
   "public_skill_projections",
+  "public_skill_projection_heads",
   "workspace_migration_runs",
   "topology_cutover_state",
   "control_plane_audit_events",

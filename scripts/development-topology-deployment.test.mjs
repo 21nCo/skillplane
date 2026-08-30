@@ -88,18 +88,31 @@ describe("multi-cell development deployment", () => {
     assert.throws(
       () =>
         assertDevelopmentControlDatabaseShape({
-          existingTables: 20,
-          hasControlTables: true,
-          hasRegionalTables: true,
+          tableNames: ["workspace_placements", "skills"],
         }),
       /empty or already control-only/u,
     );
     assert.doesNotThrow(() =>
       assertDevelopmentControlDatabaseShape({
-        existingTables: 20,
-        hasControlTables: true,
-        hasRegionalTables: false,
+        tableNames: [
+          "authfn_users",
+          "workspace_placements",
+          "skillplane_schema_migrations",
+        ],
       }),
     );
+    for (const regionalTable of [
+      "audit_events",
+      "datafn_runtime_records",
+      "__datafn_meta",
+    ]) {
+      assert.throws(
+        () =>
+          assertDevelopmentControlDatabaseShape({
+            tableNames: ["workspace_placements", regionalTable],
+          }),
+        /empty or already control-only/u,
+      );
+    }
   });
 });
