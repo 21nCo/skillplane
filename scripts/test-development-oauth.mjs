@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import {
+  developmentDatabase,
   developmentIssuer,
   developmentResource,
 } from "./lib/development-deployment.mjs";
@@ -13,6 +14,7 @@ export async function testDevelopmentOAuth() {
     .map((value) => value.trim())
     .filter(Boolean);
   return testLocalOAuth({
+    databaseUrl: developmentDatabase().url,
     issuer: developmentIssuer,
     resource: developmentResource,
     workspaceSlugs,

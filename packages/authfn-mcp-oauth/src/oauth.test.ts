@@ -309,6 +309,95 @@ describe("OAuth client and redirect validation", () => {
     });
     expect(release).toHaveBeenCalledOnce();
   });
+
+  it("accepts Codex metadata with localhost fallback and a dynamic IPv4 loopback port", async () => {
+    const callbackId = "codex-test-client";
+    const clientId = `https://chatgpt.com/oauth/codex/${callbackId}/client.json`;
+    const registeredRedirectUris = [
+      `http://127.0.0.1/callback/${callbackId}`,
+      `http://localhost/callback/${callbackId}`,
+    ];
+    const requestedRedirectUri = `http://127.0.0.1:49188/callback/${callbackId}`;
+    const query = vi.fn(async (sql: string) => ({
+      rows: sql.includes("RETURNING request_count") ? [{ request_count: 1 }] : [],
+    }));
+    const transactionQuery = vi.fn(async (sql: string) => ({
+      rows: sql.includes("RETURNING client_id") ? [{ client_id: clientId }] : [],
+    }));
+    const release = vi.fn();
+    const connect = vi.fn(async () => ({ query: transactionQuery, release }));
+    const fetcher = vi.fn(async () =>
+      Response.json({
+        client_id: clientId,
+        client_uri: "https://chatgpt.com/codex",
+        application_type: "native",
+        redirect_uris: registeredRedirectUris,
+        token_endpoint_auth_method: "none",
+        token_endpoint_auth_methods_supported: ["none"],
+        grant_types: ["authorization_code", "refresh_token"],
+        response_types: ["code"],
+        client_name: "Codex",
+      }),
+    );
+    const { plugin } = createAuthFnMcpOAuthPlugin({
+      pool: {
+        query,
+        connect,
+      } as unknown as Pool,
+      issuer: "https://app.skillplane.dev",
+      tokenPepper: pepper,
+      fetcher,
+      now: () => new Date("2026-08-30T00:00:00.000Z"),
+    });
+    const authfn = {
+      config: { plugins: [] },
+      namespace: "authfn",
+      basePath: "/auth",
+      hooks: {},
+    } as unknown as AuthFnPluginRuntimeContext;
+    const authorize = plugin
+      .routes?.(authfn)
+      .find((route) => route.path === "/oauth/authorize");
+    if (!authorize) throw new Error("OAuth authorization route is missing");
+    const authorizationUrl = new URL("https://app.skillplane.dev/auth/oauth/authorize");
+    for (const [name, value] of Object.entries({
+      response_type: "code",
+      client_id: clientId,
+      redirect_uri: requestedRedirectUri,
+      code_challenge: "c".repeat(43),
+      code_challenge_method: "S256",
+      state: "state-codex",
+      resource: MCP_RESOURCE,
+      scope: "skills:read",
+    })) {
+      authorizationUrl.searchParams.set(name, value);
+    }
+
+    const response = await authorize.handler(
+      new Request(authorizationUrl),
+      undefined as never,
+    );
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get("location")).toContain("/sign-in?next=");
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(connect).toHaveBeenCalledOnce();
+    expect(
+      transactionQuery.mock.calls
+        .filter(([sql]) =>
+          sql.includes("INSERT INTO authfn_oauth_client_redirect_uris"),
+        )
+        .map(([, parameters]) => parameters?.[2]),
+    ).toEqual(registeredRedirectUris);
+    expect(query.mock.calls[1]?.[1]?.[2]).toMatchObject({
+      clientId,
+      redirectUri: requestedRedirectUri,
+      loopbackRedirect: true,
+      resource: MCP_RESOURCE,
+      scopes: ["skills:read"],
+    });
+    expect(release).toHaveBeenCalledOnce();
+  });
 });
 
 describe("opaque token primitives", () => {

@@ -641,9 +641,15 @@ export function createMcpApp(options: CreateMcpAppOptions = {}) {
           );
           const server = createSkillplaneMcpServer(runtime);
           const posthog = resolvePostHog(context.env);
-          if (posthog) instrument(server.protocol, posthog);
           const protocolHandler = await server.createWebStandardHandler({
             enableJsonResponse: true,
+            ...(posthog
+              ? {
+                  configureRequestServer: (requestServer) => {
+                    instrument(requestServer.protocol, posthog);
+                  },
+                }
+              : {}),
           });
           const response = await protocolHandler(protocolRequest, handleOptions);
           const protocolResponse = secureProtocolResponse(

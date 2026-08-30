@@ -7,3 +7,6 @@ id, desc, status, completedAt, completionDoc
 2026-08-04-32192064-issue,"Linear MCP connector authorization fails while hydrating client metadata in Workerd",1,2026-08-04T02:00:25Z,2026-08-04-32192064-completion
 2026-08-04-yh02xrqp-issue,"Linear Agent fails when Skillplane MCP connector is active",1,2026-08-04T12:19:39Z,2026-08-04-yh02xrqp-completion
 SKI-1,"Move service-principal credential authentication to AuthFn API keys",1,2026-08-05T12:04:29Z,2026-08-05-05fc074e-completion
+2026-08-27-new-f3c333cf-spec,"Make Skillplane locally authoritative and safely project exact skills into agent-native directories",0,,
+SKI-6,"Adopt McpFn for Skillplane MCP runtime, authorization, and quality gates",0,,
+2026-08-30-codex-loopback-oauth-issue,"Codex client metadata rejects safe localhost and dynamic loopback callbacks",1,2026-08-30T04:27:43Z,2026-08-30-33cfc7a1-completion

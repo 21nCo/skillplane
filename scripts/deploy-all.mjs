@@ -23,7 +23,7 @@ import {
   sha256,
   writeJsonAtomic,
 } from "./lib/production-deployment.mjs";
-import { productionSmoke } from "./production-smoke.mjs";
+import { productionReleaseSmoke } from "./production-smoke.mjs";
 import { renderDeploymentConfigs } from "./render-deploy-config.mjs";
 
 async function releaseSourceDigest() {
@@ -88,7 +88,7 @@ export async function deployAll() {
       { mode: 0o600 },
     );
   }
-  const smoke = await productionSmoke({ attempts: 90 });
+  const smoke = await productionReleaseSmoke({ attempts: 90 });
   const finalSourceRevision = requireCleanSourceRevision();
   const finalSourceDigest = await releaseSourceDigest();
   if (

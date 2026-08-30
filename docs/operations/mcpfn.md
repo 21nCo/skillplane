@@ -23,9 +23,9 @@ body fields never establish identity or authorization.
 
 Skillplane consumes the reviewed stable npm releases directly:
 
-- `@mcpfn/auth@0.0.2`
-- `@mcpfn/core@0.0.2`
-- `@mcpfn/testing@0.0.2`
+- `@mcpfn/auth@0.0.3`
+- `@mcpfn/core@0.0.4`
+- `@mcpfn/testing@0.0.4`
 
 Consumer manifests use exact versions and `pnpm-lock.yaml` records the registry
 artifacts and integrity hashes. Run:
@@ -103,8 +103,9 @@ MCP Worker consumes the corresponding authenticated principal contract. Do not
 roll back only selected source files or add old routes as a fallback.
 
 For a release incident, follow `docs/operations/rollback.md` and use the exact
-recorded Worker versions. Roll back MCP before app, run the production smoke
-suite, and confirm OAuth discovery and an authenticated tool call against the
-restored pair. The content-addressed bundle store and PostgreSQL schema remain
-unchanged. If rollback does not restore the flow, roll forward to the recorded
-release pair and investigate before changing token or client records.
+recorded Worker versions. Roll back MCP before app, run
+`pnpm smoke:production:release`, and confirm OAuth discovery and an
+authenticated tool call against the restored pair. The content-addressed bundle
+store and PostgreSQL schema remain unchanged. If rollback does not restore the
+flow, roll forward to the recorded release pair and investigate before changing
+token or client records.

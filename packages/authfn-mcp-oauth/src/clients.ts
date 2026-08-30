@@ -6,6 +6,7 @@ import {
 import { consumeRateLimit } from "@skillplane/db";
 import { isIP } from "node:net";
 import type { OAuthRuntime } from "./config.js";
+import { SKILLPLANE_MCP_REDIRECT_POLICY } from "./redirect-policy.js";
 import { id } from "./tokens.js";
 
 type ClientMetadata = McpFnNormalizedClientRegistration["metadata"];
@@ -82,6 +83,7 @@ export async function resolveRegisteredClient(
   return normalizeMcpClientRegistration({
     clientId: row.client_id,
     source: "dynamic",
+    redirectPolicy: SKILLPLANE_MCP_REDIRECT_POLICY,
     metadata: {
       client_name: row.client_name,
       redirect_uris: redirects.rows.map((redirect) => redirect.redirect_uri),
@@ -225,6 +227,7 @@ export async function registerClient(
   return normalizeMcpClientRegistration({
     clientId,
     source: "dynamic",
+    redirectPolicy: SKILLPLANE_MCP_REDIRECT_POLICY,
     metadata: persistedMetadata,
   });
 }

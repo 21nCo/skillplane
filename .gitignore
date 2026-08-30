@@ -54,3 +54,6 @@ blob-report/
 *.pid
 *.tmp
 *.tsbuildinfo
+
+
+.conduct

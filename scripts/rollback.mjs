@@ -20,7 +20,7 @@ import {
   wrangler,
   writeJsonAtomic,
 } from "./lib/production-deployment.mjs";
-import { productionSmoke } from "./production-smoke.mjs";
+import { productionReleaseSmoke } from "./production-smoke.mjs";
 
 const releasePath = resolve(productionStateDirectory, "release.json");
 const lockPath = resolve(productionStateDirectory, "rollback.lock");
@@ -207,7 +207,7 @@ export async function verifyProductionRollback() {
           version: inventory[kind].priorVersion,
         });
       }
-      rollbackSmoke = await productionSmoke({ attempts: 10 });
+      rollbackSmoke = await productionReleaseSmoke({ attempts: 10 });
     } catch (error) {
       rehearsalError = error;
     }
@@ -232,7 +232,7 @@ export async function verifyProductionRollback() {
       }
     }
     try {
-      forwardSmoke = await productionSmoke({ attempts: 10 });
+      forwardSmoke = await productionReleaseSmoke({ attempts: 10 });
     } catch (error) {
       forwardErrors.push(error);
     }

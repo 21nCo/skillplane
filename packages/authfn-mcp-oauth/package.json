@@ -20,7 +20,8 @@
     "test:unit": "vitest run --exclude 'dist/**' src"
   },
   "dependencies": {
-    "@mcpfn/auth": "0.0.2",
+    "@authfn/core": "catalog:",
+    "@mcpfn/auth": "0.0.3",
     "@skillplane/db": "workspace:*",
     "@skillplane/observability": "workspace:*",
     "@superfunctions/db": "catalog:",
