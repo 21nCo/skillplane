@@ -1,10 +1,13 @@
 import type { CallerDeclaration } from "@skillplane/mcp-schema";
 import { McpToolError, type McpErrorCode } from "@skillplane/mcp-schema";
 import {
+  auditMetadata,
   AuditWriteError,
   PostgresAuditWriter,
   writeAuditEvent,
+  writeControlPlaneAuditEvent,
   type AuditWriteInput,
+  type ControlPlaneAuditWriteInput,
 } from "@skillplane/observability";
 import { enqueueAgentSkillUseProjection } from "@skillplane/domain";
 import type { Pool } from "pg";
@@ -102,6 +105,64 @@ function auditInput(event: McpAuditRecord): AuditWriteInput {
     ...(event.errorCode ? { errorCode: event.errorCode } : {}),
     latencyMs: event.latencyMs,
   };
+}
+
+function controlPlaneAuditInput(event: McpAuditRecord): ControlPlaneAuditWriteInput {
+  const input = auditInput(event);
+  return {
+    workspaceId: input.workspaceId,
+    eventType: input.eventType,
+    action: input.action,
+    outcome: input.outcome,
+    actorType: input.actorType,
+    actorId: input.actorId,
+    requestId: input.requestId,
+    channel: "mcp",
+    ...(input.userId !== undefined ? { userId: input.userId } : {}),
+    ...(input.resourceType ? { resourceType: input.resourceType } : {}),
+    ...(input.resourceId ? { resourceId: input.resourceId } : {}),
+    ...(input.errorCode ? { errorCode: input.errorCode } : {}),
+    metadata: {
+      ...auditMetadata(input),
+      ...(event.contextId ? { contextId: event.contextId } : {}),
+    },
+  };
+}
+
+export class ControlPlaneMcpAuditWriter implements McpAuditWriter {
+  constructor(private readonly pool: Pool) {}
+
+  async record(event: McpAuditRecord): Promise<void> {
+    await this.recordBatch([event]);
+  }
+
+  async recordBatch(events: readonly McpAuditRecord[]): Promise<void> {
+    if (events.length === 0) return;
+    const client = await this.pool.connect().catch(() => null);
+    if (!client) {
+      throw new McpToolError(
+        "AUDIT_WRITE_FAILED",
+        "The access event could not be recorded",
+        { status: 503, retryable: true },
+      );
+    }
+    try {
+      await client.query("BEGIN");
+      for (const event of events) {
+        await writeControlPlaneAuditEvent(client, controlPlaneAuditInput(event));
+      }
+      await client.query("COMMIT");
+    } catch {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw new McpToolError(
+        "AUDIT_WRITE_FAILED",
+        "The access event could not be recorded",
+        { status: 503, retryable: true },
+      );
+    } finally {
+      client.release();
+    }
+  }
 }
 
 export class PostgresMcpAuditWriter implements McpAuditWriter {

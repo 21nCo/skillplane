@@ -25,6 +25,7 @@ import {
   type McpIdentity,
 } from "./auth.js";
 import {
+  ControlPlaneMcpAuditWriter,
   persistMcpAudit,
   PostgresMcpAuditWriter,
   type McpAuditWriter,
@@ -546,10 +547,9 @@ export function createMcpApp(options: CreateMcpAppOptions = {}) {
     if (existing) return existing;
     const created =
       options.createAuditWriter?.(services) ??
-      new PostgresMcpAuditWriter(
-        services.database.pool,
-        services.database.role === "regional",
-      );
+      (services.database.role === "regional"
+        ? new PostgresMcpAuditWriter(services.database.pool, true)
+        : new ControlPlaneMcpAuditWriter(services.database.pool));
     writer.set(services, created);
     return created;
   };
