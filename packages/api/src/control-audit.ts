@@ -1,3 +1,5 @@
+import { writeControlPlaneAuditEvent } from "@skillplane/observability";
+
 interface SqlWriter {
   query(text: string, values?: readonly unknown[]): Promise<unknown>;
 }
@@ -29,30 +31,7 @@ export async function writeControlPlaneAudit(
     readonly channel?: string;
   },
 ): Promise<void> {
-  await sql.query(
-    `INSERT INTO control_plane_audit_events
-       (id, workspace_id, event_type, action, outcome, actor_type, actor_id,
-        user_id, request_id, resource_type, resource_id, metadata, channel)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
-    [
-      `control-audit:${crypto.randomUUID()}`,
-      event.workspaceId ?? null,
-      event.eventType,
-      event.action,
-      event.outcome,
-      event.actorType,
-      event.actorId,
-      event.userId ?? null,
-      event.requestId,
-      event.resourceType ?? null,
-      event.resourceId ?? null,
-      JSON.stringify({
-        ...(event.metadata ?? {}),
-        ...(event.errorCode ? { errorCode: event.errorCode } : {}),
-      }),
-      event.channel ?? "app",
-    ],
-  );
+  await writeControlPlaneAuditEvent(sql, event);
 }
 
 export async function writePrincipalControlPlaneAudit(

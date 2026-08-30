@@ -205,17 +205,19 @@ export async function testLocalOAuth(options = {}) {
     assert(typeof clientId === "string", "Dynamic registration omitted client_id");
     const registeredAccessToken = registration.registration_access_token;
     const registeredClientUri = registration.registration_client_uri;
-    assert(
-      typeof registeredAccessToken === "string" && registeredAccessToken.length >= 32,
-      "Dynamic registration omitted registration_access_token",
-    );
-    assert(
+    const hasRegistrationAccessToken =
+      typeof registeredAccessToken === "string" && registeredAccessToken.length >= 32;
+    const hasRegistrationClientUri =
       typeof registeredClientUri === "string" &&
-        new URL(registeredClientUri).origin === new URL(configured.issuer).origin,
-      "Dynamic registration omitted a valid registration_client_uri",
+      new URL(registeredClientUri).origin === new URL(configured.issuer).origin;
+    assert(
+      hasRegistrationAccessToken === hasRegistrationClientUri,
+      "Dynamic registration returned incomplete management credentials",
     );
-    registrationAccessToken = registeredAccessToken;
-    registrationClientUri = registeredClientUri;
+    if (hasRegistrationAccessToken && hasRegistrationClientUri) {
+      registrationAccessToken = registeredAccessToken;
+      registrationClientUri = registeredClientUri;
+    }
     const authorize = new URL(authorizationMetadata.authorization_endpoint);
     authorize.search = new URLSearchParams({
       response_type: "code",
@@ -230,7 +232,7 @@ export async function testLocalOAuth(options = {}) {
     process.stderr.write(
       `Complete sign-in and consent in the opened browser:\n${authorize.toString()}\n`,
     );
-    openBrowser(authorize.toString());
+    (options.openBrowser ?? openBrowser)(authorize.toString());
     const code = await waitForOAuthCallback(callback.callback);
     const tokenResponse = await json(
       await fetch(authorizationMetadata.token_endpoint, {

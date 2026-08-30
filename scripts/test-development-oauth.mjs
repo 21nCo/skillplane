@@ -11,6 +11,9 @@ export async function testDevelopmentOAuth() {
   return testLocalOAuth({
     issuer: developmentIssuer,
     resource: developmentResource,
+    ...(process.env.SKILLPLANE_OAUTH_NO_BROWSER === "1"
+      ? { openBrowser: () => undefined }
+      : {}),
   });
 }
 

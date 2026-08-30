@@ -52,6 +52,23 @@ export interface AuditWriteInput {
   readonly id?: string;
 }
 
+export interface ControlPlaneAuditWriteInput {
+  readonly workspaceId?: string | null;
+  readonly eventType: string;
+  readonly action: string;
+  readonly outcome: string;
+  readonly actorType: string;
+  readonly actorId: string;
+  readonly userId?: string | null;
+  readonly requestId: string;
+  readonly resourceType?: string;
+  readonly resourceId?: string;
+  readonly errorCode?: string;
+  readonly metadata?: Readonly<Record<string, unknown>>;
+  readonly channel?: string;
+  readonly id?: string;
+}
+
 export interface AuditQueryable {
   query(
     text: string,
@@ -145,6 +162,45 @@ export async function writeAuditEvent(
   } catch (error) {
     throw new AuditWriteError(error);
   }
+}
+
+/** Writes global identity, tenancy, and routing decisions to the control authority. */
+export async function writeControlPlaneAuditEvent(
+  queryable: { query(text: string, values?: readonly unknown[]): Promise<unknown> },
+  input: ControlPlaneAuditWriteInput,
+): Promise<string> {
+  const id = input.id ?? `control-audit:${crypto.randomUUID()}`;
+  const redacted = redactAuditMetadata({
+    ...(input.metadata ?? {}),
+    ...(input.errorCode ? { errorCode: input.errorCode } : {}),
+  });
+  await queryable.query(
+    `INSERT INTO control_plane_audit_events
+       (id, workspace_id, event_type, action, outcome, actor_type, actor_id,
+        user_id, request_id, resource_type, resource_id, metadata, channel)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+    [
+      id,
+      input.workspaceId ?? null,
+      input.eventType,
+      input.action,
+      input.outcome,
+      input.actorType,
+      input.actorId,
+      input.userId ?? null,
+      input.requestId,
+      input.resourceType ?? null,
+      input.resourceId ?? null,
+      JSON.stringify({
+        ...redacted.value,
+        ...(redacted.removedFieldCount > 0
+          ? { redaction: { removedFieldCount: redacted.removedFieldCount } }
+          : {}),
+      }),
+      input.channel ?? "app",
+    ],
+  );
+  return id;
 }
 
 export class PostgresAuditWriter {
