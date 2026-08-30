@@ -184,7 +184,7 @@ async function resolveWorkspace(
   scope: Exclude<ApiScope, { readonly kind: "global" }>,
   services: ApiServices,
   options: { readonly allowPublicRead?: boolean } = {},
-): Promise<string> {
+): Promise<{ readonly workspaceId: string; readonly publicRead: boolean }> {
   let service: Awaited<ReturnType<typeof authenticateServicePrincipalRequest>>;
   try {
     service = await authenticateServicePrincipalRequest(request, services);
@@ -229,10 +229,10 @@ async function resolveWorkspace(
         "Workspace access is denied",
       );
     }
-    return workspaceId;
+    return { workspaceId, publicRead: false };
   }
   if (!session) {
-    if (options.allowPublicRead) return workspaceId;
+    if (options.allowPublicRead) return { workspaceId, publicRead: true };
     throw new ApiRoutingError(
       401,
       "AUTHENTICATION_REQUIRED",
@@ -247,14 +247,14 @@ async function resolveWorkspace(
     [workspaceId, session.actorId],
   );
   if (!membership.rows[0]) {
-    if (options.allowPublicRead) return workspaceId;
+    if (options.allowPublicRead) return { workspaceId, publicRead: true };
     throw new ApiRoutingError(
       403,
       "WORKSPACE_ACCESS_DENIED",
       "Workspace access is denied",
     );
   }
-  return workspaceId;
+  return { workspaceId, publicRead: false };
 }
 
 function serviceBinding(value: unknown): ServiceBinding | null {
@@ -379,13 +379,13 @@ export function createRoutedApiApplication(input: {
             return await input.local.fetch(request, bindings);
           }
           const publicSkillVersionRead = isPublicSkillVersionRead(request, scope);
-          const workspaceId = await resolveWorkspace(request, scope, services, {
+          const resolved = await resolveWorkspace(request, scope, services, {
             allowPublicRead: publicSkillVersionRead,
           });
-          const forwardedRequest = publicSkillVersionRead
+          const forwardedRequest = resolved.publicRead
             ? new Request(request, { headers: new Headers(request.headers) })
             : request;
-          if (publicSkillVersionRead) {
+          if (resolved.publicRead) {
             forwardedRequest.headers.set(PUBLIC_SKILL_READ_HEADER, "1");
           }
           const assertions = createWorkspaceRoutingAssertions({
@@ -396,7 +396,7 @@ export function createRoutedApiApplication(input: {
             directory: createPostgresWorkspacePlacementDirectory(
               services.controlDatabase.pool,
             ),
-            resolveAuthorizedWorkspace: () => Promise.resolve(workspaceId),
+            resolveAuthorizedWorkspace: () => Promise.resolve(resolved.workspaceId),
             cells: {
               resolve: ({ regionId }) => {
                 const cell = runtime.deployment.topology.cells.find(

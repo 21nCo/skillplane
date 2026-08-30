@@ -332,6 +332,76 @@ describe("API scope classification", () => {
     },
   );
 
+  it("keeps nested skill reads private for authenticated workspace members", async () => {
+    const query = async (text: string) => {
+      if (text.includes("FROM resource_routing_directory")) {
+        return {
+          rows: [
+            {
+              resource_type: "skill",
+              resource_id: "skill:private",
+              workspace_id: "workspace:one",
+              state: "active",
+              updated_at: new Date("2026-07-26T00:00:00.000Z"),
+            },
+          ],
+        };
+      }
+      if (text.includes("FROM workspace_memberships")) {
+        return { rows: [{ present: 1 }] };
+      }
+      if (text.includes("FROM workspace_placements")) {
+        return {
+          rows: [
+            {
+              workspace_id: "workspace:one",
+              region_id: "in-south",
+              epoch: 1,
+              state: "active",
+              updated_at: new Date("2026-07-26T00:00:00.000Z"),
+              cache_expires_at: null,
+              destination_ref: null,
+              moving_to_region_id: null,
+              previous_region_id: null,
+              migration: null,
+            },
+          ],
+        };
+      }
+      throw new Error(`Unexpected SQL in routing test: ${text}`);
+    };
+    const routed = createRoutedApiApplication({
+      local: { fetch: async () => new Response("unexpected global response") },
+      services: async () =>
+        ({
+          auth: {
+            provider: { authenticate: async () => ({ actorId: "user:one" }) },
+          },
+          controlDatabase: { pool: { query } },
+        }) as never,
+    });
+
+    const response = await routed.fetch(
+      new Request("http://localhost:5700/api/v1/skills/skill%3Aprivate/versions"),
+      {
+        ...gatewayBindings,
+        CELL_APP: {
+          fetch: async (request: Request) =>
+            Response.json({
+              workspaceId: request.headers.get("x-skillplane-routed-workspace-id"),
+              publicRead: request.headers.get("x-skillplane-public-skill-read"),
+            }),
+        },
+      },
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      workspaceId: "workspace:one",
+      publicRead: null,
+    });
+  });
+
   it("boots a private cell without gateway-only OTP or email bindings", async () => {
     const local = { fetch: async () => new Response("unexpected") };
     const services = async () => {
