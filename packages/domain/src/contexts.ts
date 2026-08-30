@@ -9,6 +9,7 @@ import {
   type MutationAuditContext,
 } from "./mutation-audit.js";
 import { principalAuditActor, type Principal } from "./principal.js";
+import { enqueueResourceRoutingProjection } from "./projection-events.js";
 import { withDomainTransaction as withTransaction } from "./transactions.js";
 
 export const CONTEXT_TYPES = [
@@ -517,6 +518,7 @@ export class ContextService {
     readonly learningMetadata?: Readonly<Record<string, unknown>>;
     readonly idempotencyKey: string;
     readonly requestId: string;
+    readonly fencingEpoch?: number;
     readonly auditContext?: MutationAuditContext;
   }): Promise<ContextCreateResult> {
     authorize(options.principal, "contexts:write");
@@ -679,6 +681,11 @@ export class ContextService {
             knowledgeRevisionId: response.knowledge.id,
             knowledgeDigest: response.knowledge.bodyDigest,
           },
+        });
+        await enqueueResourceRoutingProjection(client, {
+          workspaceId: options.principal.workspaceId,
+          resources: [{ resourceType: "context", resourceId: response.context.id }],
+          fencingEpoch: options.fencingEpoch,
         });
         await this.idempotency.complete(client, claim.identity, 201, {
           context: response.context,

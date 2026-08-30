@@ -18,6 +18,7 @@ import { principalAuditActor, type Principal } from "./principal.js";
 import {
   enqueueCurrentSkillProjection,
   enqueuePublishedSkillProjection,
+  enqueueResourceRoutingProjection,
   enqueueSkillCountProjection,
 } from "./projection-events.js";
 import { withDomainTransaction as withTransaction } from "./transactions.js";
@@ -549,6 +550,17 @@ export class SkillService {
               fencingEpoch: options.fencingEpoch,
             });
           }
+          await enqueueResourceRoutingProjection(client, {
+            workspaceId: options.workspaceId,
+            resources: [
+              { resourceType: "skill", resourceId: responseBody.skill.id },
+              {
+                resourceType: "skill_version",
+                resourceId: responseBody.version.id,
+              },
+            ],
+            fencingEpoch: options.fencingEpoch,
+          });
           await enqueueSkillCountProjection(client, {
             workspaceId: options.workspaceId,
             delta: 1,

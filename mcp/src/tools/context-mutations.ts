@@ -5,6 +5,7 @@ import type {
   ContextNoteUpsertInput,
 } from "@skillplane/mcp-schema";
 import { McpToolError } from "@skillplane/mcp-schema";
+import { registerResourceRoutes } from "@skillplane/api";
 import { resolveContext, resolveSkill } from "./resolve.js";
 import {
   executeMutationTool,
@@ -115,8 +116,12 @@ export function contextNoteUpsert(
           learningMetadata: input.learningMetadata,
           idempotencyKey: input.idempotencyKey,
           requestId: execution.requestId,
+          fencingEpoch: runtime.fencingEpoch,
           auditContext,
         });
+        await registerResourceRoutes(runtime.services, skill.workspaceId, [
+          { resourceType: "context_note", resourceId: note.id },
+        ]);
       } else {
         const expectedRevision = input.expectedRevision;
         if (expectedRevision === null) {

@@ -545,11 +545,12 @@ export function createMcpApp(options: CreateMcpAppOptions = {}) {
   const auditFor = (services: ApiServices): McpAuditWriter => {
     const existing = writer.get(services);
     if (existing) return existing;
+    const role = services.database.role;
     const created =
       options.createAuditWriter?.(services) ??
-      (services.database.role === "regional"
-        ? new PostgresMcpAuditWriter(services.database.pool, true)
-        : new ControlPlaneMcpAuditWriter(services.database.pool));
+      (role === "control"
+        ? new ControlPlaneMcpAuditWriter(services.database.pool)
+        : new PostgresMcpAuditWriter(services.database.pool, role === "regional"));
     writer.set(services, created);
     return created;
   };

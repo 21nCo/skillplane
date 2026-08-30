@@ -5,6 +5,7 @@ import {
   type ImmutablePublicationStore,
   type PublicProjectionDirectory,
 } from "./publication.js";
+import type { ResourceRoutingDirectory } from "./resource-directory.js";
 
 const publishedPayload = z
   .object({
@@ -43,6 +44,31 @@ const publicSkillCountPayload = z
   })
   .strict();
 
+const routableResourceType = z.enum([
+  "workspace",
+  "skill",
+  "skill_version",
+  "context",
+  "context_note",
+]);
+
+const resourceRoutePayload = z
+  .object({
+    workspaceId: z.string().min(1).max(200),
+    resources: z
+      .array(
+        z
+          .object({
+            resourceType: routableResourceType,
+            resourceId: z.string().min(1).max(200),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(20),
+  })
+  .strict();
+
 export interface RegionalProjectionEvent {
   readonly id: string;
   readonly regionId: string;
@@ -50,7 +76,8 @@ export interface RegionalProjectionEvent {
     | "public_skill.published"
     | "public_skill.unpublished"
     | "public_stats.agent_skill_used"
-    | "public_stats.skill_count_changed";
+    | "public_stats.skill_count_changed"
+    | "resource_route.upsert";
   readonly workspaceId: string;
   readonly fencingEpoch: number;
   readonly sequence: number;
@@ -81,6 +108,7 @@ const eventType = z.enum([
   "public_skill.unpublished",
   "public_stats.agent_skill_used",
   "public_stats.skill_count_changed",
+  "resource_route.upsert",
 ]);
 
 function safeFailureCode(error: unknown): string {
@@ -235,6 +263,7 @@ export async function applyRegionalPublicProjection(input: {
   readonly regionalStore: ImmutablePublicationStore;
   readonly publicStore: ImmutablePublicationStore;
   readonly directory: PublicProjectionDirectory;
+  readonly resourceDirectory?: ResourceRoutingDirectory;
   readonly applyPublicStats?: (input: {
     readonly eventId: string;
     readonly workspaceId: string;
@@ -251,6 +280,23 @@ export async function applyRegionalPublicProjection(input: {
     placement.epoch !== input.event.fencingEpoch
   ) {
     throw new Error("PUBLICATION_FENCING_EPOCH_STALE");
+  }
+  if (input.event.eventType === "resource_route.upsert") {
+    const payload = resourceRoutePayload.parse(input.event.payload);
+    if (payload.workspaceId !== input.event.workspaceId) {
+      throw new Error("RESOURCE_ROUTE_WORKSPACE_MISMATCH");
+    }
+    if (!input.resourceDirectory) {
+      throw new Error("RESOURCE_ROUTE_PROJECTOR_UNAVAILABLE");
+    }
+    for (const resource of payload.resources) {
+      await input.resourceDirectory.upsert({
+        workspaceId: payload.workspaceId,
+        resourceType: resource.resourceType,
+        resourceId: resource.resourceId,
+      });
+    }
+    return { objectKey: null };
   }
   if (input.event.eventType === "public_stats.agent_skill_used") {
     const payload = publicStatsPayload.parse(input.event.payload);

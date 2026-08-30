@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { assertDisposableDatabaseUrl } from "./database-url.js";
-import { loadMigrations } from "./migrate.js";
+import { loadMigrations, physicalOwnershipPlan } from "./migrate.js";
 
 describe("migration chain", () => {
   it("is ordered, hashed, and immutable by identity", async () => {
@@ -60,5 +60,24 @@ describe("migration chain", () => {
     expect(() =>
       assertDisposableDatabaseUrl("postgresql://user:pass@127.0.0.1:5432/skillplane"),
     ).toThrow(/Refusing destructive reset/);
+  });
+
+  it("assigns dynamic DataFn tables to regional databases", () => {
+    const dynamic = ["widgets_9f3a", 'nested"records'];
+    const regional = physicalOwnershipPlan("regional", dynamic);
+    const control = physicalOwnershipPlan("control", dynamic);
+
+    expect(regional.expected).toEqual(
+      expect.arrayContaining(["widgets_9f3a", 'nested"records']),
+    );
+    expect(regional.unowned).not.toEqual(
+      expect.arrayContaining(["widgets_9f3a", 'nested"records']),
+    );
+    expect(control.unowned).toEqual(
+      expect.arrayContaining(["widgets_9f3a", 'nested"records']),
+    );
+    expect(control.expected).not.toEqual(
+      expect.arrayContaining(["widgets_9f3a", 'nested"records']),
+    );
   });
 });

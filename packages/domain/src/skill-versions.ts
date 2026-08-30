@@ -14,6 +14,7 @@ import { DomainError } from "./errors.js";
 import { hashIdempotentRequest } from "./idempotency.js";
 import type { IdempotencyStore } from "./idempotency.js";
 import { principalAuditActor, type Principal } from "./principal.js";
+import { enqueueResourceRoutingProjection } from "./projection-events.js";
 import { mapSkillInfrastructureError, type SkillVersionRecord } from "./skills.js";
 import { withDomainTransaction as withTransaction } from "./transactions.js";
 import { insertPrincipalAudit } from "./mutation-audit.js";
@@ -168,6 +169,7 @@ export class SkillVersionService {
     readonly archiveBytes: Uint8Array;
     readonly idempotencyKey: string;
     readonly requestId: string;
+    readonly fencingEpoch?: number;
   }): Promise<SkillVersionRecord> {
     authorize(options.principal, "skills:write");
     const proposedBump = parseSemanticBump(options.proposedBump);
@@ -359,6 +361,11 @@ export class SkillVersionService {
             publishedAt: null,
             createdAt: now,
           };
+          await enqueueResourceRoutingProjection(client, {
+            workspaceId: options.principal.workspaceId,
+            resources: [{ resourceType: "skill_version", resourceId: version.id }],
+            fencingEpoch: options.fencingEpoch,
+          });
           await this.idempotency.complete(client, claim.identity, 201, { version });
           return version;
         },

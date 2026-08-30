@@ -11,6 +11,7 @@ import {
   readJsonObject,
   requireIdempotencyKey,
   requirePrincipal,
+  routingEpoch,
 } from "./shared.js";
 
 function parseLimit(value: string | undefined): number | undefined {
@@ -50,6 +51,7 @@ export function registerSkillVersionRoutes(app: Hono<ApiEnvironment>): void {
       archiveBytes: upload.archiveBytes,
       idempotencyKey: requireIdempotencyKey(context),
       requestId: context.get("requestId"),
+      fencingEpoch: routingEpoch(context),
     });
     await registerResourceRoutes(services, principal.workspaceId, [
       { resourceType: "skill_version", resourceId: version.id },

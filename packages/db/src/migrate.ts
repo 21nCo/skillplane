@@ -75,6 +75,36 @@ export interface MigrationResult {
   readonly alreadyApplied: readonly string[];
 }
 
+export function physicalOwnershipPlan(
+  role: Exclude<MigrationRole, "combined">,
+  dynamicDatafnTables: readonly string[],
+): {
+  readonly unowned: readonly string[];
+  readonly expected: readonly string[];
+} {
+  const staticTables = new Set<string>([
+    ...globalControlTables,
+    ...regionalWorkspaceTables,
+    "skillplane_schema_migrations",
+  ]);
+  const dynamic = [...new Set(dynamicDatafnTables)]
+    .filter((table) => !staticTables.has(table))
+    .sort();
+  return role === "control"
+    ? {
+        unowned: [...regionalWorkspaceTables, ...dynamic],
+        expected: [...globalControlTables],
+      }
+    : {
+        unowned: [...globalControlTables],
+        expected: [...regionalWorkspaceTables, ...dynamic],
+      };
+}
+
+function quoteIdentifier(value: string): string {
+  return `"${value.replaceAll('"', '""')}"`;
+}
+
 export async function loadMigrations(
   directory = migrationsDirectory,
 ): Promise<readonly Migration[]> {
@@ -118,9 +148,18 @@ async function enforcePhysicalOwnership(
   client: PoolClient,
   role: Exclude<MigrationRole, "combined">,
 ): Promise<void> {
-  const unowned = role === "control" ? regionalWorkspaceTables : globalControlTables;
   await client.query("BEGIN");
   try {
+    const datafnTables = await client.query<{ table_name: string }>(
+      `SELECT DISTINCT table_name
+         FROM information_schema.columns
+        WHERE table_schema = 'public' AND column_name = '__ns'
+        ORDER BY table_name`,
+    );
+    const plan = physicalOwnershipPlan(
+      role,
+      datafnTables.rows.map((row) => row.table_name),
+    );
     if (role === "regional") {
       await client.query(
         "DROP TRIGGER IF EXISTS audit_events_public_stats_counter_insert ON audit_events",
@@ -129,12 +168,10 @@ async function enforcePhysicalOwnership(
         "DROP FUNCTION IF EXISTS skillplane_increment_public_agent_skill_uses()",
       );
     }
-    for (const table of unowned) {
-      await client.query(`DROP TABLE IF EXISTS ${table} CASCADE`);
+    for (const table of plan.unowned) {
+      await client.query(`DROP TABLE IF EXISTS ${quoteIdentifier(table)} CASCADE`);
     }
-    const expected = new Set<string>(
-      role === "control" ? globalControlTables : regionalWorkspaceTables,
-    );
+    const expected = new Set<string>(plan.expected);
     const actual = await client.query<{ table_name: string }>(
       `SELECT table_name
          FROM information_schema.tables

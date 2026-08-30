@@ -79,6 +79,18 @@ export function requireIdempotencyKey(context: Context<ApiEnvironment>): string 
   return value;
 }
 
+export function routingEpoch(context: Context<ApiEnvironment>): number {
+  const value = Number(context.req.header("x-skillplane-routing-epoch") ?? "1");
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new DomainError(
+      "VALIDATION_FAILED",
+      "The workspace routing epoch is invalid",
+      400,
+    );
+  }
+  return value;
+}
+
 function decodeBase64(value: unknown): Uint8Array {
   if (
     typeof value !== "string" ||

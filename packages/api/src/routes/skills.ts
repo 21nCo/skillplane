@@ -15,6 +15,7 @@ import {
   readBundleUpload,
   readJsonObject,
   requireIdempotencyKey,
+  routingEpoch,
   workspacePrincipal,
 } from "./shared.js";
 
@@ -30,18 +31,6 @@ function parseLimit(value: string | undefined): number | undefined {
     );
   }
   return parsed;
-}
-
-function routingEpoch(context: { req: { header(name: string): string | undefined } }) {
-  const value = Number(context.req.header("x-skillplane-routing-epoch") ?? "1");
-  if (!Number.isSafeInteger(value) || value < 1) {
-    throw new DomainError(
-      "VALIDATION_FAILED",
-      "The workspace routing epoch is invalid",
-      400,
-    );
-  }
-  return value;
 }
 
 function parseVisibilityFilter(context: {

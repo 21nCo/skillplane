@@ -1,5 +1,6 @@
 import {
   DomainError,
+  normalizePublicSearchInput,
   type SkillRecord,
   type SkillVersionRecord,
 } from "@skillplane/domain";
@@ -236,9 +237,7 @@ export class PublicSkillProjectionService {
     readonly limit?: number;
     readonly cursor?: string | null;
   }) {
-    const limit = Math.max(1, Math.min(100, options.limit ?? 20));
-    const query = options.query.trim();
-    const tags = [...new Set(options.tags)].sort();
+    const { limit, query, tags } = normalizePublicSearchInput(options);
     const filterHash = await projectionFilterHash(query, tags);
     const cursor = options.cursor
       ? await parseProjectionCursor(options.cursor, this.cursorSecret, filterHash)
@@ -251,6 +250,7 @@ export class PublicSkillProjectionService {
                 search_text
            FROM public_skill_projections
           WHERE state = 'published'
+            AND version_id = document->'skill'->>'currentPublishedVersionId'
           ORDER BY workspace_id, skill_id, published_at DESC, version_id ASC
        ), ranked AS MATERIALIZED (
          SELECT latest.*,
@@ -309,6 +309,7 @@ export class PublicSkillProjectionService {
     const result = await this.pool.query<ProjectionRow>(
       `${SELECT}
         WHERE workspace_slug = $1 AND skill_slug = $2 AND state = 'published'
+          AND version_id = document->'skill'->>'currentPublishedVersionId'
         ORDER BY published_at DESC, version_id ASC
         LIMIT 1`,
       [workspaceSlug, skillSlug],
@@ -322,6 +323,7 @@ export class PublicSkillProjectionService {
     const result = await this.pool.query<ProjectionRow>(
       `${SELECT}
         WHERE skill_id = $1 AND state = 'published'
+          AND version_id = document->'skill'->>'currentPublishedVersionId'
         ORDER BY published_at DESC, version_id ASC
         LIMIT 1`,
       [skillId],
@@ -335,7 +337,9 @@ export class PublicSkillProjectionService {
     const result = await this.pool.query<ProjectionRow>(
       `${SELECT}
         WHERE workspace_slug = $1 AND skill_slug = $2 AND state = 'published'
-        ORDER BY published_at DESC, version_id ASC
+        ORDER BY published_at DESC,
+                 (document->'version'->>'revision')::bigint DESC NULLS LAST,
+                 version_id ASC
         LIMIT $3`,
       [workspaceSlug, skillSlug, Math.max(1, Math.min(100, limit ?? 20))],
     );

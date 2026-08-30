@@ -8,7 +8,12 @@ import type { Hono } from "hono";
 import type { ApiEnvironment } from "../context.js";
 import { success } from "../envelopes.js";
 import { registerResourceRoutes } from "../resource-routing.js";
-import { readJsonObject, requireIdempotencyKey, requirePrincipal } from "./shared.js";
+import {
+  readJsonObject,
+  requireIdempotencyKey,
+  requirePrincipal,
+  routingEpoch,
+} from "./shared.js";
 
 function objectField(
   value: unknown,
@@ -107,6 +112,7 @@ export function registerContextRoutes(app: Hono<ApiEnvironment>): void {
       ...(learningMetadata !== undefined ? { learningMetadata } : {}),
       idempotencyKey: requireIdempotencyKey(context),
       requestId: context.get("requestId"),
+      fencingEpoch: routingEpoch(context),
     });
     await registerResourceRoutes(services, requirePrincipal(context).workspaceId, [
       { resourceType: "context", resourceId: created.context.id },
@@ -220,6 +226,7 @@ export function registerContextRoutes(app: Hono<ApiEnvironment>): void {
       ...(learningMetadata !== undefined ? { learningMetadata } : {}),
       idempotencyKey: requireIdempotencyKey(context),
       requestId: context.get("requestId"),
+      fencingEpoch: routingEpoch(context),
     });
     await registerResourceRoutes(services, requirePrincipal(context).workspaceId, [
       { resourceType: "context_note", resourceId: note.id },

@@ -2,6 +2,7 @@ import {
   PostgresPublicProjectionDirectory,
   applyRegionalPublicProjection,
   createImmutableObjectPublicationStore,
+  createPostgresResourceRoutingDirectory,
   createPostgresWorkspacePlacementDirectory,
   drainRegionalProjectionOutbox,
 } from "@skillplane/control-plane";
@@ -47,6 +48,7 @@ export async function drainProjectionCell(
     const regionalStore = createImmutableObjectPublicationStore(bindings.CELL_BUNDLES);
     const publicStore = createImmutableObjectPublicationStore(bindings.PUBLIC_BUNDLES);
     const directory = new PostgresPublicProjectionDirectory(control.pool);
+    const resourceDirectory = createPostgresResourceRoutingDirectory(control.pool);
     return await drainRegionalProjectionOutbox({
       regionId,
       database: regional.pool,
@@ -58,6 +60,7 @@ export async function drainProjectionCell(
           regionalStore,
           publicStore,
           directory,
+          resourceDirectory,
           async applyPublicStats({
             eventId,
             workspaceId,

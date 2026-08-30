@@ -237,6 +237,30 @@ function normalizeSearchInput(options: {
   return { query, tags, visibility, archive, limit };
 }
 
+export function normalizePublicSearchInput(options: {
+  readonly query?: string;
+  readonly tags?: readonly string[];
+  readonly limit?: number;
+}): {
+  readonly query: string;
+  readonly tags: readonly string[];
+  readonly limit: number;
+} {
+  const normalized = normalizeSearchInput({
+    query: options.query ?? "",
+    visibility: ["public"],
+    archive: "active",
+    allowEmptyQuery: true,
+    ...(options.tags ? { tags: options.tags } : {}),
+    ...(options.limit !== undefined ? { limit: options.limit } : {}),
+  });
+  return {
+    query: normalized.query,
+    tags: normalized.tags,
+    limit: normalized.limit,
+  };
+}
+
 export class SkillSearchService {
   constructor(
     private readonly pool: Pool,

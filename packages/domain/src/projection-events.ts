@@ -12,6 +12,15 @@ interface ProjectionRow extends Record<string, unknown> {
   readonly version_document: SkillVersionRecord;
 }
 
+export const ROUTABLE_RESOURCE_TYPES = [
+  "workspace",
+  "skill",
+  "skill_version",
+  "context",
+  "context_note",
+] as const;
+export type RoutableResourceType = (typeof ROUTABLE_RESOURCE_TYPES)[number];
+
 function epoch(value: number | undefined): number {
   const resolved = value ?? 1;
   if (!Number.isSafeInteger(resolved) || resolved < 1) {
@@ -28,7 +37,8 @@ async function enqueue(
       | "public_skill.published"
       | "public_skill.unpublished"
       | "public_stats.agent_skill_used"
-      | "public_stats.skill_count_changed";
+      | "public_stats.skill_count_changed"
+      | "resource_route.upsert";
     readonly payload: Readonly<Record<string, unknown>>;
     readonly fencingEpoch?: number | undefined;
   },
@@ -48,6 +58,29 @@ async function enqueue(
       epoch(input.fencingEpoch),
     ],
   );
+}
+
+export async function enqueueResourceRoutingProjection(
+  client: ProjectionSqlClient,
+  input: {
+    readonly workspaceId: string;
+    readonly resources: readonly {
+      readonly resourceType: RoutableResourceType;
+      readonly resourceId: string;
+    }[];
+    readonly fencingEpoch?: number | undefined;
+  },
+): Promise<void> {
+  if (input.resources.length === 0) return;
+  await enqueue(client, {
+    workspaceId: input.workspaceId,
+    eventType: "resource_route.upsert",
+    fencingEpoch: input.fencingEpoch,
+    payload: {
+      workspaceId: input.workspaceId,
+      resources: input.resources,
+    },
+  });
 }
 
 export async function enqueueSkillCountProjection(

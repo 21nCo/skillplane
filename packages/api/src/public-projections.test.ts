@@ -73,7 +73,13 @@ describe("global public projection search", () => {
   });
 
   it("retrieves a public skill by its stable ID", async () => {
-    const pool = { query: async () => ({ rows: [row("skill:public", "0")] }) };
+    const calls: string[] = [];
+    const pool = {
+      async query(text: string) {
+        calls.push(text);
+        return { rows: [row("skill:public", "0")] };
+      },
+    };
     const service = new PublicSkillProjectionService(
       pool as never,
       {} as never,
@@ -83,6 +89,56 @@ describe("global public projection search", () => {
     expect(current.skill.id).toBe("skill:public");
     expect(current.skill.visibility).toBe("public");
     expect(current.version.publishedAt).toBe("2026-08-01T00:00:00.000Z");
+    expect(calls[0]).toContain(
+      "version_id = document->'skill'->>'currentPublishedVersionId'",
+    );
+  });
+
+  it("applies the domain search bounds before querying the global projection", async () => {
+    const pool = { query: async () => ({ rows: [] }) };
+    const service = new PublicSkillProjectionService(
+      pool as never,
+      {} as never,
+      "public-projection-cursor-secret-000000000000",
+    );
+
+    await expect(
+      service.discover({ query: "x".repeat(501), tags: [] }),
+    ).rejects.toMatchObject({ code: "VALIDATION_FAILED", status: 400 });
+    await expect(
+      service.discover({
+        query: "valid",
+        tags: Array.from({ length: 31 }, (_, index) => `tag-${index}`),
+      }),
+    ).rejects.toMatchObject({ code: "VALIDATION_FAILED", status: 400 });
+    await expect(
+      service.discover({ query: "valid", tags: ["invalid tag"] }),
+    ).rejects.toMatchObject({ code: "VALIDATION_FAILED", status: 400 });
+  });
+
+  it("uses the declared current version and revision ordering for tied timestamps", async () => {
+    const calls: string[] = [];
+    const pool = {
+      async query(text: string) {
+        calls.push(text);
+        return { rows: [row("skill:tied", "0")] };
+      },
+    };
+    const service = new PublicSkillProjectionService(
+      pool as never,
+      {} as never,
+      "public-projection-cursor-secret-000000000000",
+    );
+
+    await service.getCurrent("one", "tied");
+    await service.listVersions("one", "tied");
+
+    expect(calls[0]).toContain(
+      "version_id = document->'skill'->>'currentPublishedVersionId'",
+    );
+    expect(calls[1]).toContain(
+      "(document->'version'->>'revision')::bigint DESC NULLS LAST",
+    );
   });
 
   it("keeps public bundle storage and integrity failures retryable", async () => {

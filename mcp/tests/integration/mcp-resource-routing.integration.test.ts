@@ -68,6 +68,26 @@ describe("MCP resource route convergence", () => {
         },
       ],
     });
+    const durable = await environment.services.database.pool.query<{
+      payload: { resources?: readonly { resourceId?: string }[] };
+    }>(
+      `SELECT payload
+         FROM regional_projection_outbox
+        WHERE workspace_id = $1 AND event_type = 'resource_route.upsert'
+          AND payload->'resources' @> $2::jsonb
+        ORDER BY sequence DESC
+        LIMIT 1`,
+      [
+        environment.owner.workspaceId,
+        JSON.stringify([{ resourceType: "skill", resourceId: created.skill.id }]),
+      ],
+    );
+    expect(durable.rows[0]?.payload.resources).toEqual(
+      expect.arrayContaining([
+        { resourceType: "skill", resourceId: created.skill.id },
+        { resourceType: "skill_version", resourceId: created.version.id },
+      ]),
+    );
 
     await environment.services.controlDatabase.pool.query(
       `DELETE FROM resource_routing_directory

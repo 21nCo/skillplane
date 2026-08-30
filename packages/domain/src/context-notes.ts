@@ -13,6 +13,7 @@ import {
   type MutationAuditContext,
 } from "./mutation-audit.js";
 import { principalAuditActor, type Principal } from "./principal.js";
+import { enqueueResourceRoutingProjection } from "./projection-events.js";
 import { withDomainTransaction as withTransaction } from "./transactions.js";
 
 export const NOTE_ARCHIVE_FILTERS = ["active", "archived", "all"] as const;
@@ -306,6 +307,7 @@ export class ContextNoteService {
     readonly learningMetadata?: Readonly<Record<string, unknown>>;
     readonly idempotencyKey: string;
     readonly requestId: string;
+    readonly fencingEpoch?: number;
     readonly auditContext?: MutationAuditContext;
   }): Promise<ContextNoteRecord> {
     authorize(options.principal, "contexts:write");
@@ -438,6 +440,11 @@ export class ContextNoteService {
             baseRevisionId: note.currentRevisionBaseId,
             digest: note.bodyDigest,
           },
+        });
+        await enqueueResourceRoutingProjection(client, {
+          workspaceId: options.principal.workspaceId,
+          resources: [{ resourceType: "context_note", resourceId: note.id }],
+          fencingEpoch: options.fencingEpoch,
         });
         await this.idempotency.complete(client, claim.identity, 201, { note });
         return note;

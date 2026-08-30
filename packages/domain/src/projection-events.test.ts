@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   enqueueCurrentSkillProjection,
+  enqueueResourceRoutingProjection,
   type SkillRecord,
   type SkillVersionRecord,
 } from "./index.js";
@@ -93,5 +94,38 @@ describe("public projection events", () => {
       first.publishedAt,
       current.publishedAt,
     ]);
+  });
+
+  it("enqueues resource routing changes with the regional fencing epoch", async () => {
+    const inserts: unknown[][] = [];
+    const query = vi.fn(async (text: string, values?: readonly unknown[]) => {
+      if (text.includes("INSERT INTO regional_projection_outbox") && values) {
+        inserts.push([...values]);
+      }
+      return { rows: [] };
+    });
+
+    await enqueueResourceRoutingProjection(
+      { query },
+      {
+        workspaceId: "workspace:one",
+        resources: [
+          { resourceType: "context", resourceId: "context:one" },
+          { resourceType: "context_note", resourceId: "note:one" },
+        ],
+        fencingEpoch: 7,
+      },
+    );
+
+    expect(inserts).toHaveLength(1);
+    expect(inserts[0]?.[2]).toBe("resource_route.upsert");
+    expect(inserts[0]?.[4]).toBe(7);
+    expect(JSON.parse(String(inserts[0]?.[3]))).toEqual({
+      workspaceId: "workspace:one",
+      resources: [
+        { resourceType: "context", resourceId: "context:one" },
+        { resourceType: "context_note", resourceId: "note:one" },
+      ],
+    });
   });
 });

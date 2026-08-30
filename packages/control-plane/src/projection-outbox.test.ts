@@ -220,4 +220,64 @@ describe("regional publication projection", () => {
       },
     ]);
   });
+
+  it("projects regional resource IDs into the global routing directory", async () => {
+    const placements = createMemoryWorkspacePlacementDirectory();
+    await placements.putIfAbsent({
+      namespace: "workspace:a",
+      regionId: "eu-west",
+      epoch: 6,
+      state: "active",
+      updatedAt: new Date().toISOString(),
+    });
+    const routes: unknown[] = [];
+    const empty = store();
+
+    await expect(
+      applyRegionalPublicProjection({
+        event: {
+          id: "event:route",
+          regionId: "eu-west",
+          eventType: "resource_route.upsert",
+          workspaceId: "workspace:a",
+          fencingEpoch: 6,
+          sequence: 2,
+          payload: {
+            workspaceId: "workspace:a",
+            resources: [
+              { resourceType: "context", resourceId: "context:a" },
+              { resourceType: "context_note", resourceId: "note:a" },
+            ],
+          },
+        },
+        placements,
+        resolveWorkspaceSlug: async () => "acme",
+        regionalStore: empty,
+        publicStore: empty,
+        directory: {
+          publish: async () => undefined,
+          unpublish: async () => undefined,
+        },
+        resourceDirectory: {
+          resolve: async () => null,
+          async upsert(route) {
+            routes.push(route);
+          },
+          tombstone: async () => undefined,
+        },
+      }),
+    ).resolves.toEqual({ objectKey: null });
+    expect(routes).toEqual([
+      {
+        workspaceId: "workspace:a",
+        resourceType: "context",
+        resourceId: "context:a",
+      },
+      {
+        workspaceId: "workspace:a",
+        resourceType: "context_note",
+        resourceId: "note:a",
+      },
+    ]);
+  });
 });
