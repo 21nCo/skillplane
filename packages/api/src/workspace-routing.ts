@@ -11,6 +11,7 @@ import {
   type RoutableResourceType,
 } from "@skillplane/control-plane";
 import { InvalidAuthenticationError } from "@skillplane/domain";
+import { collectDatafnStructuralResources } from "@skillplane/datafn";
 import { authenticateServicePrincipalRequest } from "./service-principal-auth.js";
 import type { ApiServiceProvider, ApiServices } from "./context.js";
 
@@ -36,28 +37,6 @@ type ApiScope =
 type DatafnAuthority = "control" | "regional" | "mixed";
 const controlDatafnResources = new Set(["workspaces", "workspaceMemberships"]);
 
-function collectDatafnResources(
-  value: unknown,
-  found = new Set<string>(),
-): Set<string> {
-  if (!value || typeof value !== "object") return found;
-  if (Array.isArray(value)) {
-    for (const item of value) collectDatafnResources(item, found);
-    return found;
-  }
-  const record = value as Record<string, unknown>;
-  if (typeof record.resource === "string") found.add(record.resource);
-  if (Array.isArray(record.resources)) {
-    for (const resource of record.resources) {
-      if (typeof resource === "string") found.add(resource);
-    }
-  }
-  for (const child of Object.values(record)) {
-    if (child && typeof child === "object") collectDatafnResources(child, found);
-  }
-  return found;
-}
-
 export async function classifyDatafnAuthority(
   request: Request,
 ): Promise<DatafnAuthority | null> {
@@ -70,7 +49,7 @@ export async function classifyDatafnAuthority(
       return "regional";
     }
   }
-  const resources = collectDatafnResources(payload);
+  const resources = collectDatafnStructuralResources(payload);
   if (resources.size === 0) return "control";
   const control = [...resources].some((resource) =>
     controlDatafnResources.has(resource),

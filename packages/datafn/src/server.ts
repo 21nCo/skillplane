@@ -8,6 +8,7 @@ import {
 import { resolveUserPrincipal, type DatabaseClient } from "@skillplane/db";
 import type { Principal } from "@skillplane/domain";
 import type { IndexedDirectoryStoreAdapter } from "@superfunctions/db";
+import { collectDatafnStructuralResources } from "./resource-selectors.js";
 import { DATAFN_RESOURCE_NAMES, skillplaneDatafnSchema } from "./schema.js";
 
 export interface DatafnAuthProvider {
@@ -30,27 +31,6 @@ export interface CreateSkillplaneDatafnServerInput {
   readonly trustDirectWorkspaceHeader?: boolean;
   readonly debug?: boolean;
   readonly onTiming?: (event: Readonly<Record<string, unknown>>) => void;
-}
-
-function requestedResources(payload: unknown, found = new Set<string>()): Set<string> {
-  if (!payload || typeof payload !== "object") return found;
-  if (Array.isArray(payload)) {
-    for (const item of payload) requestedResources(item, found);
-    return found;
-  }
-  const record = payload as Record<string, unknown>;
-  if (typeof record.resource === "string") {
-    found.add(record.resource);
-  }
-  if (Array.isArray(record.resources)) {
-    for (const resource of record.resources) {
-      if (typeof resource === "string") found.add(resource);
-    }
-  }
-  for (const value of Object.values(record)) {
-    if (typeof value === "object") requestedResources(value, found);
-  }
-  return found;
 }
 
 export async function createSkillplaneDatafnServer(
@@ -89,7 +69,7 @@ export async function createSkillplaneDatafnServer(
     },
     authorize: (context, action, payload) => {
       if (!["status", "query", "search"].includes(action)) return false;
-      const resources = requestedResources(payload);
+      const resources = collectDatafnStructuralResources(payload);
       if (action !== "status" && resources.size === 0) return false;
       return [...resources].every((resource) => allowedResources.has(resource));
     },

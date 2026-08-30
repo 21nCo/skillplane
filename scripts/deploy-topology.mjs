@@ -2,6 +2,7 @@
 
 import {
   activeWorkerVersion,
+  capture,
   isMain,
   productionReleaseTag,
   productionSecrets,
@@ -11,6 +12,7 @@ import {
   requireSecretEnvironment,
   root,
   run,
+  validateVersionId,
   withSecretFile,
 } from "./lib/production-deployment.mjs";
 import {
@@ -58,8 +60,28 @@ function worker(output) {
   };
 }
 
+export function deployedVersionFromOutput(output, label = "Wrangler deployment") {
+  const match = /Current Version ID:\s*([a-f0-9-]{36})/iu.exec(output);
+  return validateVersionId(match?.[1], `${label} uploaded version`);
+}
+
+async function waitForUploadedVersion(output, uploadedVersion) {
+  let activeVersion = null;
+  for (let attempt = 1; attempt <= 30; attempt += 1) {
+    activeVersion = activeWorkerVersion(worker(output));
+    if (activeVersion === uploadedVersion) return uploadedVersion;
+    if (attempt < 30) {
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 1_000));
+    }
+  }
+  const observed = activeVersion ?? "none";
+  throw new Error(
+    `${output.id} uploaded version is not serving at 100% (observed ${observed})`,
+  );
+}
+
 function deployOutput(output, tag, secrets) {
-  const operation = (secretFile) => {
+  const operation = async (secretFile) => {
     const args = [
       "exec",
       "wrangler",
@@ -73,14 +95,21 @@ function deployOutput(output, tag, secrets) {
       tag,
     ];
     if (secretFile) args.push("--secrets-file", secretFile);
-    run("pnpm", args, {
+    const result = capture("pnpm", args, {
       cwd: `${root}/${output.directory}`,
       failureMessage: `${output.id} deployment failed`,
     });
+    process.stdout.write(result.stdout);
+    process.stderr.write(result.stderr);
+    const uploadedVersion = deployedVersionFromOutput(
+      `${result.stdout}\n${result.stderr}`,
+      output.id,
+    );
+    await waitForUploadedVersion(output, uploadedVersion);
     return {
       id: output.id,
       name: output.config.name,
-      version: activeWorkerVersion(worker(output)),
+      version: uploadedVersion,
     };
   };
   return secrets ? withSecretFile(secrets, operation) : operation();
@@ -128,7 +157,7 @@ function verifyTopologyBuckets(rendered) {
   return [...names].sort().map((name) => verifyPrivateProductionBucket(name));
 }
 
-function verifyActiveTopologyWorkers(outputs) {
+function verifyActiveTopologyWorkers(outputs, expectedDeployments) {
   return outputs.map((output) => {
     if (
       output.kind === "projection" &&
@@ -136,10 +165,18 @@ function verifyActiveTopologyWorkers(outputs) {
     ) {
       throw new Error(`${output.id} does not have the required projection cron`);
     }
+    const version = validateVersionId(
+      activeWorkerVersion(worker(output)),
+      `${output.id} active version`,
+    );
+    const expectedVersion = expectedDeployments.get(output.id);
+    if (expectedVersion && version !== expectedVersion) {
+      throw new Error(`${output.id} no longer serves the uploaded version`);
+    }
     return {
       id: output.id,
       name: output.config.name,
-      version: activeWorkerVersion(worker(output)),
+      version,
     };
   });
 }
@@ -175,14 +212,25 @@ export async function deployTopology(options = {}) {
   // Re-read every active version after all uploads. This includes the private
   // projection workers and proves the cron-bearing versions are serving before
   // the public release smoke can mark the topology successful.
-  const activeWorkers = verifyActiveTopologyWorkers(rendered.outputs);
+  const activeWorkers = verifyActiveTopologyWorkers(
+    rendered.outputs,
+    new Map(deployments.map((deployment) => [deployment.id, deployment.version])),
+  );
   const smoke = await productionReleaseSmoke({ attempts: 90 });
   return {
     ok: true,
     tag,
     applicationCommit: sourceRevision.commit,
     safety: {
-      backupCreatedAt: safety.backup.createdAt,
+      backupCreatedAt: {
+        control: safety.backups.control.createdAt,
+        cells: Object.fromEntries(
+          Object.entries(safety.backups.cells).map(([regionId, backup]) => [
+            regionId,
+            backup.createdAt,
+          ]),
+        ),
+      },
       migrationCreatedAt: safety.migration.createdAt,
       ownership: safety.ownership,
     },

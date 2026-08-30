@@ -176,6 +176,14 @@ describe("API scope classification", () => {
         request({ resources: ["workspaceMemberships", "skills"] }),
       ),
     ).resolves.toBe("mixed");
+    await expect(
+      classifyDatafnAuthority(
+        request({
+          resource: "skills",
+          filters: { metadata: { resource: "workspaces" } },
+        }),
+      ),
+    ).resolves.toBe("regional");
   });
 
   it("terminates anonymous public-by-ID reads at the global projection", async () => {

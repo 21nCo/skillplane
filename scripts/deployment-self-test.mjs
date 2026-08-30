@@ -13,6 +13,7 @@ import {
   parseWranglerJson,
 } from "./lib/cloudflare-production.mjs";
 import { renderDeploymentConfigs } from "./render-deploy-config.mjs";
+import { deployedVersionFromOutput } from "./deploy-topology.mjs";
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -178,6 +179,12 @@ const version = activeVersionFromDeployments([
 assert(
   version === "12345678-1234-1234-1234-123456789abc",
   "Active deployment parsing failed",
+);
+assert(
+  deployedVersionFromOutput(
+    "Uploaded worker\nCurrent Version ID: 12345678-1234-1234-1234-123456789abc\n",
+  ) === "12345678-1234-1234-1234-123456789abc",
+  "Uploaded deployment version parsing failed",
 );
 
 const sanitized = sanitizeDeploymentRecord({

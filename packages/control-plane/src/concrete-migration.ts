@@ -186,22 +186,40 @@ export class PostgresWorkspaceMigrationOperations implements WorkspaceMigrationO
   }
 
   async quiesceSource(context: DatafnNamespaceMigrationContext): Promise<void> {
-    void context;
     if (this.quiescedSource) return;
+    const dynamic = await dynamicNamespaceTables(this.source);
+    const lockTables = [...regionalTables, ...dynamic].filter(
+      (table) =>
+        table !== "regional_projection_outbox" &&
+        table !== "__datafn_permission_directory_outbox",
+    );
+    // Placement is already fenced as moving. Briefly wait for transactions
+    // which entered before that fence, then release the broad barrier before
+    // retaining the long-lived read snapshot. New legitimate writes for this
+    // namespace cannot enter after the fence; unrelated namespaces remain
+    // writable throughout copy and verification.
+    if (lockTables.length > 0) {
+      const barrier = await this.source.connect();
+      try {
+        await barrier.query("BEGIN");
+        await barrier.query(
+          `LOCK TABLE ${lockTables.map(identifier).join(", ")} IN SHARE MODE`,
+        );
+        await barrier.query("COMMIT");
+      } catch (error) {
+        await barrier.query("ROLLBACK").catch(() => undefined);
+        throw error;
+      } finally {
+        barrier.release();
+      }
+    }
+
     const client = await this.source.connect();
     try {
       await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ");
-      const dynamic = await dynamicNamespaceTables(this.source);
-      const lockTables = [...regionalTables, ...dynamic].filter(
-        (table) =>
-          table !== "regional_projection_outbox" &&
-          table !== "__datafn_permission_directory_outbox",
-      );
-      if (lockTables.length > 0) {
-        await client.query(
-          `LOCK TABLE ${lockTables.map(identifier).join(", ")} IN SHARE MODE`,
-        );
-      }
+      await client.query("SELECT count(*) FROM skills WHERE workspace_id = $1", [
+        context.namespace,
+      ]);
       this.quiescedSource = client;
     } catch (error) {
       await client.query("ROLLBACK").catch(() => undefined);

@@ -112,7 +112,11 @@ internal service targets, or routing keys.
 2. Create a `workspace_migration_runs` record and use DataFn's fenced migration
    transition. The first compare-and-set changes the placement to `moving` and
    increments the epoch. Gateways must now return retryable `409` for writes.
-3. Quiesce source writes and drain its permission/publication outboxes.
+3. Quiesce source writes and drain its permission/publication outboxes. After
+   placement is fenced, use a short table barrier only to drain transactions
+   that entered before the fence; release it before retaining the
+   workspace-filtered repeatable-read snapshot so other workspaces remain
+   writable during copy and verification.
 4. Copy every regional table row for the workspace and every referenced bundle
    to the target. Do not copy global identity or membership tables.
 5. Verify row counts per table, stable logical checksums, bundle count/bytes,

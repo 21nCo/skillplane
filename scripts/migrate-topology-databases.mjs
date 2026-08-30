@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { dirname } from "node:path";
 import {
   backfillLegacyPublicSkillProjections,
   migrateLegacyWorkspaceBatch,
@@ -9,17 +10,18 @@ import { Pool } from "pg";
 import {
   isMain,
   productionBucket,
-  productionStateDirectory,
-  readJson,
   requireCleanSourceRevision,
   requireEnvironment,
+  requireSecretEnvironment,
 } from "./lib/production-deployment.mjs";
 import {
-  assertRecentTopologyBackup,
+  assertRecentTopologyBackups,
   productionTopologyDatabases,
+  topologyBackupStatePath,
   verifyProductionTopologyDatabaseOwnership,
   writeTopologyMigrationSafetyState,
 } from "./lib/production-topology-safety.mjs";
+import { backupProductionDatabase } from "./production-backup.mjs";
 import { readProductionTopology } from "./lib/topology-deployment.mjs";
 import {
   requireBucketName,
@@ -58,6 +60,26 @@ async function prepareRegionalDatabase(databaseUrl, regionId) {
   return migrateDatabase(databaseUrl, { role: "regional" });
 }
 
+export async function backupTopologyDatabases(databases, options = {}) {
+  const backup = options.backupDatabase ?? backupProductionDatabase;
+  const passphrase =
+    options.passphrase ?? requireSecretEnvironment("SKILLPLANE_BACKUP_ENCRYPTION_KEY");
+  const control = await backup({
+    database: databases.control,
+    passphrase,
+    stateDirectory: dirname(topologyBackupStatePath()),
+  });
+  const cells = {};
+  for (const [regionId, database] of Object.entries(databases.cells)) {
+    cells[regionId] = await backup({
+      database,
+      passphrase,
+      stateDirectory: dirname(topologyBackupStatePath(regionId)),
+    });
+  }
+  return assertRecentTopologyBackups({ control, cells }, databases);
+}
+
 export async function migrateTopologyDatabases(options = {}) {
   const manifest = options.manifest ?? (await readProductionTopology());
   const sourceRevision = options.sourceRevision ?? requireCleanSourceRevision();
@@ -68,10 +90,12 @@ export async function migrateTopologyDatabases(options = {}) {
       cells: options.cells,
       productionDatabase: options.productionDatabase,
     });
-  const backup = assertRecentTopologyBackup(
-    options.backup ?? (await readJson(`${productionStateDirectory}/backup.json`)),
-    databases.control,
-  );
+  // Capture and verify every database before the first schema or data mutation.
+  // The resulting digests are bound into the exact-commit migration evidence.
+  const backups = await backupTopologyDatabases(databases, {
+    backupDatabase: options.backupDatabase,
+    passphrase: options.backupPassphrase,
+  });
   const controlUrl = databases.control.url;
   const initialWorkspaceRegion = manifest.cells[0]?.regionId;
   if (!initialWorkspaceRegion) {
@@ -205,7 +229,7 @@ export async function migrateTopologyDatabases(options = {}) {
     sourceRevision,
     manifest,
     databases,
-    backup,
+    backups,
     control,
     cells,
     cutoverComplete: true,

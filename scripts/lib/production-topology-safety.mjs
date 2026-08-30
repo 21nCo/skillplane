@@ -19,6 +19,19 @@ export const topologyMigrationStatePath = resolve(
   "topology-migration.json",
 );
 
+export function topologyBackupStatePath(regionId) {
+  if (regionId && !/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(regionId)) {
+    throw new Error("Topology backup region is invalid");
+  }
+  return resolve(
+    productionStateDirectory,
+    "topology-backups",
+    regionId ? "cells" : "control",
+    ...(regionId ? [regionId] : []),
+    "backup.json",
+  );
+}
+
 export function topologyCellEnvironment(regionId, suffix) {
   return `SKILLPLANE_CELL_${regionId.replaceAll("-", "_").toUpperCase()}_${suffix}`;
 }
@@ -65,34 +78,61 @@ export function productionTopologyDatabases(manifest, options = {}) {
   return { control, cells };
 }
 
-export function assertRecentTopologyBackup(backup, control, now = Date.now()) {
+export function assertRecentTopologyBackup(backup, database, now = Date.now()) {
   const createdAt = Date.parse(backup?.createdAt);
   if (
     backup?.ok !== true ||
-    backup.databaseFingerprint !== control.fingerprint ||
+    backup.databaseFingerprint !== database.fingerprint ||
     backup.restoreListVerified !== true ||
     typeof backup.encryptedSha256 !== "string" ||
     !Number.isFinite(createdAt) ||
     now - createdAt < 0 ||
     now - createdAt > backupMaximumAge
   ) {
-    throw new Error(
-      "A recent verified backup of the topology control database is required",
-    );
+    throw new Error("A recent verified backup of every topology database is required");
   }
   return backup;
 }
 
+export function assertRecentTopologyBackups(backups, databases, now = Date.now()) {
+  const control = assertRecentTopologyBackup(backups?.control, databases.control, now);
+  const cells = Object.fromEntries(
+    Object.entries(databases.cells).map(([regionId, database]) => [
+      regionId,
+      assertRecentTopologyBackup(backups?.cells?.[regionId], database, now),
+    ]),
+  );
+  if (Object.keys(backups?.cells ?? {}).length !== Object.keys(cells).length) {
+    throw new Error("Topology backup evidence contains an unexpected cell set");
+  }
+  return { control, cells };
+}
+
+function backupEvidence(backups) {
+  const evidence = (backup) => ({
+    sha256: backup.encryptedSha256,
+    createdAt: backup.createdAt,
+  });
+  return {
+    control: evidence(backups.control),
+    cells: Object.fromEntries(
+      Object.entries(backups.cells).map(([regionId, backup]) => [
+        regionId,
+        evidence(backup),
+      ]),
+    ),
+  };
+}
+
 export function createTopologyMigrationSafetyState(input) {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     ok: true,
     createdAt: input.createdAt ?? new Date().toISOString(),
     applicationCommit: input.sourceRevision.commit,
     topologySha256: sha256(JSON.stringify(input.manifest)),
     databaseFingerprints: fingerprints(input.databases),
-    backupSha256: input.backup.encryptedSha256,
-    backupCreatedAt: input.backup.createdAt,
+    backups: backupEvidence(input.backups),
     controlRole: input.control.role,
     cellRoles: Object.fromEntries(
       Object.entries(input.cells).map(([regionId, result]) => [regionId, result.role]),
@@ -102,7 +142,7 @@ export function createTopologyMigrationSafetyState(input) {
 }
 
 export function assertRecentTopologyMigrationState(input) {
-  const { state, backup, manifest, databases, sourceRevision } = input;
+  const { state, backups, manifest, databases, sourceRevision } = input;
   const now = input.now ?? Date.now();
   const createdAt = Date.parse(state?.createdAt);
   const expectedFingerprints = fingerprints(databases);
@@ -110,14 +150,13 @@ export function assertRecentTopologyMigrationState(input) {
     manifest.cells.map((cell) => [cell.regionId, "regional"]),
   );
   if (
-    state?.schemaVersion !== 1 ||
+    state?.schemaVersion !== 2 ||
     state.ok !== true ||
     state.applicationCommit !== sourceRevision.commit ||
     state.topologySha256 !== sha256(JSON.stringify(manifest)) ||
     JSON.stringify(state.databaseFingerprints) !==
       JSON.stringify(expectedFingerprints) ||
-    state.backupSha256 !== backup.encryptedSha256 ||
-    state.backupCreatedAt !== backup.createdAt ||
+    JSON.stringify(state.backups) !== JSON.stringify(backupEvidence(backups)) ||
     state.controlRole !== "control" ||
     JSON.stringify(state.cellRoles) !== JSON.stringify(expectedCells) ||
     state.cutoverComplete !== true ||
@@ -253,14 +292,24 @@ export async function verifyProductionTopologyDatabaseOwnership(manifest, databa
 
 export async function readAndAssertTopologySafety(input) {
   const now = input.now ?? Date.now();
-  const backup = assertRecentTopologyBackup(
-    input.backup ?? (await readJson(resolve(productionStateDirectory, "backup.json"))),
-    input.databases.control,
+  const backups = assertRecentTopologyBackups(
+    input.backups ?? {
+      control: await readJson(topologyBackupStatePath()),
+      cells: Object.fromEntries(
+        await Promise.all(
+          input.manifest.cells.map(async (cell) => [
+            cell.regionId,
+            await readJson(topologyBackupStatePath(cell.regionId)),
+          ]),
+        ),
+      ),
+    },
+    input.databases,
     now,
   );
   const state = assertRecentTopologyMigrationState({
     state: input.state ?? (await readJson(topologyMigrationStatePath)),
-    backup,
+    backups,
     manifest: input.manifest,
     databases: input.databases,
     sourceRevision: input.sourceRevision,
@@ -270,7 +319,7 @@ export async function readAndAssertTopologySafety(input) {
     input.manifest,
     input.databases,
   );
-  return { backup, migration: state, ownership };
+  return { backups, migration: state, ownership };
 }
 
 export async function writeTopologyMigrationSafetyState(input) {

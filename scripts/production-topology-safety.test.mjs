@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
-  assertRecentTopologyBackup,
+  assertRecentTopologyBackups,
   assertRecentTopologyMigrationState,
   createTopologyMigrationSafetyState,
 } from "./lib/production-topology-safety.mjs";
@@ -20,12 +20,19 @@ const databases = {
   },
 };
 const sourceRevision = { commit: "a".repeat(40) };
-const backup = {
+const backup = (databaseFingerprint) => ({
   ok: true,
   createdAt: "2026-08-30T11:00:00.000Z",
-  databaseFingerprint: "control",
-  encryptedSha256: "backup-digest",
+  databaseFingerprint,
+  encryptedSha256: `${databaseFingerprint}-backup-digest`,
   restoreListVerified: true,
+});
+const backups = {
+  control: backup("control"),
+  cells: {
+    "in-south": backup("in-south"),
+    "us-east": backup("us-east"),
+  },
 };
 
 function state(overrides = {}) {
@@ -35,7 +42,7 @@ function state(overrides = {}) {
       sourceRevision,
       manifest,
       databases,
-      backup,
+      backups,
       control: { role: "control" },
       cells: {
         "in-south": { role: "regional" },
@@ -49,11 +56,11 @@ function state(overrides = {}) {
 
 describe("production topology safety evidence", () => {
   it("accepts a fresh backup and exact-commit migration record", () => {
-    assert.equal(assertRecentTopologyBackup(backup, databases.control, now), backup);
+    assert.deepEqual(assertRecentTopologyBackups(backups, databases, now), backups);
     assert.equal(
       assertRecentTopologyMigrationState({
         state: state(),
-        backup,
+        backups,
         manifest,
         databases,
         sourceRevision,
@@ -68,7 +75,7 @@ describe("production topology safety evidence", () => {
       () =>
         assertRecentTopologyMigrationState({
           state: state({ applicationCommit: "b".repeat(40) }),
-          backup,
+          backups,
           manifest,
           databases,
           sourceRevision,
@@ -83,13 +90,28 @@ describe("production topology safety evidence", () => {
       () =>
         assertRecentTopologyMigrationState({
           state: state({ createdAt: "2026-08-30T09:00:00.000Z" }),
-          backup,
+          backups,
           manifest,
           databases,
           sourceRevision,
           now,
         }),
       /stale/u,
+    );
+  });
+
+  it("rejects missing cell backup evidence", () => {
+    assert.throws(
+      () =>
+        assertRecentTopologyBackups(
+          {
+            control: backups.control,
+            cells: { "in-south": backups.cells["in-south"] },
+          },
+          databases,
+          now,
+        ),
+      /every topology database/u,
     );
   });
 });

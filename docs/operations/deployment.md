@@ -156,19 +156,21 @@ Run the blocking app/MCP release sequence from the repository root:
 
 ```bash
 pnpm deploy:check
-pnpm db:backup:production
 pnpm db:migrate:topology
 pnpm deploy:all
 pnpm smoke:production:release
 ```
 
 `db:migrate:topology` writes a short-lived safety record tied to the exact Git
-commit, topology manifest, verified control backup, and control/cell database
-fingerprints. `deploy:all` refuses to upload a Worker unless that record is
+commit, topology manifest, verified encrypted backups of the control database
+and every cell, and control/cell database fingerprints. All backups complete
+before the first schema or data mutation, and their digests are bound into the
+migration record. `deploy:all` refuses to upload a Worker unless that record is
 less than two hours old, every database still has the expected physical
 ownership, each live cache-disabled Hyperdrive targets its declared database,
-and every bucket exists with private access and a safe lifecycle. It then
-rechecks the active version of every gateway, cell, and projection Worker and
+and every bucket exists with private access and a safe lifecycle. It captures
+each uploaded Worker version ID, proves that exact version is active at 100%,
+rechecks every gateway, cell, and projection Worker after the upload set, and
 runs `smoke:production:release` before returning success. The explicit smoke
 invocation above remains the final operator-visible verification.
 
@@ -185,11 +187,12 @@ landing failure is an environment incident that must be escalated to the
 landing owner, but it does not invalidate or prevent recording a healthy
 app/MCP deployment that this repository can roll back.
 
-For the first conversion from the combined database, take and verify the
-backup, provision every empty cell database and private bucket, render the
-topology, and run `pnpm db:migrate:topology` before deploying any gateway. The
-command is resumable and deliberately ordered: it initializes cells, upgrades
-the combined source without pruning it, enables a database write fence, runs a
+For the first conversion from the combined database, provision every empty
+cell database and private bucket, render the topology, and run
+`pnpm db:migrate:topology` before deploying any gateway. The command is
+resumable and deliberately ordered: it backs up and verifies the control
+database and every cell before mutation, initializes cells, upgrades the
+combined source without pruning it, enables a database write fence, runs a
 rollback drill plus row/bundle checksum verification for every workspace,
 copies and digest-verifies every existing public release into the global
 public bucket, marks placements active in the first declared cell, and only
@@ -200,16 +203,17 @@ command returns a completed cutover and the normal smoke gates pass.
 
 The commands enforce these boundaries:
 
-- `db:backup:production` performs `pg_dump --format=custom`, encrypts the
-  archive with AES-256-GCM and a scrypt-derived key, verifies decryption, and
-  proves `pg_restore --list` can read it. Its Postgres client image matches the
+- `db:migrate:topology` runs `pg_dump --format=custom` against the control
+  database and every cell, encrypts each archive with AES-256-GCM and a
+  scrypt-derived key, verifies decryption, and proves `pg_restore --list` can
+  read it before changing any database. Its Postgres client image matches each
   PostgreSQL server major version, and no plaintext dump is written.
 - `db:migrate:production` applies committed migrations directly to PostgreSQL,
   verifies every migration hash, table, constraint, trigger, and required query
   plan, records the exact application Git commit, and never uses Hyperdrive.
-- `deploy:all` refuses to start unless the matching backup is less than 24
-  hours old, verified migration state is less than two hours old, and that
-  migration was produced from the exact application commit being deployed.
+- `deploy:all` refuses to start unless every matching topology backup is less
+  than 24 hours old, verified migration state is less than two hours old, and
+  that migration was produced from the exact application commit being deployed.
   This commit lock is required for forward-only compatibility changes such as
   the workspace-sharded public statistics counter in migration 0019; do not
   canary or roll back an older app binary against that migrated schema. Deploy
