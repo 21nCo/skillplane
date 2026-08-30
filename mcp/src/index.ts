@@ -706,7 +706,12 @@ export function createMcpApp(options: CreateMcpAppOptions = {}) {
             ...(posthog
               ? {
                   configureRequestServer: (requestServer) => {
-                    instrument(requestServer.protocol, posthog);
+                    // Skillplane creates a fresh low-level protocol server for every
+                    // stateless HTTP request. PostHog's default context injection
+                    // remembers ownership on the tools/list server instance, so a
+                    // later tools/call instance cannot safely strip that synthetic
+                    // argument before McpFn validates the canonical schema.
+                    instrument(requestServer.protocol, posthog, { context: false });
                   },
                 }
               : {}),

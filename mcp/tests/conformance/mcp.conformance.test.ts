@@ -1,9 +1,11 @@
 import type { SkillsListOutput, SkillsSearchOutput } from "@skillplane/mcp-schema";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { PostHog } from "@posthog/mcp";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   prepareMcpProtocolRequest,
   projectMcpToolCatalogResponse,
 } from "../../src/index.js";
+import { isPostHogSessionId } from "../../src/analytics.js";
 import type { McpIdentity } from "../../src/auth.js";
 import { SKILLPLANE_MCP_SERVER_INFO } from "../../src/server.js";
 import {
@@ -19,7 +21,11 @@ let environment: McpTestEnvironment;
 let connection: ConnectedMcpClient;
 
 beforeAll(async () => {
-  environment = await startMcpTestEnvironment("conformance");
+  const posthog = {
+    capture: vi.fn(),
+    flush: vi.fn().mockResolvedValue(undefined),
+  } as unknown as PostHog;
+  environment = await startMcpTestEnvironment("conformance", { posthog });
   connection = await environment.connect(environment.serviceToken);
 }, 60_000);
 
@@ -84,7 +90,7 @@ function toolCatalogResponse(result: unknown): Response {
 describe("MCP Streamable HTTP conformance", () => {
   it("negotiates a supported protocol and completes initialize, initialized, and ping", async () => {
     expect(connection.transport.protocolVersion).toBe("2025-11-25");
-    expect(connection.transport.sessionId).toBeUndefined();
+    expect(isPostHogSessionId(connection.transport.sessionId ?? "")).toBe(true);
     expect(connection.client.getServerCapabilities()).toMatchObject({
       tools: { listChanged: true },
     });
@@ -104,6 +110,10 @@ describe("MCP Streamable HTTP conformance", () => {
         type: "object",
         additionalProperties: false,
       });
+      expect(tool.inputSchema).not.toHaveProperty(
+        "properties.context.description",
+        expect.stringContaining("analytics and user intent tracking"),
+      );
       expect(tool.outputSchema).toMatchObject({ type: "object" });
       const mutating = [
         "skill_amend",
@@ -334,6 +344,7 @@ describe("MCP Streamable HTTP conformance", () => {
     const listed = await oauthConnection.client.listTools();
     const listingTool = listed.tools.find((tool) => tool.name === "skills_list");
     expect(listingTool?.inputSchema).not.toHaveProperty("properties.caller");
+    expect(listingTool?.inputSchema).not.toHaveProperty("properties.context");
     expect(listingTool?.inputSchema).toHaveProperty("additionalProperties", false);
 
     const result = await oauthConnection.client.callTool({
