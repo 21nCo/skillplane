@@ -18,7 +18,10 @@ function workerBase(name, kind, variables) {
     name,
     main: kind === "app" ? ".svelte-kit/cloudflare/_worker.js" : "src/index.ts",
     compatibility_date: "2026-05-03",
-    compatibility_flags: ["nodejs_compat"],
+    compatibility_flags:
+      kind === "mcp"
+        ? ["nodejs_compat", "allow_eval_during_startup"]
+        : ["nodejs_compat"],
     workers_dev: false,
     ...(kind === "app"
       ? {
