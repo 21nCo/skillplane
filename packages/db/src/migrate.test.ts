@@ -63,18 +63,30 @@ describe("migration chain", () => {
   });
 
   it("assigns dynamic DataFn tables to regional databases", () => {
-    const dynamic = ["widgets_9f3a", 'nested"records'];
+    const dynamic = [
+      "widgets_9f3a",
+      'nested"records',
+      "__datafn_permission_directory_outbox",
+    ];
     const regional = physicalOwnershipPlan("regional", dynamic);
     const control = physicalOwnershipPlan("control", dynamic);
 
     expect(regional.expected).toEqual(
-      expect.arrayContaining(["widgets_9f3a", 'nested"records']),
+      expect.arrayContaining([
+        "widgets_9f3a",
+        'nested"records',
+        "__datafn_permission_directory_outbox",
+      ]),
     );
     expect(regional.unowned).not.toEqual(
       expect.arrayContaining(["widgets_9f3a", 'nested"records']),
     );
     expect(control.unowned).toEqual(
-      expect.arrayContaining(["widgets_9f3a", 'nested"records']),
+      expect.arrayContaining([
+        "widgets_9f3a",
+        'nested"records',
+        "__datafn_permission_directory_outbox",
+      ]),
     );
     expect(control.expected).not.toEqual(
       expect.arrayContaining(["widgets_9f3a", 'nested"records']),

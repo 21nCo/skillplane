@@ -77,7 +77,7 @@ export interface MigrationResult {
 
 export function physicalOwnershipPlan(
   role: Exclude<MigrationRole, "combined">,
-  dynamicDatafnTables: readonly string[],
+  datafnTables: readonly string[],
 ): {
   readonly unowned: readonly string[];
   readonly expected: readonly string[];
@@ -87,7 +87,7 @@ export function physicalOwnershipPlan(
     ...regionalWorkspaceTables,
     "skillplane_schema_migrations",
   ]);
-  const dynamic = [...new Set(dynamicDatafnTables)]
+  const dynamic = [...new Set(datafnTables)]
     .filter((table) => !staticTables.has(table))
     .sort();
   return role === "control"
@@ -151,9 +151,20 @@ async function enforcePhysicalOwnership(
   await client.query("BEGIN");
   try {
     const datafnTables = await client.query<{ table_name: string }>(
-      `SELECT DISTINCT table_name
-         FROM information_schema.columns
-        WHERE table_schema = 'public' AND column_name = '__ns'
+      `SELECT table_name
+         FROM information_schema.tables AS candidate
+        WHERE table_schema = 'public'
+          AND table_type = 'BASE TABLE'
+          AND (
+            left(table_name, 9) = '__datafn_'
+            OR EXISTS (
+              SELECT 1
+                FROM information_schema.columns AS column_definition
+               WHERE column_definition.table_schema = candidate.table_schema
+                 AND column_definition.table_name = candidate.table_name
+                 AND column_definition.column_name = '__ns'
+            )
+          )
         ORDER BY table_name`,
     );
     const plan = physicalOwnershipPlan(

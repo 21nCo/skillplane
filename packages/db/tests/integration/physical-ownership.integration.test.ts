@@ -42,6 +42,10 @@ describe("dynamic DataFn physical ownership", () => {
              __ns text NOT NULL,
              id text NOT NULL,
              PRIMARY KEY (__ns, id)
+           );
+           CREATE TABLE __datafn_permission_directory_outbox (
+             id text PRIMARY KEY,
+             namespace text NOT NULL
            )`,
         );
       } finally {
@@ -74,16 +78,21 @@ describe("dynamic DataFn physical ownership", () => {
     const control = new Pool({ connectionString: controlUrl, max: 1 });
     const regional = new Pool({ connectionString: regionalUrl, max: 1 });
     try {
-      const [controlTable, regionalTable] = await Promise.all([
-        control.query<{ table_name: string | null }>(
-          "SELECT to_regclass('public.datafn_runtime_records')::text AS table_name",
+      const [controlTables, regionalTables] = await Promise.all([
+        control.query<{ runtime: string | null; internal: string | null }>(
+          `SELECT to_regclass('public.datafn_runtime_records')::text AS runtime,
+                  to_regclass('public.__datafn_permission_directory_outbox')::text AS internal`,
         ),
-        regional.query<{ table_name: string | null }>(
-          "SELECT to_regclass('public.datafn_runtime_records')::text AS table_name",
+        regional.query<{ runtime: string | null; internal: string | null }>(
+          `SELECT to_regclass('public.datafn_runtime_records')::text AS runtime,
+                  to_regclass('public.__datafn_permission_directory_outbox')::text AS internal`,
         ),
       ]);
-      expect(controlTable.rows[0]?.table_name).toBeNull();
-      expect(regionalTable.rows[0]?.table_name).toBe("datafn_runtime_records");
+      expect(controlTables.rows[0]).toEqual({ runtime: null, internal: null });
+      expect(regionalTables.rows[0]).toEqual({
+        runtime: "datafn_runtime_records",
+        internal: "__datafn_permission_directory_outbox",
+      });
     } finally {
       await Promise.all([control.end(), regional.end()]);
     }
