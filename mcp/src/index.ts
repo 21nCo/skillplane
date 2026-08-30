@@ -6,7 +6,7 @@ import {
 } from "@skillplane/api";
 import { metadataResponse, protectedResourceMetadata } from "@skillplane/auth";
 import { parseOAuthEndpoints, type RuntimeBindings } from "@skillplane/config";
-import { McpToolError } from "@skillplane/mcp-schema";
+import { McpToolError, type CallerDeclaration } from "@skillplane/mcp-schema";
 import { normalizeBundlePath } from "@skillplane/storage";
 import { instrument, type PostHog } from "@posthog/mcp";
 import { Hono } from "hono";
@@ -50,6 +50,7 @@ const MCP_ISSUER = "https://app.skillplane.dev";
 const MCP_RESOURCE = "https://mcp.skillplane.dev/mcp";
 const LINEAR_MCP_CLIENT_ID =
   "https://linear.app/.well-known/oauth-client-metadata/mcp.json";
+const CLAUDE_MCP_CLIENT_ID = "https://claude.ai/oauth/mcp-oauth-client-metadata";
 
 const BRAND_CACHE_CONTROL = "public, max-age=604800, immutable";
 
@@ -149,6 +150,65 @@ const LINEAR_OMITTED_SCHEMA_KEYWORDS = new Set([
   "pattern",
 ]);
 
+interface OAuthMcpClientProfile {
+  readonly compactToolCatalog: boolean;
+  readonly invocationPrefix: string;
+  readonly caller: Omit<CallerDeclaration, "runId" | "sessionId" | "conversationId">;
+}
+
+const OAUTH_MCP_CLIENT_PROFILES = {
+  claude: {
+    compactToolCatalog: false,
+    invocationPrefix: "claude",
+    caller: {
+      agentId: "claude",
+      agentName: "Claude",
+      modelProvider: "Anthropic",
+      modelName: "Claude",
+      modelVersion: "unknown",
+      clientName: "Claude",
+      clientVersion: "unknown",
+    },
+  },
+  generic: {
+    compactToolCatalog: false,
+    invocationPrefix: "oauth-client",
+    caller: {
+      agentId: "authenticated-oauth-client",
+      agentName: "Authenticated OAuth client",
+      modelProvider: "unknown",
+      modelName: "unknown",
+      modelVersion: "unknown",
+      clientName: "OAuth MCP client",
+      clientVersion: "unknown",
+    },
+  },
+  linear: {
+    compactToolCatalog: true,
+    invocationPrefix: "linear",
+    caller: {
+      agentId: "linear-agent",
+      agentName: "Linear Agent",
+      modelProvider: "Linear",
+      modelName: "Linear Agent",
+      modelVersion: "unknown",
+      clientName: "Linear",
+      clientVersion: "unknown",
+    },
+  },
+} as const satisfies Record<string, OAuthMcpClientProfile>;
+
+function oauthMcpClientProfile(identity: McpIdentity): OAuthMcpClientProfile | null {
+  if (identity.kind !== "oauth") return null;
+  if (identity.clientId === LINEAR_MCP_CLIENT_ID) {
+    return OAUTH_MCP_CLIENT_PROFILES.linear;
+  }
+  if (identity.clientId === CLAUDE_MCP_CLIENT_ID) {
+    return OAUTH_MCP_CLIENT_PROFILES.claude;
+  }
+  return OAUTH_MCP_CLIENT_PROFILES.generic;
+}
+
 function compactLinearInputSchema(value: unknown): void {
   if (Array.isArray(value)) {
     for (const item of value) compactLinearInputSchema(item);
@@ -164,14 +224,12 @@ function compactLinearInputSchema(value: unknown): void {
   }
 }
 
-export async function compactLinearToolCatalogResponse(
+export async function projectMcpToolCatalogResponse(
   response: Response,
-  isLinearAgent: boolean,
+  identity: McpIdentity,
 ): Promise<Response> {
-  if (
-    !isLinearAgent ||
-    !response.headers.get("content-type")?.includes("application/json")
-  ) {
+  const profile = oauthMcpClientProfile(identity);
+  if (!profile || !response.headers.get("content-type")?.includes("application/json")) {
     return response;
   }
 
@@ -191,23 +249,30 @@ export async function compactLinearToolCatalogResponse(
     return new Response(body, response);
   }
 
-  // Linear only needs names, descriptions, and input contracts. Keep optional
-  // MCP presentation and output metadata server-side to stay within its budget.
   for (const tool of payload.result.tools) {
     if (!isJsonObject(tool)) continue;
-    delete tool.outputSchema;
-    delete tool.execution;
-    delete tool.annotations;
-    delete tool.title;
+    // Authenticated OAuth clients cannot author trusted caller provenance. Keep
+    // the canonical caller contract server-side and inject it before validation.
     if (isJsonObject(tool.inputSchema)) {
       if (isJsonObject(tool.inputSchema.properties)) {
         delete tool.inputSchema.properties.caller;
       }
       if (Array.isArray(tool.inputSchema.required)) {
-        tool.inputSchema.required = tool.inputSchema.required.filter(
-          (name) => name !== "caller",
-        );
+        const required = tool.inputSchema.required.filter((name) => name !== "caller");
+        if (required.length > 0) {
+          tool.inputSchema.required = required;
+        } else {
+          delete tool.inputSchema.required;
+        }
       }
+    }
+    if (profile.compactToolCatalog) {
+      // Linear only needs names, descriptions, and input contracts. Keep optional
+      // MCP presentation and output metadata server-side to stay within its budget.
+      delete tool.outputSchema;
+      delete tool.execution;
+      delete tool.annotations;
+      delete tool.title;
       compactLinearInputSchema(tool.inputSchema);
     }
   }
@@ -221,12 +286,13 @@ export async function compactLinearToolCatalogResponse(
   });
 }
 
-export async function withLinearAgentCaller(
+export async function prepareMcpProtocolRequest(
   request: Request,
-  isLinearAgent: boolean,
+  identity: McpIdentity,
 ): Promise<Request> {
+  const profile = oauthMcpClientProfile(identity);
   if (
-    !isLinearAgent ||
+    !profile ||
     request.method !== "POST" ||
     !request.headers.get("content-type")?.includes("application/json")
   ) {
@@ -247,24 +313,32 @@ export async function withLinearAgentCaller(
     return request;
   }
 
-  const arguments_ = isJsonObject(payload.params.arguments)
-    ? payload.params.arguments
-    : {};
-  if (!isJsonObject(arguments_.caller)) {
-    const invocationId = crypto.randomUUID();
-    arguments_.caller = {
-      agentId: "linear-agent",
-      agentName: "Linear Agent",
-      modelProvider: "Linear",
-      modelName: "Linear Agent",
-      modelVersion: "unknown",
-      clientName: "Linear",
-      clientVersion: "unknown",
-      runId: `linear-run:${invocationId}`,
-      sessionId: `linear-session:${invocationId}`,
-      conversationId: `linear-conversation:${invocationId}`,
-    };
+  if (
+    payload.params.arguments !== undefined &&
+    !isJsonObject(payload.params.arguments)
+  ) {
+    return request;
   }
+
+  const arguments_ = payload.params.arguments ?? {};
+  if (
+    payload.params.name === "skills_list" &&
+    !("workspace" in arguments_) &&
+    typeof arguments_.workspaceId === "string"
+  ) {
+    arguments_.workspace = { id: arguments_.workspaceId };
+    delete arguments_.workspaceId;
+  }
+
+  // OAuth client identity is authenticated before this point. Always replace a
+  // supplied caller so model-authored provenance cannot reach handlers or audit.
+  const invocationId = crypto.randomUUID();
+  arguments_.caller = {
+    ...profile.caller,
+    runId: `${profile.invocationPrefix}-run:${invocationId}`,
+    sessionId: `${profile.invocationPrefix}-session:${invocationId}`,
+    conversationId: `${profile.invocationPrefix}-conversation:${invocationId}`,
+  };
   payload.params.arguments = arguments_;
 
   const headers = new Headers(request.headers);
@@ -617,9 +691,7 @@ export function createMcpApp(options: CreateMcpAppOptions = {}) {
           if (request.method !== "POST") {
             return statelessMethodNotAllowedResponse();
           }
-          const isLinearAgent =
-            identity.kind === "oauth" && identity.clientId === LINEAR_MCP_CLIENT_ID;
-          const protocolRequest = await withLinearAgentCaller(request, isLinearAgent);
+          const protocolRequest = await prepareMcpProtocolRequest(request, identity);
           const runtime = createRuntime(
             currentServices,
             identity,
@@ -641,7 +713,7 @@ export function createMcpApp(options: CreateMcpAppOptions = {}) {
           });
           const response = await protocolHandler(protocolRequest, handleOptions);
           const protocolResponse = secureProtocolResponse(
-            await compactLinearToolCatalogResponse(response, isLinearAgent),
+            await projectMcpToolCatalogResponse(response, identity),
           );
           if (posthog) {
             let waitUntil: ((promise: Promise<unknown>) => void) | undefined;
