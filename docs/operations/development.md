@@ -106,3 +106,61 @@ The final OAuth verifier requires an interactive browser sign-in and consent. It
 proves discovery, dynamic registration, PKCE, token exchange, audience validation,
 authenticated Streamable HTTP, tool discovery, and `workspaces_list` against the
 deployed development environment.
+
+## Three-cell gateway development topology
+
+The compatibility `deploy:dev` command above remains a one-database deployment. Use
+the topology commands below to exercise the global gateway and private regional-cell
+model on the same development authorities. The checked-in development manifest uses
+`in-south`, `us-east`, and `eu-west`; every cell has distinct PostgreSQL and R2
+bindings, and its app, MCP, and projection Workers have no public route.
+
+Add these non-secret resource IDs and direct database URLs to the ignored
+`.env.development.local` file:
+
+```dotenv
+SKILLPLANE_DEV_CONTROL_DATABASE_URL=postgresql://...
+SKILLPLANE_DEV_DATABASE_URL=postgresql://... # in-south compatibility name
+SKILLPLANE_DEV_USEAST_DATABASE_URL=postgresql://...
+SKILLPLANE_DEV_EUWEST_DATABASE_URL=postgresql://...
+CLOUDFLARE_DEV_CONTROL_HYPERDRIVE_ID=...
+CLOUDFLARE_DEV_CELL_IN_SOUTH_HYPERDRIVE_ID=...
+CLOUDFLARE_DEV_CELL_US_EAST_HYPERDRIVE_ID=...
+CLOUDFLARE_DEV_CELL_EU_WEST_HYPERDRIVE_ID=...
+```
+
+Every Hyperdrive must match its direct URL and have SQL response caching disabled.
+Initialize the independent routing and encrypted-backup keys without printing them:
+
+```bash
+pnpm development:topology:secrets:init
+```
+
+For an empty control database and an existing combined India development database,
+the preparation command first creates and verifies an encrypted backup, initializes
+the control schema, and then removes every global/control table from the India
+database while preserving its regional skill, version, context, audit, analytics,
+and bundle-reference rows. US and EU are initialized as empty regional databases.
+Both destructive confirmations must exactly match the database names:
+
+```bash
+pnpm db:prepare:dev:topology -- \
+  --confirm-control-database <control-database-name> \
+  --confirm-regionalize-database <india-database-name>
+```
+
+Render, deploy private cells before gateways, and run the normal public smoke and
+OAuth gates:
+
+```bash
+pnpm deploy:check
+pnpm deploy:dev:topology:render
+pnpm deploy:dev:topology
+pnpm smoke:dev
+pnpm test:dev:oauth
+```
+
+The old India AuthFn users, sessions, workspaces, memberships, and placement records
+remain only in the encrypted pre-conversion backup. Existing regional India rows are
+intentionally not attached to newly created control-plane users or workspaces; map or
+remove that development data explicitly rather than silently granting access.

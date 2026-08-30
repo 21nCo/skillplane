@@ -56,6 +56,21 @@ export function createCloudflareTopologyConfigs(input) {
     throw new Error("A multi-cell topology with at least two cells is required");
   }
   const topology = JSON.stringify(manifest);
+  const runtimeEnvironment = input.runtimeEnvironment ?? "production";
+  if (!["production", "preview"].includes(runtimeEnvironment)) {
+    throw new Error("The topology runtime environment is invalid");
+  }
+  const appHost = new URL(manifest.public.appAuthority).host;
+  const mcpHost = new URL(manifest.public.mcpResource).host;
+  const names = {
+    appGateway: input.workerNames?.appGateway ?? "skillplane-app",
+    mcpGateway: input.workerNames?.mcpGateway ?? "skillplane-mcp",
+    appCell: input.workerNames?.appCell ?? ((regionId) => `skillplane-app-${regionId}`),
+    mcpCell: input.workerNames?.mcpCell ?? ((regionId) => `skillplane-mcp-${regionId}`),
+    projection:
+      input.workerNames?.projection ??
+      ((regionId) => `skillplane-projection-${regionId}`),
+  };
   if (
     typeof input.publicTurnstileSiteKey !== "string" ||
     input.publicTurnstileSiteKey.length < 10
@@ -63,7 +78,7 @@ export function createCloudflareTopologyConfigs(input) {
     throw new Error("A production Turnstile site key is required");
   }
   const sharedVariables = {
-    RUNTIME_ENV: "production",
+    RUNTIME_ENV: runtimeEnvironment,
     DATABASE_ADAPTER: "postgres",
     OAUTH_ISSUER: manifest.public.appAuthority,
     OAUTH_RESOURCE: manifest.public.mcpResource,
@@ -80,16 +95,17 @@ export function createCloudflareTopologyConfigs(input) {
     "public bucket name",
   );
   const appGateway = {
-    ...workerBase("skillplane-app", "app", {
+    ...workerBase(names.appGateway, "app", {
       ...sharedVariables,
       SKILLPLANE_ROLE: "gateway",
       AUTH_MODE: "otp",
       EMAIL_PROVIDER: "cloudflare-email",
-      TURNSTILE_ALLOWED_HOSTNAMES: "app.skillplane.dev",
-      SKILLPLANE_OTP_FROM: "Skillplane <no-reply@auth.skillplane.dev>",
+      TURNSTILE_ALLOWED_HOSTNAMES: appHost,
+      SKILLPLANE_OTP_FROM: input.otpFrom ?? "Skillplane <no-reply@auth.skillplane.dev>",
       PUBLIC_TURNSTILE_SITE_KEY: input.publicTurnstileSiteKey,
+      ...(input.appVariables ?? {}),
     }),
-    routes: [{ pattern: "app.skillplane.dev", custom_domain: true }],
+    routes: [{ pattern: appHost, custom_domain: true }],
     hyperdrive: [{ binding: manifest.controlPlane.databaseBinding, id: controlId }],
     r2_buckets: [
       {
@@ -99,22 +115,23 @@ export function createCloudflareTopologyConfigs(input) {
     ],
     services: manifest.cells.map((cell) => ({
       binding: cell.appServiceBinding,
-      service: `skillplane-app-${cell.regionId}`,
+      service: names.appCell(cell.regionId),
     })),
     send_email: [
       {
         name: "SEND_EMAIL",
-        allowed_sender_addresses: ["no-reply@auth.skillplane.dev"],
+        allowed_sender_addresses: [input.emailSender ?? "no-reply@auth.skillplane.dev"],
         remote: true,
       },
     ],
   };
   const mcpGateway = {
-    ...workerBase("skillplane-mcp", "mcp", {
+    ...workerBase(names.mcpGateway, "mcp", {
       ...sharedVariables,
       SKILLPLANE_ROLE: "gateway",
+      ...(input.mcpVariables ?? {}),
     }),
-    routes: [{ pattern: "mcp.skillplane.dev", custom_domain: true }],
+    routes: [{ pattern: mcpHost, custom_domain: true }],
     hyperdrive: [{ binding: manifest.controlPlane.databaseBinding, id: controlId }],
     r2_buckets: [
       {
@@ -124,7 +141,7 @@ export function createCloudflareTopologyConfigs(input) {
     ],
     services: manifest.cells.map((cell) => ({
       binding: cell.mcpServiceBinding,
-      service: `skillplane-mcp-${cell.regionId}`,
+      service: names.mcpCell(cell.regionId),
     })),
   };
   const cells = Object.fromEntries(
@@ -161,19 +178,15 @@ export function createCloudflareTopologyConfigs(input) {
         cell.regionId,
         {
           app: {
-            ...workerBase(`skillplane-app-${cell.regionId}`, "app", variables),
+            ...workerBase(names.appCell(cell.regionId), "app", variables),
             ...bindings,
           },
           mcp: {
-            ...workerBase(`skillplane-mcp-${cell.regionId}`, "mcp", variables),
+            ...workerBase(names.mcpCell(cell.regionId), "mcp", variables),
             ...bindings,
           },
           projection: {
-            ...workerBase(
-              `skillplane-projection-${cell.regionId}`,
-              "projection",
-              variables,
-            ),
+            ...workerBase(names.projection(cell.regionId), "projection", variables),
             main: "src/index.ts",
             hyperdrive: [
               { binding: "CONTROL_DATABASE", id: controlId },
@@ -195,5 +208,11 @@ export function createCloudflareTopologyConfigs(input) {
 export async function readProductionTopology() {
   return JSON.parse(
     await readFile(resolve(root, "deployment", "topology.production.json"), "utf8"),
+  );
+}
+
+export async function readDevelopmentTopology() {
+  return JSON.parse(
+    await readFile(resolve(root, "deployment", "topology.development.json"), "utf8"),
   );
 }

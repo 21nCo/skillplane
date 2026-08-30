@@ -222,7 +222,8 @@ function verifyProtectedDump(protectedDump, passphrase, expectedDump, clientImag
 
 export async function backupProductionDatabase(options = {}) {
   const database = options.database ?? productionDatabase();
-  const passphrase = requireSecretEnvironment("SKILLPLANE_BACKUP_ENCRYPTION_KEY");
+  const passphrase =
+    options.passphrase ?? requireSecretEnvironment("SKILLPLANE_BACKUP_ENCRYPTION_KEY");
   const source = await openBackupSnapshot(database);
   let dump;
   try {
@@ -244,7 +245,8 @@ export async function backupProductionDatabase(options = {}) {
   );
   const timestamp = new Date().toISOString();
   const basename = `skillplane-${timestamp.replaceAll(/[:.]/gu, "-")}`;
-  const directory = resolve(productionStateDirectory, "backups");
+  const stateDirectory = options.stateDirectory ?? productionStateDirectory;
+  const directory = resolve(stateDirectory, "backups");
   const output = resolve(directory, `${basename}.dump.enc`);
   const manifestPath = resolve(directory, `${basename}.manifest.json`);
   const temporaryOutput = `${output}.tmp`;
@@ -305,7 +307,7 @@ export async function backupProductionDatabase(options = {}) {
     restoreEntryCount,
     ssl: manifest.source.ssl,
   };
-  await writeJsonAtomic(resolve(productionStateDirectory, "backup.json"), state, {
+  await writeJsonAtomic(resolve(stateDirectory, "backup.json"), state, {
     mode: 0o600,
   });
   return state;

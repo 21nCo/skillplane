@@ -37,7 +37,11 @@ export const workers = Object.freeze({
   },
 });
 
-const libpqCompatHosts = new Set(["insouth.db.21n.dev"]);
+const libpqCompatHosts = new Set([
+  "insouth.db.21n.dev",
+  "useast.db.21n.dev",
+  "euwest.db.21n.dev",
+]);
 const hyperdriveIdPattern = /^[a-f0-9]{32}$/u;
 const postHogProjectTokenPattern = /^phc_[A-Za-z0-9_-]{20,}$/u;
 const versionIdPattern =

@@ -22,3 +22,19 @@ describe("production topology manifest", () => {
     );
   });
 });
+
+describe("development topology manifest", () => {
+  it("uses isolated dev authorities and all three private cells", async () => {
+    const manifest = JSON.parse(
+      await readFile(resolve(root, "deployment", "topology.development.json"), "utf8"),
+    );
+    assert.equal(manifest.public.appAuthority, "https://app-dev.skillplane.dev");
+    assert.equal(manifest.public.mcpResource, "https://mcp-dev.skillplane.dev/mcp");
+    assert.deepEqual(
+      manifest.cells.map((cell) => cell.regionId),
+      ["in-south", "us-east", "eu-west"],
+    );
+    assert.ok(manifest.cells.every((cell) => cell.publiclyRoutable === false));
+    assert.notEqual(manifest.routing.assertionAudience, "skillplane-cell");
+  });
+});
