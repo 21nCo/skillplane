@@ -524,12 +524,47 @@ export const publicStatsProjectionEvents = pgTable(
       .notNull()
       .references(() => workspaces.id, { onDelete: "cascade" }),
     eventType: text("event_type").notNull(),
+    fencingEpoch: bigint("fencing_epoch", { mode: "number" }),
+    sequence: bigint("sequence", { mode: "number" }),
     appliedAt: utcTimestamp("applied_at").notNull().defaultNow(),
   },
   (table) => [
     index("public_stats_projection_workspace_time_idx").on(
       table.workspaceId,
       table.appliedAt,
+    ),
+    index("public_stats_projection_events_retention_idx")
+      .on(table.appliedAt, table.eventId)
+      .where(sql`${table.sequence} IS NOT NULL`),
+    check(
+      "public_stats_projection_events_epoch_positive",
+      sql`${table.fencingEpoch} IS NULL OR ${table.fencingEpoch} > 0`,
+    ),
+    check(
+      "public_stats_projection_events_sequence_positive",
+      sql`${table.sequence} IS NULL OR ${table.sequence} > 0`,
+    ),
+  ],
+);
+
+export const publicStatsProjectionCheckpoints = pgTable(
+  "public_stats_projection_checkpoints",
+  {
+    workspaceId: text("workspace_id")
+      .primaryKey()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    fencingEpoch: bigint("fencing_epoch", { mode: "number" }).notNull(),
+    sequence: bigint("sequence", { mode: "number" }).notNull(),
+    updatedAt: utcTimestamp("updated_at").notNull().defaultNow(),
+  },
+  (table) => [
+    check(
+      "public_stats_projection_checkpoints_epoch_positive",
+      sql`${table.fencingEpoch} > 0`,
+    ),
+    check(
+      "public_stats_projection_checkpoints_sequence_positive",
+      sql`${table.sequence} > 0`,
     ),
   ],
 );
@@ -729,6 +764,7 @@ export const domainSchema = {
   auditEvents,
   publicStatsCounters,
   publicStatsProjectionEvents,
+  publicStatsProjectionCheckpoints,
   analyticsDaily,
   analyticsDailySummary,
   analyticsDailyDimensions,

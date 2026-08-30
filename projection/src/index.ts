@@ -1,6 +1,9 @@
 import {
   PostgresPublicProjectionDirectory,
+  applyPublicStatsProjectionCheckpoint,
   applyRegionalPublicProjection,
+  cleanupProcessedRegionalProjectionOutbox,
+  cleanupPublicStatsProjectionEvents,
   createImmutableObjectPublicationStore,
   createPostgresResourceRoutingDirectory,
   createPostgresWorkspacePlacementDirectory,
@@ -49,7 +52,7 @@ export async function drainProjectionCell(
     const publicStore = createImmutableObjectPublicationStore(bindings.PUBLIC_BUNDLES);
     const directory = new PostgresPublicProjectionDirectory(control.pool);
     const resourceDirectory = createPostgresResourceRoutingDirectory(control.pool);
-    return await drainRegionalProjectionOutbox({
+    const result = await drainRegionalProjectionOutbox({
       regionId,
       database: regional.pool,
       limit: 100,
@@ -64,30 +67,22 @@ export async function drainProjectionCell(
           async applyPublicStats({
             eventId,
             workspaceId,
+            fencingEpoch,
+            sequence,
             eventType,
             agentSkillUses,
             totalSkills,
           }) {
-            await control.pool.query(
-              `WITH claimed AS (
-                 INSERT INTO public_stats_projection_events
-                   (event_id, workspace_id, event_type)
-                 VALUES ($1, $2, $3)
-                 ON CONFLICT (event_id) DO NOTHING
-                 RETURNING event_id
-               )
-               INSERT INTO public_stats_counters
-                 (id, agent_skill_uses, total_skills, updated_at)
-               SELECT $2, $4, $5, now() FROM claimed
-               ON CONFLICT (id) DO UPDATE
-                 SET agent_skill_uses =
-                       public_stats_counters.agent_skill_uses +
-                       EXCLUDED.agent_skill_uses,
-                     total_skills =
-                       public_stats_counters.total_skills + EXCLUDED.total_skills,
-                     updated_at = now()`,
-              [eventId, workspaceId, eventType, agentSkillUses, totalSkills],
-            );
+            await applyPublicStatsProjectionCheckpoint({
+              database: control.pool,
+              eventId,
+              workspaceId,
+              eventType,
+              fencingEpoch,
+              sequence,
+              agentSkillUses,
+              totalSkills,
+            });
           },
           async resolveWorkspaceSlug(workspaceId) {
             const result = await control.pool.query<{ slug: string }>(
@@ -108,6 +103,11 @@ export async function drainProjectionCell(
         );
       },
     });
+    await Promise.all([
+      cleanupProcessedRegionalProjectionOutbox({ database: regional.pool }),
+      cleanupPublicStatsProjectionEvents({ database: control.pool }),
+    ]);
+    return result;
   } finally {
     await Promise.allSettled([regional.close(), control.close()]);
   }

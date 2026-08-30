@@ -38,6 +38,8 @@ describe("migration chain", () => {
       "0030_regional_workspace_migration_outbox_drain.sql",
       "0031_datafn_internal_workspace_migration_fence.sql",
       "0032_control_public_skill_heads.sql",
+      "0033_regional_projection_sequences.sql",
+      "0034_control_public_stats_checkpoints.sql",
     ]);
     expect(new Set(migrations.map((migration) => migration.sha256)).size).toBe(
       migrations.length,

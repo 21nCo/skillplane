@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { drainRegionalProjectionOutbox } from "./projection-outbox.js";
+import {
+  applyPublicStatsProjectionCheckpoint,
+  cleanupPublicStatsProjectionEvents,
+  cleanupProcessedRegionalProjectionOutbox,
+  drainRegionalProjectionOutbox,
+} from "./projection-outbox.js";
 
 function event(id: string) {
   return {
@@ -18,6 +23,65 @@ function event(id: string) {
 }
 
 describe("regional projection outbox drainer", () => {
+  it("retires only processed rows outside the replay window", async () => {
+    const query = vi.fn(async () => ({
+      rows: [{ id: "event:one" }, { id: "event:two" }],
+    }));
+
+    await expect(
+      cleanupProcessedRegionalProjectionOutbox({
+        database: { query },
+        retentionSeconds: 86_400,
+        limit: 200,
+      }),
+    ).resolves.toBe(2);
+
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining("processed_at < now()"),
+      [86_400, 200],
+    );
+    expect(query.mock.calls[0]?.[0]).toContain("FOR UPDATE SKIP LOCKED");
+  });
+
+  it("retires only checkpointed stats event IDs with durable sequences", async () => {
+    const query = vi.fn(async () => ({ rows: [{ event_id: "event:one" }] }));
+
+    await expect(
+      cleanupPublicStatsProjectionEvents({
+        database: { query },
+        retentionSeconds: 86_400,
+        limit: 200,
+      }),
+    ).resolves.toBe(1);
+
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining("event.sequence IS NOT NULL"),
+      [86_400, 200],
+    );
+    expect(query.mock.calls[0]?.[0]).toContain("public_stats_projection_checkpoints");
+  });
+
+  it("applies stats through an atomic event claim and sequence checkpoint", async () => {
+    const query = vi.fn(async () => ({ rows: [] }));
+
+    await applyPublicStatsProjectionCheckpoint({
+      database: { query },
+      eventId: "event:stats",
+      workspaceId: "workspace:a",
+      eventType: "public_stats.agent_skill_used",
+      fencingEpoch: 3,
+      sequence: 9,
+      agentSkillUses: 2,
+      totalSkills: 0,
+    });
+
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining("public_stats_projection_checkpoints"),
+      ["event:stats", "workspace:a", "public_stats.agent_skill_used", 2, 0, 3, 9],
+    );
+    expect(query.mock.calls[0]?.[0]).toContain("ON CONFLICT (event_id) DO NOTHING");
+  });
+
   it("acknowledges claimed events only after successful projection", async () => {
     const queries: string[] = [];
     let claimed = false;

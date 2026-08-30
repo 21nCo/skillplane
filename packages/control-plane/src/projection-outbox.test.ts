@@ -269,6 +269,8 @@ describe("regional publication projection", () => {
       {
         eventId: "event:stats",
         workspaceId: "workspace:a",
+        fencingEpoch: 5,
+        sequence: 1,
         eventType: "public_stats.agent_skill_used",
         agentSkillUses: 1,
         totalSkills: 0,

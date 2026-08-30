@@ -14,6 +14,7 @@ import {
   domainSchema,
   idempotencyRecords,
   publicStatsCounters,
+  publicStatsProjectionCheckpoints,
   publicStatsProjectionEvents,
   servicePrincipals,
   skillContexts,
@@ -44,6 +45,7 @@ export const globalControlSchema = {
   service_principals: servicePrincipals,
   public_stats_counters: publicStatsCounters,
   public_stats_projection_events: publicStatsProjectionEvents,
+  public_stats_projection_checkpoints: publicStatsProjectionCheckpoints,
   api_rate_limits: apiRateLimits,
   ...controlPlaneSchema,
 };

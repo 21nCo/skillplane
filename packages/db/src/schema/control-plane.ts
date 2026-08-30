@@ -330,6 +330,21 @@ export const regionalProjectionOutbox = pgTable(
   ],
 );
 
+export const regionalProjectionSequences = pgTable(
+  "regional_projection_sequences",
+  {
+    workspaceId: text("workspace_id").primaryKey(),
+    lastSequence: bigint("last_sequence", { mode: "number" }).notNull(),
+    updatedAt: utcTimestamp("updated_at").notNull().defaultNow(),
+  },
+  (table) => [
+    check(
+      "regional_projection_sequences_last_positive",
+      sql`${table.lastSequence} > 0`,
+    ),
+  ],
+);
+
 export const controlPlaneSchema = {
   workspace_placements: workspacePlacements,
   resource_routing_directory: resourceRoutingDirectory,
@@ -344,5 +359,6 @@ export const controlPlaneSchema = {
 };
 
 export const regionalInfrastructureSchema = {
+  regional_projection_sequences: regionalProjectionSequences,
   regional_projection_outbox: regionalProjectionOutbox,
 };

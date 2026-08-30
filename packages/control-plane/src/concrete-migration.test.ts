@@ -59,13 +59,8 @@ describe("concrete workspace migration", () => {
   });
 
   it("retains the snapshot only after the fenced outbox drain", async () => {
-    const barrier = client();
     const snapshot = client();
     const calls: string[] = [];
-    barrier.query.mockImplementation(async (sql) => {
-      calls.push(`barrier:${sql}`);
-      return { rows: [] };
-    });
     snapshot.query.mockImplementation(async (sql) => {
       calls.push(`snapshot:${sql}`);
       return { rows: [] };
@@ -75,10 +70,7 @@ describe("concrete workspace migration", () => {
         calls.push(`pool:${sql}`);
         return { rows: [] };
       }),
-      connect: vi
-        .fn<() => Promise<MigrationSqlClient>>()
-        .mockResolvedValueOnce(barrier)
-        .mockResolvedValueOnce(snapshot),
+      connect: vi.fn<() => Promise<MigrationSqlClient>>().mockResolvedValue(snapshot),
     } satisfies MigrationSqlPool;
     const unusedPool = source;
     const unusedObjects = {
@@ -106,8 +98,11 @@ describe("concrete workspace migration", () => {
     );
     expect(
       calls.findIndex((call) => call.startsWith("snapshot:SELECT count(*)")),
-    ).toBeGreaterThan(calls.indexOf("barrier:COMMIT"));
-    expect(barrier.release).toHaveBeenCalledOnce();
+    ).toBeGreaterThan(
+      calls.findIndex((call) =>
+        call.includes("INSERT INTO regional_workspace_migration_fences"),
+      ),
+    );
     expect(snapshot.query).toHaveBeenCalledWith(
       "SELECT count(*) FROM skills WHERE workspace_id = $1",
       ["workspace:a"],
@@ -116,14 +111,10 @@ describe("concrete workspace migration", () => {
   });
 
   it("keeps the source-cell fence after the retained snapshot is released", async () => {
-    const barrier = client();
     const snapshot = client();
     const source = {
       query: vi.fn(async () => ({ rows: [] })),
-      connect: vi
-        .fn<() => Promise<MigrationSqlClient>>()
-        .mockResolvedValueOnce(barrier)
-        .mockResolvedValueOnce(snapshot),
+      connect: vi.fn<() => Promise<MigrationSqlClient>>().mockResolvedValue(snapshot),
     } satisfies MigrationSqlPool;
     const unusedObjects = {
       read: vi.fn(async () => new Uint8Array()),

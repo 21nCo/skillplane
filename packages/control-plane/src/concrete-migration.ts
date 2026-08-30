@@ -45,6 +45,7 @@ const regionalTables = [
   "analytics_daily_dimensions",
   "analytics_rollup_runs",
   "idempotency_records",
+  "regional_projection_sequences",
   "regional_projection_outbox",
 ] as const;
 
@@ -249,28 +250,10 @@ export class PostgresWorkspaceMigrationOperations implements WorkspaceMigrationO
        DO UPDATE SET source_epoch = EXCLUDED.source_epoch, fenced_at = now()`,
       [context.namespace, context.sourceEpoch],
     );
-    const lockTables = [...regionalTables, ...dynamic.map((table) => table.tableName)];
-    // The durable namespace trigger rejects a request admitted under the old
-    // placement epoch even if it reaches DML late. The brief table barrier then
-    // drains writes which entered before the trigger fence. Outbox consumers
-    // can settle those writes after the barrier without admitting new domain
-    // mutations; drainOutboxes retains the source snapshot once they converge.
-    const barrier = lockTables.length > 0 ? await this.source.connect() : null;
-    try {
-      if (barrier) {
-        await barrier.query("BEGIN");
-        await barrier.query(
-          `LOCK TABLE ${lockTables.map(identifier).join(", ")} IN SHARE MODE`,
-        );
-        await barrier.query("COMMIT");
-      }
-      this.sourceQuiesced = true;
-    } catch (error) {
-      if (barrier) await barrier.query("ROLLBACK").catch(() => undefined);
-      throw error;
-    } finally {
-      barrier?.release();
-    }
+    // The trigger holds a shared lock on this workspace's durable fence row
+    // for every accepted DML transaction. Raising the row above waits for all
+    // pre-fence writes in this namespace without blocking unrelated tenants.
+    this.sourceQuiesced = true;
   }
 
   async drainOutboxes(context: DatafnNamespaceMigrationContext): Promise<void> {

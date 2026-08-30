@@ -98,7 +98,9 @@ describe("public projection events", () => {
 
   it("enqueues resource routing changes with the regional fencing epoch", async () => {
     const inserts: unknown[][] = [];
+    const statements: string[] = [];
     const query = vi.fn(async (text: string, values?: readonly unknown[]) => {
+      statements.push(text);
       if (text.includes("INSERT INTO regional_projection_outbox") && values) {
         inserts.push([...values]);
       }
@@ -120,6 +122,11 @@ describe("public projection events", () => {
     expect(inserts).toHaveLength(1);
     expect(inserts[0]?.[2]).toBe("resource_route.upsert");
     expect(inserts[0]?.[4]).toBe(7);
+    expect(statements).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("regional_projection_sequences"),
+      ]),
+    );
     expect(JSON.parse(String(inserts[0]?.[3]))).toEqual({
       workspaceId: "workspace:one",
       resources: [

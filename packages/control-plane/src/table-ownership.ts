@@ -28,6 +28,7 @@ export const GLOBAL_CONTROL_TABLES = [
   "control_plane_outbox",
   "public_stats_counters",
   "public_stats_projection_events",
+  "public_stats_projection_checkpoints",
   "api_rate_limits",
 ] as const;
 
@@ -46,6 +47,7 @@ export const REGIONAL_WORKSPACE_TABLES = [
   "analytics_daily_dimensions",
   "analytics_rollup_runs",
   "idempotency_records",
+  "regional_projection_sequences",
   "regional_projection_outbox",
   "regional_workspace_migration_fences",
 ] as const;

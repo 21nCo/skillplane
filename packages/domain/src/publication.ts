@@ -259,12 +259,30 @@ export class PublicationService {
             options.principal.workspaceId,
           ]);
           await client.query(
-            `INSERT INTO regional_projection_outbox
+            `WITH next_sequence AS (
+               INSERT INTO regional_projection_sequences
+                 (workspace_id, last_sequence, updated_at)
+               SELECT $2, COALESCE(MAX(sequence), 0) + 1, now()
+                 FROM regional_projection_outbox
+                WHERE workspace_id = $2
+               ON CONFLICT (workspace_id) DO UPDATE
+                 SET last_sequence =
+                       GREATEST(
+                         regional_projection_sequences.last_sequence,
+                         (
+                           SELECT COALESCE(MAX(sequence), 0)
+                             FROM regional_projection_outbox
+                            WHERE workspace_id = $2
+                         )
+                       ) + 1,
+                     updated_at = now()
+               RETURNING last_sequence
+             )
+             INSERT INTO regional_projection_outbox
                (id, workspace_id, event_type, payload, fencing_epoch, sequence)
              SELECT $1, $2, 'public_skill.published', $3::jsonb, $4,
-                    COALESCE(MAX(sequence), 0) + 1
-               FROM regional_projection_outbox
-              WHERE workspace_id = $2`,
+                    last_sequence
+               FROM next_sequence`,
             [
               `regional-projection:${crypto.randomUUID()}`,
               options.principal.workspaceId,
