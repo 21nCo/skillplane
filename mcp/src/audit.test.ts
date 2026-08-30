@@ -44,10 +44,11 @@ function record(overrides: Partial<McpAuditRecord> = {}): McpAuditRecord {
 
 describe("ControlPlaneMcpAuditWriter", () => {
   it("writes global MCP audit batches to the control-plane audit table", async () => {
-    const query = vi.fn(async (_sql: string, _values?: readonly unknown[]) => ({
-      rows: [],
-      rowCount: 1,
-    }));
+    const query = vi.fn(async (sql: string, values?: readonly unknown[]) => {
+      void sql;
+      void values;
+      return { rows: [], rowCount: 1 };
+    });
     const release = vi.fn();
     const pool = {
       connect: vi.fn(async () => ({ query, release })),
@@ -76,7 +77,9 @@ describe("ControlPlaneMcpAuditWriter", () => {
 
   it("rolls back and fails closed when the control audit insert fails", async () => {
     let queryCount = 0;
-    const query = vi.fn(async (_sql: string, _values?: readonly unknown[]) => {
+    const query = vi.fn(async (sql: string, values?: readonly unknown[]) => {
+      void sql;
+      void values;
       queryCount += 1;
       if (queryCount === 2) throw new Error("control audit unavailable");
       return { rows: [], rowCount: null };

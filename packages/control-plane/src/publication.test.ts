@@ -107,9 +107,7 @@ describe("global public projection", () => {
       projectionSequence: 8,
     });
 
-    expect(calls[0]?.text).toContain(
-      "public_skill_projections.projection_sequence <=",
-    );
+    expect(calls[0]?.text).toContain("public_skill_projections.projection_sequence <=");
     expect(calls[0]?.values?.[8]).toBe(9);
     expect(calls[1]?.text).toContain("projection_sequence <= $3");
     expect(calls[1]?.values).toEqual(["workspace:a", "skill:a", 8]);

@@ -9,11 +9,13 @@ describe("browser session database binding detection", () => {
   });
 
   it("preserves legacy and direct database deployments", () => {
+    expect(hasWorkerDatabaseBinding({ HYPERDRIVE: {} } as App.Platform["env"])).toBe(
+      true,
+    );
     expect(
-      hasWorkerDatabaseBinding({ HYPERDRIVE: {} } as App.Platform["env"]),
-    ).toBe(true);
-    expect(
-      hasWorkerDatabaseBinding({ DATABASE_URL: "postgresql://local" } as App.Platform["env"]),
+      hasWorkerDatabaseBinding({
+        DATABASE_URL: "postgresql://local",
+      } as App.Platform["env"]),
     ).toBe(true);
   });
 

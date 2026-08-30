@@ -3,10 +3,11 @@ import { writeControlPlaneAuditEvent } from "./audit.js";
 
 describe("control-plane audit writer", () => {
   it("writes global decisions to the control authority with redacted metadata", async () => {
-    const query = vi.fn(async (_text: string, _values?: readonly unknown[]) => ({
-      rows: [],
-      rowCount: 1,
-    }));
+    const query = vi.fn(async (text: string, values?: readonly unknown[]) => {
+      void text;
+      void values;
+      return { rows: [], rowCount: 1 };
+    });
 
     await expect(
       writeControlPlaneAuditEvent(

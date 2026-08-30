@@ -20,9 +20,7 @@ export function hasWorkerDatabaseBinding(
 ): boolean {
   return Boolean(
     bindings &&
-      (bindings.HYPERDRIVE ??
-        bindings.CONTROL_HYPERDRIVE ??
-        bindings.DATABASE_URL),
+    (bindings.HYPERDRIVE ?? bindings.CONTROL_HYPERDRIVE ?? bindings.DATABASE_URL),
   );
 }
 
