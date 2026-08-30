@@ -844,6 +844,8 @@ export class SkillService {
         await enqueueCurrentSkillProjection(client, {
           skill,
           fencingEpoch: options.fencingEpoch,
+          includePublishedHistory:
+            visibility === "public" && previous.visibility !== "public",
         });
         await this.idempotency.complete(client, claim.identity, 200, { skill });
         return skill;
@@ -936,6 +938,7 @@ export class SkillService {
         await enqueueCurrentSkillProjection(client, {
           skill,
           fencingEpoch: options.fencingEpoch,
+          includePublishedHistory: !options.archived && Boolean(previous.archived_at),
         });
         if (Boolean(previous.archived_at) !== options.archived) {
           await enqueueSkillCountProjection(client, {

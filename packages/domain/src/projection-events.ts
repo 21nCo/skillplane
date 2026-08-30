@@ -7,7 +7,7 @@ interface ProjectionSqlClient {
   ): Promise<{ readonly rows: readonly Record<string, unknown>[] }>;
 }
 
-interface CurrentProjectionRow extends Record<string, unknown> {
+interface ProjectionRow extends Record<string, unknown> {
   readonly search_text: string;
   readonly version_document: SkillVersionRecord;
 }
@@ -137,12 +137,13 @@ export async function enqueueUnpublishedSkillProjection(
   });
 }
 
-/** Enqueues the current public state using only rows locked by the caller. */
+/** Enqueues public state using only rows locked by the caller. */
 export async function enqueueCurrentSkillProjection(
   client: ProjectionSqlClient,
   input: {
     readonly skill: SkillRecord;
     readonly fencingEpoch?: number | undefined;
+    readonly includePublishedHistory?: boolean | undefined;
   },
 ): Promise<void> {
   const versionId = input.skill.currentPublishedVersionId;
@@ -186,18 +187,25 @@ export async function enqueueCurrentSkillProjection(
               'createdAt', version.created_at
             ) AS version_document
        FROM skills skill
-       JOIN skill_versions version ON version.id = skill.current_published_version_id
+       JOIN skill_versions version
+         ON version.skill_id = skill.id
+        AND version.workspace_id = skill.workspace_id
       WHERE skill.id = $1 AND skill.workspace_id = $2
-        AND version.id = $3 AND version.status = 'published'
-      LIMIT 1`,
-    [input.skill.id, input.skill.workspaceId, versionId],
+        AND version.status = 'published'
+        AND ($3::boolean OR version.id = skill.current_published_version_id)
+      ORDER BY version.published_at, version.id`,
+    [input.skill.id, input.skill.workspaceId, input.includePublishedHistory ?? false],
   );
-  const row = result.rows[0] as CurrentProjectionRow | undefined;
-  if (!row) throw new Error("PUBLICATION_CURRENT_VERSION_MISSING");
-  await enqueuePublishedSkillProjection(client, {
-    skill: input.skill,
-    version: row.version_document,
-    searchText: row.search_text,
-    fencingEpoch: input.fencingEpoch,
-  });
+  const rows = result.rows as readonly ProjectionRow[];
+  if (!rows.some((row) => row.version_document.id === versionId)) {
+    throw new Error("PUBLICATION_CURRENT_VERSION_MISSING");
+  }
+  for (const row of rows) {
+    await enqueuePublishedSkillProjection(client, {
+      skill: input.skill,
+      version: row.version_document,
+      searchText: row.search_text,
+      fencingEpoch: input.fencingEpoch,
+    });
+  }
 }

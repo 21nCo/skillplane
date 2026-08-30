@@ -54,6 +54,13 @@ type McpScope =
       readonly allowPublic: true;
     };
 
+type WorkspaceMcpScope = Exclude<McpScope, { readonly kind: "global" }>;
+interface McpBatchScope {
+  readonly kind: "batch";
+  readonly scopes: readonly WorkspaceMcpScope[];
+}
+type RoutedMcpScope = McpScope | McpBatchScope;
+
 interface ResolvedMcpRoute {
   readonly workspaceId: string;
   readonly skillId?: string;
@@ -142,7 +149,7 @@ function scopeForMessage(message: unknown): McpScope {
   );
 }
 
-export async function classifyMcpScope(request: Request): Promise<McpScope> {
+export async function classifyMcpScope(request: Request): Promise<RoutedMcpScope> {
   const url = new URL(request.url);
   if (request.method === "GET" && url.pathname.startsWith("/downloads/")) {
     const parts = url.pathname.split("/");
@@ -178,21 +185,15 @@ export async function classifyMcpScope(request: Request): Promise<McpScope> {
       "An MCP batch cannot mix global and workspace operations",
     );
   }
-  const first = JSON.stringify(workspaceScopes[0]);
-  if (workspaceScopes.some((scope) => JSON.stringify(scope) !== first)) {
-    throw new McpRoutingError(
-      400,
-      "WORKSPACE_BATCH_INVALID",
-      "An MCP batch cannot span multiple workspaces",
-    );
-  }
   const firstScope = workspaceScopes[0];
   if (!firstScope) return { kind: "global" };
-  return firstScope;
+  return workspaceScopes.length === 1
+    ? firstScope
+    : { kind: "batch", scopes: workspaceScopes };
 }
 
 async function resolveWorkspaceId(
-  scope: Exclude<McpScope, { readonly kind: "global" }>,
+  scope: WorkspaceMcpScope,
   services: ApiServices,
 ): Promise<ResolvedMcpRoute> {
   if (scope.kind === "workspace-id") return { workspaceId: scope.value };
@@ -224,9 +225,44 @@ async function resolveWorkspaceId(
   );
 }
 
+export async function resolveMcpWorkspaceBatch(
+  scope: WorkspaceMcpScope | McpBatchScope,
+  services: ApiServices,
+): Promise<{
+  readonly workspaceId: string;
+  readonly entries: readonly {
+    readonly scope: WorkspaceMcpScope;
+    readonly route: ResolvedMcpRoute;
+  }[];
+}> {
+  const scopes = scope.kind === "batch" ? scope.scopes : [scope];
+  const entries = await Promise.all(
+    scopes.map(async (entry) => ({
+      scope: entry,
+      route: await resolveWorkspaceId(entry, services),
+    })),
+  );
+  const workspaceId = entries[0]?.route.workspaceId;
+  if (!workspaceId) {
+    throw new McpRoutingError(
+      400,
+      "WORKSPACE_BATCH_INVALID",
+      "An MCP batch must identify one workspace",
+    );
+  }
+  if (entries.some((entry) => entry.route.workspaceId !== workspaceId)) {
+    throw new McpRoutingError(
+      400,
+      "WORKSPACE_BATCH_INVALID",
+      "An MCP batch cannot span multiple workspaces",
+    );
+  }
+  return { workspaceId, entries };
+}
+
 async function authorizeWorkspace(
   identity: McpIdentity,
-  scope: Exclude<McpScope, { readonly kind: "global" }>,
+  scope: WorkspaceMcpScope,
   route: ResolvedMcpRoute,
   services: ApiServices,
 ): Promise<void> {
@@ -325,9 +361,11 @@ export function createRoutedMcpApplication<Context>(input: {
           const services = await input.services(bindings);
           try {
             const identity = await authenticateMcpRequest(request, services);
-            const route = await resolveWorkspaceId(scope, services);
-            const workspaceId = route.workspaceId;
-            await authorizeWorkspace(identity, scope, route, services);
+            const batch = await resolveMcpWorkspaceBatch(scope, services);
+            const workspaceId = batch.workspaceId;
+            for (const entry of batch.entries) {
+              await authorizeWorkspace(identity, entry.scope, entry.route, services);
+            }
             const assertions = createWorkspaceRoutingAssertions({
               activeKeyId: runtime.routing.activeKeyId,
               keys: runtime.routing.keys,

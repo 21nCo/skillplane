@@ -22,6 +22,8 @@ interface ServiceBinding {
   fetch(request: Request): Response | Promise<Response>;
 }
 
+const PUBLIC_SKILL_READ_HEADER = "x-skillplane-public-skill-read";
+
 type ApiScope =
   | { readonly kind: "global" }
   | { readonly kind: "workspace"; readonly workspaceId: string }
@@ -181,6 +183,7 @@ async function resolveWorkspace(
   request: Request,
   scope: Exclude<ApiScope, { readonly kind: "global" }>,
   services: ApiServices,
+  options: { readonly allowPublicRead?: boolean } = {},
 ): Promise<string> {
   let service: Awaited<ReturnType<typeof authenticateServicePrincipalRequest>>;
   try {
@@ -196,7 +199,7 @@ async function resolveWorkspace(
     throw error;
   }
   const session = service ? null : await services.auth.provider.authenticate(request);
-  if (!service && !session) {
+  if (!service && !session && !options.allowPublicRead) {
     throw new ApiRoutingError(
       401,
       "AUTHENTICATION_REQUIRED",
@@ -229,6 +232,7 @@ async function resolveWorkspace(
     return workspaceId;
   }
   if (!session) {
+    if (options.allowPublicRead) return workspaceId;
     throw new ApiRoutingError(
       401,
       "AUTHENTICATION_REQUIRED",
@@ -243,6 +247,7 @@ async function resolveWorkspace(
     [workspaceId, session.actorId],
   );
   if (!membership.rows[0]) {
+    if (options.allowPublicRead) return workspaceId;
     throw new ApiRoutingError(
       403,
       "WORKSPACE_ACCESS_DENIED",
@@ -267,6 +272,7 @@ function cleanPublicRequest(request: Request): Request {
   headers.delete("x-skillplane-routing-region");
   headers.delete("x-skillplane-routing-epoch");
   headers.delete("x-datafn-routing-assertion");
+  headers.delete(PUBLIC_SKILL_READ_HEADER);
   return new Request(request, { headers });
 }
 
@@ -276,6 +282,15 @@ function isPublicSkillByIdRead(request: Request, scope: ApiScope): boolean {
     scope.resourceType === "skill" &&
     (request.method === "GET" || request.method === "HEAD") &&
     /^\/api\/v1\/skills\/[^/]+\/?$/u.test(new URL(request.url).pathname)
+  );
+}
+
+function isPublicSkillVersionRead(request: Request, scope: ApiScope): boolean {
+  return (
+    scope.kind === "resource" &&
+    scope.resourceType === "skill" &&
+    (request.method === "GET" || request.method === "HEAD") &&
+    /^\/api\/v1\/skills\/[^/]+\/versions(?:\/|$)/u.test(new URL(request.url).pathname)
   );
 }
 
@@ -363,7 +378,16 @@ export function createRoutedApiApplication(input: {
             // Member reads still route to the cell so private access is preserved.
             return await input.local.fetch(request, bindings);
           }
-          const workspaceId = await resolveWorkspace(request, scope, services);
+          const publicSkillVersionRead = isPublicSkillVersionRead(request, scope);
+          const workspaceId = await resolveWorkspace(request, scope, services, {
+            allowPublicRead: publicSkillVersionRead,
+          });
+          const forwardedRequest = publicSkillVersionRead
+            ? new Request(request, { headers: new Headers(request.headers) })
+            : request;
+          if (publicSkillVersionRead) {
+            forwardedRequest.headers.set(PUBLIC_SKILL_READ_HEADER, "1");
+          }
           const assertions = createWorkspaceRoutingAssertions({
             activeKeyId: runtime.routing.activeKeyId,
             keys: runtime.routing.keys,
@@ -393,7 +417,7 @@ export function createRoutedApiApplication(input: {
             assertionTtlMs: runtime.routing.ttlMs,
             onEvent: (event) => logWorkspaceRoutingEvent("app", event),
           });
-          return await gateway.handle(request);
+          return await gateway.handle(forwardedRequest);
         } catch (error) {
           if (error instanceof ApiRoutingError) return error.response();
           if (error instanceof DatafnRoutingError) return error.toResponse();

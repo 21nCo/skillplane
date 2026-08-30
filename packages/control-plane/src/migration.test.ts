@@ -123,4 +123,118 @@ describe("fenced workspace migration", () => {
       state: "active",
     });
   });
+
+  it("finishes an expired target-resume recovery without preparing the source again", async () => {
+    const directory = createMemoryWorkspacePlacementDirectory();
+    const claimed = await claimWorkspacePlacement({
+      directory,
+      workspaceId: "workspace:resume-target",
+      regionId: "legacy",
+      now: () => 0,
+    });
+    await directory.compareAndSet({
+      namespace: claimed.placement.namespace,
+      expectedEpoch: claimed.placement.epoch,
+      expectedState: "active",
+      next: {
+        namespace: claimed.placement.namespace,
+        regionId: "in-south",
+        epoch: 3,
+        state: "active",
+        previousRegionId: "legacy",
+        updatedAt: new Date(1).toISOString(),
+        migration: {
+          phase: "resume-target",
+          sourceRegionId: "legacy",
+          targetRegionId: "in-south",
+          sourceEpoch: 1,
+          movingEpoch: 2,
+          recoveryFence: 2,
+          recoveryOwnerId: "interrupted-worker",
+          recoveryLeaseExpiresAt: 1,
+        },
+      },
+    });
+    const migrationOperations = operations();
+    const journal = {
+      started: vi.fn(async () => undefined),
+      completed: vi.fn(async () => undefined),
+      failed: vi.fn(async () => undefined),
+    };
+
+    const result = await migrateWorkspaceWithJournal({
+      directory,
+      workspaceId: "workspace:resume-target",
+      targetRegionId: "in-south",
+      operations: migrationOperations,
+      journal,
+      now: () => 10,
+    });
+
+    expect(result.proof).toMatchObject({
+      sourceRegionId: "legacy",
+      sourceEpoch: 1,
+      targetRegionId: "in-south",
+    });
+    expect(migrationOperations.prepareSource).not.toHaveBeenCalled();
+    expect(migrationOperations.resumeTarget).toHaveBeenCalledOnce();
+    const resumed = await directory.get("workspace:resume-target");
+    expect(resumed).toMatchObject({ regionId: "in-south", state: "active" });
+    expect(resumed?.migration).toBeUndefined();
+  });
+
+  it("finishes an expired source-resume rollback before a cutover retry", async () => {
+    const directory = createMemoryWorkspacePlacementDirectory();
+    const claimed = await claimWorkspacePlacement({
+      directory,
+      workspaceId: "workspace:resume-source",
+      regionId: "legacy",
+      now: () => 0,
+    });
+    await directory.compareAndSet({
+      namespace: claimed.placement.namespace,
+      expectedEpoch: claimed.placement.epoch,
+      expectedState: "active",
+      next: {
+        namespace: claimed.placement.namespace,
+        regionId: "legacy",
+        epoch: 3,
+        state: "active",
+        updatedAt: new Date(1).toISOString(),
+        migration: {
+          phase: "resume-source",
+          sourceRegionId: "legacy",
+          targetRegionId: "in-south",
+          sourceEpoch: 1,
+          movingEpoch: 2,
+          recoveryFence: 2,
+          recoveryOwnerId: "interrupted-worker",
+          recoveryLeaseExpiresAt: 1,
+        },
+      },
+    });
+    const migrationOperations = operations();
+    const journal = {
+      started: vi.fn(async () => undefined),
+      completed: vi.fn(async () => undefined),
+      failed: vi.fn(async () => undefined),
+    };
+
+    await expect(
+      migrateWorkspaceWithJournal({
+        directory,
+        workspaceId: "workspace:resume-source",
+        targetRegionId: "in-south",
+        operations: migrationOperations,
+        journal,
+        now: () => 10,
+      }),
+    ).rejects.toThrow("DATAFN_MIGRATION_ROLLED_BACK");
+
+    expect(migrationOperations.prepareSource).not.toHaveBeenCalled();
+    expect(migrationOperations.rollbackSource).toHaveBeenCalledOnce();
+    const rolledBack = await directory.get("workspace:resume-source");
+    expect(rolledBack).toMatchObject({ regionId: "legacy", state: "active" });
+    expect(rolledBack?.migration).toBeUndefined();
+  });
 });

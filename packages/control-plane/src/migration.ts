@@ -102,6 +102,33 @@ export class PostgresWorkspaceMigrationJournal implements WorkspaceMigrationJour
   }
 }
 
+export function isWorkspaceMigrationRecoveryPending(
+  placement: WorkspacePlacement,
+): boolean {
+  return (
+    placement.state === "moving" ||
+    (placement.state === "active" &&
+      (placement.migration?.phase === "resume-source" ||
+        placement.migration?.phase === "resume-target"))
+  );
+}
+
+function migrationSource(placement: WorkspacePlacement): {
+  readonly regionId: string;
+  readonly epoch: number;
+} {
+  if (!isWorkspaceMigrationRecoveryPending(placement)) {
+    return { regionId: placement.regionId, epoch: placement.epoch };
+  }
+  return {
+    regionId:
+      placement.migration?.sourceRegionId ??
+      placement.previousRegionId ??
+      placement.regionId,
+    epoch: placement.migration?.sourceEpoch ?? Math.max(1, placement.epoch - 1),
+  };
+}
+
 /** Composes Skillplane copy/verification hooks with DataFn's fenced move state machine. */
 export async function migrateWorkspace(input: {
   readonly directory: WorkspacePlacementDirectory;
@@ -118,14 +145,19 @@ export async function migrateWorkspace(input: {
 }> {
   const now = input.now ?? Date.now;
   const before = await input.directory.get(input.workspaceId);
-  if (before?.state !== "active") {
+  if (!before) {
     throw new Error("WORKSPACE_MIGRATION_SOURCE_NOT_ACTIVE");
   }
+  const recovering = isWorkspaceMigrationRecoveryPending(before);
+  if (!recovering && before.state !== "active") {
+    throw new Error("WORKSPACE_MIGRATION_SOURCE_NOT_ACTIVE");
+  }
+  const source = migrationSource(before);
   const startedAt = new Date(now()).toISOString();
   const checks: MigrationCheck[] = [];
   // Projection consumers reject events after the placement is fenced as moving,
   // so the asynchronous backlog must converge before entering DataFn's CAS.
-  await input.operations.prepareSource(input.workspaceId);
+  if (!recovering) await input.operations.prepareSource(input.workspaceId);
   const placement = await migrateDatafnNamespace({
     directory: input.directory,
     namespace: input.workspaceId,
@@ -164,9 +196,9 @@ export async function migrateWorkspace(input: {
     placement,
     proof: {
       workspaceId: input.workspaceId,
-      sourceRegionId: before.regionId,
+      sourceRegionId: source.regionId,
       targetRegionId: input.targetRegionId,
-      sourceEpoch: before.epoch,
+      sourceEpoch: source.epoch,
       finalEpoch: placement.epoch,
       startedAt,
       completedAt: new Date(now()).toISOString(),
@@ -240,16 +272,20 @@ export async function migrateWorkspaceWithJournal(
   readonly proof: WorkspaceMigrationProof;
 }> {
   const source = await input.directory.get(input.workspaceId);
-  if (source?.state !== "active") {
+  if (
+    !source ||
+    (source.state !== "active" && !isWorkspaceMigrationRecoveryPending(source))
+  ) {
     throw new Error("WORKSPACE_MIGRATION_SOURCE_NOT_ACTIVE");
   }
+  const origin = migrationSource(source);
   const migrationId = input.migrationId ?? `workspace-migration:${crypto.randomUUID()}`;
   await input.journal.started({
     id: migrationId,
     workspaceId: input.workspaceId,
-    sourceRegionId: source.regionId,
+    sourceRegionId: origin.regionId,
     targetRegionId: input.targetRegionId,
-    sourceEpoch: source.epoch,
+    sourceEpoch: origin.epoch,
   });
   try {
     const result = await migrateWorkspace(input);

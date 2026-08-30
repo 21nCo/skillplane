@@ -5,12 +5,14 @@ import {
 } from "./concrete-migration.js";
 import {
   migrateWorkspaceWithJournal,
+  isWorkspaceMigrationRecoveryPending,
   PostgresWorkspaceMigrationJournal,
   runWorkspaceRollbackDrill,
   type MigrationCheck,
   type WorkspaceMigrationProof,
 } from "./migration.js";
 import { createPostgresWorkspacePlacementDirectory } from "./placement.js";
+import type { WorkspacePlacement } from "./placement.js";
 import {
   PostgresPublicProjectionDirectory,
   publishGlobalProjection,
@@ -22,9 +24,6 @@ export type CutoverObjectStore = WorkspaceMigrationObjectStore &
 
 interface PlacementRow extends Record<string, unknown> {
   readonly workspace_id: string;
-  readonly region_id: string;
-  readonly epoch: number;
-  readonly state: "active" | "moving" | "tombstoned";
 }
 
 interface PublicSkillRow extends Record<string, unknown> {
@@ -67,9 +66,9 @@ function iso(value: Date | string): string {
   return new Date(value).toISOString();
 }
 
-function verificationContext(row: PlacementRow, targetRegionId: string) {
+function verificationContext(row: WorkspacePlacement, targetRegionId: string) {
   return {
-    namespace: row.workspace_id,
+    namespace: row.namespace,
     sourceRegionId: "legacy",
     targetRegionId,
     sourceEpoch: Math.max(1, row.epoch - 1),
@@ -81,7 +80,7 @@ function verificationContext(row: PlacementRow, targetRegionId: string) {
 }
 
 async function verifyExistingCopy(
-  row: PlacementRow,
+  row: WorkspacePlacement,
   targetRegionId: string,
   operations: PostgresWorkspaceMigrationOperations,
 ): Promise<readonly MigrationCheck[]> {
@@ -91,7 +90,7 @@ async function verifyExistingCopy(
     ...(await operations.verifyBundles(context)),
   ];
   if (checks.length === 0 || checks.some((check) => !check.matched)) {
-    throw new Error(`TOPOLOGY_CUTOVER_EXISTING_COPY_INVALID:${row.workspace_id}`);
+    throw new Error(`TOPOLOGY_CUTOVER_EXISTING_COPY_INVALID:${row.namespace}`);
   }
   return checks;
 }
@@ -116,7 +115,7 @@ export async function migrateLegacyWorkspaceBatch(input: {
   }[];
 }> {
   const placements = await input.control.query<PlacementRow>(
-    `SELECT workspace_id, region_id, epoch, state
+    `SELECT workspace_id
        FROM workspace_placements
       ORDER BY workspace_id`,
   );
@@ -129,6 +128,10 @@ export async function migrateLegacyWorkspaceBatch(input: {
   }[] = [];
 
   for (const row of placements.rows) {
+    const current = await directory.get(row.workspace_id);
+    if (!current) {
+      throw new Error(`TOPOLOGY_CUTOVER_PLACEMENT_MISSING:${row.workspace_id}`);
+    }
     const operations = new PostgresWorkspaceMigrationOperations(
       input.source,
       input.target,
@@ -136,33 +139,49 @@ export async function migrateLegacyWorkspaceBatch(input: {
       input.sourceObjects,
       input.targetObjects,
     );
-    if (row.state !== "active") {
+    const recovering = isWorkspaceMigrationRecoveryPending(current);
+    if (!recovering && current.state !== "active") {
       throw new Error(`TOPOLOGY_CUTOVER_PLACEMENT_NOT_ACTIVE:${row.workspace_id}`);
     }
-    if (row.region_id === input.targetRegionId) {
+    if (!recovering && current.regionId === input.targetRegionId) {
       verifiedExisting.push({
         workspaceId: row.workspace_id,
-        checks: await verifyExistingCopy(row, input.targetRegionId, operations),
+        checks: await verifyExistingCopy(current, input.targetRegionId, operations),
       });
       continue;
     }
-    if (row.region_id !== "legacy") {
+    if (!recovering && current.regionId !== "legacy") {
       throw new Error(`TOPOLOGY_CUTOVER_SOURCE_REGION_INVALID:${row.workspace_id}`);
     }
-    await runWorkspaceRollbackDrill({
-      directory,
-      workspaceId: row.workspace_id,
-      targetRegionId: input.targetRegionId,
-      operations,
-    });
-    const result = await migrateWorkspaceWithJournal({
-      directory,
-      journal,
-      workspaceId: row.workspace_id,
-      targetRegionId: input.targetRegionId,
-      operations,
-      rollbackTested: true,
-    });
+    if (!recovering) {
+      await runWorkspaceRollbackDrill({
+        directory,
+        workspaceId: row.workspace_id,
+        targetRegionId: input.targetRegionId,
+        operations,
+      });
+    }
+    const migrate = () =>
+      migrateWorkspaceWithJournal({
+        directory,
+        journal,
+        workspaceId: row.workspace_id,
+        targetRegionId: input.targetRegionId,
+        operations,
+        rollbackTested: true,
+      });
+    let result;
+    try {
+      result = await migrate();
+    } catch (error) {
+      if (
+        !(error instanceof Error) ||
+        error.message !== "DATAFN_MIGRATION_ROLLED_BACK"
+      ) {
+        throw error;
+      }
+      result = await migrate();
+    }
     migrated.push(result.proof);
   }
   return { migrated, verifiedExisting };

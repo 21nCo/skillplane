@@ -181,6 +181,26 @@ describe("combined database topology cutover", () => {
                 started_at = now(), updated_at = now()
           WHERE id = 'legacy-to-cells'`,
       );
+      await control.query(
+        `UPDATE workspace_placements
+            SET epoch = 2, state = 'moving', moving_to_region_id = 'in-south',
+                previous_region_id = 'legacy', migration = $2::jsonb,
+                updated_at = now()
+          WHERE workspace_id = $1`,
+        [
+          workspaceId,
+          JSON.stringify({
+            phase: "moving",
+            sourceRegionId: "legacy",
+            targetRegionId: "in-south",
+            sourceEpoch: 1,
+            movingEpoch: 2,
+            recoveryFence: 2,
+            recoveryOwnerId: "interrupted-cutover",
+            recoveryLeaseExpiresAt: 1,
+          }),
+        ],
+      );
       const first = await migrateLegacyWorkspaceBatch({
         control,
         source: control,

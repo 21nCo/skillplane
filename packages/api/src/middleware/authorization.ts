@@ -63,8 +63,14 @@ export function authorizationMiddleware(): MiddlewareHandler<ApiEnvironment> {
       }
       const servicePrincipal = context.get("servicePrincipal");
       const requestedWorkspace = requestedWorkspaceId(context);
+      const routedPublicSkillRead =
+        action === "skills:read" &&
+        context.req.header("x-skillplane-public-skill-read") === "1" &&
+        /^\/api\/v1\/skills\/[^/]+\/versions(?:\/|$)/u.test(context.req.path);
       const publicSkillRead =
-        action === "skills:read" && !servicePrincipal && !requestedWorkspace;
+        action === "skills:read" &&
+        !servicePrincipal &&
+        (!requestedWorkspace || routedPublicSkillRead);
       if (publicSkillRead) {
         await next();
         return;
