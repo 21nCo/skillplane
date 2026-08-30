@@ -96,19 +96,10 @@ export function createPostgresAuthFnPlacementDirectory(
   };
 }
 
-function identifierKey(identifier: string): string {
-  return `identifier:${identifier.trim().toLowerCase()}`;
-}
-
 export function createSkillplaneAuthFnMultiRegionConfig(input: {
-  readonly pool: Pool;
   readonly issuer: string;
   readonly resource: string;
-  readonly routingKeys: Readonly<Record<string, string>>;
-  readonly activeRoutingKeyId: string;
 }): MultiRegionPluginRuntimeConfig {
-  const active = input.routingKeys[input.activeRoutingKeyId];
-  if (!active) throw new Error("AUTHFN_ROUTING_KEY_UNAVAILABLE");
   return {
     regions: [
       {
@@ -120,20 +111,13 @@ export function createSkillplaneAuthFnMultiRegionConfig(input: {
     ],
     defaultRegionId: "global",
     routing: {
-      mode: "gateway",
+      // AuthFn state is globally owned and terminates in the public app Worker.
+      // Canonical gateway mode is reserved for a future topology where that
+      // edge dispatches to a distinct private AuthFn control Worker.
+      mode: "direct",
       publicAuthority: input.issuer,
       canonicalCookie: AUTH_COOKIE_CONFIG,
       canonicalOAuth: { resource: input.resource },
-      placementDirectory: createPostgresAuthFnPlacementDirectory(input.pool),
-      identityKeyForIdentifier: identifierKey,
-      async identityKeyForUserId(userId) {
-        const result = await input.pool.query<{ primary_email: string | null }>(
-          "SELECT primary_email FROM authfn_users WHERE id = $1 LIMIT 1",
-          [userId],
-        );
-        const email = result.rows[0]?.primary_email;
-        return email ? identifierKey(email) : `user:${userId}`;
-      },
     },
   };
 }

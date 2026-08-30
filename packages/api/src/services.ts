@@ -80,11 +80,8 @@ export async function buildApiServices(
       ...(!single
         ? {
             multiRegion: createSkillplaneAuthFnMultiRegionConfig({
-              pool: controlDatabase.pool,
               issuer: runtime.oauth.issuer,
               resource: runtime.oauth.resource,
-              routingKeys: runtime.routing.keys,
-              activeRoutingKeyId: runtime.routing.activeKeyId,
             }),
           }
         : {}),
