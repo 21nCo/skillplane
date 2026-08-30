@@ -114,6 +114,15 @@ export async function migrateLegacyWorkspaceBatch(input: {
     readonly checks: readonly MigrationCheck[];
   }[];
 }> {
+  await input.control.query(
+    `INSERT INTO workspace_placements (workspace_id, region_id, epoch, state)
+     SELECT workspace.id, 'legacy', 1, 'active'
+       FROM workspaces workspace
+       LEFT JOIN workspace_placements placement
+         ON placement.workspace_id = workspace.id
+      WHERE placement.workspace_id IS NULL
+     ON CONFLICT (workspace_id) DO NOTHING`,
+  );
   const placements = await input.control.query<PlacementRow>(
     `SELECT workspace_id
        FROM workspace_placements

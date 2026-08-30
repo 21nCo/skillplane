@@ -21,6 +21,7 @@ import { parseLearningMetadata, type LearningMetadata } from "./learning-metadat
 import { insertMutationAudit, type MutationAuditContext } from "./mutation-audit.js";
 import { principalAuditActor, type Principal } from "./principal.js";
 import { nextSemanticVersion } from "./publication.js";
+import { enqueueCurrentSkillProjection } from "./projection-events.js";
 import type { AmendmentReviewDetail, AmendmentReviewRecord } from "./reviews.js";
 import { parseSemanticBump } from "./skill-versions.js";
 import { mapSkillInfrastructureError, type SkillVersionRecord } from "./skills.js";
@@ -363,6 +364,7 @@ export class AmendmentService {
     readonly caller: unknown;
     readonly idempotencyKey: string;
     readonly requestId: string;
+    readonly fencingEpoch?: number;
     readonly auditContext?: MutationAuditContext;
   }): Promise<AmendmentResult> {
     authorize(options.principal, "skills:amend");
@@ -761,6 +763,55 @@ export class AmendmentService {
             policyDecision,
             autoPublished,
           };
+          if (autoPublished) {
+            const projection = await client.query<{
+              id: string;
+              workspace_id: string;
+              slug: string;
+              name: string;
+              description: string;
+              tags: string[];
+              visibility: "private" | "workspace" | "public";
+              current_published_version_id: string | null;
+              semantic_version: string | null;
+              archived_at: Date | null;
+              created_at: Date;
+              updated_at: Date;
+            }>(
+              `SELECT skill.id, skill.workspace_id, skill.slug, skill.name,
+                      skill.description, skill.tags, skill.visibility,
+                      skill.current_published_version_id,
+                      current.semantic_version, skill.archived_at,
+                      skill.created_at, skill.updated_at
+                 FROM skills skill
+                 LEFT JOIN skill_versions current
+                   ON current.id = skill.current_published_version_id
+                WHERE skill.id = $1 AND skill.workspace_id = $2
+                LIMIT 1`,
+              [options.skillId, options.principal.workspaceId],
+            );
+            const projected = projection.rows[0];
+            if (!projected) {
+              throw new DomainError("SKILL_NOT_FOUND", "Skill was not found", 404);
+            }
+            await enqueueCurrentSkillProjection(client, {
+              skill: {
+                id: projected.id,
+                workspaceId: projected.workspace_id,
+                slug: projected.slug,
+                name: projected.name,
+                description: projected.description,
+                tags: projected.tags,
+                visibility: projected.visibility,
+                currentPublishedVersionId: projected.current_published_version_id,
+                currentSemanticVersion: projected.semantic_version,
+                archivedAt: projected.archived_at?.toISOString() ?? null,
+                createdAt: projected.created_at.toISOString(),
+                updatedAt: projected.updated_at.toISOString(),
+              },
+              fencingEpoch: options.fencingEpoch,
+            });
+          }
           await this.idempotency.complete(client, claim.identity, 201, {
             result: response,
           });

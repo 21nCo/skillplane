@@ -70,6 +70,19 @@ async function dynamicNamespaceTables(pool: MigrationSqlPool): Promise<string[]>
     );
 }
 
+async function installDynamicMigrationFences(
+  pool: MigrationSqlPool,
+  tables: readonly string[],
+): Promise<void> {
+  for (const table of tables) {
+    await pool.query(
+      `CREATE OR REPLACE TRIGGER skillplane_fence_workspace_migration_write
+       BEFORE INSERT OR UPDATE OR DELETE ON ${identifier(table)}
+       FOR EACH ROW EXECUTE FUNCTION skillplane_fence_workspace_migration_write()`,
+    );
+  }
+}
+
 async function rowsForWorkspace(
   client: MigrationSqlClient,
   table: string,
@@ -188,43 +201,42 @@ export class PostgresWorkspaceMigrationOperations implements WorkspaceMigrationO
   async quiesceSource(context: DatafnNamespaceMigrationContext): Promise<void> {
     if (this.quiescedSource) return;
     const dynamic = await dynamicNamespaceTables(this.source);
-    const lockTables = [...regionalTables, ...dynamic].filter(
-      (table) =>
-        table !== "regional_projection_outbox" &&
-        table !== "__datafn_permission_directory_outbox",
+    await installDynamicMigrationFences(this.source, dynamic);
+    await this.source.query(
+      `INSERT INTO regional_workspace_migration_fences
+         (workspace_id, source_epoch, fenced_at)
+       VALUES ($1, $2, now())
+       ON CONFLICT (workspace_id)
+       DO UPDATE SET source_epoch = EXCLUDED.source_epoch, fenced_at = now()`,
+      [context.namespace, context.sourceEpoch],
     );
-    // Placement is already fenced as moving. Briefly wait for transactions
-    // which entered before that fence, then release the broad barrier before
-    // retaining the long-lived read snapshot. New legitimate writes for this
-    // namespace cannot enter after the fence; unrelated namespaces remain
-    // writable throughout copy and verification.
-    if (lockTables.length > 0) {
-      const barrier = await this.source.connect();
-      try {
+    const lockTables = [...regionalTables, ...dynamic];
+    // The durable namespace trigger rejects a request admitted under the old
+    // placement epoch even if it reaches DML late. The brief table barrier then
+    // drains writes which entered before the trigger fence and stays held only
+    // until the retained repeatable-read snapshot has been materialized.
+    const barrier = lockTables.length > 0 ? await this.source.connect() : null;
+    const client = await this.source.connect();
+    try {
+      if (barrier) {
         await barrier.query("BEGIN");
         await barrier.query(
           `LOCK TABLE ${lockTables.map(identifier).join(", ")} IN SHARE MODE`,
         );
-        await barrier.query("COMMIT");
-      } catch (error) {
-        await barrier.query("ROLLBACK").catch(() => undefined);
-        throw error;
-      } finally {
-        barrier.release();
       }
-    }
-
-    const client = await this.source.connect();
-    try {
       await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ");
       await client.query("SELECT count(*) FROM skills WHERE workspace_id = $1", [
         context.namespace,
       ]);
+      if (barrier) await barrier.query("COMMIT");
       this.quiescedSource = client;
     } catch (error) {
+      if (barrier) await barrier.query("ROLLBACK").catch(() => undefined);
       await client.query("ROLLBACK").catch(() => undefined);
       client.release();
       throw error;
+    } finally {
+      barrier?.release();
     }
   }
 
@@ -374,15 +386,18 @@ export class PostgresWorkspaceMigrationOperations implements WorkspaceMigrationO
   private async releaseSource(): Promise<void> {
     const source = this.quiescedSource;
     this.quiescedSource = null;
-    if (!source) return;
-    await source.query("COMMIT").catch(async () => {
-      await source.query("ROLLBACK").catch(() => undefined);
-    });
-    source.release();
+    if (source) {
+      await source.query("COMMIT").catch(async () => {
+        await source.query("ROLLBACK").catch(() => undefined);
+      });
+      source.release();
+    }
   }
 
   async resumeTarget(context: DatafnNamespaceMigrationContext): Promise<void> {
     void context;
+    // Keep the source-cell fence as a tombstone. It rejects even an old
+    // repeatable-read transaction which reaches DML after activation.
     await this.releaseSource();
   }
 
@@ -418,6 +433,12 @@ export class PostgresWorkspaceMigrationOperations implements WorkspaceMigrationO
       }
     } finally {
       await this.releaseSource();
+      await this.source.query(
+        `UPDATE regional_workspace_migration_fences
+            SET source_epoch = 0, fenced_at = now()
+          WHERE workspace_id = $1`,
+        [context.namespace],
+      );
     }
   }
 }

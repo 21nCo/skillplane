@@ -46,6 +46,7 @@ export const REGIONAL_WORKSPACE_TABLES = [
   "analytics_rollup_runs",
   "idempotency_records",
   "regional_projection_outbox",
+  "regional_workspace_migration_fences",
 ] as const;
 
 export function assertDisjointTableOwnership(): void {

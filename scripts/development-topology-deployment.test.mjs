@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { renderDevelopmentTopologyConfigs } from "./render-development-topology-config.mjs";
+import { assertDevelopmentControlDatabaseShape } from "./prepare-development-topology-databases.mjs";
 
 const ids = {
   control: "1".repeat(32),
@@ -80,6 +81,25 @@ describe("multi-cell development deployment", () => {
         write: false,
       }),
       /must be distinct/u,
+    );
+  });
+
+  it("rejects a combined database before control migration can drop regional data", () => {
+    assert.throws(
+      () =>
+        assertDevelopmentControlDatabaseShape({
+          existingTables: 20,
+          hasControlTables: true,
+          hasRegionalTables: true,
+        }),
+      /empty or already control-only/u,
+    );
+    assert.doesNotThrow(() =>
+      assertDevelopmentControlDatabaseShape({
+        existingTables: 20,
+        hasControlTables: true,
+        hasRegionalTables: false,
+      }),
     );
   });
 });

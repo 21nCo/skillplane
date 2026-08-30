@@ -175,6 +175,12 @@ describe("combined database topology cutover", () => {
     const control = new Pool({ connectionString: legacyUrl, max: 3 });
     const cell = new Pool({ connectionString: cellUrl, max: 3 });
     try {
+      const unplacedWorkspaceId = `workspace:cutover-unplaced-${suffix}`;
+      await control.query(
+        `INSERT INTO workspaces (id, workspace_id, slug, name)
+         VALUES ($1, $1, $2, 'Unplaced cutover fixture')`,
+        [unplacedWorkspaceId, `cutover-unplaced-${suffix}`],
+      );
       await control.query(
         `UPDATE topology_cutover_state
             SET state = 'copying', target_region_id = 'in-south',
@@ -209,14 +215,26 @@ describe("combined database topology cutover", () => {
         targetObjects: cellObjects,
         targetRegionId: "in-south",
       });
-      expect(first.migrated).toHaveLength(1);
-      expect(first.migrated[0]).toMatchObject({
+      expect(first.migrated).toHaveLength(2);
+      expect(
+        first.migrated.find((proof) => proof.workspaceId === workspaceId),
+      ).toMatchObject({
         workspaceId,
         sourceRegionId: "legacy",
         targetRegionId: "in-south",
         rollbackTested: true,
       });
-      expect(first.migrated[0]?.checks.every((check) => check.matched)).toBe(true);
+      expect(
+        first.migrated
+          .find((proof) => proof.workspaceId === workspaceId)
+          ?.checks.every((check) => check.matched),
+      ).toBe(true);
+      await expect(
+        control.query<{ region_id: string }>(
+          "SELECT region_id FROM workspace_placements WHERE workspace_id = $1",
+          [unplacedWorkspaceId],
+        ),
+      ).resolves.toMatchObject({ rows: [{ region_id: "in-south" }] });
 
       await expect(
         control.query("UPDATE skills SET name = 'stale write' WHERE id = $1", [
@@ -266,10 +284,12 @@ describe("combined database topology cutover", () => {
         targetRegionId: "in-south",
       });
       expect(resumed.migrated).toHaveLength(0);
-      expect(resumed.verifiedExisting).toHaveLength(1);
-      expect(resumed.verifiedExisting[0]?.checks.every((check) => check.matched)).toBe(
-        true,
-      );
+      expect(resumed.verifiedExisting).toHaveLength(2);
+      expect(
+        resumed.verifiedExisting.every((entry) =>
+          entry.checks.every((check) => check.matched),
+        ),
+      ).toBe(true);
       await control.query(
         `UPDATE topology_cutover_state
             SET state = 'complete', completed_at = now(), updated_at = now()

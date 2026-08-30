@@ -34,6 +34,7 @@ describe("migration chain", () => {
       "0026_control_topology_cutover_fence.sql",
       "0027_control_projection_workspace_slug.sql",
       "0028_regional_published_row_updates.sql",
+      "0029_regional_workspace_migration_fence.sql",
     ]);
     expect(new Set(migrations.map((migration) => migration.sha256)).size).toBe(
       migrations.length,

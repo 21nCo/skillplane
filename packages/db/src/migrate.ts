@@ -60,6 +60,7 @@ const regionalWorkspaceTables = [
   "analytics_rollup_runs",
   "idempotency_records",
   "regional_projection_outbox",
+  "regional_workspace_migration_fences",
 ] as const;
 
 export interface Migration {

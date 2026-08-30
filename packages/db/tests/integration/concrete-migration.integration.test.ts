@@ -193,6 +193,59 @@ describe("concrete workspace migration rollback", () => {
     expect(targetObjects.objects.has(bundleKey)).toBe(false);
   });
 
+  it("rejects a pre-fence transaction that reaches workspace DML late", async () => {
+    if (!source || !target) throw new Error("Migration fixture unavailable");
+    const sourceObjects = new MemoryObjects();
+    const targetObjects = new MemoryObjects();
+    const operations = new PostgresWorkspaceMigrationOperations(
+      source,
+      target,
+      source,
+      sourceObjects,
+      targetObjects,
+    );
+    const context = {
+      namespace: workspaceId,
+      sourceRegionId: "legacy",
+      targetRegionId: "in-south",
+      sourceEpoch: 1,
+      movingEpoch: 2,
+      recoveryFence: 1,
+      recoveryOwnerId: `recovery:late-${suffix}`,
+      recoveryLeaseExpiresAt: Date.now() + 60_000,
+    };
+    const delayed = await source.connect();
+    let rolledBack = false;
+    try {
+      await delayed.query("BEGIN ISOLATION LEVEL REPEATABLE READ");
+      await delayed.query("SELECT 1");
+      await operations.quiesceSource(context);
+
+      await expect(
+        delayed.query(
+          `INSERT INTO skills
+             (id, workspace_id, slug, name, description, tags)
+           VALUES ($1, $2, 'late-write', 'Late write', '', '{}')`,
+          [`skill:late-${suffix}`, workspaceId],
+        ),
+      ).rejects.toMatchObject({ code: "40001" });
+      await delayed.query("ROLLBACK");
+      await operations.rollbackSource({
+        ...context,
+        cause: new Error("late-write test cleanup"),
+      });
+      rolledBack = true;
+    } finally {
+      await delayed.query("ROLLBACK").catch(() => undefined);
+      delayed.release();
+      if (!rolledBack) {
+        await operations
+          .rollbackSource({ ...context, cause: new Error("test cleanup") })
+          .catch(() => undefined);
+      }
+    }
+  });
+
   it("keeps newer public state when an older unpublish completes late", async () => {
     if (!target) throw new Error("Migration fixture unavailable");
     const publicWorkspace = `workspace:projection-${suffix}`;

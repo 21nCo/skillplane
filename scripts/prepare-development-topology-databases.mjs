@@ -36,6 +36,17 @@ async function tableCount(pool) {
   return Number(result.rows[0]?.count ?? 0);
 }
 
+export function assertDevelopmentControlDatabaseShape(input) {
+  if (
+    input.existingTables > 0 &&
+    (!input.hasControlTables || input.hasRegionalTables)
+  ) {
+    throw new Error(
+      "The development control database must be empty or already control-only",
+    );
+  }
+}
+
 export async function prepareDevelopmentTopologyDatabases(options = {}) {
   const databases = options.databases ?? developmentTopologyDatabases();
   const controlConfirmation =
@@ -58,12 +69,15 @@ export async function prepareDevelopmentTopologyDatabases(options = {}) {
   });
   try {
     const existingTables = await tableCount(controlPool);
-    const alreadyControl = await relationExists(controlPool, "workspace_placements");
-    if (existingTables > 0 && !alreadyControl) {
-      throw new Error(
-        "The development control database must be empty or already control-only",
-      );
-    }
+    const [hasControlTables, hasRegionalTables] = await Promise.all([
+      relationExists(controlPool, "workspace_placements"),
+      relationExists(controlPool, "skills"),
+    ]);
+    assertDevelopmentControlDatabaseShape({
+      existingTables,
+      hasControlTables,
+      hasRegionalTables,
+    });
   } finally {
     await controlPool.end();
   }

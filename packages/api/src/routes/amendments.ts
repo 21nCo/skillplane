@@ -7,6 +7,7 @@ import {
   publicSkillVersion,
   requirePrincipal,
   requireIdempotencyKey,
+  routingEpoch,
 } from "./shared.js";
 
 export function registerAmendmentRoutes(app: Hono<ApiEnvironment>): void {
@@ -31,6 +32,7 @@ export function registerAmendmentRoutes(app: Hono<ApiEnvironment>): void {
       caller: body.caller,
       idempotencyKey: requireIdempotencyKey(context),
       requestId: context.get("requestId"),
+      fencingEpoch: routingEpoch(context),
     });
     context.header("Cache-Control", "private, no-store");
     return context.json(

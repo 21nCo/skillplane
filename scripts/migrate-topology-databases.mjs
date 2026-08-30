@@ -199,8 +199,12 @@ export async function migrateTopologyDatabases(options = {}) {
       });
       const incomplete = await controlPool.query(
         `SELECT count(*)::text AS count
-           FROM workspace_placements
-          WHERE state <> 'active' OR region_id <> $1`,
+           FROM workspaces workspace
+           LEFT JOIN workspace_placements placement
+             ON placement.workspace_id = workspace.id
+          WHERE placement.workspace_id IS NULL
+             OR placement.state <> 'active'
+             OR placement.region_id <> $1`,
         [initialWorkspaceRegion],
       );
       if (incomplete.rows[0]?.count !== "0") {
