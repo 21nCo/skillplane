@@ -31,6 +31,9 @@ describe("migration chain", () => {
       "0023_control_initial_workspace_placements.sql",
       "0024_regional_workspace_migration_cleanup.sql",
       "0025_control_projection_ordering.sql",
+      "0026_control_topology_cutover_fence.sql",
+      "0027_control_projection_workspace_slug.sql",
+      "0028_regional_published_row_updates.sql",
     ]);
     expect(new Set(migrations.map((migration) => migration.sha256)).size).toBe(
       migrations.length,
@@ -40,7 +43,7 @@ describe("migration chain", () => {
       expect(migration.sql.trim().length).toBeGreaterThan(100);
       expect(migration.roles.length).toBeGreaterThan(0);
     }
-    expect(migrations.at(-1)?.roles).toEqual(["control"]);
+    expect(migrations.at(-1)?.roles).toEqual(["combined", "regional"]);
   });
 
   it("guards destructive test reset targets", () => {

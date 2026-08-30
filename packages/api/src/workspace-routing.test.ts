@@ -99,6 +99,16 @@ describe("API scope classification", () => {
     ).toEqual({ kind: "resource", resourceType: "skill", resourceId: "skill:one" });
   });
 
+  it("routes header-scoped skill searches to the workspace cell", () => {
+    expect(
+      classifyApiScope(
+        new Request("https://app.skillplane.dev/api/v1/skills/search", {
+          headers: { "x-skillplane-workspace-id": "workspace:one" },
+        }),
+      ),
+    ).toEqual({ kind: "workspace", workspaceId: "workspace:one" });
+  });
+
   it("separates control and regional DataFn resources", async () => {
     const request = (body: unknown) =>
       new Request("https://app.skillplane.dev/datafn/query", {

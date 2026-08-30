@@ -88,6 +88,14 @@ Worker as a secret.
 | `PUBLIC_TURNSTILE_SITE_KEY`                           | Public site key for the production widget                               |
 | `SKILLPLANE_RELEASE_TAG`                              | Optional stable release label; generated when omitted                   |
 
+The one-time multi-cell conversion additionally requires
+`SKILLPLANE_CONTROL_DATABASE_URL`, one
+`SKILLPLANE_CELL_<REGION>_DATABASE_URL` and
+`SKILLPLANE_CELL_<REGION>_BUCKET` per manifest cell, and the public bucket in
+`SKILLPLANE_PUBLIC_BUCKET`. `SKILLPLANE_LEGACY_BUCKET` defaults to the legacy
+`skillplane-skill-bundles` bucket when omitted. Control and cell database URLs
+must all be distinct.
+
 The direct URL may use any PostgreSQL provider, but it must include a host,
 username, password, and database name. `sslmode` defaults to `require`; only
 `require`, `verify-ca`, and `verify-full` are accepted. The controlled
@@ -149,6 +157,19 @@ pnpm db:migrate:production
 pnpm deploy:all
 pnpm smoke:production
 ```
+
+For the first conversion from the combined database, take and verify the
+backup, provision every empty cell database and private bucket, render the
+topology, and run `pnpm db:migrate:topology` before deploying any gateway. The
+command is resumable and deliberately ordered: it initializes cells, upgrades
+the combined source without pruning it, enables a database write fence, runs a
+rollback drill plus row/bundle checksum verification for every workspace,
+copies and digest-verifies every existing public release into the global
+public bucket, marks placements active in the first declared cell, and only
+then drops regional tables from the control database. A failure leaves the
+source regional tables intact and the durable cutover state at `copying`; fix
+the cause and rerun the same command. Do not deploy gateway mode unless the
+command returns a completed cutover and the normal smoke gates pass.
 
 The commands enforce these boundaries:
 

@@ -22,6 +22,7 @@ export const GLOBAL_CONTROL_TABLES = [
   "workspace_routing_nonces",
   "public_skill_projections",
   "workspace_migration_runs",
+  "topology_cutover_state",
   "control_plane_audit_events",
   "control_plane_outbox",
   "public_stats_counters",

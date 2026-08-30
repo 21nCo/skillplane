@@ -193,6 +193,28 @@ export const workspaceMigrationRuns = pgTable(
   ],
 );
 
+export const topologyCutoverState = pgTable(
+  "topology_cutover_state",
+  {
+    id: text("id").primaryKey(),
+    state: text("state").$type<"inactive" | "copying" | "complete">().notNull(),
+    targetRegionId: text("target_region_id"),
+    startedAt: utcTimestamp("started_at"),
+    completedAt: utcTimestamp("completed_at"),
+    updatedAt: utcTimestamp("updated_at").notNull().defaultNow(),
+  },
+  (table) => [
+    check(
+      "topology_cutover_state_valid",
+      sql`${table.state} IN ('inactive', 'copying', 'complete')`,
+    ),
+    check(
+      "topology_cutover_target_required",
+      sql`(${table.state} = 'inactive') OR ${table.targetRegionId} IS NOT NULL`,
+    ),
+  ],
+);
+
 export const controlPlaneAuditEvents = pgTable(
   "control_plane_audit_events",
   {
@@ -282,6 +304,7 @@ export const controlPlaneSchema = {
   workspace_routing_nonces: workspaceRoutingNonces,
   public_skill_projections: publicSkillProjections,
   workspace_migration_runs: workspaceMigrationRuns,
+  topology_cutover_state: topologyCutoverState,
   control_plane_audit_events: controlPlaneAuditEvents,
   control_plane_outbox: controlPlaneOutbox,
 };

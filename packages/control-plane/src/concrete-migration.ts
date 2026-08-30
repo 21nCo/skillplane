@@ -75,27 +75,27 @@ async function rowsForWorkspace(
   table: string,
   workspaceId: string,
   namespaceColumn: "workspace_id" | "__ns",
-): Promise<readonly Record<string, unknown>[]> {
+): Promise<readonly string[]> {
   return (
-    await client.query(
-      `SELECT * FROM ${identifier(table)}
+    await client.query<{ row_json: string }>(
+      `SELECT to_jsonb(${identifier(table)})::text AS row_json
+         FROM ${identifier(table)}
         WHERE ${identifier(namespaceColumn)} = $1
         ORDER BY to_jsonb(${identifier(table)})::text`,
       [workspaceId],
     )
-  ).rows;
+  ).rows.map((row) => row.row_json);
 }
 
 async function insertRows(
   client: MigrationSqlClient,
   table: string,
-  rows: readonly Record<string, unknown>[],
+  rows: readonly string[],
 ): Promise<void> {
   const writable = await client.query<{
     column_name: string;
-    data_type: string;
   }>(
-    `SELECT column_name, data_type
+    `SELECT column_name
        FROM information_schema.columns
       WHERE table_schema = 'public' AND table_name = $1
         AND is_generated = 'NEVER' AND is_identity = 'NO'
@@ -103,20 +103,13 @@ async function insertRows(
     [table],
   );
   for (const row of rows) {
-    const selected = writable.rows.filter((column) =>
-      Object.hasOwn(row, column.column_name),
-    );
-    const columns = selected.map((column) => column.column_name);
+    const columns = writable.rows.map((column) => column.column_name);
     if (columns.length === 0) continue;
     await client.query(
       `INSERT INTO ${identifier(table)} (${columns.map(identifier).join(", ")})
-       VALUES (${columns.map((_, index) => `$${String(index + 1)}`).join(", ")})`,
-      selected.map((column) => {
-        const value = row[column.column_name];
-        return value !== null && ["json", "jsonb"].includes(column.data_type)
-          ? JSON.stringify(value)
-          : value;
-      }),
+       SELECT ${columns.map(identifier).join(", ")}
+         FROM jsonb_populate_record(NULL::${identifier(table)}, $1::jsonb)`,
+      [row],
     );
   }
 }
@@ -230,6 +223,12 @@ export class PostgresWorkspaceMigrationOperations implements WorkspaceMigrationO
     const dynamic = await dynamicNamespaceTables(this.source);
     try {
       await target.query("BEGIN ISOLATION LEVEL SERIALIZABLE");
+      // Preserve the source row image exactly. Application triggers derive
+      // search fields and timestamps as related rows arrive, which would make
+      // a logically identical copy fail the stable checksum. This setting is
+      // transaction-local and the complete copy is verified before commit is
+      // promoted through placement.
+      await target.query("SET LOCAL session_replication_role = replica");
       await target.query("SET CONSTRAINTS ALL DEFERRED");
       await target.query(
         "SELECT set_config('skillplane.workspace_migration_cleanup', $1, true)",

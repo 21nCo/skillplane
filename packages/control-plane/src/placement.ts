@@ -30,7 +30,7 @@ export interface PlacementSqlClient {
 interface PlacementRow extends Record<string, unknown> {
   readonly workspace_id: string;
   readonly region_id: string;
-  readonly epoch: number;
+  readonly epoch: number | string;
   readonly state: WorkspacePlacementState;
   readonly updated_at: Date | string;
   readonly cache_expires_at: Date | string | null;
@@ -41,10 +41,14 @@ interface PlacementRow extends Record<string, unknown> {
 }
 
 function placement(row: PlacementRow): WorkspacePlacement {
+  const epoch = Number(row.epoch);
+  if (!Number.isSafeInteger(epoch) || epoch < 1) {
+    throw new Error("WORKSPACE_PLACEMENT_EPOCH_INVALID");
+  }
   return {
     namespace: row.workspace_id,
     regionId: row.region_id,
-    epoch: row.epoch,
+    epoch,
     state: row.state,
     updatedAt: new Date(row.updated_at).toISOString(),
     ...(row.cache_expires_at

@@ -56,7 +56,7 @@
     "production:secrets:init": "node scripts/init-production-secrets.mjs",
     "db:backup:production": "node --env-file-if-exists=.env.production.local scripts/production-backup.mjs",
     "db:migrate:production": "node --env-file-if-exists=.env.production.local scripts/production-migrate.mjs",
-    "db:migrate:topology": "pnpm --filter @skillplane/db build && node --env-file-if-exists=.env.production.local scripts/migrate-topology-databases.mjs",
+    "db:migrate:topology": "pnpm --filter @skillplane/db build && pnpm --filter @skillplane/control-plane build && node --env-file-if-exists=.env.production.local scripts/migrate-topology-databases.mjs",
     "db:move:production": "node --env-file-if-exists=.env.production.local scripts/migrate-production-origin.mjs",
     "workspace:migrate": "pnpm --filter @skillplane/control-plane build && node --env-file-if-exists=.env.production.local scripts/migrate-workspace.mjs",
     "db:restore:production": "node --env-file-if-exists=.env.production.local scripts/restore-production-backup.mjs",

@@ -36,6 +36,7 @@ const globalControlTables = [
   "workspace_routing_nonces",
   "public_skill_projections",
   "workspace_migration_runs",
+  "topology_cutover_state",
   "control_plane_audit_events",
   "control_plane_outbox",
   "public_stats_counters",
@@ -164,6 +165,7 @@ export async function migrateDatabase(
   options: {
     readonly role?: MigrationRole;
     readonly initialWorkspaceRegion?: string;
+    readonly finalizePhysicalOwnership?: boolean;
   } = {},
 ): Promise<MigrationResult> {
   const role = options.role ?? "combined";
@@ -245,7 +247,9 @@ export async function migrateDatabase(
         [initialWorkspaceRegion],
       );
     }
-    if (role !== "combined") await enforcePhysicalOwnership(client, role);
+    if (role !== "combined" && options.finalizePhysicalOwnership !== false) {
+      await enforcePhysicalOwnership(client, role);
+    }
     return { role, applied, alreadyApplied };
   } finally {
     await client

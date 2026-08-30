@@ -145,7 +145,9 @@ export function classifyApiScope(request: Request): ApiScope {
   match = /^\/api\/v1\/(?:audit|analytics)\/workspaces\/([^/]+)(?:\/|$)/u.exec(path);
   if (match) return { kind: "workspace", workspaceId: segment(match[1]) };
   if (path === "/api/v1/skills/search") {
-    const workspaceId = url.searchParams.get("workspaceId");
+    const workspaceId =
+      url.searchParams.get("workspaceId") ??
+      request.headers.get("x-skillplane-workspace-id");
     return workspaceId
       ? { kind: "workspace", workspaceId: segment(workspaceId) }
       : { kind: "global" };

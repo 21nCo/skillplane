@@ -131,6 +131,27 @@ failure plus rollback evidence. A rollback drill is complete only when it
 demonstrates that a stale target assertion and a stale source assertion are
 both rejected after the final transition.
 
+## Combined-database cutover
+
+The initial conversion is a batch of the same fenced workspace move, not a
+schema-only role change. `db:migrate:topology` retains the combined database's
+regional tables while it creates the control schema and records
+`topology_cutover_state=copying`. Database triggers then allow compatibility
+writes only for workspaces whose placement is still `legacy` and `active`.
+Each workspace is quiesced, copied into the first declared cell, checked table
+by table and bundle by bundle, rollback-drilled, and promoted with a higher
+placement epoch. The legacy application therefore cannot resume source writes
+after promotion.
+
+Before control ownership is finalized, the command copies every published
+version of every currently public skill from the regional bucket to the global
+public bucket. Source and destination SHA-256 digests must both match before
+the metadata row becomes visible. Only after all placements are active in the
+declared cell and all public projection copies succeed does the command mark
+the cutover complete and prune regional tables from the control database. A
+retry verifies already-promoted workspaces instead of trusting placement state
+alone.
+
 ## Regional outage and control-plane outage
 
 For a regional outage, do not redirect writes to another cell. Return `503`,

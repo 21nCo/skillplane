@@ -1,4 +1,5 @@
 export * from "./concrete-migration.js";
+export * from "./legacy-cutover.js";
 export * from "./migration.js";
 export * from "./permission-directory.js";
 export * from "./placement.js";
