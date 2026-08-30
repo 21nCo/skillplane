@@ -113,7 +113,16 @@ function segment(value: string | undefined): string {
       "WORKSPACE_ROUTE_NOT_FOUND",
       "The workspace route was not found",
     );
-  const decoded = decodeURIComponent(value);
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(value);
+  } catch {
+    throw new ApiRoutingError(
+      400,
+      "WORKSPACE_ROUTE_INVALID",
+      "The workspace route is invalid",
+    );
+  }
   let hasControlCharacter = false;
   for (const character of decoded) {
     if ((character.codePointAt(0) ?? 0) < 32) {

@@ -18,6 +18,15 @@ function bucketName(name) {
   return requireBucketName(requireEnvironment(name), name);
 }
 
+export function assertDistinctMigrationBuckets(sourceBucket, targetBucket) {
+  if (sourceBucket === targetBucket) {
+    throw new Error(
+      "SKILLPLANE_SOURCE_BUCKET and SKILLPLANE_TARGET_BUCKET must be distinct",
+    );
+  }
+  return { sourceBucket, targetBucket };
+}
+
 export async function migrateConfiguredWorkspace() {
   const workspaceId = requireEnvironment("SKILLPLANE_WORKSPACE_ID", {
     pattern: /^[A-Za-z0-9:_-]{1,180}$/u,
@@ -25,6 +34,10 @@ export async function migrateConfiguredWorkspace() {
   const targetRegionId = requireEnvironment("SKILLPLANE_TARGET_REGION_ID", {
     pattern: /^[a-z0-9][a-z0-9-]{0,62}$/u,
   });
+  const buckets = assertDistinctMigrationBuckets(
+    bucketName("SKILLPLANE_SOURCE_BUCKET"),
+    bucketName("SKILLPLANE_TARGET_BUCKET"),
+  );
   const control = new Pool({
     connectionString: requireEnvironment("SKILLPLANE_CONTROL_DATABASE_URL"),
     application_name: "skillplane-workspace-migration-control",
@@ -45,8 +58,8 @@ export async function migrateConfiguredWorkspace() {
       source,
       target,
       control,
-      new WranglerR2MigrationStore(bucketName("SKILLPLANE_SOURCE_BUCKET")),
-      new WranglerR2MigrationStore(bucketName("SKILLPLANE_TARGET_BUCKET")),
+      new WranglerR2MigrationStore(buckets.sourceBucket),
+      new WranglerR2MigrationStore(buckets.targetBucket),
     );
     const directory = createPostgresWorkspacePlacementDirectory(control);
     await runWorkspaceRollbackDrill({

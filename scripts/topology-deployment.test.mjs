@@ -64,4 +64,28 @@ describe("multi-cell Cloudflare topology adapter", () => {
       assert.deepEqual(pair.projection.compatibility_flags, ["nodejs_compat"]);
     }
   });
+
+  it("rejects bucket reuse across public and regional storage", async () => {
+    const manifest = await readProductionTopology();
+    assert.throws(
+      () =>
+        createCloudflareTopologyConfigs({
+          manifest,
+          publicTurnstileSiteKey: "0x4AAAAAAAAAA-production-site-key",
+          controlHyperdriveId: ids.control,
+          publicBucketName: "skillplane-public-bundles",
+          cells: {
+            "in-south": {
+              hyperdriveId: ids.inSouth,
+              bucketName: "skillplane-public-bundles",
+            },
+            "us-east": {
+              hyperdriveId: ids.usEast,
+              bucketName: "skillplane-us-east-bundles",
+            },
+          },
+        }),
+      /must be distinct/u,
+    );
+  });
 });

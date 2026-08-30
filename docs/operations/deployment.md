@@ -95,6 +95,10 @@ The one-time multi-cell conversion additionally requires
 `SKILLPLANE_PUBLIC_BUCKET`. `SKILLPLANE_LEGACY_BUCKET` defaults to the legacy
 `skillplane-skill-bundles` bucket when omitted. Control and cell database URLs
 must all be distinct.
+`SKILLPLANE_PRODUCTION_DATABASE_URL` must identify the same database as
+`SKILLPLANE_CONTROL_DATABASE_URL`; it remains the canonical input to the
+encrypted backup workflow. The public and every regional bucket must also be
+distinct.
 
 The direct URL may use any PostgreSQL provider, but it must include a host,
 username, password, and database name. `sslmode` defaults to `require`; only
@@ -153,14 +157,20 @@ Run the blocking app/MCP release sequence from the repository root:
 ```bash
 pnpm deploy:check
 pnpm db:backup:production
-pnpm db:migrate:production
+pnpm db:migrate:topology
 pnpm deploy:all
 pnpm smoke:production:release
 ```
 
-`deploy:all` already runs `smoke:production:release` before it writes the
-release manifest. The explicit invocation above is the final operator-visible
-verification of the recorded app/MCP pair.
+`db:migrate:topology` writes a short-lived safety record tied to the exact Git
+commit, topology manifest, verified control backup, and control/cell database
+fingerprints. `deploy:all` refuses to upload a Worker unless that record is
+less than two hours old, every database still has the expected physical
+ownership, each live cache-disabled Hyperdrive targets its declared database,
+and every bucket exists with private access and a safe lifecycle. It then
+rechecks the active version of every gateway, cell, and projection Worker and
+runs `smoke:production:release` before returning success. The explicit smoke
+invocation above remains the final operator-visible verification.
 
 Run the cross-system topology check separately before and after the release, or
 from the landing deployment's own operational workflow:

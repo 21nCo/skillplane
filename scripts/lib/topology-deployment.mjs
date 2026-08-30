@@ -205,6 +205,13 @@ export function createCloudflareTopologyConfigs(input) {
       ];
     }),
   );
+  const bucketNames = [
+    publicBucket,
+    ...Object.values(cells).map((cell) => cell.app.r2_buckets[0].bucket_name),
+  ];
+  if (new Set(bucketNames).size !== bucketNames.length) {
+    throw new Error("Public and regional topology buckets must be distinct");
+  }
   return { gateway: { app: appGateway, mcp: mcpGateway }, cells };
 }
 

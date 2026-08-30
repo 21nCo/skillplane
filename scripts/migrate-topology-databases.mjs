@@ -9,17 +9,22 @@ import { Pool } from "pg";
 import {
   isMain,
   productionBucket,
+  productionStateDirectory,
+  readJson,
+  requireCleanSourceRevision,
   requireEnvironment,
 } from "./lib/production-deployment.mjs";
+import {
+  assertRecentTopologyBackup,
+  productionTopologyDatabases,
+  verifyProductionTopologyDatabaseOwnership,
+  writeTopologyMigrationSafetyState,
+} from "./lib/production-topology-safety.mjs";
 import { readProductionTopology } from "./lib/topology-deployment.mjs";
 import {
   requireBucketName,
   WranglerR2MigrationStore,
 } from "./lib/wrangler-r2-migration-store.mjs";
-
-function regionEnvironment(regionId) {
-  return `SKILLPLANE_CELL_${regionId.replaceAll("-", "_").toUpperCase()}_DATABASE_URL`;
-}
 
 function regionBucketEnvironment(regionId) {
   return `SKILLPLANE_CELL_${regionId.replaceAll("-", "_").toUpperCase()}_BUCKET`;
@@ -55,25 +60,26 @@ async function prepareRegionalDatabase(databaseUrl, regionId) {
 
 export async function migrateTopologyDatabases(options = {}) {
   const manifest = options.manifest ?? (await readProductionTopology());
-  const controlUrl =
-    options.controlDatabaseUrl ?? requireEnvironment("SKILLPLANE_CONTROL_DATABASE_URL");
+  const sourceRevision = options.sourceRevision ?? requireCleanSourceRevision();
+  const databases =
+    options.databases ??
+    productionTopologyDatabases(manifest, {
+      controlDatabaseUrl: options.controlDatabaseUrl,
+      cells: options.cells,
+      productionDatabase: options.productionDatabase,
+    });
+  const backup = assertRecentTopologyBackup(
+    options.backup ?? (await readJson(`${productionStateDirectory}/backup.json`)),
+    databases.control,
+  );
+  const controlUrl = databases.control.url;
   const initialWorkspaceRegion = manifest.cells[0]?.regionId;
   if (!initialWorkspaceRegion) {
     throw new Error("The topology must declare an initial workspace cell");
   }
   const cellUrls = Object.fromEntries(
-    manifest.cells.map((cell) => [
-      cell.regionId,
-      options.cells?.[cell.regionId] ??
-        requireEnvironment(regionEnvironment(cell.regionId)),
-    ]),
+    manifest.cells.map((cell) => [cell.regionId, databases.cells[cell.regionId].url]),
   );
-  if (
-    new Set([controlUrl, ...Object.values(cellUrls)]).size !==
-    1 + manifest.cells.length
-  ) {
-    throw new Error("Control and cell databases must be distinct");
-  }
 
   const cells = {};
   for (const cell of manifest.cells) {
@@ -194,6 +200,16 @@ export async function migrateTopologyDatabases(options = {}) {
         role: "control",
         initialWorkspaceRegion,
       });
+  await verifyProductionTopologyDatabaseOwnership(manifest, databases);
+  const safety = await writeTopologyMigrationSafetyState({
+    sourceRevision,
+    manifest,
+    databases,
+    backup,
+    control,
+    cells,
+    cutoverComplete: true,
+  });
   return {
     ok: true,
     control,
@@ -201,6 +217,7 @@ export async function migrateTopologyDatabases(options = {}) {
     cutover: cutover ?? { migrated: [], verifiedExisting: [] },
     projection: projection ?? { projected: 0 },
     alreadyComplete,
+    safety,
   };
 }
 

@@ -109,6 +109,29 @@ describe("API scope classification", () => {
     ).toEqual({ kind: "workspace", workspaceId: "workspace:one" });
   });
 
+  it("rejects malformed percent-encoded routing segments", () => {
+    expect(() =>
+      classifyApiScope(new Request("https://app.skillplane.dev/api/v1/skills/%ZZ")),
+    ).toThrowError(
+      expect.objectContaining({
+        status: 400,
+        code: "WORKSPACE_ROUTE_INVALID",
+      }),
+    );
+    expect(() =>
+      classifyApiScope(
+        new Request("https://app.skillplane.dev/api/v1/skills/search", {
+          headers: { "x-skillplane-workspace-id": "%E0%A4%A" },
+        }),
+      ),
+    ).toThrowError(
+      expect.objectContaining({
+        status: 400,
+        code: "WORKSPACE_ROUTE_INVALID",
+      }),
+    );
+  });
+
   it("separates control and regional DataFn resources", async () => {
     const request = (body: unknown) =>
       new Request("https://app.skillplane.dev/datafn/query", {
