@@ -80,6 +80,52 @@ export async function backupTopologyDatabases(databases, options = {}) {
   return assertRecentTopologyBackups({ control, cells }, databases);
 }
 
+export async function completeTopologyCutover(controlPool, targetRegionId) {
+  const client = await controlPool.connect();
+  try {
+    await client.query("BEGIN");
+    const state = await client.query(
+      `SELECT state
+         FROM topology_cutover_state
+        WHERE id = 'legacy-to-cells'
+        FOR UPDATE`,
+    );
+    if (state.rows[0]?.state !== "copying") {
+      throw new Error("TOPOLOGY_CUTOVER_NOT_COPYING");
+    }
+    const incomplete = await client.query(
+      `SELECT count(*)::text AS count
+         FROM workspaces workspace
+         LEFT JOIN workspace_placements placement
+           ON placement.workspace_id = workspace.id
+        WHERE placement.workspace_id IS NULL
+           OR placement.state <> 'active'
+           OR placement.region_id <> $1`,
+      [targetRegionId],
+    );
+    if (incomplete.rows[0]?.count !== "0") {
+      throw new Error("TOPOLOGY_CUTOVER_PLACEMENTS_INCOMPLETE");
+    }
+    const completed = await client.query(
+      `UPDATE topology_cutover_state
+          SET state = 'complete', target_region_id = $1,
+              completed_at = now(), updated_at = now()
+        WHERE id = 'legacy-to-cells' AND state = 'copying'
+        RETURNING id`,
+      [targetRegionId],
+    );
+    if (completed.rowCount !== 1) {
+      throw new Error("TOPOLOGY_CUTOVER_COMPLETION_CONFLICT");
+    }
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 export async function migrateTopologyDatabases(options = {}) {
   const manifest = options.manifest ?? (await readProductionTopology());
   const sourceRevision = options.sourceRevision ?? requireCleanSourceRevision();
@@ -197,26 +243,7 @@ export async function migrateTopologyDatabases(options = {}) {
         publicObjects,
         regionId: initialWorkspaceRegion,
       });
-      const incomplete = await controlPool.query(
-        `SELECT count(*)::text AS count
-           FROM workspaces workspace
-           LEFT JOIN workspace_placements placement
-             ON placement.workspace_id = workspace.id
-          WHERE placement.workspace_id IS NULL
-             OR placement.state <> 'active'
-             OR placement.region_id <> $1`,
-        [initialWorkspaceRegion],
-      );
-      if (incomplete.rows[0]?.count !== "0") {
-        throw new Error("TOPOLOGY_CUTOVER_PLACEMENTS_INCOMPLETE");
-      }
-      await controlPool.query(
-        `UPDATE topology_cutover_state
-            SET state = 'complete', target_region_id = $1,
-                completed_at = now(), updated_at = now()
-          WHERE id = 'legacy-to-cells' AND state = 'copying'`,
-        [initialWorkspaceRegion],
-      );
+      await completeTopologyCutover(controlPool, initialWorkspaceRegion);
     }
   } finally {
     await Promise.allSettled([controlPool.end(), targetPool.end()]);

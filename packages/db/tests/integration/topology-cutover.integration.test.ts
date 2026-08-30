@@ -187,6 +187,39 @@ describe("combined database topology cutover", () => {
                 started_at = now(), updated_at = now()
           WHERE id = 'legacy-to-cells'`,
       );
+      await expect(
+        control.query(
+          `INSERT INTO workspaces (id, workspace_id, slug, name)
+           VALUES ($1, $1, $2, 'Late unplaced compatibility workspace')`,
+          [
+            `workspace:cutover-late-unplaced-${suffix}`,
+            `cutover-late-unplaced-${suffix}`,
+          ],
+        ),
+      ).rejects.toMatchObject({ code: "55000" });
+
+      const placedWorkspaceId = `workspace:cutover-late-placed-${suffix}`;
+      const placedClient = await control.connect();
+      try {
+        await placedClient.query("BEGIN");
+        await placedClient.query(
+          `INSERT INTO workspaces (id, workspace_id, slug, name)
+           VALUES ($1, $1, $2, 'Late placed gateway workspace')`,
+          [placedWorkspaceId, `cutover-late-placed-${suffix}`],
+        );
+        await placedClient.query(
+          `INSERT INTO workspace_placements
+             (workspace_id, region_id, epoch, state)
+           VALUES ($1, 'in-south', 1, 'active')`,
+          [placedWorkspaceId],
+        );
+        await placedClient.query("COMMIT");
+      } catch (error) {
+        await placedClient.query("ROLLBACK");
+        throw error;
+      } finally {
+        placedClient.release();
+      }
       await control.query(
         `UPDATE workspace_placements
             SET epoch = 2, state = 'moving', moving_to_region_id = 'in-south',
@@ -284,7 +317,12 @@ describe("combined database topology cutover", () => {
         targetRegionId: "in-south",
       });
       expect(resumed.migrated).toHaveLength(0);
-      expect(resumed.verifiedExisting).toHaveLength(2);
+      expect(resumed.verifiedExisting).toHaveLength(3);
+      expect(
+        resumed.verifiedExisting.some(
+          (entry) => entry.workspaceId === placedWorkspaceId,
+        ),
+      ).toBe(true);
       expect(
         resumed.verifiedExisting.every((entry) =>
           entry.checks.every((check) => check.matched),
