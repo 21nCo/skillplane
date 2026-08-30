@@ -61,8 +61,8 @@ interface ProjectionOutboxRow extends Record<string, unknown> {
   readonly workspace_id: string;
   readonly event_type: RegionalProjectionEvent["eventType"];
   readonly payload: unknown;
-  readonly fencing_epoch: number;
-  readonly sequence: number;
+  readonly fencing_epoch: number | string;
+  readonly sequence: number | string;
 }
 
 interface ProjectionOutboxSqlClient {
@@ -95,6 +95,14 @@ function projectionSequence(value: unknown): number {
     throw new Error("PUBLICATION_OUTBOX_SEQUENCE_INVALID");
   }
   return sequence;
+}
+
+function fencingEpoch(value: unknown): number {
+  const epoch = Number(value);
+  if (!Number.isSafeInteger(epoch) || epoch < 1) {
+    throw new Error("PUBLICATION_OUTBOX_FENCING_EPOCH_INVALID");
+  }
+  return epoch;
 }
 
 /**
@@ -159,7 +167,7 @@ export async function drainRegionalProjectionOutbox(input: {
       regionId: input.regionId,
       eventType: eventType.parse(row.event_type),
       workspaceId: row.workspace_id,
-      fencingEpoch: row.fencing_epoch,
+      fencingEpoch: fencingEpoch(row.fencing_epoch),
       sequence: projectionSequence(row.sequence),
       payload: row.payload,
     };

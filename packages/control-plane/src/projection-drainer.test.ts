@@ -11,8 +11,9 @@ function event(id: string) {
       skillId: `skill:${id}`,
       versionId: `version:${id}`,
     },
-    fencing_epoch: 2,
-    sequence: 1,
+    // PostgreSQL bigint/numeric values arrive as strings through node-postgres.
+    fencing_epoch: "2",
+    sequence: "1",
   };
 }
 
