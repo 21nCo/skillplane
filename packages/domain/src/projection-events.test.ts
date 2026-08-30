@@ -89,5 +89,9 @@ describe("public projection events", () => {
       "version:one",
       "version:two",
     ]);
+    expect(payloads.map((payload) => payload.publishedAt)).toEqual([
+      first.publishedAt,
+      current.publishedAt,
+    ]);
   });
 });

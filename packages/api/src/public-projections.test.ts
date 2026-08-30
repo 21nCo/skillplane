@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { PublicSkillProjectionService } from "./public-projections.js";
+import { BundleValidationError, StorageError } from "@skillplane/storage";
+import {
+  mapPublicProjectionFileError,
+  PublicSkillProjectionService,
+} from "./public-projections.js";
 
 const row = (id: string, score: string) => ({
   workspace_id: "workspace:one",
@@ -12,7 +16,7 @@ const row = (id: string, score: string) => ({
   object_key: `public/${id}.zip`,
   document: {
     skill: { name: id, description: "description", tags: ["search"] },
-    version: { revision: 1 },
+    version: { revision: 1, publishedAt: "2026-08-01T00:00:00.000Z" },
   },
   published_at: new Date("2026-08-29T00:00:00.000Z"),
   score,
@@ -78,5 +82,26 @@ describe("global public projection search", () => {
     const current = await service.getCurrentBySkillId("skill:public");
     expect(current.skill.id).toBe("skill:public");
     expect(current.skill.visibility).toBe("public");
+    expect(current.version.publishedAt).toBe("2026-08-01T00:00:00.000Z");
+  });
+
+  it("keeps public bundle storage and integrity failures retryable", async () => {
+    expect(() =>
+      mapPublicProjectionFileError(
+        new StorageError("R2_READ_FAILED", "Bundle object could not be read"),
+      ),
+    ).toThrowError(expect.objectContaining({ code: "R2_READ_FAILED", status: 503 }));
+    expect(() =>
+      mapPublicProjectionFileError(
+        new BundleValidationError("SKILL_BUNDLE_INVALID", "Invalid archive"),
+      ),
+    ).toThrowError(
+      expect.objectContaining({ code: "R2_OBJECT_MISMATCH", status: 503 }),
+    );
+    expect(() =>
+      mapPublicProjectionFileError(new Error("SKILL_FILE_NOT_FOUND")),
+    ).toThrowError(
+      expect.objectContaining({ code: "SKILL_FILE_NOT_FOUND", status: 404 }),
+    );
   });
 });

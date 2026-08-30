@@ -12,7 +12,11 @@ export function createPostgresRoutingReplayStore(
         return false;
       }
       const result = await sql.query<{ nonce: string }>(
-        `INSERT INTO workspace_routing_nonces (nonce, expires_at)
+        `WITH expired AS (
+           DELETE FROM workspace_routing_nonces
+            WHERE expires_at <= now()
+         )
+         INSERT INTO workspace_routing_nonces (nonce, expires_at)
          VALUES ($1, $2)
          ON CONFLICT (nonce) DO NOTHING
          RETURNING nonce`,

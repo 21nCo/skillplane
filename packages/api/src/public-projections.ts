@@ -4,8 +4,11 @@ import {
   type SkillVersionRecord,
 } from "@skillplane/domain";
 import {
+  BundlePathError,
+  BundleValidationError,
   retrieveBundleFile,
   stableJson,
+  StorageError,
   type DownloadedSkillFile,
   type R2BundleRepository,
 } from "@skillplane/storage";
@@ -169,8 +172,14 @@ function skill(row: ProjectionRow): SkillRecord & { readonly workspaceSlug: stri
 }
 
 function version(row: ProjectionRow): SkillVersionRecord {
+  const document = object(row.document.version);
+  const sourcePublishedAt =
+    typeof document.publishedAt === "string" &&
+    Number.isFinite(Date.parse(document.publishedAt))
+      ? new Date(document.publishedAt).toISOString()
+      : row.published_at.toISOString();
   return {
-    ...object(row.document.version),
+    ...document,
     id: row.version_id,
     workspaceId: row.workspace_id,
     skillId: row.skill_id,
@@ -178,8 +187,31 @@ function version(row: ProjectionRow): SkillVersionRecord {
     digest: row.digest,
     objectKey: row.object_key,
     status: "published" as const,
-    publishedAt: row.published_at.toISOString(),
+    publishedAt: sourcePublishedAt,
   } as unknown as SkillVersionRecord;
+}
+
+export function mapPublicProjectionFileError(error: unknown): never {
+  if (error instanceof Error && error.message === "SKILL_FILE_NOT_FOUND") {
+    throw new DomainError("SKILL_FILE_NOT_FOUND", "Skill file was not found", 404);
+  }
+  if (error instanceof BundlePathError) {
+    throw new DomainError(error.code, error.message, 400);
+  }
+  if (error instanceof StorageError) {
+    throw new DomainError(error.code, error.message, 503);
+  }
+  if (
+    error instanceof BundleValidationError ||
+    (error instanceof Error && error.message === "SKILL_FILE_DIGEST_MISMATCH")
+  ) {
+    throw new DomainError(
+      "R2_OBJECT_MISMATCH",
+      "Published skill bundle failed integrity verification",
+      503,
+    );
+  }
+  throw error;
 }
 
 const SELECT = `SELECT workspace_id, workspace_slug, skill_id, skill_slug,
@@ -334,8 +366,8 @@ export class PublicSkillProjectionService {
         bundleDigest: row.digest,
         path: options.path,
       });
-    } catch {
-      throw new DomainError("SKILL_FILE_NOT_FOUND", "Skill file was not found", 404);
+    } catch (error) {
+      return mapPublicProjectionFileError(error);
     }
   }
 }

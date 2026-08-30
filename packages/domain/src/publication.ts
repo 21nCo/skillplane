@@ -276,6 +276,7 @@ export class PublicationService {
                 semanticVersion,
                 sourceObjectKey: record.objectKey,
                 digest: record.digest,
+                publishedAt: record.publishedAt,
                 searchText: instructions,
                 document: {
                   skill: {

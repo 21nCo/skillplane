@@ -90,6 +90,7 @@ export interface PublicProjectionDirectory {
     readonly digest: `sha256:${string}`;
     readonly objectKey: string;
     readonly projectionSequence: number;
+    readonly publishedAt?: string;
     readonly document?: Readonly<Record<string, unknown>>;
     readonly searchText?: string;
   }): Promise<void>;
@@ -116,7 +117,7 @@ export class PostgresPublicProjectionDirectory implements PublicProjectionDirect
           semantic_version, digest, object_key, projection_sequence, document,
           search_text, state, published_at, unpublished_at, updated_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11,
-               'published', now(), NULL, now())
+               'published', COALESCE($12::timestamptz, now()), NULL, now())
        ON CONFLICT (workspace_id, skill_id, version_id)
        DO UPDATE SET workspace_slug = EXCLUDED.workspace_slug,
                      skill_slug = EXCLUDED.skill_slug,
@@ -126,6 +127,7 @@ export class PostgresPublicProjectionDirectory implements PublicProjectionDirect
                      projection_sequence = EXCLUDED.projection_sequence,
                      document = EXCLUDED.document,
                      search_text = EXCLUDED.search_text,
+                     published_at = EXCLUDED.published_at,
                      state = 'published', unpublished_at = NULL,
                      updated_at = now()
        WHERE public_skill_projections.projection_sequence <=
@@ -142,6 +144,7 @@ export class PostgresPublicProjectionDirectory implements PublicProjectionDirect
         input.projectionSequence,
         JSON.stringify(input.document ?? {}),
         input.searchText ?? "",
+        input.publishedAt ?? null,
       ],
     );
   }
@@ -181,6 +184,7 @@ export async function publishGlobalProjection(input: {
   readonly semanticVersion: string;
   readonly digest: `sha256:${string}`;
   readonly projectionSequence: number;
+  readonly publishedAt?: string;
   readonly document?: Readonly<Record<string, unknown>>;
   readonly searchText?: string;
 }): Promise<string> {
@@ -217,6 +221,7 @@ export async function publishGlobalProjection(input: {
     digest: input.digest,
     objectKey,
     projectionSequence: input.projectionSequence,
+    ...(input.publishedAt !== undefined ? { publishedAt: input.publishedAt } : {}),
     ...(input.document ? { document: input.document } : {}),
     ...(input.searchText !== undefined ? { searchText: input.searchText } : {}),
   });

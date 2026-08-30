@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { classifyMcpScope, resolveMcpWorkspaceBatch } from "./workspace-routing.js";
+import {
+  authorizeMcpWorkspace,
+  classifyMcpScope,
+  resolveMcpWorkspaceBatch,
+} from "./workspace-routing.js";
 
 function call(name: string, arguments_: Record<string, unknown> = {}) {
   return new Request("https://mcp.skillplane.dev/mcp", {
@@ -65,6 +69,15 @@ describe("MCP workspace routing", () => {
       allowPublic: false,
     });
     await expect(
+      classifyMcpScope(
+        call("skills_search", { workspace: { id: "workspace:public" } }),
+      ),
+    ).resolves.toEqual({
+      kind: "workspace-id",
+      value: "workspace:public",
+      allowPublic: true,
+    });
+    await expect(
       classifyMcpScope(call("skill_retrieve", { skill: { id: "skill:one" } })),
     ).resolves.toEqual({
       kind: "skill-id",
@@ -78,6 +91,39 @@ describe("MCP workspace routing", () => {
       value: "skill:one",
       allowPublic: false,
     });
+  });
+
+  it("allows authenticated non-members to search a workspace's public skills", async () => {
+    const scope = await classifyMcpScope(
+      call("skills_search", { workspace: { id: "workspace:public" } }),
+    );
+    if (scope.kind === "global" || scope.kind === "batch") {
+      throw new Error("Expected one workspace scope");
+    }
+    const query = async () => ({ rows: [] });
+    await expect(
+      authorizeMcpWorkspace(
+        { kind: "oauth", userId: "user:outsider" } as never,
+        scope,
+        { workspaceId: "workspace:public" },
+        { controlDatabase: { pool: { query } } } as never,
+      ),
+    ).resolves.toBeUndefined();
+
+    const privateScope = await classifyMcpScope(
+      call("skills_list", { workspace: { id: "workspace:private" } }),
+    );
+    if (privateScope.kind === "global" || privateScope.kind === "batch") {
+      throw new Error("Expected one workspace scope");
+    }
+    await expect(
+      authorizeMcpWorkspace(
+        { kind: "oauth", userId: "user:outsider" } as never,
+        privateScope,
+        { workspaceId: "workspace:private" },
+        { controlDatabase: { pool: { query } } } as never,
+      ),
+    ).rejects.toMatchObject({ code: "WORKSPACE_ACCESS_DENIED" });
   });
 
   it("routes credential-bound downloads through the owning cell", async () => {

@@ -20,12 +20,16 @@ function event(id: string) {
 describe("regional projection outbox drainer", () => {
   it("acknowledges claimed events only after successful projection", async () => {
     const queries: string[] = [];
+    let claimed = false;
     const database = {
       query: vi.fn(async (text: string) => {
         queries.push(text);
-        return queries.length === 1
-          ? { rows: [event("one")] }
-          : { rows: [{ id: "one" }] };
+        if (text.includes("WITH candidates AS")) {
+          if (claimed) return { rows: [] };
+          claimed = true;
+          return { rows: [event("one")] };
+        }
+        return { rows: [{ id: "one" }] };
       }),
     };
     const process = vi.fn(async () => undefined);
@@ -51,10 +55,15 @@ describe("regional projection outbox drainer", () => {
 
   it("releases failed claims with a safe retry code", async () => {
     const values: (readonly unknown[] | undefined)[] = [];
+    let claimed = false;
     const database = {
-      query: vi.fn(async (_text: string, parameters?: readonly unknown[]) => {
+      query: vi.fn(async (text: string, parameters?: readonly unknown[]) => {
         values.push(parameters);
-        return values.length === 1 ? { rows: [event("bad")] } : { rows: [] };
+        if (text.includes("WITH candidates AS") && !claimed) {
+          claimed = true;
+          return { rows: [event("bad")] };
+        }
+        return { rows: [] };
       }),
     };
     await expect(
@@ -68,6 +77,53 @@ describe("regional projection outbox drainer", () => {
       }),
     ).resolves.toEqual({ processed: 0, failed: 1 });
     expect(values[1]).toEqual(["bad", "claim:test", "PUBLICATION_PROJECTION_FAILED"]);
+  });
+
+  it("continues draining ordered events for one workspace in one invocation", async () => {
+    const rows = [
+      { ...event("one"), workspace_id: "workspace:shared", sequence: 1 },
+      { ...event("two"), workspace_id: "workspace:shared", sequence: 2 },
+    ];
+    const processed = new Set<string>();
+    const claimQueries: (readonly unknown[])[] = [];
+    const database = {
+      query: vi.fn(async (text: string, values: readonly unknown[] = []) => {
+        if (text.includes("WITH candidates AS")) {
+          claimQueries.push(values);
+          const row = rows.find(
+            (candidate) =>
+              !processed.has(candidate.id) &&
+              !rows.some(
+                (earlier) =>
+                  earlier.workspace_id === candidate.workspace_id &&
+                  earlier.sequence < candidate.sequence &&
+                  !processed.has(earlier.id),
+              ),
+          );
+          return { rows: row ? [row] : [] };
+        }
+        if (text.includes("SET processed_at = now()")) {
+          processed.add(String(values[0]));
+          return { rows: [{ id: values[0] }] };
+        }
+        throw new Error(`Unexpected projection SQL: ${text}`);
+      }),
+    };
+    const process = vi.fn(async () => undefined);
+
+    await expect(
+      drainRegionalProjectionOutbox({
+        regionId: "in-south",
+        database,
+        process,
+        limit: 2,
+        claimToken: "claim:test",
+      }),
+    ).resolves.toEqual({ processed: 2, failed: 0 });
+
+    expect(process.mock.calls.map(([value]) => value.id)).toEqual(["one", "two"]);
+    expect(claimQueries).toHaveLength(2);
+    expect(claimQueries.map((values) => values[0])).toEqual([2, 1]);
   });
 
   it("does not let a delayed reclaimed unpublish clobber a later publish", async () => {
@@ -173,6 +229,7 @@ describe("regional projection outbox drainer", () => {
       regionId: "in-south",
       database,
       process,
+      limit: 1,
       leaseSeconds: 10,
       claimToken: "claim:original",
     });
@@ -183,6 +240,7 @@ describe("regional projection outbox drainer", () => {
         regionId: "in-south",
         database,
         process,
+        limit: 1,
         leaseSeconds: 10,
         claimToken: "claim:reclaimed",
       }),
@@ -192,6 +250,7 @@ describe("regional projection outbox drainer", () => {
         regionId: "in-south",
         database,
         process,
+        limit: 1,
         leaseSeconds: 10,
         claimToken: "claim:publish",
       }),

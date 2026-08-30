@@ -66,6 +66,7 @@ describe("global public projection", () => {
       semanticVersion: "1.0.0",
       digest: sha,
       projectionSequence: 3,
+      publishedAt: "2026-08-01T00:00:00.000Z",
     });
     expect(key).toBe(
       globalPublishedBundleKey({
@@ -77,7 +78,11 @@ describe("global public projection", () => {
     );
     expect(destination.objects.get(key)).toEqual(bytes);
     expect(published).toHaveLength(1);
-    expect(published[0]).toMatchObject({ objectKey: key, digest: sha });
+    expect(published[0]).toMatchObject({
+      objectKey: key,
+      digest: sha,
+      publishedAt: "2026-08-01T00:00:00.000Z",
+    });
   });
 
   it("guards publish and unpublish writes with the regional event sequence", async () => {
@@ -99,6 +104,7 @@ describe("global public projection", () => {
       digest: digestValue,
       objectKey: "public/review.zip",
       projectionSequence: 9,
+      publishedAt: "2026-08-01T00:00:00.000Z",
     });
     await directory.unpublish({
       workspaceId: "workspace:a",
@@ -108,7 +114,9 @@ describe("global public projection", () => {
     });
 
     expect(calls[0]?.text).toContain("public_skill_projections.projection_sequence <=");
+    expect(calls[0]?.text).toContain("published_at = EXCLUDED.published_at");
     expect(calls[0]?.values?.[8]).toBe(9);
+    expect(calls[0]?.values?.[11]).toBe("2026-08-01T00:00:00.000Z");
     expect(calls[1]?.text).toContain("projection_sequence <= $3");
     expect(calls[1]?.values).toEqual(["workspace:a", "skill:a", 8]);
   });

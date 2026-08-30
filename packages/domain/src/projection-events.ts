@@ -110,6 +110,7 @@ export async function enqueuePublishedSkillProjection(
       semanticVersion: input.version.semanticVersion,
       sourceObjectKey: input.version.objectKey,
       digest: input.version.digest,
+      publishedAt: input.version.publishedAt,
       searchText: input.searchText,
       document: { skill: input.skill, version: input.version },
     },

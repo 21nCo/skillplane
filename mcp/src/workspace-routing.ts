@@ -34,12 +34,12 @@ type McpScope =
   | {
       readonly kind: "workspace-id";
       readonly value: string;
-      readonly allowPublic: false;
+      readonly allowPublic: boolean;
     }
   | {
       readonly kind: "workspace-slug";
       readonly value: string;
-      readonly allowPublic: false;
+      readonly allowPublic: boolean;
     }
   | { readonly kind: "skill-id"; readonly value: string; readonly allowPublic: boolean }
   | {
@@ -117,17 +117,18 @@ function scopeForMessage(message: unknown): McpScope {
   if (params.name === "workspaces_list") return { kind: "global" };
   const arguments_ = record(params.arguments);
   const allowPublic =
+    params.name === "skills_search" ||
     params.name === "skill_asset_retrieve" ||
     params.name === "skill_versions_list" ||
     (params.name === "skill_retrieve" && !record(arguments_?.context));
   const workspace = record(arguments_?.workspace);
   const workspaceId = identifier(workspace?.id) ?? identifier(arguments_?.workspaceId);
   if (workspaceId) {
-    return { kind: "workspace-id", value: workspaceId, allowPublic: false };
+    return { kind: "workspace-id", value: workspaceId, allowPublic };
   }
   const workspaceSlug = identifier(workspace?.slug);
   if (workspaceSlug) {
-    return { kind: "workspace-slug", value: workspaceSlug, allowPublic: false };
+    return { kind: "workspace-slug", value: workspaceSlug, allowPublic };
   }
   const skill = record(arguments_?.skill);
   const skillId = identifier(skill?.id) ?? identifier(arguments_?.skillId);
@@ -260,7 +261,7 @@ export async function resolveMcpWorkspaceBatch(
   return { workspaceId, entries };
 }
 
-async function authorizeWorkspace(
+export async function authorizeMcpWorkspace(
   identity: McpIdentity,
   scope: WorkspaceMcpScope,
   route: ResolvedMcpRoute,
@@ -269,6 +270,9 @@ async function authorizeWorkspace(
   const { workspaceId } = route;
   const publicProjectionExists = async (): Promise<boolean> => {
     if (!scope.allowPublic) return false;
+    if (scope.kind === "workspace-id" || scope.kind === "workspace-slug") {
+      return true;
+    }
     const result = await services.controlDatabase.pool.query(
       scope.kind === "skill-id" || scope.kind === "download-grant"
         ? `SELECT 1 FROM public_skill_projections
@@ -364,7 +368,7 @@ export function createRoutedMcpApplication<Context>(input: {
             const batch = await resolveMcpWorkspaceBatch(scope, services);
             const workspaceId = batch.workspaceId;
             for (const entry of batch.entries) {
-              await authorizeWorkspace(identity, entry.scope, entry.route, services);
+              await authorizeMcpWorkspace(identity, entry.scope, entry.route, services);
             }
             const assertions = createWorkspaceRoutingAssertions({
               activeKeyId: runtime.routing.activeKeyId,

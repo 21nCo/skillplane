@@ -285,6 +285,7 @@ export async function backfillLegacyPublicSkillProjections(input: {
         semanticVersion: row.semantic_version,
         digest: row.content_digest,
         projectionSequence: 0,
+        publishedAt: version.publishedAt,
         searchText: row.published_search_text,
         document: {
           skill: {

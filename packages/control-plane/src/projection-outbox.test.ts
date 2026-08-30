@@ -71,6 +71,7 @@ describe("regional publication projection", () => {
           semanticVersion: "1.0.0",
           sourceObjectKey: "source.zip",
           digest: sha,
+          publishedAt: "2026-08-01T00:00:00.000Z",
           searchText: "review carefully",
           document: { skill: { id: "skill:a" } },
         },
@@ -81,7 +82,9 @@ describe("regional publication projection", () => {
       publicStore,
       directory,
     });
-    expect(published).toHaveLength(1);
+    expect(published).toEqual([
+      expect.objectContaining({ publishedAt: "2026-08-01T00:00:00.000Z" }),
+    ]);
   });
 
   it("rejects events from a stale placement epoch", async () => {

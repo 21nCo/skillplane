@@ -15,6 +15,7 @@ const publishedPayload = z
     semanticVersion: z.string().min(1).max(160),
     sourceObjectKey: z.string().min(1).max(1_024),
     digest: z.string().regex(/^sha256:[a-f0-9]{64}$/u),
+    publishedAt: z.iso.datetime({ offset: true }).optional(),
     searchText: z.string().max(2_000_000),
     document: z.record(z.string(), z.unknown()),
   })
@@ -105,11 +106,27 @@ function fencingEpoch(value: unknown): number {
   return epoch;
 }
 
+function sourcePublishedAt(
+  payload: z.infer<typeof publishedPayload>,
+): string | undefined {
+  if (payload.publishedAt) return payload.publishedAt;
+  const version = payload.document.version;
+  if (!version || typeof version !== "object" || Array.isArray(version)) {
+    return undefined;
+  }
+  const value = (version as Record<string, unknown>).publishedAt;
+  if (typeof value !== "string" || !Number.isFinite(Date.parse(value))) {
+    return undefined;
+  }
+  return new Date(value).toISOString();
+}
+
 /**
- * Claims at most one ordered event per workspace, then acknowledges each event
- * only after the global projection succeeds. Expired claims are recoverable and
- * the projection itself is idempotent, so worker termination cannot expose a
- * partially copied bundle.
+ * Claims at most one ordered event per workspace at a time, then continues with
+ * that workspace's next event after acknowledgement. A failed workspace is
+ * skipped for the rest of the invocation so one poison event cannot consume the
+ * whole batch. Expired claims are recoverable and the projection itself is
+ * idempotent, so worker termination cannot expose a partially copied bundle.
  */
 export async function drainRegionalProjectionOutbox(input: {
   readonly regionId: string;
@@ -133,69 +150,75 @@ export async function drainRegionalProjectionOutbox(input: {
     throw new Error("PUBLICATION_OUTBOX_LEASE_INVALID");
   }
   const claimToken = input.claimToken ?? `projection-claim:${crypto.randomUUID()}`;
-  const claimed = await input.database.query(
-    `WITH candidates AS (
-       SELECT candidate.id
-         FROM regional_projection_outbox candidate
-        WHERE candidate.processed_at IS NULL
-          AND (candidate.claimed_at IS NULL OR
-               candidate.claimed_at < now() - ($2::integer * interval '1 second'))
-          AND NOT EXISTS (
-            SELECT 1
-              FROM regional_projection_outbox earlier
-             WHERE earlier.workspace_id = candidate.workspace_id
-               AND earlier.processed_at IS NULL
-               AND earlier.sequence < candidate.sequence
-          )
-        ORDER BY candidate.created_at, candidate.id
-        LIMIT $1
-        FOR UPDATE SKIP LOCKED
-     )
-     UPDATE regional_projection_outbox event
-        SET claim_token = $3, claimed_at = now(), attempts = attempts + 1
-       FROM candidates
-      WHERE event.id = candidates.id
-      RETURNING event.id, event.workspace_id, event.event_type,
-                event.payload, event.fencing_epoch, event.sequence`,
-    [limit, leaseSeconds, claimToken],
-  );
   let processed = 0;
   let failed = 0;
-  for (const row of claimed.rows as readonly ProjectionOutboxRow[]) {
-    const event: RegionalProjectionEvent = {
-      id: row.id,
-      regionId: input.regionId,
-      eventType: eventType.parse(row.event_type),
-      workspaceId: row.workspace_id,
-      fencingEpoch: fencingEpoch(row.fencing_epoch),
-      sequence: projectionSequence(row.sequence),
-      payload: row.payload,
-    };
-    try {
-      await input.process(event);
-      const acknowledged = await input.database.query(
-        `UPDATE regional_projection_outbox
-            SET processed_at = now(), claim_token = NULL, claimed_at = NULL,
-                last_error = NULL
-          WHERE id = $1 AND claim_token = $2 AND processed_at IS NULL
-          RETURNING id`,
-        [row.id, claimToken],
-      );
-      if (acknowledged.rows.length !== 1) {
-        throw new Error("PUBLICATION_OUTBOX_CLAIM_LOST");
+  const blockedWorkspaceIds = new Set<string>();
+  while (processed + failed < limit) {
+    const claimed = await input.database.query(
+      `WITH candidates AS (
+         SELECT candidate.id
+           FROM regional_projection_outbox candidate
+          WHERE candidate.processed_at IS NULL
+            AND (candidate.claimed_at IS NULL OR
+                 candidate.claimed_at < now() - ($2::integer * interval '1 second'))
+            AND NOT (candidate.workspace_id = ANY($4::text[]))
+            AND NOT EXISTS (
+              SELECT 1
+                FROM regional_projection_outbox earlier
+               WHERE earlier.workspace_id = candidate.workspace_id
+                 AND earlier.processed_at IS NULL
+                 AND earlier.sequence < candidate.sequence
+            )
+          ORDER BY candidate.created_at, candidate.id
+          LIMIT $1
+          FOR UPDATE SKIP LOCKED
+       )
+       UPDATE regional_projection_outbox event
+          SET claim_token = $3, claimed_at = now(), attempts = attempts + 1
+         FROM candidates
+        WHERE event.id = candidates.id
+        RETURNING event.id, event.workspace_id, event.event_type,
+                  event.payload, event.fencing_epoch, event.sequence`,
+      [limit - processed - failed, leaseSeconds, claimToken, [...blockedWorkspaceIds]],
+    );
+    if (claimed.rows.length === 0) break;
+    for (const row of claimed.rows as readonly ProjectionOutboxRow[]) {
+      const event: RegionalProjectionEvent = {
+        id: row.id,
+        regionId: input.regionId,
+        eventType: eventType.parse(row.event_type),
+        workspaceId: row.workspace_id,
+        fencingEpoch: fencingEpoch(row.fencing_epoch),
+        sequence: projectionSequence(row.sequence),
+        payload: row.payload,
+      };
+      try {
+        await input.process(event);
+        const acknowledged = await input.database.query(
+          `UPDATE regional_projection_outbox
+              SET processed_at = now(), claim_token = NULL, claimed_at = NULL,
+                  last_error = NULL
+            WHERE id = $1 AND claim_token = $2 AND processed_at IS NULL
+            RETURNING id`,
+          [row.id, claimToken],
+        );
+        if (acknowledged.rows.length !== 1) {
+          throw new Error("PUBLICATION_OUTBOX_CLAIM_LOST");
+        }
+        processed += 1;
+        await input.onEvent?.({ type: "processed", eventId: row.id });
+      } catch (error) {
+        const errorCode = safeFailureCode(error);
+        await input.database.query(
+          `UPDATE regional_projection_outbox
+              SET claim_token = NULL, claimed_at = NULL, last_error = $3
+            WHERE id = $1 AND claim_token = $2 AND processed_at IS NULL`,
+          [row.id, claimToken, errorCode],
+        );
+        blockedWorkspaceIds.add(row.workspace_id);
+        failed += 1;
+        await input.onEvent?.({ type: "failed", eventId: row.id, errorCode });
       }
-      processed += 1;
-      await input.onEvent?.({ type: "processed", eventId: row.id });
-    } catch (error) {
-      const errorCode = safeFailureCode(error);
-      await input.database.query(
-        `UPDATE regional_projection_outbox
-            SET claim_token = NULL, claimed_at = NULL, last_error = $3
-          WHERE id = $1 AND claim_token = $2 AND processed_at IS NULL`,
-        [row.id, claimToken, errorCode],
-      );
-      failed += 1;
-      await input.onEvent?.({ type: "failed", eventId: row.id, errorCode });
     }
   }
   return { processed, failed };
@@ -280,6 +303,7 @@ export async function applyRegionalPublicProjection(input: {
   }
   const workspaceSlug = await input.resolveWorkspaceSlug(payload.workspaceId);
   if (!workspaceSlug) throw new Error("PUBLICATION_WORKSPACE_NOT_FOUND");
+  const publishedAt = sourcePublishedAt(payload);
   const objectKey = await publishGlobalProjection({
     source: input.regionalStore,
     destination: input.publicStore,
@@ -293,6 +317,7 @@ export async function applyRegionalPublicProjection(input: {
     semanticVersion: payload.semanticVersion,
     digest: payload.digest as `sha256:${string}`,
     projectionSequence: input.event.sequence,
+    ...(publishedAt ? { publishedAt } : {}),
     document: payload.document,
     searchText: payload.searchText,
   });
