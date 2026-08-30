@@ -269,26 +269,49 @@ export async function testLocalOAuth(options = {}) {
       tools.tools.some((tool) => tool.name === "workspaces_list"),
       "MCP tool inventory is incomplete",
     );
+    const caller = {
+      agentId: "skillplane-local-oauth-verifier",
+      agentName: "Skillplane local OAuth verifier",
+      modelProvider: "openai",
+      modelName: "codex",
+      modelVersion: "local-verification",
+      clientName: "Skillplane local OAuth verifier",
+      clientVersion: "1.0.0",
+      runId: `run:local:${randomUUID()}`,
+      sessionId: `session:local:${randomUUID()}`,
+      conversationId: `conversation:local:${randomUUID()}`,
+    };
     const result = await client.callTool({
       name: "workspaces_list",
       arguments: {
         cursor: null,
         limit: 100,
-        caller: {
-          agentId: "skillplane-local-oauth-verifier",
-          agentName: "Skillplane local OAuth verifier",
-          modelProvider: "openai",
-          modelName: "codex",
-          modelVersion: "local-verification",
-          clientName: "Skillplane local OAuth verifier",
-          clientVersion: "1.0.0",
-          runId: `run:local:${randomUUID()}`,
-          sessionId: `session:local:${randomUUID()}`,
-          conversationId: `conversation:local:${randomUUID()}`,
-        },
+        caller,
       },
     });
     assert(result.isError !== true, "Authenticated workspaces_list failed");
+    const regionalWorkspaces = [];
+    for (const workspaceSlug of options.workspaceSlugs ?? []) {
+      const regional = await client.callTool({
+        name: "skills_list",
+        arguments: {
+          workspace: { slug: workspaceSlug },
+          visibility: ["private", "workspace", "public"],
+          state: "active",
+          cursor: null,
+          limit: 100,
+          caller,
+        },
+      });
+      assert(
+        regional.isError !== true && Array.isArray(regional.structuredContent?.skills),
+        `Authenticated skills_list failed for ${workspaceSlug}`,
+      );
+      regionalWorkspaces.push({
+        slug: workspaceSlug,
+        skillCount: regional.structuredContent.skills.length,
+      });
+    }
     verificationResult = {
       ok: true,
       checkedAt: new Date().toISOString(),
@@ -300,7 +323,12 @@ export async function testLocalOAuth(options = {}) {
         pkce: "S256",
         tokenExchange: true,
       },
-      mcp: { authenticated: true, toolCount: tools.tools.length, workspacesList: true },
+      mcp: {
+        authenticated: true,
+        toolCount: tools.tools.length,
+        workspacesList: true,
+        regionalWorkspaces,
+      },
     };
   } catch (error) {
     primaryError = error;
