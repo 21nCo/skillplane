@@ -36,7 +36,6 @@ import {
 } from "./analytics.js";
 import { verifyDownloadGrant } from "./downloads.js";
 import { McpCursorCodec } from "./pagination.js";
-import { createSkillplaneMcpServer } from "./server.js";
 import { resolveSkill, resolveVersion } from "./tools/resolve.js";
 import { loadExactCanonicalBundle } from "./tools/retrieve.js";
 import { createRoutedMcpApplication } from "./workspace-routing.js";
@@ -639,6 +638,7 @@ export function createMcpApp(options: CreateMcpAppOptions = {}) {
             protocolRequest,
             now,
           );
+          const { createSkillplaneMcpServer } = await import("./server.js");
           const server = createSkillplaneMcpServer(runtime);
           const posthog = resolvePostHog(context.env);
           if (posthog) instrument(server.protocol, posthog);
