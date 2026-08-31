@@ -331,6 +331,60 @@ describe("API scope classification", () => {
     });
   });
 
+  it("reuses the gateway placement cache across requests", async () => {
+    let placementLookups = 0;
+    const query = async (text: string) => {
+      if (text.includes("FROM workspace_memberships")) {
+        return { rows: [{ present: 1 }] };
+      }
+      if (text.includes("FROM workspace_placements")) {
+        placementLookups += 1;
+        return {
+          rows: [
+            {
+              workspace_id: "workspace:one",
+              region_id: "in-south",
+              epoch: 1,
+              state: "active",
+              updated_at: new Date("2026-07-26T00:00:00.000Z"),
+              cache_expires_at: null,
+              destination_ref: null,
+              moving_to_region_id: null,
+              previous_region_id: null,
+              migration: null,
+            },
+          ],
+        };
+      }
+      throw new Error(`Unexpected SQL in routing test: ${text}`);
+    };
+    const serviceGraph = {
+      auth: {
+        provider: { authenticate: async () => ({ actorId: "user:one" }) },
+      },
+      controlDatabase: { pool: { query } },
+    } as never;
+    const services = async () => serviceGraph;
+    const routed = createRoutedApiApplication({
+      local: { fetch: async () => new Response("unexpected global response") },
+      services,
+    });
+    const bindings = {
+      ...gatewayBindings,
+      CELL_APP: { fetch: async () => new Response("regional response") },
+    };
+
+    for (let index = 0; index < 2; index += 1) {
+      const response = await routed.fetch(
+        new Request("http://localhost:5700/api/v1/workspaces/workspace%3Aone/skills"),
+        bindings,
+      );
+      expect(response.status).toBe(200);
+    }
+
+    expect(placementLookups).toBe(1);
+  });
+
   it("uses the public projection for authenticated non-members", async () => {
     const query = async (text: string) => {
       if (text.includes("FROM resource_routing_directory")) {

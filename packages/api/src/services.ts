@@ -307,9 +307,26 @@ export async function closeApiServices(services: ApiServices): Promise<void> {
 
 export function createApiServiceProvider(
   options: BuildApiServicesOptions = {},
+  build: typeof buildApiServices = buildApiServices,
 ): ApiServiceProvider {
-  return Object.assign(
-    (bindings: RuntimeBindings) => buildApiServices(bindings, options),
-    { release: closeApiServices },
-  );
+  let services: Promise<ApiServices> | null = null;
+
+  const getServices = (bindings: RuntimeBindings): Promise<ApiServices> => {
+    services ??= build(bindings, options).catch((error: unknown) => {
+      services = null;
+      throw error;
+    });
+    return services;
+  };
+
+  return Object.assign(getServices, {
+    // Request completion must not tear down worker-lifetime DB pools, AuthFn,
+    // or DataFn state. Cloudflare disposes the isolate as a unit.
+    release: () => Promise.resolve(),
+    close: async () => {
+      const current = services;
+      services = null;
+      if (current) await closeApiServices(await current);
+    },
+  });
 }

@@ -28,10 +28,10 @@ import { registerAuditRoutes } from "./routes/audit.js";
 export const MIDDLEWARE_ORDER = [
   "request-id",
   "security-headers",
+  "observability",
   "authentication",
   "authorization",
   "rate-limit",
-  "observability",
 ] as const;
 
 type MiddlewareName = (typeof MIDDLEWARE_ORDER)[number];
@@ -81,6 +81,10 @@ export function createApiApp(options: ApiOptions = {}) {
   );
   app.use(
     "*",
+    observe("observability", observabilityMiddleware(), options.middlewareObserver),
+  );
+  app.use(
+    "*",
     observe(
       "authentication",
       authenticationMiddleware(options.getServices),
@@ -95,11 +99,6 @@ export function createApiApp(options: ApiOptions = {}) {
     "*",
     observe("rate-limit", rateLimitMiddleware(), options.middlewareObserver),
   );
-  app.use(
-    "*",
-    observe("observability", observabilityMiddleware(), options.middlewareObserver),
-  );
-
   app.get("/api/v1/health/live", (context) =>
     context.json(
       success(context, {

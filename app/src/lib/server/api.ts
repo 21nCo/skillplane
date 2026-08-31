@@ -1,6 +1,5 @@
 import { env as privateEnvironment } from "$env/dynamic/private";
 import {
-  closeApiServices,
   createApiApp,
   createApiServiceProvider,
   createRoutedApiApplication,
@@ -14,7 +13,12 @@ const services = Object.assign(
     bindings.SKILLPLANE_ROLE === "cell"
       ? cellServices(bindings)
       : fullServices(bindings),
-  { release: closeApiServices },
+  {
+    release: () => Promise.resolve(),
+    close: async () => {
+      await Promise.all([fullServices.close?.(), cellServices.close?.()]);
+    },
+  },
 );
 const localApi = createApiApp({
   serviceName: "skillplane-app",

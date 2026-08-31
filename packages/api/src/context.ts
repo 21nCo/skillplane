@@ -69,4 +69,6 @@ export interface ApiEnvironment {
 export interface ApiServiceProvider {
   (bindings: RuntimeBindings): Promise<ApiServices>;
   readonly release?: (services: ApiServices) => Promise<void>;
+  /** Closes worker-lifetime services during an explicit shutdown or test cleanup. */
+  readonly close?: () => Promise<void>;
 }
