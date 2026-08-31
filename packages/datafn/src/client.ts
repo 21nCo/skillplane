@@ -1,6 +1,7 @@
 import {
   createDatafnClient,
   type DatafnClient,
+  type DatafnHttpTransportOptions,
   type DatafnRemoteAdapter,
 } from "@datafn/client";
 import { skillplaneDatafnSchema } from "./schema.js";
@@ -9,8 +10,11 @@ export interface SkillplaneDatafnClientOptions {
   readonly clientId: string;
   readonly remote?: string;
   readonly remoteAdapter?: DatafnRemoteAdapter;
+  readonly http?: DatafnHttpTransportOptions;
   readonly namespace?: string;
 }
+
+export type SkillplaneDatafnClient = DatafnClient<typeof skillplaneDatafnSchema>;
 
 export function createSkillplaneDatafnClient(
   options: SkillplaneDatafnClientOptions,
@@ -29,6 +33,7 @@ export function createSkillplaneDatafnClient(
       ws: false,
       ...(options.remote ? { remote: options.remote } : {}),
       ...(options.remoteAdapter ? { remoteAdapter: options.remoteAdapter } : {}),
+      ...(options.http ? { http: options.http } : {}),
     },
   });
 }

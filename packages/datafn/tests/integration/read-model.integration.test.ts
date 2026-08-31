@@ -76,6 +76,39 @@ describe("DataFn tenant read model", () => {
     expect(serialized).not.toContain(tenantB.skillId);
   });
 
+  it("expands current skill version metadata in one tenant-filtered query", async () => {
+    const response = await handle(
+      request(tenantA, "/datafn/query", {
+        resource: "skills",
+        version: 1,
+        select: ["*", "currentVersion.*"],
+        filters: { id: tenantA.skillId },
+        limit: 1,
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+    expect(payload).toMatchObject({
+      ok: true,
+      result: {
+        data: [
+          {
+            id: tenantA.skillId,
+            currentVersion: {
+              semanticVersion: "1.0.0",
+              bundleByteSize: 1,
+            },
+          },
+        ],
+      },
+    });
+    expect(payload.result.data[0].createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T/u);
+    expect(payload.result.data[0].currentVersion.createdAt).toMatch(
+      /^\d{4}-\d{2}-\d{2}T/u,
+    );
+  });
+
   it("denies generic mutations and secret-bearing resources", async () => {
     const mutation = await handle(
       request(tenantA, "/datafn/mutation", {

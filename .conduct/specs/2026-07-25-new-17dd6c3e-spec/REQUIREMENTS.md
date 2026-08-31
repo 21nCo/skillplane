@@ -83,6 +83,7 @@
 - Rationale: DataFn is required, but R2 publication and OAuth workflows need stronger orchestration.
 - Acceptance criteria:
   - DataFn schema covers workspaces, memberships, skills, versions, contexts, notes, reviews, and analytics reads.
+  - Authenticated reads approved in the data-operation ownership matrix use DataFn as their first-party canonical path.
   - Every private resource query is tenant-filtered before results are returned.
   - R2 publication, OAuth tokens, and other cross-system transactions cannot be bypassed through generic mutations.
 - Test vectors: `TV-DATA-002-P`, `TV-DATA-002-N`

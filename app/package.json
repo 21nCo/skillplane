@@ -16,6 +16,7 @@
   "dependencies": {
     "@skillplane/api": "workspace:*",
     "@skillplane/config": "workspace:*",
+    "@skillplane/datafn": "workspace:*",
     "@skillplane/ui": "workspace:*",
     "fflate": "catalog:",
     "phosphor-svelte": "catalog:",
