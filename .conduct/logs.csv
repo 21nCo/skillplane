@@ -33,3 +33,4 @@ timestamp,model,launcher,command,agent_name,phase(s),path
 2026-08-30T04:27:43Z,GPT-5,Codex Desktop,execute-issue,unknown-agent,,.conduct/issue-completions/2026-08-30-33cfc7a1-completion.md
 2026-08-30T11:12:02Z,GPT-5,Codex Desktop,execute-issue,Codex /root,,.conduct/issue-completions/2026-08-30-9f2c1a7b-completion.md
 2026-08-30T13:22:51Z,GPT-5,Codex Desktop,execute-issue,Codex /root,,.conduct/issue-completions/2026-08-30-7785fc18-completion.md
+2026-08-31T07:29:59Z,GPT-5,Codex Desktop,execute-issue,Codex /root,,.conduct/issue-completions/2026-08-31-native-private-use-oauth-redirects-completion.md

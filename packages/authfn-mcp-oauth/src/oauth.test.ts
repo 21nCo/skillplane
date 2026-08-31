@@ -205,6 +205,78 @@ describe("OAuth client and redirect validation", () => {
     ).toThrow(/unsafe|malformed/u);
   });
 
+  it("persists Cursor's full registration set and emits redacted compatibility audit fields", async () => {
+    const redirects = [
+      "cursor://anysphere.cursor-mcp/oauth/callback",
+      "https://www.cursor.com/agents/mcp/oauth/callback",
+      "http://localhost:8787/callback",
+    ];
+    const events: {
+      readonly type: string;
+      readonly outcome: string;
+      readonly metadata?: Readonly<Record<string, unknown>>;
+    }[] = [];
+    const query = vi.fn(async () => ({ rows: [{ request_count: 1 }] }));
+    const transactionQuery = vi.fn(async () => ({ rows: [] }));
+    const release = vi.fn();
+    const connect = vi.fn(async () => ({ query: transactionQuery, release }));
+    const { plugin } = createAuthFnMcpOAuthPlugin({
+      pool: { query, connect } as unknown as Pool,
+      issuer: "https://app.skillplane.dev",
+      tokenPepper: pepper,
+      now: () => new Date("2026-08-31T00:00:00.000Z"),
+      emit: (event) => {
+        events.push(event);
+      },
+    });
+    const register = plugin
+      .routes?.({} as AuthFnPluginRuntimeContext)
+      .find((route) => route.path === "/oauth/register");
+    if (!register) throw new Error("OAuth registration route is missing");
+
+    const response = await register.handler(
+      new Request("https://app.skillplane.dev/auth/oauth/register", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "cf-connecting-ip": "198.51.100.42",
+        },
+        body: JSON.stringify({
+          client_name: "Cursor",
+          redirect_uris: redirects,
+          response_types: ["code"],
+          grant_types: ["authorization_code", "refresh_token"],
+          token_endpoint_auth_method: "none",
+        }),
+      }),
+      undefined as never,
+    );
+
+    expect(response.status).toBe(201);
+    expect(
+      transactionQuery.mock.calls
+        .filter(([sql]) =>
+          sql.includes("INSERT INTO authfn_oauth_client_redirect_uris"),
+        )
+        .map(([, parameters]) => parameters?.[2]),
+    ).toEqual(redirects);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "mcpfn.oauth.client-registration",
+        outcome: "succeeded",
+        metadata: {
+          privateUseSchemePolicy: "compatible",
+          compatibilityRedirectSchemes: ["cursor"],
+          compatibilityRedirectCount: 1,
+        },
+      }),
+    );
+    expect(JSON.stringify(events)).not.toContain("anysphere.cursor-mcp");
+    expect(JSON.stringify(events)).not.toContain("localhost:8787");
+    expect(connect).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledOnce();
+  });
+
   it.each([
     "https://localhost/client.json",
     "https://127.0.0.1/client.json",

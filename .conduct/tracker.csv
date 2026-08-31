@@ -12,3 +12,4 @@ SKI-6,"Adopt McpFn for Skillplane MCP runtime, authorization, and quality gates"
 2026-08-30-codex-loopback-oauth-issue,"Codex client metadata rejects safe localhost and dynamic loopback callbacks",1,2026-08-30T04:27:43Z,2026-08-30-33cfc7a1-completion
 SKI-14,"Adapt Skillplane tool contracts for authenticated client compatibility",0,,
 SKI-14-posthog-context-regression,"PostHog context injection breaks stateless MCP tool calls",1,2026-08-30T13:22:51Z,2026-08-30-7785fc18-completion
+2026-08-31-native-private-use-oauth-redirects,"Cursor-family dynamic registration rejects a private-use callback bundle",1,2026-08-31T07:29:59Z,2026-08-31-native-private-use-oauth-redirects-completion

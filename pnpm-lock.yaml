@@ -328,8 +328,8 @@ importers:
   mcp:
     dependencies:
       '@mcpfn/auth':
-        specifier: 0.0.3
-        version: 0.0.3(@superfunctions/auth@0.1.2)(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))(zod@4.4.3)
+        specifier: 0.0.4
+        version: 0.0.4(@superfunctions/auth@0.1.2)(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))(zod@4.4.3)
       '@mcpfn/core':
         specifier: 0.0.4
         version: 0.0.4(zod@4.4.3)
@@ -484,8 +484,8 @@ importers:
         specifier: 'catalog:'
         version: 0.1.1(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
       '@mcpfn/auth':
-        specifier: 0.0.3
-        version: 0.0.3(@superfunctions/auth@0.1.2)(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))(zod@4.4.3)
+        specifier: 0.0.4
+        version: 0.0.4(@superfunctions/auth@0.1.2)(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))(zod@4.4.3)
       '@skillplane/db':
         specifier: workspace:*
         version: link:../db
@@ -2290,8 +2290,8 @@ packages:
     resolution: {integrity: sha512-9I2Zn6+NJLfaGoz9jN3lpwDgAYvfGeNYdbAIjJOqzs4Tpc+VU3Jqq4IofSUBKajiDS8k9fZIg18/z13mpk1bsA==}
     engines: {node: '>=8'}
 
-  '@mcpfn/auth@0.0.3':
-    resolution: {integrity: sha512-rJXGjnr6wpsw6xJyGOcCQwLZMzw3xkxpF/wiQlcGDbzHs+iamIBANevhoRdOCMuKKQP9YclGKxHNDL2dAWg33g==}
+  '@mcpfn/auth@0.0.4':
+    resolution: {integrity: sha512-9vwa47X+y/vWroY/tW/ankdBgehqP6zvk6ncBdHAPtf/PGWQuKK+94n/BQnmrx0Adk4Ju4nRBP5RUDWzOtHqjQ==}
     engines: {node: '>=18.18.0'}
     peerDependencies:
       '@superfunctions/auth': '>=0.1.2'
@@ -8081,7 +8081,7 @@ snapshots:
 
   '@lukeed/ms@2.0.2': {}
 
-  '@mcpfn/auth@0.0.3(@superfunctions/auth@0.1.2)(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))(zod@4.4.3)':
+  '@mcpfn/auth@0.0.4(@superfunctions/auth@0.1.2)(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))(zod@4.4.3)':
     dependencies:
       '@modelcontextprotocol/sdk': 1.29.0(zod@4.4.3)
       '@superfunctions/oauth-core': 0.1.1(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))

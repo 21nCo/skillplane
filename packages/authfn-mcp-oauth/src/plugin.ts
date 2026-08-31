@@ -34,6 +34,47 @@ import { SKILLPLANE_MCP_REDIRECT_POLICY } from "./redirect-policy.js";
 import { revokeToken } from "./revocation.js";
 import { createOAuthSchema } from "./schema.js";
 
+interface McpFnDiagnosticEvent {
+  readonly code?: string;
+  readonly details?: Readonly<Record<string, unknown>>;
+}
+
+function isSafeCompatibilitySchemes(value: unknown): value is string[] {
+  if (!Array.isArray(value)) return false;
+  const schemes: unknown[] = value;
+  return (
+    schemes.length > 0 &&
+    schemes.length <= 10 &&
+    schemes.every(
+      (scheme) =>
+        typeof scheme === "string" && /^[a-z][a-z0-9+.-]{0,63}$/u.test(scheme),
+    )
+  );
+}
+
+function diagnosticMetadata(
+  event: McpFnDiagnosticEvent,
+): Readonly<Record<string, unknown>> | undefined {
+  const metadata: Record<string, unknown> = {};
+  if (event.code) metadata.code = event.code;
+  const details = event.details;
+  const compatibilitySchemes = details?.compatibilityRedirectSchemes;
+  const compatibilityCount = details?.compatibilityRedirectCount;
+  if (
+    details?.privateUseSchemePolicy === "compatible" &&
+    isSafeCompatibilitySchemes(compatibilitySchemes) &&
+    typeof compatibilityCount === "number" &&
+    Number.isSafeInteger(compatibilityCount) &&
+    compatibilityCount >= compatibilitySchemes.length &&
+    compatibilityCount <= 100
+  ) {
+    metadata.privateUseSchemePolicy = "compatible";
+    metadata.compatibilityRedirectSchemes = [...compatibilitySchemes];
+    metadata.compatibilityRedirectCount = compatibilityCount;
+  }
+  return Object.keys(metadata).length > 0 ? metadata : undefined;
+}
+
 async function tokenRateLimit(
   runtime: OAuthRuntime,
   clientId: string,
@@ -204,6 +245,7 @@ function compatibilityOptions(
       revocation_endpoint_auth_methods_supported: ["none"],
     },
     diagnostics: async (event) => {
+      const metadata = diagnosticMetadata(event);
       await runtime.emit({
         type: `mcpfn.oauth.${event.phase}`,
         requestId: `oauth:${crypto.randomUUID()}`,
@@ -211,7 +253,7 @@ function compatibilityOptions(
         ...(event.details?.clientId && typeof event.details.clientId === "string"
           ? { clientId: event.details.clientId }
           : {}),
-        ...(event.code ? { metadata: { code: event.code } } : {}),
+        ...(metadata ? { metadata } : {}),
       });
     },
   };
