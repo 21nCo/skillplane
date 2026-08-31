@@ -30,6 +30,11 @@ const topology = {
   cells: [
     {
       regionId: "in-south",
+      placement: {
+        displayName: "India South",
+        latitude: 19.076,
+        longitude: 72.8777,
+      },
       databaseBinding: "CELL_DATABASE",
       objectStorageBinding: "CELL_BUNDLES",
       appServiceBinding: "CELL_APP",
@@ -38,6 +43,11 @@ const topology = {
     },
     {
       regionId: "us-east",
+      placement: {
+        displayName: "US East",
+        latitude: 39.0438,
+        longitude: -77.4874,
+      },
       databaseBinding: "OTHER_DATABASE",
       objectStorageBinding: "OTHER_BUNDLES",
       appServiceBinding: "OTHER_APP",
@@ -69,6 +79,53 @@ const gatewayBindings = {
 };
 
 describe("API scope classification", () => {
+  it("replaces a public placement header with the trusted edge recommendation", async () => {
+    const routed = createRoutedApiApplication({
+      local: {
+        fetch: async (request) =>
+          Response.json({
+            regionId: request.headers.get("x-skillplane-placement-region"),
+          }),
+      },
+      services: async () => {
+        throw new Error("global route must not initialize routing services");
+      },
+    });
+    const request = Object.assign(
+      new Request("http://localhost:5700/api/v1/workspaces", {
+        headers: { "x-skillplane-placement-region": "us-east" },
+      }),
+      { cf: { latitude: "19.076", longitude: "72.8777", continent: "AS" } },
+    );
+
+    const response = await routed.fetch(request, gatewayBindings);
+
+    await expect(response.json()).resolves.toEqual({ regionId: "in-south" });
+  });
+
+  it("removes a public placement header when edge location is unavailable", async () => {
+    const routed = createRoutedApiApplication({
+      local: {
+        fetch: async (request) =>
+          Response.json({
+            regionId: request.headers.get("x-skillplane-placement-region"),
+          }),
+      },
+      services: async () => {
+        throw new Error("global route must not initialize routing services");
+      },
+    });
+
+    const response = await routed.fetch(
+      new Request("http://localhost:5700/api/v1/workspaces", {
+        headers: { "x-skillplane-placement-region": "us-east" },
+      }),
+      gatewayBindings,
+    );
+
+    await expect(response.json()).resolves.toEqual({ regionId: null });
+  });
+
   it("keeps identity, membership, and public projection routes global", () => {
     for (const path of [
       "/auth/session",

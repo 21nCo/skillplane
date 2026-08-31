@@ -209,6 +209,16 @@ export async function buildApiServices(
       database,
       controlDatabase,
       workspaceRegions: runtime.deployment.topology.cells.map((cell) => cell.regionId),
+      workspaceRegionCandidates: runtime.deployment.topology.cells.map((cell) => ({
+        regionId: cell.regionId,
+        displayName: cell.placement?.displayName ?? cell.regionId,
+        ...(cell.placement
+          ? {
+              latitude: cell.placement.latitude,
+              longitude: cell.placement.longitude,
+            }
+          : {}),
+      })),
       deploymentRole: runtime.deployment.role,
       auth,
       datafn,

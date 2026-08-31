@@ -14,6 +14,10 @@ import { InvalidAuthenticationError } from "@skillplane/domain";
 import { collectDatafnStructuralResources } from "@skillplane/datafn";
 import { authenticateServicePrincipalRequest } from "./service-principal-auth.js";
 import type { ApiServiceProvider, ApiServices } from "./context.js";
+import {
+  recommendedWorkspaceRegionFromEdge,
+  TRUSTED_WORKSPACE_REGION_HEADER,
+} from "./workspace-placement.js";
 
 interface FetchApplication {
   fetch(request: Request, bindings: RuntimeBindings): Response | Promise<Response>;
@@ -254,13 +258,20 @@ function serviceBinding(value: unknown): ServiceBinding | null {
     : null;
 }
 
-function cleanPublicRequest(request: Request): Request {
+function cleanPublicRequest(
+  request: Request,
+  recommendedWorkspaceRegion: string | null = null,
+): Request {
   const headers = new Headers(request.headers);
   headers.delete("x-skillplane-routed-workspace-id");
   headers.delete("x-skillplane-routing-region");
   headers.delete("x-skillplane-routing-epoch");
   headers.delete("x-datafn-routing-assertion");
   headers.delete(PUBLIC_SKILL_READ_HEADER);
+  headers.delete(TRUSTED_WORKSPACE_REGION_HEADER);
+  if (recommendedWorkspaceRegion) {
+    headers.set(TRUSTED_WORKSPACE_REGION_HEADER, recommendedWorkspaceRegion);
+  }
   return new Request(request, { headers });
 }
 
@@ -328,8 +339,24 @@ export function createRoutedApiApplication(input: {
       // Only public ingress is allowed to discard caller-supplied routing
       // metadata. Regional cells receive these headers from the trusted
       // service-binding hop and must retain them for assertion verification.
+      const regionCandidates = runtime.deployment.topology.cells.map((cell) => ({
+        regionId: cell.regionId,
+        displayName: cell.placement?.displayName ?? cell.regionId,
+        ...(cell.placement
+          ? {
+              latitude: cell.placement.latitude,
+              longitude: cell.placement.longitude,
+            }
+          : {}),
+      }));
+      const recommendedWorkspaceRegion =
+        runtime.deployment.role === "gateway"
+          ? recommendedWorkspaceRegionFromEdge(incoming, regionCandidates)
+          : null;
       const request =
-        runtime.deployment.role === "cell" ? incoming : cleanPublicRequest(incoming);
+        runtime.deployment.role === "cell"
+          ? incoming
+          : cleanPublicRequest(incoming, recommendedWorkspaceRegion);
       if (runtime.deployment.role === "single") {
         return await input.local.fetch(request, bindings);
       }

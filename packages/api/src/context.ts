@@ -20,6 +20,7 @@ import type { SkillplaneDatafnContext } from "@skillplane/datafn";
 import type { SkillplaneSendFn } from "@skillplane/email";
 import type { R2BundleRepository } from "@skillplane/storage";
 import type { PublicSkillProjectionService } from "./public-projections.js";
+import type { WorkspaceRegionCandidate } from "@skillplane/control-plane";
 
 export interface ApiServices {
   /** Regional workspace database, or the combined database in compatibility mode. */
@@ -27,6 +28,7 @@ export interface ApiServices {
   /** Global identity, membership, OAuth, placement, and projection authority. */
   readonly controlDatabase: DatabaseClient;
   readonly workspaceRegions: readonly string[];
+  readonly workspaceRegionCandidates: readonly WorkspaceRegionCandidate[];
   readonly deploymentRole: "single" | "gateway" | "control" | "cell";
   readonly auth: SkillplaneAuthServer;
   readonly email: SkillplaneSendFn | null;

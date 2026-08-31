@@ -47,6 +47,14 @@ const mcpResource = z.url().refine((value) => {
 const cellSchema = z
   .object({
     regionId: identifier,
+    placement: z
+      .object({
+        displayName: z.string().trim().min(1).max(80),
+        latitude: z.number().min(-90).max(90),
+        longitude: z.number().min(-180).max(180),
+      })
+      .strict()
+      .optional(),
     databaseBinding: bindingName,
     objectStorageBinding: bindingName,
     appServiceBinding: bindingName,
@@ -233,6 +241,11 @@ export function createSingleCellTopology(input: {
     cells: [
       {
         regionId: input.regionId ?? "local",
+        placement: {
+          displayName: "Local",
+          latitude: 0,
+          longitude: 0,
+        },
         databaseBinding: input.regionalDatabaseBinding ?? "CELL_HYPERDRIVE",
         objectStorageBinding:
           input.regionalObjectStorageBinding ?? "CELL_SKILL_BUNDLES",

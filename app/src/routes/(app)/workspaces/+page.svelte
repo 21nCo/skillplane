@@ -14,6 +14,7 @@
   let createOpen = $state(false);
   let createName = $state("");
   let createSlug = $state("");
+  let createRegionId = $state("");
   let createState = $state<"idle" | "saving">("idle");
   let createError = $state<string | null>(null);
   let savedMessage = $state<string | null>(null);
@@ -26,6 +27,12 @@
     editName = store.active?.name ?? "";
     editSlug = store.active?.slug ?? "";
     editError = null;
+  });
+
+  $effect(() => {
+    if (createOpen && !createRegionId && store.recommendedRegionId) {
+      createRegionId = store.recommendedRegionId;
+    }
   });
 
   function slugFromName() {
@@ -47,12 +54,17 @@
         workspace: { id: string; name: string };
       }>("/api/v1/workspaces", {
         method: "POST",
-        ...jsonBody({ name: createName, slug: createSlug }),
+        ...jsonBody({
+          name: createName,
+          slug: createSlug,
+          regionId: createRegionId,
+        }),
       });
       await store.refresh(data.workspace.id);
       createOpen = false;
       createName = "";
       createSlug = "";
+      createRegionId = "";
       savedMessage = `${data.workspace.name} was created.`;
     } catch (error) {
       createError =
@@ -138,6 +150,33 @@
             aria-describedby={createError ? "create-error" : undefined}
           />
         </label>
+        <fieldset>
+          <legend>Data region</legend>
+          <p class="field-help">
+            Choose where this workspace's private data and execution will live. This
+            cannot be changed without a managed workspace move.
+          </p>
+          <div class="region-options">
+            {#each store.regions as region (region.id)}
+              <label class:recommended={region.id === store.recommendedRegionId}>
+                <input
+                  required
+                  type="radio"
+                  name="workspace-region"
+                  value={region.id}
+                  bind:group={createRegionId}
+                />
+                <span>
+                  <strong>{region.name}</strong>
+                  <small>{region.id}</small>
+                </span>
+                {#if region.id === store.recommendedRegionId}
+                  <em>Recommended</em>
+                {/if}
+              </label>
+            {/each}
+          </div>
+        </fieldset>
         <label>
           <span>Workspace URL</span>
           <div class="slug-input">
@@ -490,12 +529,88 @@
     gap: 0.9rem;
   }
 
-  label > span {
+  label > span,
+  legend {
     display: block;
     margin-bottom: 0.35rem;
     color: var(--text-secondary);
     font-size: 0.72rem;
     font-weight: 620;
+  }
+
+  fieldset {
+    min-width: 0;
+    margin: 0;
+    padding: 0;
+    border: 0;
+  }
+
+  legend {
+    padding: 0;
+  }
+
+  .field-help {
+    margin: 0 0 0.55rem;
+    color: var(--text-tertiary);
+    font-size: 0.7rem;
+    line-height: 1.45;
+  }
+
+  .region-options {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.55rem;
+  }
+
+  .region-options label {
+    position: relative;
+    display: grid;
+    min-width: 0;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 0.55rem;
+    align-items: center;
+    padding: 0.7rem;
+    border: 1px solid var(--border);
+    border-radius: 0.55rem;
+    background: var(--background);
+    cursor: pointer;
+  }
+
+  .region-options label:has(input:checked) {
+    border-color: var(--accent);
+    box-shadow: inset 0 0 0 1px var(--accent);
+  }
+
+  .region-options input {
+    width: 1rem;
+    height: 1rem;
+    padding: 0;
+    accent-color: var(--accent);
+  }
+
+  .region-options span,
+  .region-options strong,
+  .region-options small {
+    display: block;
+    min-width: 0;
+  }
+
+  .region-options strong {
+    font-size: 0.75rem;
+  }
+
+  .region-options small {
+    margin-top: 0.15rem;
+    color: var(--text-tertiary);
+    font-size: 0.64rem;
+  }
+
+  .region-options em {
+    grid-column: 2;
+    color: var(--accent-text);
+    font-size: 0.61rem;
+    font-style: normal;
+    font-weight: 680;
   }
 
   input {
@@ -605,6 +720,10 @@
     .create-panel {
       grid-template-columns: 1fr;
       gap: 1rem;
+    }
+
+    .region-options {
+      grid-template-columns: 1fr;
     }
   }
 

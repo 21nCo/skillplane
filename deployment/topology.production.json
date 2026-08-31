@@ -15,6 +15,11 @@
   "cells": [
     {
       "regionId": "in-south",
+      "placement": {
+        "displayName": "India South",
+        "latitude": 19.076,
+        "longitude": 72.8777
+      },
       "databaseBinding": "CELL_IN_SOUTH_HYPERDRIVE",
       "objectStorageBinding": "CELL_IN_SOUTH_BUNDLES",
       "appServiceBinding": "CELL_IN_SOUTH_APP",
@@ -23,6 +28,11 @@
     },
     {
       "regionId": "us-east",
+      "placement": {
+        "displayName": "US East",
+        "latitude": 39.0438,
+        "longitude": -77.4874
+      },
       "databaseBinding": "CELL_US_EAST_HYPERDRIVE",
       "objectStorageBinding": "CELL_US_EAST_BUNDLES",
       "appServiceBinding": "CELL_US_EAST_APP",

@@ -103,6 +103,39 @@ describe("tenancy integration", () => {
       [owner.userId],
     );
     expect(count.rows[0]?.count).toBe("1");
+
+    const listing = await app.request("/api/v1/workspaces", {
+      headers: headers(owner),
+    });
+    const listingBody = await json<{
+      data: {
+        regions: readonly { id: string; name: string }[];
+        recommendedRegionId: string;
+      };
+    }>(listing);
+    expect(listingBody.data.regions).toEqual([{ id: "legacy", name: "Local" }]);
+    expect(listingBody.data.recommendedRegionId).toBe("legacy");
+  });
+
+  it("requires an explicit available region for organization workspaces", async () => {
+    for (const regionId of [undefined, "not-a-region"]) {
+      const response = await app.request("/api/v1/workspaces", {
+        method: "POST",
+        headers: {
+          ...headers(owner),
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          name: `Rejected ${suffix}`,
+          slug: `rejected-${suffix}`,
+          ...(regionId ? { regionId } : {}),
+        }),
+      });
+      expect(response.status).toBe(400);
+      await expect(response.text()).resolves.toContain(
+        "Select an available workspace region",
+      );
+    }
   });
 
   it("creates an organization and preserves the final-owner invariant", async () => {
@@ -115,6 +148,7 @@ describe("tenancy integration", () => {
       body: JSON.stringify({
         name: `Tenancy ${suffix}`,
         slug: `tenancy-${suffix}`,
+        regionId: "legacy",
       }),
     });
     expect(created.status).toBe(201);
@@ -123,6 +157,21 @@ describe("tenancy integration", () => {
     }>(created);
     organizationId = body.data.workspace.id;
     expect(body.data.workspace.role).toBe("owner");
+    const placement = await services.controlDatabase.pool.query<{
+      region_id: string;
+      epoch: string;
+      state: string;
+    }>(
+      `SELECT region_id, epoch, state
+         FROM workspace_placements
+        WHERE workspace_id = $1`,
+      [organizationId],
+    );
+    expect(placement.rows[0]).toMatchObject({
+      region_id: "legacy",
+      epoch: "1",
+      state: "active",
+    });
 
     const removal = await app.request(
       `/api/v1/workspaces/${organizationId}/members/${owner.userId}`,

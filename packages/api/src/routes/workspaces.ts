@@ -7,16 +7,32 @@ import {
   normalizeWorkspaceSlug,
   parseWorkspaceRole,
 } from "@skillplane/domain";
-import { selectInitialWorkspaceRegion } from "@skillplane/control-plane";
 import type { Hono } from "hono";
 import { writeControlPlaneAudit } from "../control-audit.js";
 import type { ApiEnvironment } from "../context.js";
 import { success } from "../envelopes.js";
 import { lockWorkspaceMemberships, membershipRole } from "../tenancy.js";
+import { initialWorkspaceRegionForRequest } from "../workspace-placement.js";
 import { isPostgresUniqueViolation, readJsonObject, workspaceUser } from "./shared.js";
 
 function id(prefix: string): string {
   return `${prefix}:${crypto.randomUUID()}`;
+}
+
+function requestedWorkspaceRegion(
+  value: unknown,
+  availableRegions: readonly string[],
+): string {
+  const regionId = typeof value === "string" ? value.trim() : "";
+  if (!regionId || !availableRegions.includes(regionId)) {
+    throw new DomainError(
+      "VALIDATION_FAILED",
+      "Select an available workspace region",
+      400,
+      { field: "regionId" },
+    );
+  }
+  return regionId;
 }
 
 export function registerWorkspaceRoutes(app: Hono<ApiEnvironment>): void {
@@ -45,6 +61,11 @@ export function registerWorkspaceRoutes(app: Hono<ApiEnvironment>): void {
         ORDER BY CASE w.kind WHEN 'personal' THEN 0 ELSE 1 END, w.name, w.id`,
       [session.actorId],
     );
+    const recommendedRegionId = initialWorkspaceRegionForRequest(
+      context.req.raw,
+      services,
+      session.actorId,
+    );
     return context.json(
       success(context, {
         workspaces: result.rows.map((row) => ({
@@ -55,6 +76,11 @@ export function registerWorkspaceRoutes(app: Hono<ApiEnvironment>): void {
           role: row.role,
           updatedAt: row.updated_at.toISOString(),
         })),
+        regions: services.workspaceRegionCandidates.map((region) => ({
+          id: region.regionId,
+          name: region.displayName,
+        })),
+        recommendedRegionId,
       }),
     );
   });
@@ -73,8 +99,8 @@ export function registerWorkspaceRoutes(app: Hono<ApiEnvironment>): void {
     const name = normalizeWorkspaceName(body.name);
     const slug = normalizeWorkspaceSlug(body.slug);
     const workspaceId = id("workspace");
-    const homeRegionId = selectInitialWorkspaceRegion(
-      workspaceId,
+    const homeRegionId = requestedWorkspaceRegion(
+      body.regionId,
       services.workspaceRegions,
     );
     const client = await services.controlDatabase.pool.connect();
@@ -117,7 +143,12 @@ export function registerWorkspaceRoutes(app: Hono<ApiEnvironment>): void {
         resourceId: workspaceId,
         channel: "app",
         retentionClass: "permanent",
-        metadata: { kind: "organization", homeRegionId, placementEpoch: 1 },
+        metadata: {
+          kind: "organization",
+          homeRegionId,
+          placementEpoch: 1,
+          placementSource: "user_selected",
+        },
       });
       await client.query("COMMIT");
     } catch (error) {
