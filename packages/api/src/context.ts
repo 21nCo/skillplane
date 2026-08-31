@@ -16,11 +16,15 @@ import type {
   SkillVersionService,
 } from "@skillplane/domain";
 import type { DatafnServer } from "@datafn/server";
+import type { DatafnPlacementRegionCandidate } from "@datafn/server/placement";
 import type { SkillplaneDatafnContext } from "@skillplane/datafn";
 import type { SkillplaneSendFn } from "@skillplane/email";
 import type { R2BundleRepository } from "@skillplane/storage";
 import type { PublicSkillProjectionService } from "./public-projections.js";
-import type { WorkspaceRegionCandidate } from "@skillplane/control-plane";
+
+export interface WorkspaceRegionCandidate extends DatafnPlacementRegionCandidate {
+  readonly displayName: string;
+}
 
 export interface ApiServices {
   /** Regional workspace database, or the combined database in compatibility mode. */

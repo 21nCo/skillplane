@@ -34,8 +34,8 @@ catalogs:
       specifier: 0.1.0
       version: 0.1.0
     '@datafn/server':
-      specifier: 0.1.0
-      version: 0.1.0
+      specifier: 0.1.1
+      version: 0.1.1
     '@fontsource-variable/dm-sans':
       specifier: 5.3.0
       version: 5.3.0
@@ -417,7 +417,7 @@ importers:
     dependencies:
       '@datafn/server':
         specifier: 'catalog:'
-        version: 0.1.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
+        version: 0.1.1(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
       '@skillplane/auth':
         specifier: workspace:*
         version: link:../auth
@@ -562,7 +562,7 @@ importers:
     dependencies:
       '@datafn/server':
         specifier: 'catalog:'
-        version: 0.1.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
+        version: 0.1.1(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
       '@superfunctions/db':
         specifier: 'catalog:'
         version: 0.2.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
@@ -587,7 +587,7 @@ importers:
         version: 0.1.0
       '@datafn/server':
         specifier: 'catalog:'
-        version: 0.1.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
+        version: 0.1.1(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
       '@skillplane/db':
         specifier: workspace:*
         version: link:../db
@@ -1232,8 +1232,8 @@ packages:
     resolution: {integrity: sha512-23m5c1bqkATc8IdqS6BIHktClkNcSHW+9pTcanov4q++GKx6gOQ09oIA1DHToqDD9fPyFK3iW0Nh5syaM3aDgA==}
     engines: {node: '>=18.18.0'}
 
-  '@datafn/server@0.1.0':
-    resolution: {integrity: sha512-fzbsZl2JiCxyyCHnEGZDfNP7fUMcBRvpJEcqM8hTascinekN3cP3ONwbJVIHUvi54WHqY3QjLfRNid0iA8Kdvw==}
+  '@datafn/server@0.1.1':
+    resolution: {integrity: sha512-09T6sA5s96D5Oj4wHyW2VHr7bkuVUD3omZTv5Tf22/xtmmMcX+aisES4LMopPbqTjaMQSFNV6oDfasUJlzM81g==}
     engines: {node: '>=18.18.0'}
 
   '@dotenvx/dotenvx@1.31.0':
@@ -7405,7 +7405,7 @@ snapshots:
 
   '@datafn/core@0.1.0': {}
 
-  '@datafn/server@0.1.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))':
+  '@datafn/server@0.1.1(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))':
     dependencies:
       '@datafn/core': 0.1.0
       '@superfunctions/db': 0.2.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))

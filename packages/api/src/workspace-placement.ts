@@ -1,59 +1,28 @@
 import {
-  selectInitialWorkspaceRegion,
-  selectNearestWorkspaceRegion,
-  type WorkspaceClientLocation,
-  type WorkspaceRegionCandidate,
-} from "@skillplane/control-plane";
+  readDatafnCloudflarePlacementLocation,
+  selectDatafnPlacementRegion,
+  type DatafnPlacementLocation,
+} from "@datafn/server/placement";
 import { DomainError } from "@skillplane/domain";
-import type { ApiServices } from "./context.js";
+import type { ApiServices, WorkspaceRegionCandidate } from "./context.js";
 
 export const TRUSTED_WORKSPACE_REGION_HEADER = "x-skillplane-placement-region";
 
-interface CloudflareLocationRequest extends Request {
-  readonly cf?: {
-    readonly continent?: unknown;
-    readonly latitude?: unknown;
-    readonly longitude?: unknown;
-  };
-}
-
-function coordinate(
-  value: unknown,
-  minimum: number,
-  maximum: number,
-): number | undefined {
-  const parsed = typeof value === "number" ? value : Number(value);
-  return Number.isFinite(parsed) && parsed >= minimum && parsed <= maximum
-    ? parsed
-    : undefined;
-}
-
 export function clientLocationFromEdgeRequest(
   request: Request,
-): WorkspaceClientLocation | null {
-  const cf = (request as CloudflareLocationRequest).cf;
-  if (!cf) return null;
-  const latitude = coordinate(cf.latitude, -90, 90);
-  const longitude = coordinate(cf.longitude, -180, 180);
-  const continent =
-    typeof cf.continent === "string" && /^[A-Za-z]{2}$/u.test(cf.continent)
-      ? cf.continent.toUpperCase()
-      : undefined;
-  if (latitude === undefined && longitude === undefined && !continent) return null;
-  return {
-    ...(latitude === undefined ? {} : { latitude }),
-    ...(longitude === undefined ? {} : { longitude }),
-    ...(continent ? { continent } : {}),
-  };
+): DatafnPlacementLocation | null {
+  return readDatafnCloudflarePlacementLocation(request);
 }
 
 export function recommendedWorkspaceRegionFromEdge(
   request: Request,
   candidates: readonly WorkspaceRegionCandidate[],
 ): string | null {
-  return selectNearestWorkspaceRegion(
-    clientLocationFromEdgeRequest(request),
-    candidates,
+  return (
+    selectDatafnPlacementRegion({
+      candidates,
+      location: clientLocationFromEdgeRequest(request),
+    })?.regionId ?? null
   );
 }
 
@@ -79,9 +48,17 @@ export function initialWorkspaceRegionForRequest(
       503,
     );
   }
-  return selectInitialWorkspaceRegion(
-    workspaceKey,
-    services.workspaceRegions,
+  const decision = selectDatafnPlacementRegion({
+    candidates: services.workspaceRegions.map((regionId) => ({ regionId })),
     preferredRegionId,
-  );
+    ...(services.deploymentRole === "gateway" ? {} : { stableKey: workspaceKey }),
+  });
+  if (!decision) {
+    throw new DomainError(
+      "WORKSPACE_REGION_UNAVAILABLE",
+      "A workspace region could not be determined",
+      503,
+    );
+  }
+  return decision.regionId;
 }
