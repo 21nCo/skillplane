@@ -309,24 +309,14 @@ export function createApiServiceProvider(
   options: BuildApiServicesOptions = {},
   build: typeof buildApiServices = buildApiServices,
 ): ApiServiceProvider {
-  let services: Promise<ApiServices> | null = null;
-
-  const getServices = (bindings: RuntimeBindings): Promise<ApiServices> => {
-    services ??= build(bindings, options).catch((error: unknown) => {
-      services = null;
-      throw error;
-    });
-    return services;
-  };
-
-  return Object.assign(getServices, {
-    // Request completion must not tear down worker-lifetime DB pools, AuthFn,
-    // or DataFn state. Cloudflare disposes the isolate as a unit.
-    release: () => Promise.resolve(),
-    close: async () => {
-      const current = services;
-      services = null;
-      if (current) await closeApiServices(await current);
+  return Object.assign(
+    (bindings: RuntimeBindings) => build(bindings, options),
+    {
+      // Database clients must remain request-scoped in Cloudflare Workers.
+      // Hyperdrive owns the reusable origin pool and the runtime discards the
+      // request-side connections when the invocation ends, so explicitly ending
+      // each pg pool here only adds teardown latency.
+      release: () => Promise.resolve(),
     },
-  });
+  );
 }

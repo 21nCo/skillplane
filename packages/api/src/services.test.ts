@@ -24,23 +24,7 @@ function disposableServices() {
 }
 
 describe("createApiServiceProvider", () => {
-  it("reuses one worker-lifetime service graph across requests", async () => {
-    const first = disposableServices();
-    const build = vi.fn(async () => first.services);
-    const provider = createApiServiceProvider({}, build);
-    const bindings = {} as RuntimeBindings;
-
-    const [left, right] = await Promise.all([provider(bindings), provider(bindings)]);
-    await provider.release?.(left);
-
-    expect(left).toBe(first.services);
-    expect(right).toBe(first.services);
-    expect(build).toHaveBeenCalledOnce();
-    expect(first.datafnClose).not.toHaveBeenCalled();
-    expect(first.controlDatabaseClose).not.toHaveBeenCalled();
-  });
-
-  it("closes cached services explicitly and rebuilds after shutdown", async () => {
+  it("creates a request-scoped service graph for every invocation", async () => {
     const first = disposableServices();
     const second = disposableServices();
     const build = vi
@@ -50,15 +34,16 @@ describe("createApiServiceProvider", () => {
     const provider = createApiServiceProvider({}, build);
     const bindings = {} as RuntimeBindings;
 
-    await provider(bindings);
-    await provider.close?.();
-    expect(first.datafnClose).toHaveBeenCalledOnce();
-    expect(first.emailClose).toHaveBeenCalledOnce();
-    expect(first.databaseClose).toHaveBeenCalledOnce();
-    expect(first.controlDatabaseClose).toHaveBeenCalledOnce();
+    const [left, right] = await Promise.all([provider(bindings), provider(bindings)]);
+    await provider.release?.(left);
 
-    await expect(provider(bindings)).resolves.toBe(second.services);
+    expect(left).toBe(first.services);
+    expect(right).toBe(second.services);
     expect(build).toHaveBeenCalledTimes(2);
+    expect(first.datafnClose).not.toHaveBeenCalled();
+    expect(first.controlDatabaseClose).not.toHaveBeenCalled();
+    expect(second.datafnClose).not.toHaveBeenCalled();
+    expect(second.controlDatabaseClose).not.toHaveBeenCalled();
   });
 
   it("allows a failed initialization to be retried", async () => {

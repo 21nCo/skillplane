@@ -13,12 +13,7 @@ const services = Object.assign(
     bindings.SKILLPLANE_ROLE === "cell"
       ? cellServices(bindings)
       : fullServices(bindings),
-  {
-    release: () => Promise.resolve(),
-    close: async () => {
-      await Promise.all([fullServices.close?.(), cellServices.close?.()]);
-    },
-  },
+  { release: () => Promise.resolve() },
 );
 const localApi = createApiApp({
   serviceName: "skillplane-app",
