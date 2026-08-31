@@ -330,6 +330,14 @@ export function createRoutedApiApplication(input: {
   readonly local: FetchApplication;
   readonly services: ApiServiceProvider;
 }): FetchApplication {
+  let gatewayCache:
+    | {
+        readonly services: ApiServices;
+        readonly gateway: ReturnType<typeof createWorkspaceGateway>;
+        readonly setBindings: (bindings: RuntimeBindings) => void;
+      }
+    | undefined;
+
   return {
     async fetch(incoming, bindings) {
       const runtime = parseRuntimeConfig(
@@ -403,42 +411,73 @@ export function createRoutedApiApplication(input: {
           const resolved = await resolveWorkspace(request, scope, services, {
             allowPublicRead: publicSkillVersionRead,
           });
-          const forwardedRequest = resolved.publicRead
-            ? new Request(request, { headers: new Headers(request.headers) })
-            : request;
+          const forwardedRequest = new Request(request, {
+            headers: new Headers(request.headers),
+          });
+          // Public callers cannot supply this header because cleanPublicRequest
+          // strips it. It carries the already-authorized workspace into the
+          // reusable gateway without closing over request-scoped identity.
+          forwardedRequest.headers.set(
+            "x-skillplane-routed-workspace-id",
+            resolved.workspaceId,
+          );
           if (resolved.publicRead) {
             forwardedRequest.headers.set(PUBLIC_SKILL_READ_HEADER, "1");
           }
-          const assertions = createWorkspaceRoutingAssertions({
-            activeKeyId: runtime.routing.activeKeyId,
-            keys: runtime.routing.keys,
-          });
-          const gateway = createWorkspaceGateway({
-            directory: createPostgresWorkspacePlacementDirectory(
-              services.controlDatabase.pool,
-            ),
-            resolveAuthorizedWorkspace: () => Promise.resolve(resolved.workspaceId),
-            cells: {
-              resolve: ({ regionId }) => {
-                const cell = runtime.deployment.topology.cells.find(
-                  (candidate) => candidate.regionId === regionId,
+          if (gatewayCache?.services !== services) {
+            let activeBindings = bindings;
+            const assertions = createWorkspaceRoutingAssertions({
+              activeKeyId: runtime.routing.activeKeyId,
+              keys: runtime.routing.keys,
+            });
+            const gateway = createWorkspaceGateway({
+              directory: createPostgresWorkspacePlacementDirectory(
+                services.controlDatabase.pool,
+              ),
+              resolveAuthorizedWorkspace: (routedRequest) => {
+                const workspaceId = routedRequest.headers.get(
+                  "x-skillplane-routed-workspace-id",
                 );
-                const binding = cell
-                  ? serviceBinding(bindings[cell.appServiceBinding])
-                  : null;
-                if (!cell || !binding) throw new Error("regional app unavailable");
-                return {
-                  regionId,
-                  fetch: (forwarded) => Promise.resolve(binding.fetch(forwarded)),
-                };
+                if (!workspaceId) {
+                  throw new ApiRoutingError(
+                    401,
+                    "WORKSPACE_ROUTING_ASSERTION_REQUIRED",
+                    "An authorized workspace route is required",
+                  );
+                }
+                return Promise.resolve(workspaceId);
               },
-            },
-            signer: assertions,
-            assertionAudience: runtime.routing.audience,
-            assertionTtlMs: runtime.routing.ttlMs,
-            onEvent: (event) => logWorkspaceRoutingEvent("app", event),
-          });
-          return await gateway.handle(forwardedRequest);
+              cells: {
+                resolve: ({ regionId }) => {
+                  const cell = runtime.deployment.topology.cells.find(
+                    (candidate) => candidate.regionId === regionId,
+                  );
+                  const binding = cell
+                    ? serviceBinding(activeBindings[cell.appServiceBinding])
+                    : null;
+                  if (!cell || !binding) throw new Error("regional app unavailable");
+                  return {
+                    regionId,
+                    fetch: (forwarded) => Promise.resolve(binding.fetch(forwarded)),
+                  };
+                },
+              },
+              signer: assertions,
+              assertionAudience: runtime.routing.audience,
+              assertionTtlMs: runtime.routing.ttlMs,
+              onEvent: (event) => logWorkspaceRoutingEvent("app", event),
+            });
+            gatewayCache = {
+              services,
+              gateway,
+              setBindings: (nextBindings) => {
+                activeBindings = nextBindings;
+              },
+            };
+          } else {
+            gatewayCache.setBindings(bindings);
+          }
+          return await gatewayCache.gateway.handle(forwardedRequest);
         } catch (error) {
           if (error instanceof ApiRoutingError) return error.response();
           if (error instanceof DatafnRoutingError) return error.toResponse();
