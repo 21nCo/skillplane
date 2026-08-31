@@ -88,6 +88,8 @@ describe("global public projection search", () => {
     const current = await service.getCurrentBySkillId("skill:public");
     expect(current.skill.id).toBe("skill:public");
     expect(current.skill.visibility).toBe("public");
+    expect(current.skill.currentSemanticVersion).toBe("1.0.0");
+    expect(current.skill.archivedAt).toBeNull();
     expect(current.version.publishedAt).toBe("2026-08-01T00:00:00.000Z");
     expect(calls[0]).toContain("JOIN public_skill_projection_heads head");
     expect(calls[0]).toContain("head.current_version_id = projection.version_id");

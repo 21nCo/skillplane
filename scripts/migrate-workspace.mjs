@@ -5,6 +5,7 @@ import {
   PostgresWorkspaceMigrationJournal,
   PostgresWorkspaceMigrationOperations,
   createPostgresWorkspacePlacementDirectory,
+  isWorkspaceMigrationRecoveryPending,
   migrateWorkspaceWithJournal,
   runWorkspaceRollbackDrill,
 } from "../packages/control-plane/dist/index.js";
@@ -25,6 +26,10 @@ export function assertDistinctMigrationBuckets(sourceBucket, targetBucket) {
     );
   }
   return { sourceBucket, targetBucket };
+}
+
+export function requiresWorkspaceRollbackDrill(placement) {
+  return placement === null || !isWorkspaceMigrationRecoveryPending(placement);
 }
 
 export async function migrateConfiguredWorkspace() {
@@ -62,12 +67,15 @@ export async function migrateConfiguredWorkspace() {
       new WranglerR2MigrationStore(buckets.targetBucket),
     );
     const directory = createPostgresWorkspacePlacementDirectory(control);
-    await runWorkspaceRollbackDrill({
-      directory,
-      workspaceId,
-      targetRegionId,
-      operations,
-    });
+    const placement = await directory.get(workspaceId);
+    if (requiresWorkspaceRollbackDrill(placement)) {
+      await runWorkspaceRollbackDrill({
+        directory,
+        workspaceId,
+        targetRegionId,
+        operations,
+      });
+    }
     return await migrateWorkspaceWithJournal({
       directory,
       journal: new PostgresWorkspaceMigrationJournal(control),

@@ -110,11 +110,15 @@ describe("concrete workspace migration", () => {
     expect(snapshot.release).not.toHaveBeenCalled();
   });
 
-  it("keeps the source-cell fence after the retained snapshot is released", async () => {
+  it("keeps the source fence and clears a stale target fence before activation", async () => {
     const snapshot = client();
     const source = {
       query: vi.fn(async () => ({ rows: [] })),
       connect: vi.fn<() => Promise<MigrationSqlClient>>().mockResolvedValue(snapshot),
+    } satisfies MigrationSqlPool;
+    const target = {
+      query: vi.fn(async () => ({ rows: [] })),
+      connect: vi.fn<() => Promise<MigrationSqlClient>>().mockResolvedValue(client()),
     } satisfies MigrationSqlPool;
     const unusedObjects = {
       read: vi.fn(async () => new Uint8Array()),
@@ -123,7 +127,7 @@ describe("concrete workspace migration", () => {
     };
     const operations = new PostgresWorkspaceMigrationOperations(
       source,
-      source,
+      target,
       source,
       unusedObjects,
       unusedObjects,
@@ -141,6 +145,10 @@ describe("concrete workspace migration", () => {
     expect(snapshot.query).toHaveBeenCalledWith("COMMIT");
     expect(source.query).not.toHaveBeenCalledWith(
       expect.stringContaining("regional_workspace_migration_fences"),
+      ["workspace:a"],
+    );
+    expect(target.query).toHaveBeenCalledWith(
+      expect.stringContaining("source_epoch = 0"),
       ["workspace:a"],
     );
   });

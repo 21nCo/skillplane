@@ -445,7 +445,16 @@ export class PostgresWorkspaceMigrationOperations implements WorkspaceMigrationO
   }
 
   async resumeTarget(context: DatafnNamespaceMigrationContext): Promise<void> {
-    void context;
+    // A cell can become the target after having previously been the source.
+    // Reset its retained tombstone before the placement becomes active again.
+    await this.target.query(
+      `INSERT INTO regional_workspace_migration_fences
+         (workspace_id, source_epoch, fenced_at)
+       VALUES ($1, 0, now())
+       ON CONFLICT (workspace_id)
+       DO UPDATE SET source_epoch = 0, fenced_at = now()`,
+      [context.namespace],
+    );
     // Keep the source-cell fence as a tombstone. It rejects even an old
     // repeatable-read transaction which reaches DML after activation.
     await this.releaseSource();

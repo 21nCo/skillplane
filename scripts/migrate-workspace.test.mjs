@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { assertDistinctMigrationBuckets } from "./migrate-workspace.mjs";
+import {
+  assertDistinctMigrationBuckets,
+  requiresWorkspaceRollbackDrill,
+} from "./migrate-workspace.mjs";
 
 describe("workspace migration bucket safety", () => {
   it("accepts separate source and target buckets", () => {
@@ -18,6 +21,26 @@ describe("workspace migration bucket safety", () => {
       () =>
         assertDistinctMigrationBuckets("skillplane-in-south", "skillplane-in-south"),
       /must be distinct/u,
+    );
+  });
+});
+
+describe("workspace migration recovery", () => {
+  it("runs the rollback drill only for a fresh active placement", () => {
+    assert.equal(
+      requiresWorkspaceRollbackDrill({ state: "active", migration: null }),
+      true,
+    );
+    assert.equal(
+      requiresWorkspaceRollbackDrill({ state: "moving", migration: null }),
+      false,
+    );
+    assert.equal(
+      requiresWorkspaceRollbackDrill({
+        state: "active",
+        migration: { phase: "resume-target" },
+      }),
+      false,
     );
   });
 });

@@ -169,6 +169,8 @@ function skill(row: ProjectionRow): SkillRecord & { readonly workspaceSlug: stri
     slug: row.skill_slug,
     visibility: "public" as const,
     currentPublishedVersionId: row.version_id,
+    currentSemanticVersion: row.semantic_version,
+    archivedAt: null,
   } as unknown as SkillRecord & { readonly workspaceSlug: string };
 }
 

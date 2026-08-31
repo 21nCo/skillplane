@@ -1,9 +1,49 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  assertDistinctTopologyCutoverBuckets,
   backupTopologyDatabases,
   completeTopologyCutover,
+  prepareLegacyControlDatabase,
 } from "./migrate-topology-databases.mjs";
+
+describe("topology cutover preparation", () => {
+  it("applies combined source migrations before control ownership", async () => {
+    const calls = [];
+    const result = await prepareLegacyControlDatabase(
+      "postgresql://fixture.invalid/skillplane",
+      async (_databaseUrl, options) => {
+        calls.push(options);
+        return { role: options.role };
+      },
+    );
+
+    assert.deepEqual(
+      calls.map((options) => options.role),
+      ["combined", "control"],
+    );
+    assert.equal(
+      calls.every((options) => options.finalizePhysicalOwnership === false),
+      true,
+    );
+    assert.deepEqual(result, { role: "control" });
+  });
+
+  it("rejects a cutover that points legacy and regional stores at one bucket", () => {
+    assert.throws(
+      () =>
+        assertDistinctTopologyCutoverBuckets("skillplane-legacy", "skillplane-legacy"),
+      /must be distinct/u,
+    );
+    assert.deepEqual(
+      assertDistinctTopologyCutoverBuckets("skillplane-legacy", "skillplane-in-south"),
+      {
+        legacyBucketName: "skillplane-legacy",
+        initialCellBucketName: "skillplane-in-south",
+      },
+    );
+  });
+});
 
 describe("topology database backups", () => {
   it("backs up and verifies the control database and every cell", async () => {

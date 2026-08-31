@@ -231,14 +231,19 @@ export class PublicationService {
             409,
           );
         }
-        await client.query(
+        const updatedSkill = await client.query<{ updated_at: Date }>(
           `UPDATE skills
                 SET current_published_version_id = $2,
                     published_search_text = $3,
                     updated_at = now()
-              WHERE id = $1`,
+              WHERE id = $1
+              RETURNING updated_at`,
           [options.skillId, options.candidateVersionId, instructions],
         );
+        const skillUpdatedAt = updatedSkill.rows[0]?.updated_at;
+        if (!skillUpdatedAt) {
+          throw new DomainError("SKILL_NOT_FOUND", "Skill was not found", 404);
+        }
         await insertPrincipalAudit(client, options.principal, {
           eventType: "skill.version.published",
           action: "skills:publish",
@@ -307,8 +312,10 @@ export class PublicationService {
                     tags: row.skill_tags ?? [],
                     visibility: "public",
                     currentPublishedVersionId: record.id,
+                    currentSemanticVersion: semanticVersion,
+                    archivedAt: null,
                     createdAt: row.skill_created_at?.toISOString(),
-                    updatedAt: row.skill_updated_at?.toISOString(),
+                    updatedAt: skillUpdatedAt.toISOString(),
                   },
                   version: record,
                 },

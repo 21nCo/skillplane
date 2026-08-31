@@ -211,8 +211,10 @@ export function registerWorkspaceRoutes(app: Hono<ApiEnvironment>): void {
       );
     }
     values.push(principal.workspaceId);
+    const client = await services.controlDatabase.pool.connect();
     try {
-      const result = await services.controlDatabase.pool.query<{
+      await client.query("BEGIN");
+      const result = await client.query<{
         id: string;
         kind: string;
         slug: string;
@@ -227,6 +229,15 @@ export function registerWorkspaceRoutes(app: Hono<ApiEnvironment>): void {
       );
       const row = result.rows[0];
       if (!row) throw new DomainError("NOT_FOUND", "Workspace was not found", 404);
+      if (body.slug !== undefined) {
+        await client.query(
+          `UPDATE public_skill_projections
+              SET workspace_slug = $2, updated_at = now()
+            WHERE workspace_id = $1`,
+          [row.id, row.slug],
+        );
+      }
+      await client.query("COMMIT");
       return context.json(
         success(context, {
           workspace: {
@@ -239,6 +250,7 @@ export function registerWorkspaceRoutes(app: Hono<ApiEnvironment>): void {
         }),
       );
     } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
       if (
         isPostgresUniqueViolation(error, "workspaces_slug_unique") ||
         isPostgresUniqueViolation(error, "workspaces_slug_key")
@@ -251,6 +263,8 @@ export function registerWorkspaceRoutes(app: Hono<ApiEnvironment>): void {
         );
       }
       throw error;
+    } finally {
+      client.release();
     }
   });
 

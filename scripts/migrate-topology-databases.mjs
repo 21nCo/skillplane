@@ -32,6 +32,37 @@ function regionBucketEnvironment(regionId) {
   return `SKILLPLANE_CELL_${regionId.replaceAll("-", "_").toUpperCase()}_BUCKET`;
 }
 
+export function assertDistinctTopologyCutoverBuckets(
+  legacyBucketName,
+  initialCellBucketName,
+) {
+  if (legacyBucketName === initialCellBucketName) {
+    throw new Error(
+      "SKILLPLANE_LEGACY_BUCKET and the initial cell bucket must be distinct",
+    );
+  }
+  return { legacyBucketName, initialCellBucketName };
+}
+
+export async function prepareLegacyControlDatabase(
+  databaseUrl,
+  migrate = migrateDatabase,
+) {
+  // The legacy database remains the regional copy source until cutover. Apply
+  // every source-side fence/outbox migration before switching its ownership
+  // role to control and eventually pruning regional tables.
+  await migrate(databaseUrl, {
+    role: "combined",
+    initialWorkspaceRegion: "legacy",
+    finalizePhysicalOwnership: false,
+  });
+  return migrate(databaseUrl, {
+    role: "control",
+    initialWorkspaceRegion: "legacy",
+    finalizePhysicalOwnership: false,
+  });
+}
+
 async function prepareRegionalDatabase(databaseUrl, regionId) {
   await migrateDatabase(databaseUrl, {
     role: "regional",
@@ -159,11 +190,7 @@ export async function migrateTopologyDatabases(options = {}) {
     );
   }
 
-  const preparedControl = await migrateDatabase(controlUrl, {
-    role: "control",
-    initialWorkspaceRegion: "legacy",
-    finalizePhysicalOwnership: false,
-  });
+  const preparedControl = await prepareLegacyControlDatabase(controlUrl);
   const controlPool = new Pool({
     connectionString: controlUrl,
     application_name: "skillplane-topology-cutover-control",
@@ -199,25 +226,25 @@ export async function migrateTopologyDatabases(options = {}) {
           WHERE id = 'legacy-to-cells'`,
         [initialWorkspaceRegion],
       );
+      const cutoverBuckets = assertDistinctTopologyCutoverBuckets(
+        requireBucketName(
+          options.legacyBucketName ??
+            process.env.SKILLPLANE_LEGACY_BUCKET ??
+            productionBucket,
+          "SKILLPLANE_LEGACY_BUCKET",
+        ),
+        requireBucketName(
+          options.initialCellBucketName ??
+            requireEnvironment(regionBucketEnvironment(initialWorkspaceRegion)),
+          regionBucketEnvironment(initialWorkspaceRegion),
+        ),
+      );
       const sourceObjects =
         options.sourceObjects ??
-        new WranglerR2MigrationStore(
-          requireBucketName(
-            options.legacyBucketName ??
-              process.env.SKILLPLANE_LEGACY_BUCKET ??
-              productionBucket,
-            "SKILLPLANE_LEGACY_BUCKET",
-          ),
-        );
+        new WranglerR2MigrationStore(cutoverBuckets.legacyBucketName);
       const regionalObjects =
         options.regionalObjects ??
-        new WranglerR2MigrationStore(
-          requireBucketName(
-            options.initialCellBucketName ??
-              requireEnvironment(regionBucketEnvironment(initialWorkspaceRegion)),
-            regionBucketEnvironment(initialWorkspaceRegion),
-          ),
-        );
+        new WranglerR2MigrationStore(cutoverBuckets.initialCellBucketName);
       const publicObjects =
         options.publicObjects ??
         new WranglerR2MigrationStore(

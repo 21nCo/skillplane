@@ -190,6 +190,47 @@ describe("tenancy integration", () => {
     expect(membership.rowCount).toBe(1);
   });
 
+  it("updates projected public URLs atomically with the workspace slug", async () => {
+    const projectedSkillId = `skill:workspace-slug-${suffix}`;
+    const projectedVersionId = `skill-version:workspace-slug-${suffix}`;
+    await services.controlDatabase.pool.query(
+      `INSERT INTO public_skill_projections
+         (workspace_id, workspace_slug, skill_id, skill_slug, version_id,
+          semantic_version, digest, object_key, document, search_text)
+       VALUES ($1, $2, $3, $4, $5, '1.0.0', $6, $7, '{}'::jsonb, '')`,
+      [
+        organizationId,
+        `tenancy-${suffix}`,
+        projectedSkillId,
+        `workspace-slug-${suffix}`,
+        projectedVersionId,
+        `sha256:${"a".repeat(64)}`,
+        `public/${projectedVersionId}.zip`,
+      ],
+    );
+    const nextSlug = `tenancy-renamed-${suffix}`;
+    const response = await app.request(`/api/v1/workspaces/${organizationId}`, {
+      method: "PATCH",
+      headers: {
+        ...headers(owner),
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ slug: nextSlug }),
+    });
+    expect(response.status).toBe(200);
+    await expect(
+      json<{ data: { workspace: { slug: string } } }>(response),
+    ).resolves.toMatchObject({ data: { workspace: { slug: nextSlug } } });
+    await expect(
+      services.controlDatabase.pool.query<{ workspace_slug: string }>(
+        `SELECT workspace_slug
+           FROM public_skill_projections
+          WHERE workspace_id = $1 AND skill_id = $2`,
+        [organizationId, projectedSkillId],
+      ),
+    ).resolves.toMatchObject({ rows: [{ workspace_slug: nextSlug }] });
+  });
+
   it("delivers an encrypted, hashed, role-scoped invitation", async () => {
     const response = await app.request(
       `/api/v1/workspaces/${organizationId}/invitations`,
