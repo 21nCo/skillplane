@@ -238,6 +238,9 @@ importers:
       '@skillplane/config':
         specifier: workspace:*
         version: link:../packages/config
+      '@skillplane/datafn':
+        specifier: workspace:*
+        version: link:../packages/datafn
       '@skillplane/ui':
         specifier: workspace:*
         version: link:../packages/ui

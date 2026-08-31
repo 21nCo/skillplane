@@ -7,7 +7,12 @@ import {
 } from "@datafn/server";
 import { resolveUserPrincipal, type DatabaseClient } from "@skillplane/db";
 import type { Principal } from "@skillplane/domain";
-import type { IndexedDirectoryStoreAdapter } from "@superfunctions/db";
+import type {
+  Adapter,
+  FindManyParams,
+  FindOneParams,
+  IndexedDirectoryStoreAdapter,
+} from "@superfunctions/db";
 import { collectDatafnStructuralResources } from "./resource-selectors.js";
 import { DATAFN_RESOURCE_NAMES, skillplaneDatafnSchema } from "./schema.js";
 
@@ -33,6 +38,38 @@ export interface CreateSkillplaneDatafnServerInput {
   readonly onTiming?: (event: Readonly<Record<string, unknown>>) => void;
 }
 
+function jsonSafeValue<T>(value: T): T {
+  if (value instanceof Date) return value.toISOString() as T;
+  if (Array.isArray(value)) return value.map(jsonSafeValue) as T;
+  if (value && typeof value === "object") {
+    const prototype: unknown = Object.getPrototypeOf(value);
+    if (prototype === Object.prototype || prototype === null) {
+      const record = value as Record<string, unknown>;
+      return Object.fromEntries(
+        Object.entries(record).map(([key, nested]) => [key, jsonSafeValue(nested)]),
+      ) as T;
+    }
+  }
+  return value;
+}
+
+/**
+ * DataFn 0.1.1 recursively treats every object as a record while applying
+ * relation FK omissions, which reduces Date values to `{}`. Convert database
+ * read values to their JSON representation until the upstream fix is released.
+ */
+function createJsonSafeReadAdapter(adapter: Adapter): Adapter {
+  return {
+    ...adapter,
+    findOne: async <T = unknown>(params: FindOneParams) => {
+      const record = await adapter.findOne<T>(params);
+      return record ? jsonSafeValue(record) : null;
+    },
+    findMany: async <T = unknown>(params: FindManyParams) =>
+      (await adapter.findMany<T>(params)).map(jsonSafeValue),
+  };
+}
+
 export async function createSkillplaneDatafnServer(
   input: CreateSkillplaneDatafnServerInput,
 ): Promise<DatafnServer<SkillplaneDatafnContext>> {
@@ -47,7 +84,7 @@ export async function createSkillplaneDatafnServer(
       : null;
   return createDatafnServer<SkillplaneDatafnContext>({
     schema: skillplaneDatafnSchema,
-    database: input.database.adapter,
+    database: createJsonSafeReadAdapter(input.database.adapter),
     ...(multiRegion ? { plugins: [multiRegion] } : {}),
     allowUnknownResources: false,
     debug: input.debug ?? false,
