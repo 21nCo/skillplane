@@ -8,6 +8,10 @@ import { initialWorkspaceRegionForRequest } from "../workspace-placement.js";
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
+export function requiresPersonalWorkspace(path: string): boolean {
+  return path.startsWith("/api/v1/") || path.startsWith("/datafn/");
+}
+
 export function enforceCookieCsrf(
   request: Request,
   hasSession: boolean,
@@ -64,7 +68,7 @@ export function authenticationMiddleware(
         ? null
         : await services.auth.provider.authenticate(context.req.raw);
       context.set("session", session);
-      if (session) {
+      if (session && requiresPersonalWorkspace(context.req.path)) {
         await ensurePersonalWorkspace(
           services.controlDatabase.pool,
           session,
