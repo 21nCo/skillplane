@@ -58,6 +58,7 @@ PASS
 ## Notes
 
 - Repository-wide lint still reports the pre-existing unresolved generated `collections/server` docs module through type-aware rules. All changed files pass focused lint, and the same missing generated module is the only known root typecheck blocker.
+- `conduct:verify` reaches the portability gate but reports this dedicated worktree's standard `.git` pointer as a macOS home path. Its structure, CSV, report-presence, and append-only checks pass before that worktree-only false positive.
 - The browser flow used the repository's isolated local fixture identity; no Aside Browser profile or personal identity was used.
 
 ## Blockers
