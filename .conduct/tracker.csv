@@ -10,3 +10,4 @@ SKI-1,"Move service-principal credential authentication to AuthFn API keys",1,20
 2026-08-27-new-f3c333cf-spec,"Make Skillplane locally authoritative and safely project exact skills into agent-native directories",0,,
 SKI-6,"Adopt McpFn for Skillplane MCP runtime, authorization, and quality gates",0,,
 2026-08-30-codex-loopback-oauth-issue,"Codex client metadata rejects safe localhost and dynamic loopback callbacks",1,2026-08-30T04:27:43Z,2026-08-30-33cfc7a1-completion
+SKI-13,"Place new workspaces by latency and explicit organization-region choice",1,2026-08-31T07:13:05Z,2026-08-31-5ae1c3d2-completion
