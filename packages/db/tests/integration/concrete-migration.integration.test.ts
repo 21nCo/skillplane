@@ -336,6 +336,127 @@ describe("concrete workspace migration rollback", () => {
     }
   });
 
+  it("rejects a read-committed write admitted before a move away and back", async () => {
+    if (!source || !target) throw new Error("Migration fixture unavailable");
+    const sourceObjects = new MemoryObjects();
+    const targetObjects = new MemoryObjects();
+    sourceObjects.objects.set(bundleKey, new Uint8Array([0]));
+    const moveAway = new PostgresWorkspaceMigrationOperations(
+      source,
+      target,
+      source,
+      sourceObjects,
+      targetObjects,
+    );
+    const moveBack = new PostgresWorkspaceMigrationOperations(
+      target,
+      source,
+      source,
+      targetObjects,
+      sourceObjects,
+    );
+    const awayContext = {
+      namespace: workspaceId,
+      sourceRegionId: "legacy",
+      targetRegionId: "in-south",
+      sourceEpoch: 1,
+      movingEpoch: 2,
+      recoveryFence: 1,
+      recoveryOwnerId: `recovery:away-${suffix}`,
+      recoveryLeaseExpiresAt: Date.now() + 60_000,
+    };
+    const backContext = {
+      ...awayContext,
+      sourceRegionId: "in-south",
+      targetRegionId: "legacy",
+      sourceEpoch: 2,
+      movingEpoch: 3,
+      recoveryFence: 2,
+      recoveryOwnerId: `recovery:back-${suffix}`,
+    };
+    const delayed = await source.connect();
+    let awayResumed = false;
+    let backResumed = false;
+    try {
+      await delayed.query("BEGIN ISOLATION LEVEL READ COMMITTED");
+      await delayed.query("SELECT 1");
+
+      await moveAway.quiesceSource(awayContext);
+      await moveAway.drainOutboxes(awayContext);
+      await moveAway.resumeTarget(awayContext);
+      awayResumed = true;
+
+      await moveBack.quiesceSource(backContext);
+      await moveBack.drainOutboxes(backContext);
+      await moveBack.resumeTarget(backContext);
+      backResumed = true;
+
+      await expect(
+        delayed.query(
+          `INSERT INTO skills
+             (id, workspace_id, slug, name, description, tags)
+           VALUES ($1, $2, 'prior-generation', 'Prior generation', '', '{}')`,
+          [`skill:prior-generation-${suffix}`, workspaceId],
+        ),
+      ).rejects.toMatchObject({ code: "55000" });
+    } finally {
+      await delayed.query("ROLLBACK").catch(() => undefined);
+      delayed.release();
+      if (!backResumed) {
+        await moveBack
+          .rollbackSource({ ...backContext, cause: new Error("test cleanup") })
+          .catch(() => undefined);
+      }
+      if (!awayResumed) {
+        await moveAway
+          .rollbackSource({ ...awayContext, cause: new Error("test cleanup") })
+          .catch(() => undefined);
+      }
+    }
+  });
+
+  it("uses the current workspace slug after a projection cached an older slug", async () => {
+    if (!target) throw new Error("Migration fixture unavailable");
+    const publicWorkspace = `workspace:projection-slug-${suffix}`;
+    const oldSlug = `projection-old-${suffix}`;
+    const currentSlug = `projection-current-${suffix}`;
+    const projectedSkillId = `skill:projection-slug-${suffix}`;
+    await target.query(
+      `INSERT INTO workspaces (id, workspace_id, slug, name)
+       VALUES ($1, $1, $2, 'Projection slug fixture')`,
+      [publicWorkspace, oldSlug],
+    );
+    const cachedSlug = oldSlug;
+    await target.query("UPDATE workspaces SET slug = $2 WHERE id = $1", [
+      publicWorkspace,
+      currentSlug,
+    ]);
+
+    const directory = new PostgresPublicProjectionDirectory(target);
+    await directory.publish({
+      workspaceId: publicWorkspace,
+      workspaceSlug: cachedSlug,
+      skillId: projectedSkillId,
+      skillSlug: "projection-slug-fixture",
+      versionId: `version:projection-slug-${suffix}`,
+      currentVersionId: `version:projection-slug-${suffix}`,
+      semanticVersion: "1.0.0",
+      digest: `sha256:${"3".repeat(64)}`,
+      objectKey: `public/${suffix}/projection-slug.zip`,
+      projectionSequence: 1,
+    });
+
+    await expect(
+      target.query<{ workspace_slug: string }>(
+        `SELECT workspace_slug
+           FROM public_skill_projections
+          WHERE workspace_id = $1 AND skill_id = $2`,
+        [publicWorkspace, projectedSkillId],
+      ),
+    ).resolves.toMatchObject({ rows: [{ workspace_slug: currentSlug }] });
+    await target.query("DELETE FROM workspaces WHERE id = $1", [publicWorkspace]);
+  });
+
   it("keeps newer public state when an older unpublish completes late", async () => {
     if (!target) throw new Error("Migration fixture unavailable");
     const publicWorkspace = `workspace:projection-${suffix}`;

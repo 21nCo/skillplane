@@ -69,9 +69,7 @@ export function authenticationMiddleware(
         : await services.auth.provider.authenticate(context.req.raw);
       context.set("session", session);
       if (session && requiresPersonalWorkspace(context.req.path)) {
-        await ensurePersonalWorkspace(
-          services.controlDatabase.pool,
-          session,
+        await ensurePersonalWorkspace(services.controlDatabase.pool, session, () =>
           initialWorkspaceRegionForRequest(context.req.raw, services, session.actorId),
         );
       }

@@ -110,7 +110,7 @@ describe("concrete workspace migration", () => {
     expect(snapshot.release).not.toHaveBeenCalled();
   });
 
-  it("keeps the source fence and clears a stale target fence before activation", async () => {
+  it("keeps the source fence and opens a new target generation before activation", async () => {
     const snapshot = client();
     const source = {
       query: vi.fn(async () => ({ rows: [] })),

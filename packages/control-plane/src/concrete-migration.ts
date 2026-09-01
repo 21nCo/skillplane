@@ -446,7 +446,8 @@ export class PostgresWorkspaceMigrationOperations implements WorkspaceMigrationO
 
   async resumeTarget(context: DatafnNamespaceMigrationContext): Promise<void> {
     // A cell can become the target after having previously been the source.
-    // Reset its retained tombstone before the placement becomes active again.
+    // Open a new active generation before the placement becomes active again.
+    // The timestamp rejects transactions admitted during an older generation.
     await this.target.query(
       `INSERT INTO regional_workspace_migration_fences
          (workspace_id, source_epoch, fenced_at)
