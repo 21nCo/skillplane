@@ -36,6 +36,7 @@ export interface SafeAuthEvent {
   readonly actorId?: string;
   readonly sessionId?: string;
   readonly clientId?: string;
+  readonly metadata?: Readonly<Record<string, unknown>>;
 }
 
 export interface CreateSkillplaneAuthServerInput {
@@ -114,6 +115,7 @@ export function createSkillplaneAuthServer(
         outcome: event.outcome,
         ...(event.actorId ? { actorId: event.actorId } : {}),
         ...(event.clientId ? { clientId: event.clientId } : {}),
+        ...(event.metadata ? { metadata: event.metadata } : {}),
       });
     },
   });

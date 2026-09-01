@@ -157,7 +157,7 @@ export const skillplaneMcpDeclaration = defineMcpFnServer<McpToolRuntime>({
   info: {
     ...SKILLPLANE_MCP_SERVER_INFO,
     instructions:
-      "Discover, retrieve, and manage versioned Skillplane skills and their authorized context knowledge. Start with workspaces_list, skills_list, and contexts_list when identifiers are unknown. All caller identity fields are declared metadata; authentication remains server-derived.",
+      "Discover, retrieve, and manage versioned Skillplane skills and their authorized context knowledge. Start with workspaces_list, skills_list, and contexts_list when identifiers are unknown. Caller attribution is either client-declared or derived server-side from the authenticated OAuth client profile; authentication remains server-derived.",
   },
   transports: ["streamable-http"],
   tools: [

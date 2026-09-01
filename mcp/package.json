@@ -13,7 +13,7 @@
     "deploy:check": "wrangler deploy --config wrangler.jsonc --dry-run --outdir dist-worker"
   },
   "dependencies": {
-    "@mcpfn/auth": "0.0.3",
+    "@mcpfn/auth": "0.0.4",
     "@mcpfn/core": "0.0.4",
     "@modelcontextprotocol/sdk": "catalog:",
     "@posthog/mcp": "0.10.9",
