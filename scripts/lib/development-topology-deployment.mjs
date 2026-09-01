@@ -2,6 +2,10 @@ import { randomUUID } from "node:crypto";
 import { mkdir, unlink } from "node:fs/promises";
 import { resolve } from "node:path";
 import { Pool } from "pg";
+import {
+  GLOBAL_CONTROL_TABLES,
+  REGIONAL_WORKSPACE_TABLES,
+} from "../../packages/control-plane/dist/table-ownership.js";
 import { renderDevelopmentTopologyConfigs } from "../render-development-topology-config.mjs";
 import {
   developmentCloudflareEnvironment,
@@ -94,19 +98,23 @@ async function relations(database) {
 
 export async function verifyDevelopmentTopologyDatabaseOwnership(databases) {
   const control = await relations(databases.control);
-  for (const required of ["authfn_users", "workspaces", "workspace_placements"]) {
+  for (const required of GLOBAL_CONTROL_TABLES) {
     if (!control.has(required)) throw new Error(`CONTROL_TABLE_MISSING:${required}`);
   }
-  if (control.has("skills")) throw new Error("CONTROL_REGIONAL_TABLE_PRESENT:skills");
+  for (const forbidden of REGIONAL_WORKSPACE_TABLES) {
+    if (control.has(forbidden)) {
+      throw new Error(`CONTROL_REGIONAL_TABLE_PRESENT:${forbidden}`);
+    }
+  }
   const cells = {};
   for (const [regionId, database] of Object.entries(databases.cells)) {
     const tables = await relations(database);
-    for (const required of ["skills", "skill_versions", "regional_projection_outbox"]) {
+    for (const required of REGIONAL_WORKSPACE_TABLES) {
       if (!tables.has(required)) {
         throw new Error(`CELL_TABLE_MISSING:${regionId}:${required}`);
       }
     }
-    for (const forbidden of ["authfn_users", "workspaces", "workspace_placements"]) {
+    for (const forbidden of GLOBAL_CONTROL_TABLES) {
       if (tables.has(forbidden)) {
         throw new Error(`CELL_CONTROL_TABLE_PRESENT:${regionId}:${forbidden}`);
       }

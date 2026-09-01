@@ -6,6 +6,7 @@ import {
   migrateLegacyWorkspaceBatch,
 } from "../packages/control-plane/dist/index.js";
 import { migrateDatabase } from "../packages/db/dist/src/index.js";
+import { GLOBAL_CONTROL_TABLES } from "../packages/control-plane/dist/table-ownership.js";
 import { Pool } from "pg";
 import {
   isMain,
@@ -35,11 +36,11 @@ function regionBucketEnvironment(regionId) {
 export function assertDistinctTopologyCutoverBuckets(
   legacyBucketName,
   initialCellBucketName,
+  additionalBucketNames = [],
 ) {
-  if (legacyBucketName === initialCellBucketName) {
-    throw new Error(
-      "SKILLPLANE_LEGACY_BUCKET and the initial cell bucket must be distinct",
-    );
+  const names = [legacyBucketName, initialCellBucketName, ...additionalBucketNames];
+  if (new Set(names).size !== names.length) {
+    throw new Error("Legacy, public, and regional topology buckets must be distinct");
   }
   return { legacyBucketName, initialCellBucketName };
 }
@@ -74,15 +75,14 @@ async function prepareRegionalDatabase(databaseUrl, regionId) {
     max: 1,
   });
   try {
-    const relation = await pool.query(
-      "SELECT to_regclass('public.workspaces')::text AS workspaces_table",
-    );
-    if (relation.rows[0]?.workspaces_table) {
-      const workspaces = await pool.query(
-        "SELECT count(*)::text AS count FROM workspaces",
-      );
-      if (workspaces.rows[0]?.count !== "0") {
-        throw new Error(`TOPOLOGY_CELL_GLOBAL_DATA_PRESENT:${regionId}`);
+    for (const table of GLOBAL_CONTROL_TABLES) {
+      const relation = await pool.query("SELECT to_regclass($1)::text AS relation", [
+        `public.${table}`,
+      ]);
+      if (!relation.rows[0]?.relation) continue;
+      const rows = await pool.query(`SELECT 1 FROM "${table}" LIMIT 1`);
+      if (rows.rowCount !== 0) {
+        throw new Error(`TOPOLOGY_CELL_GLOBAL_DATA_PRESENT:${regionId}:${table}`);
       }
     }
   } finally {
@@ -167,6 +167,47 @@ export async function migrateTopologyDatabases(options = {}) {
       cells: options.cells,
       productionDatabase: options.productionDatabase,
     });
+  const initialWorkspaceRegion = manifest.cells[0]?.regionId;
+  if (!initialWorkspaceRegion) {
+    throw new Error("The topology must declare an initial workspace cell");
+  }
+  const topologyBuckets = {
+    legacy: requireBucketName(
+      options.legacyBucketName ??
+        process.env.SKILLPLANE_LEGACY_BUCKET ??
+        productionBucket,
+      "SKILLPLANE_LEGACY_BUCKET",
+    ),
+    public: requireBucketName(
+      options.publicBucketName ??
+        process.env.SKILLPLANE_PUBLIC_BUCKET ??
+        "skillplane-public-bundles",
+      "SKILLPLANE_PUBLIC_BUCKET",
+    ),
+    cells: Object.fromEntries(
+      manifest.cells.map((cell) => [
+        cell.regionId,
+        requireBucketName(
+          options.cellBucketNames?.[cell.regionId] ??
+            (cell.regionId === initialWorkspaceRegion
+              ? options.initialCellBucketName
+              : undefined) ??
+            requireEnvironment(regionBucketEnvironment(cell.regionId)),
+          regionBucketEnvironment(cell.regionId),
+        ),
+      ]),
+    ),
+  };
+  assertDistinctTopologyCutoverBuckets(
+    topologyBuckets.legacy,
+    topologyBuckets.cells[initialWorkspaceRegion],
+    [
+      topologyBuckets.public,
+      ...Object.entries(topologyBuckets.cells)
+        .filter(([regionId]) => regionId !== initialWorkspaceRegion)
+        .map(([, name]) => name),
+    ],
+  );
   // Capture and verify every database before the first schema or data mutation.
   // The resulting digests are bound into the exact-commit migration evidence.
   const backups = await backupTopologyDatabases(databases, {
@@ -174,10 +215,6 @@ export async function migrateTopologyDatabases(options = {}) {
     passphrase: options.backupPassphrase,
   });
   const controlUrl = databases.control.url;
-  const initialWorkspaceRegion = manifest.cells[0]?.regionId;
-  if (!initialWorkspaceRegion) {
-    throw new Error("The topology must declare an initial workspace cell");
-  }
   const cellUrls = Object.fromEntries(
     manifest.cells.map((cell) => [cell.regionId, databases.cells[cell.regionId].url]),
   );
@@ -227,17 +264,9 @@ export async function migrateTopologyDatabases(options = {}) {
         [initialWorkspaceRegion],
       );
       const cutoverBuckets = assertDistinctTopologyCutoverBuckets(
-        requireBucketName(
-          options.legacyBucketName ??
-            process.env.SKILLPLANE_LEGACY_BUCKET ??
-            productionBucket,
-          "SKILLPLANE_LEGACY_BUCKET",
-        ),
-        requireBucketName(
-          options.initialCellBucketName ??
-            requireEnvironment(regionBucketEnvironment(initialWorkspaceRegion)),
-          regionBucketEnvironment(initialWorkspaceRegion),
-        ),
+        topologyBuckets.legacy,
+        topologyBuckets.cells[initialWorkspaceRegion],
+        [topologyBuckets.public],
       );
       const sourceObjects =
         options.sourceObjects ??
@@ -246,15 +275,7 @@ export async function migrateTopologyDatabases(options = {}) {
         options.regionalObjects ??
         new WranglerR2MigrationStore(cutoverBuckets.initialCellBucketName);
       const publicObjects =
-        options.publicObjects ??
-        new WranglerR2MigrationStore(
-          requireBucketName(
-            options.publicBucketName ??
-              process.env.SKILLPLANE_PUBLIC_BUCKET ??
-              "skillplane-public-bundles",
-            "SKILLPLANE_PUBLIC_BUCKET",
-          ),
-        );
+        options.publicObjects ?? new WranglerR2MigrationStore(topologyBuckets.public);
       cutover = await migrateLegacyWorkspaceBatch({
         control: controlPool,
         source: controlPool,
@@ -281,6 +302,7 @@ export async function migrateTopologyDatabases(options = {}) {
     : await migrateDatabase(controlUrl, {
         role: "control",
         initialWorkspaceRegion,
+        workspaceRegions: manifest.cells.map((cell) => cell.regionId),
       });
   await verifyProductionTopologyDatabaseOwnership(manifest, databases);
   const safety = await writeTopologyMigrationSafetyState({

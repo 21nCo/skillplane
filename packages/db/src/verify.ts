@@ -4,40 +4,16 @@ import {
   assertAuthfnPluginSchemaContract,
 } from "./authfn.js";
 import { loadMigrations } from "./migrate.js";
+import type { MigrationRole } from "./migrate.js";
+import {
+  GLOBAL_CONTROL_TABLES,
+  REGIONAL_WORKSPACE_TABLES,
+} from "@skillplane/control-plane/table-ownership";
 
 export const REQUIRED_TABLES = [
-  "analytics_daily",
-  "analytics_daily_dimensions",
-  "analytics_daily_summary",
-  "analytics_rollup_runs",
-  "amendment_reviews",
-  "api_rate_limits",
-  "audit_events",
-  "authfn_api_keys",
-  "authfn_oauth_access_tokens",
-  "authfn_oauth_authorization_codes",
-  "authfn_oauth_authorization_requests",
-  "authfn_oauth_client_redirect_uris",
-  "authfn_oauth_clients",
-  "authfn_oauth_consents",
-  "authfn_oauth_refresh_tokens",
-  "authfn_otp_challenges",
-  "authfn_sessions",
-  "authfn_users",
-  "context_knowledge_revisions",
-  "context_note_revisions",
-  "context_notes",
-  "idempotency_records",
-  "public_stats_counters",
-  "service_principals",
-  "skill_contexts",
-  "skill_version_files",
-  "skill_versions",
-  "skills",
+  ...GLOBAL_CONTROL_TABLES,
+  ...REGIONAL_WORKSPACE_TABLES,
   "skillplane_schema_migrations",
-  "workspace_invitations",
-  "workspace_memberships",
-  "workspaces",
 ] as const;
 
 const REQUIRED_CONSTRAINTS = [
@@ -105,9 +81,13 @@ export interface DatabaseVerification {
 
 export async function verifyDatabase(
   databaseUrl: string,
+  options: { readonly role?: MigrationRole } = {},
 ): Promise<DatabaseVerification> {
-  assertAuthfnCoreSchemaContract();
-  assertAuthfnPluginSchemaContract();
+  const role = options.role ?? "combined";
+  if (role !== "regional") {
+    assertAuthfnCoreSchemaContract();
+    assertAuthfnPluginSchemaContract();
+  }
   const pool = new Pool({
     connectionString: databaseUrl,
     application_name: "skillplane-db-verifier",
@@ -121,7 +101,12 @@ export async function verifyDatabase(
         ORDER BY table_name`,
     );
     const tables = tableResult.rows.map((row) => row.table_name);
-    const missingTables = REQUIRED_TABLES.filter((table) => !tables.includes(table));
+    const requiredTables = [
+      ...(role === "regional" ? [] : GLOBAL_CONTROL_TABLES),
+      ...(role === "control" ? [] : REGIONAL_WORKSPACE_TABLES),
+      "skillplane_schema_migrations",
+    ];
+    const missingTables = requiredTables.filter((table) => !tables.includes(table));
     if (missingTables.length > 0) {
       throw new Error(`Missing required tables: ${missingTables.join(", ")}`);
     }
@@ -130,7 +115,14 @@ export async function verifyDatabase(
       `SELECT conname FROM pg_constraint ORDER BY conname`,
     );
     const constraints = constraintResult.rows.map((row) => row.conname);
-    const missingConstraints = REQUIRED_CONSTRAINTS.filter(
+    const requiredConstraints = REQUIRED_CONSTRAINTS.filter((name) =>
+      role === "combined"
+        ? true
+        : role === "control"
+          ? name === "workspaces_tenant_identity"
+          : name !== "workspaces_tenant_identity",
+    );
+    const missingConstraints = requiredConstraints.filter(
       (name) => !constraints.includes(name),
     );
     if (missingConstraints.length > 0) {
@@ -144,14 +136,22 @@ export async function verifyDatabase(
         ORDER BY tgname`,
     );
     const triggers = triggerResult.rows.map((row) => row.tgname);
-    const missingTriggers = REQUIRED_TRIGGERS.filter(
-      (name) => !triggers.includes(name),
-    );
+    const requiredTriggers =
+      role === "control"
+        ? []
+        : REQUIRED_TRIGGERS.filter(
+            (name) =>
+              role === "combined" ||
+              name !== "audit_events_public_stats_counter_insert",
+          );
+    const missingTriggers = requiredTriggers.filter((name) => !triggers.includes(name));
     if (missingTriggers.length > 0) {
       throw new Error(`Missing required triggers: ${missingTriggers.join(", ")}`);
     }
 
-    const migrations = await loadMigrations();
+    const migrations = (await loadMigrations()).filter(
+      (migration) => role === "combined" || migration.roles.includes(role),
+    );
     const migrationResult = await pool.query<{ id: string; sha256: string }>(
       "SELECT id, sha256 FROM skillplane_schema_migrations ORDER BY id",
     );
@@ -163,36 +163,41 @@ export async function verifyDatabase(
     }
 
     await pool.query("SET enable_seqscan = off");
-    const queryPlans = {
-      workspaceSlug: await explain(pool, "SELECT id FROM workspaces WHERE slug = $1", [
-        "example",
-      ]),
-      skillSlug: await explain(
+    const queryPlans: Record<string, readonly string[]> = {};
+    if (role !== "regional") {
+      queryPlans.workspaceSlug = await explain(
         pool,
-        "SELECT id FROM skills WHERE workspace_id = $1 AND slug = $2",
-        ["workspace:example", "pr-review"],
-      ),
-      skillRevision: await explain(
-        pool,
-        `SELECT id FROM skill_versions
-          WHERE workspace_id = $1 AND skill_id = $2
-          ORDER BY revision DESC LIMIT 1`,
-        ["workspace:example", "skill:example"],
-      ),
-      contextSlug: await explain(
-        pool,
-        `SELECT id FROM skill_contexts
-          WHERE workspace_id = $1 AND skill_id = $2 AND slug = $3`,
-        ["workspace:example", "skill:example", "project"],
-      ),
-      servicePrincipalApiKey: await explain(
+        "SELECT id FROM workspaces WHERE slug = $1",
+        ["example"],
+      );
+      queryPlans.servicePrincipalApiKey = await explain(
         pool,
         `SELECT id FROM service_principals
           WHERE authfn_api_key_id = $1
           LIMIT 1`,
         ["key_example"],
-      ),
-      publicSkillSearch: await explain(
+      );
+    }
+    if (role !== "control") {
+      queryPlans.skillSlug = await explain(
+        pool,
+        "SELECT id FROM skills WHERE workspace_id = $1 AND slug = $2",
+        ["workspace:example", "pr-review"],
+      );
+      queryPlans.skillRevision = await explain(
+        pool,
+        `SELECT id FROM skill_versions
+          WHERE workspace_id = $1 AND skill_id = $2
+          ORDER BY revision DESC LIMIT 1`,
+        ["workspace:example", "skill:example"],
+      );
+      queryPlans.contextSlug = await explain(
+        pool,
+        `SELECT id FROM skill_contexts
+          WHERE workspace_id = $1 AND skill_id = $2 AND slug = $3`,
+        ["workspace:example", "skill:example", "project"],
+      );
+      queryPlans.publicSkillSearch = await explain(
         pool,
         `SELECT id FROM skills
           WHERE visibility = 'public'
@@ -201,16 +206,16 @@ export async function verifyDatabase(
             AND public_search_document @@ plainto_tsquery('simple', $1)
           LIMIT 20`,
         ["pull request"],
-      ),
-      workspaceSkillSearch: await explain(
+      );
+      queryPlans.workspaceSkillSearch = await explain(
         pool,
         `SELECT id FROM skills
           WHERE archived_at IS NULL
             AND workspace_search_document @@ plainto_tsquery('simple', $1)
           LIMIT 20`,
         ["pull request"],
-      ),
-      auditExplorer: await explain(
+      );
+      queryPlans.auditExplorer = await explain(
         pool,
         `SELECT id FROM audit_events
           WHERE workspace_id = $1
@@ -220,27 +225,29 @@ export async function verifyDatabase(
           ORDER BY occurred_at DESC, id DESC
           LIMIT 100`,
         ["workspace:example", "skill_retrieve", "success", new Date(0)],
-      ),
-      analyticsSummary: await explain(
+      );
+      queryPlans.analyticsSummary = await explain(
         pool,
         `SELECT day, retrieval_count
            FROM analytics_daily_summary
           WHERE workspace_id = $1 AND skill_id = $2 AND day >= $3
           ORDER BY day`,
         ["workspace:example", "", "2026-01-01"],
-      ),
-    };
+      );
+    }
     for (const [name, indexes] of Object.entries(queryPlans)) {
       if (indexes.length === 0) {
         throw new Error(`Query plan "${name}" does not use an index`);
       }
     }
     if (
-      !queryPlans.publicSkillSearch.includes("skills_public_search_idx") ||
-      !queryPlans.workspaceSkillSearch.includes("skills_workspace_search_idx") ||
-      !queryPlans.servicePrincipalApiKey.includes(
-        "service_principals_authfn_api_key_unique",
-      )
+      (role !== "control" &&
+        (!queryPlans.publicSkillSearch?.includes("skills_public_search_idx") ||
+          !queryPlans.workspaceSkillSearch?.includes("skills_workspace_search_idx"))) ||
+      (role !== "regional" &&
+        !queryPlans.servicePrincipalApiKey?.includes(
+          "service_principals_authfn_api_key_unique",
+        ))
     ) {
       throw new Error(
         "Required query plans do not use their credential/search indexes",

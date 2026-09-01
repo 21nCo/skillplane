@@ -3,11 +3,11 @@ import { migrateDatabase } from "./migrate.js";
 
 const databaseUrl = await resolveMigrationDatabaseUrl();
 const role = process.env.SKILLPLANE_DATABASE_ROLE;
-if (role && !["combined", "control", "regional"].includes(role)) {
+if (!role || !["combined", "control", "regional"].includes(role)) {
   throw new Error("SKILLPLANE_DATABASE_ROLE must be combined, control, or regional");
 }
 const result = await migrateDatabase(databaseUrl, {
-  role: (role ?? "combined") as "combined" | "control" | "regional",
+  role: role as "combined" | "control" | "regional",
   ...(process.env.SKILLPLANE_INITIAL_WORKSPACE_REGION
     ? { initialWorkspaceRegion: process.env.SKILLPLANE_INITIAL_WORKSPACE_REGION }
     : {}),

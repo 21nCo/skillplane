@@ -8,6 +8,7 @@ import {
   logWorkspaceRoutingEvent,
 } from "@skillplane/control-plane";
 import { parseRuntimeConfig, type RuntimeBindings } from "@skillplane/config";
+import { McpToolError } from "@skillplane/mcp-schema";
 import type { ApiServiceProvider, ApiServices } from "@skillplane/api";
 import {
   authenticateMcpRequest,
@@ -445,6 +446,17 @@ export function createRoutedMcpApplication<Context>(input: {
           return mcpAuthenticationResponse(null, error);
         }
         if (error instanceof McpRoutingError) return error.response();
+        if (error instanceof McpToolError) {
+          return Response.json(
+            {
+              error: error.code,
+              error_description: error.message,
+              retryable: error.retryable,
+              ...(error.details ? { details: error.details } : {}),
+            },
+            { status: error.status, headers: { "cache-control": "no-store" } },
+          );
+        }
         if (
           error &&
           typeof error === "object" &&

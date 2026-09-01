@@ -12,7 +12,7 @@ import { writeControlPlaneAudit } from "../control-audit.js";
 import type { ApiEnvironment } from "../context.js";
 import { success } from "../envelopes.js";
 import { lockWorkspaceMemberships, membershipRole } from "../tenancy.js";
-import { initialWorkspaceRegionForRequest } from "../workspace-placement.js";
+import { recommendedWorkspaceRegionForRequest } from "../workspace-placement.js";
 import { isPostgresUniqueViolation, readJsonObject, workspaceUser } from "./shared.js";
 
 function id(prefix: string): string {
@@ -61,7 +61,7 @@ export function registerWorkspaceRoutes(app: Hono<ApiEnvironment>): void {
         ORDER BY CASE w.kind WHEN 'personal' THEN 0 ELSE 1 END, w.name, w.id`,
       [session.actorId],
     );
-    const recommendedRegionId = initialWorkspaceRegionForRequest(
+    const recommendedRegionId = recommendedWorkspaceRegionForRequest(
       context.req.raw,
       services,
       session.actorId,

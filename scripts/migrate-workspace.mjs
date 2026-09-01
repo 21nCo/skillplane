@@ -9,7 +9,11 @@ import {
   migrateWorkspaceWithJournal,
   runWorkspaceRollbackDrill,
 } from "../packages/control-plane/dist/index.js";
-import { isMain, requireEnvironment } from "./lib/production-deployment.mjs";
+import {
+  isMain,
+  parseDirectPostgresUrl,
+  requireEnvironment,
+} from "./lib/production-deployment.mjs";
 import {
   requireBucketName,
   WranglerR2MigrationStore,
@@ -43,18 +47,35 @@ export async function migrateConfiguredWorkspace() {
     bucketName("SKILLPLANE_SOURCE_BUCKET"),
     bucketName("SKILLPLANE_TARGET_BUCKET"),
   );
+  const databases = {
+    control: parseDirectPostgresUrl(
+      requireEnvironment("SKILLPLANE_CONTROL_DATABASE_URL"),
+      "SKILLPLANE_CONTROL_DATABASE_URL",
+    ),
+    source: parseDirectPostgresUrl(
+      requireEnvironment("SKILLPLANE_SOURCE_DATABASE_URL"),
+      "SKILLPLANE_SOURCE_DATABASE_URL",
+    ),
+    target: parseDirectPostgresUrl(
+      requireEnvironment("SKILLPLANE_TARGET_DATABASE_URL"),
+      "SKILLPLANE_TARGET_DATABASE_URL",
+    ),
+  };
+  if (databases.source.fingerprint === databases.target.fingerprint) {
+    throw new Error("Migration source and target databases must be distinct");
+  }
   const control = new Pool({
-    connectionString: requireEnvironment("SKILLPLANE_CONTROL_DATABASE_URL"),
+    connectionString: databases.control.url,
     application_name: "skillplane-workspace-migration-control",
     max: 2,
   });
   const source = new Pool({
-    connectionString: requireEnvironment("SKILLPLANE_SOURCE_DATABASE_URL"),
+    connectionString: databases.source.url,
     application_name: "skillplane-workspace-migration-source",
     max: 2,
   });
   const target = new Pool({
-    connectionString: requireEnvironment("SKILLPLANE_TARGET_DATABASE_URL"),
+    connectionString: databases.target.url,
     application_name: "skillplane-workspace-migration-target",
     max: 2,
   });

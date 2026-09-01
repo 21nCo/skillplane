@@ -1,6 +1,10 @@
 import { resolve } from "node:path";
 import { Pool } from "pg";
 import {
+  GLOBAL_CONTROL_TABLES,
+  REGIONAL_WORKSPACE_TABLES,
+} from "../../packages/control-plane/dist/table-ownership.js";
+import {
   parseDirectPostgresUrl,
   postgresTlsEvidence,
   productionDatabase,
@@ -224,12 +228,8 @@ export async function verifyProductionTopologyDatabaseOwnership(manifest, databa
     "skillplane-production-topology-control-preflight",
   );
   try {
-    requireTables(
-      control.tables,
-      ["authfn_users", "workspaces", "workspace_placements", "topology_cutover_state"],
-      "CONTROL",
-    );
-    forbidTables(control.tables, ["skills", "regional_projection_outbox"], "CONTROL");
+    requireTables(control.tables, GLOBAL_CONTROL_TABLES, "CONTROL");
+    forbidTables(control.tables, REGIONAL_WORKSPACE_TABLES, "CONTROL");
     const allowedRegions = manifest.cells.map((cell) => cell.regionId);
     const cutover = await control.pool.query(
       `SELECT state, target_region_id
@@ -268,14 +268,10 @@ export async function verifyProductionTopologyDatabaseOwnership(manifest, databa
     try {
       requireTables(
         regional.tables,
-        ["skills", "skill_versions", "regional_projection_outbox"],
+        REGIONAL_WORKSPACE_TABLES,
         `CELL_${cell.regionId}`,
       );
-      forbidTables(
-        regional.tables,
-        ["authfn_users", "workspaces", "workspace_placements"],
-        `CELL_${cell.regionId}`,
-      );
+      forbidTables(regional.tables, GLOBAL_CONTROL_TABLES, `CELL_${cell.regionId}`);
       cells[cell.regionId] = {
         tableCount: regional.tables.size,
         tls: regional.tls,

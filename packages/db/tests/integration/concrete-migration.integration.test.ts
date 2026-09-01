@@ -257,6 +257,10 @@ describe("concrete workspace migration rollback", () => {
     let rolledBack = false;
     try {
       await source.query(
+        "DELETE FROM regional_workspace_migration_fences WHERE workspace_id = $1",
+        [workspaceId],
+      );
+      await source.query(
         `INSERT INTO regional_projection_outbox
            (id, workspace_id, event_type, payload, fencing_epoch, sequence)
          SELECT $1, $2, 'resource_route.upsert', '{}'::jsonb, 1,
@@ -557,6 +561,7 @@ describe("concrete workspace migration rollback", () => {
     await migrateDatabase(targetUrl, {
       role: "control",
       initialWorkspaceRegion: "in-south",
+      workspaceRegions: ["in-south"],
     });
 
     await expect(

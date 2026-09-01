@@ -25,6 +25,7 @@ export async function withDomainTransaction<T>(
   options: {
     readonly isolation?: DomainTransactionIsolation;
     readonly maxRetries?: number;
+    readonly fencingEpoch?: number | undefined;
   } = {},
 ): Promise<T> {
   const isolation = options.isolation ?? "serializable";
@@ -37,6 +38,12 @@ export async function withDomainTransaction<T>(
       await client.query("SELECT set_config('application_name', $1, true)", [
         `skillplane request=${requestId}`,
       ]);
+      if (options.fencingEpoch !== undefined) {
+        await client.query(
+          "SELECT set_config('skillplane.workspace_routing_epoch', $1, true)",
+          [String(options.fencingEpoch)],
+        );
+      }
       const result = await operation({ client });
       await client.query("COMMIT");
       return result;

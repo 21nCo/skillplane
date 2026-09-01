@@ -50,6 +50,7 @@ export interface AuditWriteInput {
   readonly metadata?: Readonly<Record<string, unknown>>;
   readonly occurredAt?: Date;
   readonly id?: string;
+  readonly fencingEpoch?: number | undefined;
 }
 
 export interface ControlPlaneAuditWriteInput {
@@ -211,6 +212,12 @@ export class PostgresAuditWriter {
     if (!client) throw new AuditWriteError();
     try {
       await client.query("BEGIN");
+      if (input.fencingEpoch !== undefined) {
+        await client.query(
+          "SELECT set_config('skillplane.workspace_routing_epoch', $1, true)",
+          [String(input.fencingEpoch)],
+        );
+      }
       const id = await writeAuditEvent(client, input);
       await client.query("COMMIT");
       return id;
@@ -504,7 +511,7 @@ async function readAuditRows(
            FROM audit_events`
       : `SELECT id, occurred_at, event_type, action, outcome, actor_type, actor_id,
                 user_id, request_id, resource_type, resource_id,
-                NULL::text AS context_id,
+                COALESCE(metadata->>'contextId', metadata->>'context_id') AS context_id,
                 metadata || jsonb_build_object('channel', channel) AS metadata,
                 'permanent'::text AS retention_class
            FROM control_plane_audit_events`;

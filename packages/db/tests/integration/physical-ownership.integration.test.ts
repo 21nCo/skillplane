@@ -28,6 +28,7 @@ describe("dynamic DataFn physical ownership", () => {
     await migrateDatabase(controlUrl, {
       role: "control",
       initialWorkspaceRegion: "in-south",
+      workspaceRegions: ["in-south"],
       finalizePhysicalOwnership: false,
     });
     await migrateDatabase(regionalUrl, {
@@ -72,6 +73,7 @@ describe("dynamic DataFn physical ownership", () => {
     await migrateDatabase(controlUrl, {
       role: "control",
       initialWorkspaceRegion: "in-south",
+      workspaceRegions: ["in-south"],
     });
     await migrateDatabase(regionalUrl, { role: "regional" });
 

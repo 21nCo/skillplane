@@ -62,3 +62,19 @@ export function initialWorkspaceRegionForRequest(
   }
   return decision.regionId;
 }
+
+/** Best-effort placement hint for UI; unlike creation it must not fail a read. */
+export function recommendedWorkspaceRegionForRequest(
+  request: Request,
+  services: Pick<ApiServices, "deploymentRole" | "workspaceRegions">,
+  stableKey: string,
+): string | null {
+  const preferredRegionId = trustedWorkspaceRegion(request, services);
+  return (
+    selectDatafnPlacementRegion({
+      candidates: services.workspaceRegions.map((regionId) => ({ regionId })),
+      preferredRegionId,
+      ...(services.deploymentRole === "gateway" ? {} : { stableKey }),
+    })?.regionId ?? null
+  );
+}

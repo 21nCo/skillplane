@@ -79,6 +79,7 @@ export function registerAmendmentRoutes(app: Hono<ApiEnvironment>): void {
       policy: body.policy,
       idempotencyKey: requireIdempotencyKey(context),
       requestId: context.get("requestId"),
+      fencingEpoch: routingEpoch(context),
     });
     context.header("Cache-Control", "private, no-store");
     return context.json(success(context, { policy }));

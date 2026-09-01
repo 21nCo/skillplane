@@ -546,7 +546,11 @@ function routingKeys(
       // The stable diagnostic below deliberately omits secret parsing details.
     }
   }
-  if (topology.mode === "single-cell" && Object.keys(keys).length === 0) {
+  if (
+    topology.mode === "single-cell" &&
+    typeof bindings.SKILLPLANE_TOPOLOGY !== "string" &&
+    Object.keys(keys).length === 0
+  ) {
     keys = {
       [topology.routing.activeKeyId]: base.secrets.authfn ?? base.secrets.oauth,
     };

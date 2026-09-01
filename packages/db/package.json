@@ -34,6 +34,7 @@
     "@authfn/email-otp": "catalog:",
     "@authfn/multi-region": "catalog:",
     "@skillplane/config": "workspace:*",
+    "@skillplane/control-plane": "workspace:*",
     "@skillplane/domain": "workspace:*",
     "@superfunctions/db": "catalog:",
     "authfn": "catalog:",
@@ -41,7 +42,6 @@
     "pg": "catalog:"
   },
   "devDependencies": {
-    "@skillplane/control-plane": "workspace:*",
     "@types/pg": "catalog:",
     "drizzle-kit": "catalog:",
     "typescript": "catalog:",

@@ -368,8 +368,15 @@ export function createRoutedApiApplication(input: {
           "A DataFn request cannot span control and regional resources",
         ).response();
       }
-      if (runtime.deployment.role === "gateway" && datafn === "control") {
+      if (runtime.deployment.role !== "cell" && datafn === "control") {
         return await input.local.fetch(request, bindings);
+      }
+      if (runtime.deployment.role === "cell" && datafn === "control") {
+        return new ApiRoutingError(
+          404,
+          "REGIONAL_ROUTE_NOT_FOUND",
+          "The regional route was not found",
+        ).response();
       }
       let scope: ApiScope;
       try {

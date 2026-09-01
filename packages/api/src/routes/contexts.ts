@@ -187,6 +187,7 @@ export function registerContextRoutes(app: Hono<ApiEnvironment>): void {
       ...(learningMetadata !== undefined ? { learningMetadata } : {}),
       idempotencyKey: requireIdempotencyKey(context),
       requestId: context.get("requestId"),
+      fencingEpoch: routingEpoch(context),
     });
     context.header("Cache-Control", "private, no-store");
     return context.json(success(context, { knowledge }));
@@ -298,6 +299,7 @@ export function registerContextRoutes(app: Hono<ApiEnvironment>): void {
       patch,
       idempotencyKey: requireIdempotencyKey(context),
       requestId: context.get("requestId"),
+      fencingEpoch: routingEpoch(context),
     });
     context.header("Cache-Control", "private, no-store");
     return context.json(success(context, { context: resource }));
@@ -321,6 +323,7 @@ export function registerContextRoutes(app: Hono<ApiEnvironment>): void {
           archived,
           idempotencyKey: requireIdempotencyKey(context),
           requestId: context.get("requestId"),
+          fencingEpoch: routingEpoch(context),
         });
         context.header("Cache-Control", "private, no-store");
         return context.json(success(context, { context: resource }));

@@ -287,10 +287,9 @@ export async function migrateWorkspaceWithJournal(
     targetRegionId: input.targetRegionId,
     sourceEpoch: origin.epoch,
   });
+  let result: Awaited<ReturnType<typeof migrateWorkspace>>;
   try {
-    const result = await migrateWorkspace(input);
-    await input.journal.completed(migrationId, result.proof);
-    return { migrationId, ...result };
+    result = await migrateWorkspace(input);
   } catch (error) {
     const code =
       error instanceof Error && /^[A-Z0-9_:-]{1,160}$/u.test(error.message)
@@ -298,5 +297,13 @@ export async function migrateWorkspaceWithJournal(
         : "WORKSPACE_MIGRATION_FAILED";
     await input.journal.failed(migrationId, code).catch(() => undefined);
     throw error;
+  }
+  try {
+    await input.journal.completed(migrationId, result.proof);
+    return { migrationId, ...result };
+  } catch (error) {
+    const completion = new Error("WORKSPACE_MIGRATION_JOURNAL_COMPLETION_FAILED");
+    completion.cause = error;
+    throw completion;
   }
 }

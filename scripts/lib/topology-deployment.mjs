@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { parseTopologyManifest } from "../../packages/control-plane/dist/index.js";
 import { root } from "./production-deployment.mjs";
 
 const hyperdriveId = /^[a-f0-9]{32}$/u;
@@ -49,13 +50,10 @@ function workerBase(name, kind, variables) {
  * workers intentionally have neither routes nor workers.dev exposure.
  */
 export function createCloudflareTopologyConfigs(input) {
-  const manifest = input.manifest;
-  if (
-    manifest?.version !== 1 ||
-    manifest.mode !== "multi-cell" ||
-    !Array.isArray(manifest.cells) ||
-    manifest.cells.length < 2
-  ) {
+  const manifest = parseTopologyManifest(input.manifest, {
+    production: input.runtimeEnvironment !== "preview",
+  });
+  if (manifest.mode !== "multi-cell" || manifest.cells.length < 2) {
     throw new Error("A multi-cell topology with at least two cells is required");
   }
   const topology = JSON.stringify(manifest);
@@ -211,6 +209,13 @@ export function createCloudflareTopologyConfigs(input) {
   ];
   if (new Set(bucketNames).size !== bucketNames.length) {
     throw new Error("Public and regional topology buckets must be distinct");
+  }
+  const hyperdriveIds = [
+    controlId,
+    ...Object.values(cells).map((cell) => cell.app.hyperdrive[1].id),
+  ];
+  if (new Set(hyperdriveIds).size !== hyperdriveIds.length) {
+    throw new Error("Control and regional topology Hyperdrives must be distinct");
   }
   return { gateway: { app: appGateway, mcp: mcpGateway }, cells };
 }

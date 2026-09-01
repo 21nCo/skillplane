@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import {
   bigint,
+  boolean,
   check,
   index,
   jsonb,
@@ -14,6 +15,21 @@ import { workspaces } from "./domain.js";
 
 const utcTimestamp = (name: string) =>
   timestamp(name, { mode: "date", withTimezone: true });
+
+export const workspaceRegions = pgTable(
+  "workspace_regions",
+  {
+    regionId: text("region_id").primaryKey(),
+    enabled: boolean("enabled").notNull().default(true),
+    updatedAt: utcTimestamp("updated_at").notNull().defaultNow(),
+  },
+  (table) => [
+    check(
+      "workspace_regions_id_valid",
+      sql`${table.regionId} ~ '^[a-z0-9][a-z0-9-]{0,62}$'`,
+    ),
+  ],
+);
 
 export const workspacePlacements = pgTable(
   "workspace_placements",
@@ -346,6 +362,7 @@ export const regionalProjectionSequences = pgTable(
 );
 
 export const controlPlaneSchema = {
+  workspace_regions: workspaceRegions,
   workspace_placements: workspacePlacements,
   resource_routing_directory: resourceRoutingDirectory,
   permission_directory_records: permissionDirectoryRecords,

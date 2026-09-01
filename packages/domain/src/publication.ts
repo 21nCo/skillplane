@@ -112,6 +112,7 @@ export class PublicationService {
       operation: `skill.version.publish:${options.skillId}`,
       key: options.idempotencyKey,
       requestHash,
+      fencingEpoch: options.fencingEpoch,
     });
     if (claim.state === "replay") return claim.responseBody.version;
 
@@ -150,15 +151,18 @@ export class PublicationService {
       const instructions = new TextDecoder("utf-8", { fatal: true }).decode(
         skillMarkdown,
       );
-      return await withTransaction(this.pool, options.requestId, async ({ client }) => {
-        const locked = await client.query<
-          PublicationRow & {
-            readonly current_published_version_id: string | null;
-            readonly current_semantic_version: string | null;
-            readonly archived_at: Date | null;
-          }
-        >(
-          `SELECT candidate.id, candidate.workspace_id, candidate.skill_id,
+      return await withTransaction(
+        this.pool,
+        options.requestId,
+        async ({ client }) => {
+          const locked = await client.query<
+            PublicationRow & {
+              readonly current_published_version_id: string | null;
+              readonly current_semantic_version: string | null;
+              readonly archived_at: Date | null;
+            }
+          >(
+            `SELECT candidate.id, candidate.workspace_id, candidate.skill_id,
                     candidate.revision, candidate.semantic_version,
                     candidate.status, candidate.base_version_id,
                     candidate.proposed_bump, candidate.source,
@@ -181,39 +185,46 @@ export class PublicationService {
                  ON current.id = skill.current_published_version_id
               WHERE skill.id = $1 AND skill.workspace_id = $3
               FOR UPDATE OF skill, candidate`,
-          [options.skillId, options.candidateVersionId, options.principal.workspaceId],
-        );
-        const row = locked.rows[0];
-        if (row?.status !== "pending_review") {
-          throw new DomainError(
-            "SKILL_PUBLISH_CONFLICT",
-            "The candidate is no longer publishable",
-            409,
+            [
+              options.skillId,
+              options.candidateVersionId,
+              options.principal.workspaceId,
+            ],
           );
-        }
-        if (row.archived_at) {
-          throw new DomainError(
-            "SKILL_ARCHIVED",
-            "Archived skills cannot publish candidates",
-            409,
+          const row = locked.rows[0];
+          if (row?.status !== "pending_review") {
+            throw new DomainError(
+              "SKILL_PUBLISH_CONFLICT",
+              "The candidate is no longer publishable",
+              409,
+            );
+          }
+          if (row.archived_at) {
+            throw new DomainError(
+              "SKILL_ARCHIVED",
+              "Archived skills cannot publish candidates",
+              409,
+            );
+          }
+          if (
+            !row.current_published_version_id ||
+            !row.current_semantic_version ||
+            row.base_version_id !== row.current_published_version_id
+          ) {
+            throw new DomainError(
+              "SKILL_PUBLISH_CONFLICT",
+              "The published version changed after this candidate was created",
+              409,
+              { currentVersionId: row.current_published_version_id },
+            );
+          }
+          const bump = parseSemanticBump(row.proposed_bump);
+          const semanticVersion = nextSemanticVersion(
+            row.current_semantic_version,
+            bump,
           );
-        }
-        if (
-          !row.current_published_version_id ||
-          !row.current_semantic_version ||
-          row.base_version_id !== row.current_published_version_id
-        ) {
-          throw new DomainError(
-            "SKILL_PUBLISH_CONFLICT",
-            "The published version changed after this candidate was created",
-            409,
-            { currentVersionId: row.current_published_version_id },
-          );
-        }
-        const bump = parseSemanticBump(row.proposed_bump);
-        const semanticVersion = nextSemanticVersion(row.current_semantic_version, bump);
-        const updated = await client.query<PublicationRow>(
-          `UPDATE skill_versions
+          const updated = await client.query<PublicationRow>(
+            `UPDATE skill_versions
                 SET semantic_version = $2, status = 'published',
                     published_at = now()
               WHERE id = $1 AND status = 'pending_review'
@@ -221,50 +232,50 @@ export class PublicationService {
                         status, base_version_id, proposed_bump, source,
                         content_digest, r2_object_key, bundle_byte_size,
                         manifest, change_summary, published_at, created_at`,
-          [options.candidateVersionId, semanticVersion],
-        );
-        const version = updated.rows[0];
-        if (!version) {
-          throw new DomainError(
-            "SKILL_PUBLISH_CONFLICT",
-            "The candidate is no longer publishable",
-            409,
+            [options.candidateVersionId, semanticVersion],
           );
-        }
-        const updatedSkill = await client.query<{ updated_at: Date }>(
-          `UPDATE skills
+          const version = updated.rows[0];
+          if (!version) {
+            throw new DomainError(
+              "SKILL_PUBLISH_CONFLICT",
+              "The candidate is no longer publishable",
+              409,
+            );
+          }
+          const updatedSkill = await client.query<{ updated_at: Date }>(
+            `UPDATE skills
                 SET current_published_version_id = $2,
                     published_search_text = $3,
                     updated_at = now()
               WHERE id = $1
               RETURNING updated_at`,
-          [options.skillId, options.candidateVersionId, instructions],
-        );
-        const skillUpdatedAt = updatedSkill.rows[0]?.updated_at;
-        if (!skillUpdatedAt) {
-          throw new DomainError("SKILL_NOT_FOUND", "Skill was not found", 404);
-        }
-        await insertPrincipalAudit(client, options.principal, {
-          eventType: "skill.version.published",
-          action: "skills:publish",
-          requestId: options.requestId,
-          resourceType: "skill_version",
-          resourceId: options.candidateVersionId,
-          skillId: options.skillId,
-          versionId: options.candidateVersionId,
-          metadata: {
-            semanticVersion,
-            bump,
-            previousVersionId: row.current_published_version_id,
-          },
-        });
-        const record = toSkillVersionRecord(version);
-        if (row.skill_visibility === "public") {
-          await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
-            options.principal.workspaceId,
-          ]);
-          await client.query(
-            `WITH next_sequence AS (
+            [options.skillId, options.candidateVersionId, instructions],
+          );
+          const skillUpdatedAt = updatedSkill.rows[0]?.updated_at;
+          if (!skillUpdatedAt) {
+            throw new DomainError("SKILL_NOT_FOUND", "Skill was not found", 404);
+          }
+          await insertPrincipalAudit(client, options.principal, {
+            eventType: "skill.version.published",
+            action: "skills:publish",
+            requestId: options.requestId,
+            resourceType: "skill_version",
+            resourceId: options.candidateVersionId,
+            skillId: options.skillId,
+            versionId: options.candidateVersionId,
+            metadata: {
+              semanticVersion,
+              bump,
+              previousVersionId: row.current_published_version_id,
+            },
+          });
+          const record = toSkillVersionRecord(version);
+          if (row.skill_visibility === "public") {
+            await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
+              options.principal.workspaceId,
+            ]);
+            await client.query(
+              `WITH next_sequence AS (
                INSERT INTO regional_projection_sequences
                  (workspace_id, last_sequence, updated_at)
                SELECT $2, COALESCE(MAX(sequence), 0) + 1, now()
@@ -288,49 +299,53 @@ export class PublicationService {
              SELECT $1, $2, 'public_skill.published', $3::jsonb, $4,
                     last_sequence
                FROM next_sequence`,
-            [
-              `regional-projection:${crypto.randomUUID()}`,
-              options.principal.workspaceId,
-              JSON.stringify({
-                workspaceId: options.principal.workspaceId,
-                skillId: options.skillId,
-                skillSlug: row.skill_slug,
-                versionId: record.id,
-                currentVersionId: record.id,
-                semanticVersion,
-                sourceObjectKey: record.objectKey,
-                digest: record.digest,
-                publishedAt: record.publishedAt,
-                searchText: instructions,
-                document: {
-                  skill: {
-                    id: options.skillId,
-                    workspaceId: options.principal.workspaceId,
-                    slug: row.skill_slug,
-                    name: row.skill_name,
-                    description: row.skill_description,
-                    tags: row.skill_tags ?? [],
-                    visibility: "public",
-                    currentPublishedVersionId: record.id,
-                    currentSemanticVersion: semanticVersion,
-                    archivedAt: null,
-                    createdAt: row.skill_created_at?.toISOString(),
-                    updatedAt: skillUpdatedAt.toISOString(),
+              [
+                `regional-projection:${crypto.randomUUID()}`,
+                options.principal.workspaceId,
+                JSON.stringify({
+                  workspaceId: options.principal.workspaceId,
+                  skillId: options.skillId,
+                  skillSlug: row.skill_slug,
+                  versionId: record.id,
+                  currentVersionId: record.id,
+                  semanticVersion,
+                  sourceObjectKey: record.objectKey,
+                  digest: record.digest,
+                  publishedAt: record.publishedAt,
+                  searchText: instructions,
+                  document: {
+                    skill: {
+                      id: options.skillId,
+                      workspaceId: options.principal.workspaceId,
+                      slug: row.skill_slug,
+                      name: row.skill_name,
+                      description: row.skill_description,
+                      tags: row.skill_tags ?? [],
+                      visibility: "public",
+                      currentPublishedVersionId: record.id,
+                      currentSemanticVersion: semanticVersion,
+                      archivedAt: null,
+                      createdAt: row.skill_created_at?.toISOString(),
+                      updatedAt: skillUpdatedAt.toISOString(),
+                    },
+                    version: record,
                   },
-                  version: record,
-                },
-              }),
-              options.fencingEpoch ?? 1,
-            ],
-          );
-        }
-        await this.idempotency.complete(client, claim.identity, 200, {
-          version: record,
-        });
-        return record;
-      });
+                }),
+                options.fencingEpoch ?? 1,
+              ],
+            );
+          }
+          await this.idempotency.complete(client, claim.identity, 200, {
+            version: record,
+          });
+          return record;
+        },
+        { fencingEpoch: options.fencingEpoch },
+      );
     } catch (error) {
-      await this.idempotency.release(claim.identity).catch(() => undefined);
+      await this.idempotency
+        .release(claim.identity, options.fencingEpoch)
+        .catch(() => undefined);
       if (isPublicationConflict(error)) {
         throw new DomainError(
           "SKILL_PUBLISH_CONFLICT",
@@ -349,6 +364,7 @@ export class PublicationService {
     readonly reason: string;
     readonly idempotencyKey: string;
     readonly requestId: string;
+    readonly fencingEpoch?: number;
   }): Promise<SkillVersionRecord> {
     authorize(options.principal, "skills:publish");
     const reason = options.reason.trim();
@@ -371,12 +387,16 @@ export class PublicationService {
       operation: `skill.version.reject:${options.skillId}`,
       key: options.idempotencyKey,
       requestHash,
+      fencingEpoch: options.fencingEpoch,
     });
     if (claim.state === "replay") return claim.responseBody.version;
     try {
-      return await withTransaction(this.pool, options.requestId, async ({ client }) => {
-        const result = await client.query<PublicationRow>(
-          `UPDATE skill_versions version
+      return await withTransaction(
+        this.pool,
+        options.requestId,
+        async ({ client }) => {
+          const result = await client.query<PublicationRow>(
+            `UPDATE skill_versions version
                 SET status = 'rejected'
                FROM skills skill
               WHERE version.id = $1 AND version.skill_id = $2
@@ -391,34 +411,42 @@ export class PublicationService {
                         version.bundle_byte_size, version.manifest,
                         version.change_summary, version.published_at,
                         version.created_at`,
-          [options.candidateVersionId, options.skillId, options.principal.workspaceId],
-        );
-        const row = result.rows[0];
-        if (!row) {
-          throw new DomainError(
-            "SKILL_VERSION_NOT_FOUND",
-            "Candidate skill version was not found",
-            404,
+            [
+              options.candidateVersionId,
+              options.skillId,
+              options.principal.workspaceId,
+            ],
           );
-        }
-        await insertPrincipalAudit(client, options.principal, {
-          eventType: "skill.version.rejected",
-          action: "skills:publish",
-          requestId: options.requestId,
-          resourceType: "skill_version",
-          resourceId: options.candidateVersionId,
-          skillId: options.skillId,
-          versionId: options.candidateVersionId,
-          metadata: { reason, decisionReasonProvided: true },
-        });
-        const version = toSkillVersionRecord(row);
-        await this.idempotency.complete(client, claim.identity, 200, {
-          version,
-        });
-        return version;
-      });
+          const row = result.rows[0];
+          if (!row) {
+            throw new DomainError(
+              "SKILL_VERSION_NOT_FOUND",
+              "Candidate skill version was not found",
+              404,
+            );
+          }
+          await insertPrincipalAudit(client, options.principal, {
+            eventType: "skill.version.rejected",
+            action: "skills:publish",
+            requestId: options.requestId,
+            resourceType: "skill_version",
+            resourceId: options.candidateVersionId,
+            skillId: options.skillId,
+            versionId: options.candidateVersionId,
+            metadata: { reason, decisionReasonProvided: true },
+          });
+          const version = toSkillVersionRecord(row);
+          await this.idempotency.complete(client, claim.identity, 200, {
+            version,
+          });
+          return version;
+        },
+        { fencingEpoch: options.fencingEpoch },
+      );
     } catch (error) {
-      await this.idempotency.release(claim.identity).catch(() => undefined);
+      await this.idempotency
+        .release(claim.identity, options.fencingEpoch)
+        .catch(() => undefined);
       return mapSkillInfrastructureError(error);
     }
   }

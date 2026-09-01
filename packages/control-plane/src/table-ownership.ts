@@ -17,6 +17,7 @@ export const GLOBAL_CONTROL_TABLES = [
   "workspace_invitations",
   "service_principals",
   "workspace_placements",
+  "workspace_regions",
   "resource_routing_directory",
   "permission_directory_records",
   "workspace_routing_nonces",

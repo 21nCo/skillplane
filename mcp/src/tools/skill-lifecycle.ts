@@ -575,6 +575,7 @@ export function skillAmendmentPolicyUpdate(
         expectedUpdatedAt: input.expectedUpdatedAt,
         idempotencyKey: input.idempotencyKey,
         requestId: execution.requestId,
+        fencingEpoch: runtime.fencingEpoch,
         auditContext: mutationAuditContext(runtime, input.caller),
       });
       const updated = await runtime.services.skillService.get({

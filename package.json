@@ -48,7 +48,7 @@
     "local:tunnel": "cloudflared tunnel --config .data/cloudflared.yml run skillplane-local",
     "local:oauth:configure": "node scripts/configure-local-oauth.mjs",
     "test:local:oauth": "node scripts/test-local-oauth.mjs",
-    "db:migrate": "pnpm --filter @skillplane/db migrate",
+    "db:migrate": "SKILLPLANE_DATABASE_ROLE=combined pnpm --filter @skillplane/db migrate",
     "db:verify": "pnpm --filter @skillplane/db verify",
     "db:reset:test": "pnpm --filter @skillplane/testing db:reset:test",
     "db:backup:verify": "pnpm --filter @skillplane/testing db:backup:verify",

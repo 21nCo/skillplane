@@ -68,7 +68,11 @@ export function createPostgresPermissionDirectory(
         `INSERT INTO permission_directory_records
            (key, value, indexes, expires_at, updated_at)
          VALUES ($1, $2, $3::jsonb, $4, now())
-         ON CONFLICT (key) DO NOTHING
+         ON CONFLICT (key)
+         DO UPDATE SET value = EXCLUDED.value, indexes = EXCLUDED.indexes,
+                       expires_at = EXCLUDED.expires_at, updated_at = now()
+         WHERE permission_directory_records.expires_at IS NOT NULL
+           AND permission_directory_records.expires_at <= now()
          RETURNING key, value, indexes, expires_at`,
         [
           input.key,

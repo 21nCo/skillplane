@@ -102,6 +102,7 @@ export async function prepareDevelopmentTopologyDatabases(options = {}) {
   const control = await migrateDatabase(databases.control.url, {
     role: "control",
     initialWorkspaceRegion: "in-south",
+    workspaceRegions: Object.keys(databases.cells),
   });
   const cells = {};
   for (const [regionId, database] of Object.entries(databases.cells)) {

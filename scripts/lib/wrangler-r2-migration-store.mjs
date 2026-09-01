@@ -1,7 +1,8 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
-import { run } from "./production-deployment.mjs";
+import { spawnSync } from "node:child_process";
+import { root, run } from "./production-deployment.mjs";
 
 const bucketPattern = /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/u;
 
@@ -37,8 +38,14 @@ export class WranglerR2MigrationStore {
 
   async read(keyOrInput) {
     const key = typeof keyOrInput === "string" ? keyOrInput : keyOrInput?.key;
+    const value = await this.readIfPresent(key);
+    if (!value) throw new Error(`Could not read ${this.bucket}/${key}`);
+    return value;
+  }
+
+  async readIfPresent(key) {
     return this.withTemporaryFile(async (path) => {
-      run(
+      const result = spawnSync(
         "pnpm",
         [
           "exec",
@@ -51,8 +58,20 @@ export class WranglerR2MigrationStore {
           path,
           "--remote",
         ],
-        { failureMessage: `Could not read ${this.bucket}/${key}` },
+        {
+          cwd: root,
+          env: process.env,
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "pipe"],
+          maxBuffer: 16 * 1024 * 1024,
+        },
       );
+      if (result.error) throw result.error;
+      if (result.status !== 0) {
+        const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
+        if (/not found|does not exist|NoSuchKey|10007/iu.test(output)) return null;
+        throw new Error(`Could not read ${this.bucket}/${key}`);
+      }
       return new Uint8Array(await readFile(path));
     });
   }
@@ -81,13 +100,21 @@ export class WranglerR2MigrationStore {
   }
 
   async putIfAbsent(input) {
-    // The destination key embeds the verified digest. Rewriting that exact key
-    // during a resumed, single-writer cutover is byte-preserving and idempotent.
+    const existing = await this.readIfPresent(input.key);
+    if (existing) {
+      if (
+        existing.byteLength !== input.bytes.byteLength ||
+        existing.some((byte, index) => byte !== input.bytes[index])
+      ) {
+        throw new Error(`R2_MIGRATION_OBJECT_CONFLICT:${input.key}`);
+      }
+      return "exists";
+    }
     await this.put(input.key, input.bytes);
     return "created";
   }
 
-  delete(key) {
+  async delete(key) {
     run(
       "pnpm",
       [
@@ -101,6 +128,5 @@ export class WranglerR2MigrationStore {
       ],
       { failureMessage: `Could not delete ${this.bucket}/${key}` },
     );
-    return Promise.resolve();
   }
 }

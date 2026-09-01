@@ -297,10 +297,6 @@ export class PostgresWorkspaceMigrationOperations implements WorkspaceMigrationO
       // promoted through placement.
       await target.query("SET LOCAL session_replication_role = replica");
       await target.query("SET CONSTRAINTS ALL DEFERRED");
-      await target.query(
-        "SELECT set_config('skillplane.workspace_migration_cleanup', $1, true)",
-        [context.namespace],
-      );
       for (const table of tables.toReversed()) {
         await target.query(
           `DELETE FROM ${identifier(table.tableName)} WHERE ${identifier(table.namespaceColumn)} = $1`,
@@ -402,13 +398,20 @@ export class PostgresWorkspaceMigrationOperations implements WorkspaceMigrationO
   async rebuildGlobalResourceDirectory(
     context: DatafnNamespaceMigrationContext,
   ): Promise<void> {
+    await this.rebuildGlobalResourceDirectoryFrom(this.target, context);
+  }
+
+  private async rebuildGlobalResourceDirectoryFrom(
+    database: MigrationSqlQueryable,
+    context: DatafnNamespaceMigrationContext,
+  ): Promise<void> {
     for (const [resourceType, table] of [
       ["skill", "skills"],
       ["skill_version", "skill_versions"],
       ["context", "skill_contexts"],
       ["context_note", "context_notes"],
     ] as const) {
-      const resources = await this.target.query<{ id: string }>(
+      const resources = await database.query<{ id: string }>(
         `SELECT id FROM ${identifier(table)} WHERE workspace_id = $1 ORDER BY id`,
         [context.namespace],
       );
@@ -447,14 +450,16 @@ export class PostgresWorkspaceMigrationOperations implements WorkspaceMigrationO
   async resumeTarget(context: DatafnNamespaceMigrationContext): Promise<void> {
     // A cell can become the target after having previously been the source.
     // Open a new active generation before the placement becomes active again.
-    // The timestamp rejects transactions admitted during an older generation.
+    // A recovery lease may advance the final placement epoch further. The
+    // moving epoch is therefore a lower bound for this ownership generation.
     await this.target.query(
       `INSERT INTO regional_workspace_migration_fences
-         (workspace_id, source_epoch, fenced_at)
-       VALUES ($1, 0, now())
+         (workspace_id, source_epoch, active_epoch, fenced_at)
+       VALUES ($1, 0, $2, now())
        ON CONFLICT (workspace_id)
-       DO UPDATE SET source_epoch = 0, fenced_at = now()`,
-      [context.namespace],
+       DO UPDATE SET source_epoch = 0, active_epoch = EXCLUDED.active_epoch,
+                     fenced_at = now()`,
+      [context.namespace, context.movingEpoch + 1],
     );
     // Keep the source-cell fence as a tombstone. It rejects even an old
     // repeatable-read transaction which reaches DML after activation.
@@ -470,11 +475,8 @@ export class PostgresWorkspaceMigrationOperations implements WorkspaceMigrationO
       const client = await this.target.connect();
       try {
         await client.query("BEGIN");
+        await client.query("SET LOCAL session_replication_role = replica");
         await client.query("SET CONSTRAINTS ALL DEFERRED");
-        await client.query(
-          "SELECT set_config('skillplane.workspace_migration_cleanup', $1, true)",
-          [context.namespace],
-        );
         for (const table of tables.toReversed()) {
           await client.query(
             `DELETE FROM ${identifier(table.tableName)} WHERE ${identifier(table.namespaceColumn)} = $1`,
@@ -489,16 +491,21 @@ export class PostgresWorkspaceMigrationOperations implements WorkspaceMigrationO
         client.release();
       }
       for (const key of await this.bundleKeys(context.namespace)) {
-        await this.targetObjects.delete(key).catch(() => undefined);
+        await this.targetObjects.delete(key);
       }
-    } finally {
+      await this.rebuildGlobalResourceDirectoryFrom(this.source, context);
       await this.releaseSource();
       await this.source.query(
         `UPDATE regional_workspace_migration_fences
-            SET source_epoch = 0, fenced_at = now()
+            SET source_epoch = 0, active_epoch = $2, fenced_at = now()
           WHERE workspace_id = $1`,
-        [context.namespace],
+        [context.namespace, context.movingEpoch + 1],
       );
+    } catch (error) {
+      // Release the retained snapshot connection, but leave the durable source
+      // fence raised so recovery cannot resume writes after partial cleanup.
+      await this.releaseSource();
+      throw error;
     }
   }
 }
