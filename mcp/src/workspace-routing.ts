@@ -447,15 +447,11 @@ export function createRoutedMcpApplication<Context>(input: {
         }
         if (error instanceof McpRoutingError) return error.response();
         if (error instanceof McpToolError) {
-          return Response.json(
-            {
-              error: error.code,
-              error_description: error.message,
-              retryable: error.retryable,
-              ...(error.details ? { details: error.details } : {}),
-            },
-            { status: error.status, headers: { "cache-control": "no-store" } },
-          );
+          return new McpRoutingError(
+            error.status,
+            error.code,
+            error.message,
+          ).response();
         }
         if (
           error &&

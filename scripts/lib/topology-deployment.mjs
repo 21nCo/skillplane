@@ -1,7 +1,22 @@
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { parseTopologyManifest } from "../../packages/control-plane/dist/index.js";
+import { spawnSync } from "node:child_process";
+import { pathToFileURL } from "node:url";
 import { root } from "./production-deployment.mjs";
+
+const controlPlaneEntry = resolve(root, "packages/control-plane/dist/index.js");
+if (!existsSync(controlPlaneEntry)) {
+  const build = spawnSync("pnpm", ["--filter", "@skillplane/control-plane", "build"], {
+    cwd: root,
+    stdio: "inherit",
+  });
+  if (build.error) throw build.error;
+  if (build.status !== 0 || !existsSync(controlPlaneEntry)) {
+    throw new Error("The control-plane topology parser build failed");
+  }
+}
+const { parseTopologyManifest } = await import(pathToFileURL(controlPlaneEntry).href);
 
 const hyperdriveId = /^[a-f0-9]{32}$/u;
 const bucketName = /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/u;

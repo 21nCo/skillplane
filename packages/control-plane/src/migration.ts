@@ -58,6 +58,7 @@ export interface WorkspaceMigrationJournal {
     readonly sourceEpoch: number;
   }): Promise<void>;
   completed(id: string, proof: WorkspaceMigrationProof): Promise<void>;
+  completionPending(id: string, proof: WorkspaceMigrationProof): Promise<void>;
   failed(id: string, errorCode: string): Promise<void>;
 }
 
@@ -85,6 +86,16 @@ export class PostgresWorkspaceMigrationJournal implements WorkspaceMigrationJour
       `UPDATE workspace_migration_runs
           SET status = 'completed', phase = 'complete', final_epoch = $2,
               evidence = $3::jsonb, completed_at = now(), updated_at = now()
+        WHERE id = $1 AND status = 'running'`,
+      [id, proof.finalEpoch, JSON.stringify(proof)],
+    );
+  }
+
+  async completionPending(id: string, proof: WorkspaceMigrationProof) {
+    await this.database.query(
+      `UPDATE workspace_migration_runs
+          SET phase = 'completion-pending', final_epoch = $2,
+              evidence = $3::jsonb, updated_at = now()
         WHERE id = $1 AND status = 'running'`,
       [id, proof.finalEpoch, JSON.stringify(proof)],
     );
@@ -302,6 +313,9 @@ export async function migrateWorkspaceWithJournal(
     await input.journal.completed(migrationId, result.proof);
     return { migrationId, ...result };
   } catch (error) {
+    await input.journal
+      .completionPending(migrationId, result.proof)
+      .catch(() => undefined);
     const completion = new Error("WORKSPACE_MIGRATION_JOURNAL_COMPLETION_FAILED");
     completion.cause = error;
     throw completion;

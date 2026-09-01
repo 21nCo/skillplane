@@ -457,7 +457,11 @@ export class PostgresWorkspaceMigrationOperations implements WorkspaceMigrationO
          (workspace_id, source_epoch, active_epoch, fenced_at)
        VALUES ($1, 0, $2, now())
        ON CONFLICT (workspace_id)
-       DO UPDATE SET source_epoch = 0, active_epoch = EXCLUDED.active_epoch,
+       DO UPDATE SET source_epoch = 0,
+                     active_epoch = GREATEST(
+                       regional_workspace_migration_fences.active_epoch,
+                       EXCLUDED.active_epoch
+                     ),
                      fenced_at = now()`,
       [context.namespace, context.movingEpoch + 1],
     );
@@ -497,7 +501,9 @@ export class PostgresWorkspaceMigrationOperations implements WorkspaceMigrationO
       await this.releaseSource();
       await this.source.query(
         `UPDATE regional_workspace_migration_fences
-            SET source_epoch = 0, active_epoch = $2, fenced_at = now()
+            SET source_epoch = 0,
+                active_epoch = GREATEST(active_epoch, $2),
+                fenced_at = now()
           WHERE workspace_id = $1`,
         [context.namespace, context.movingEpoch + 1],
       );

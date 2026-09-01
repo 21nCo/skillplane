@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { assertDisposableDatabaseUrl } from "./database-url.js";
-import { loadMigrations, physicalOwnershipPlan } from "./migrate.js";
+import {
+  loadMigrations,
+  parseWorkspaceRegions,
+  physicalOwnershipPlan,
+} from "./migrate.js";
 
 describe("migration chain", () => {
   it("is ordered, hashed, and immutable by identity", async () => {
@@ -45,6 +49,8 @@ describe("migration chain", () => {
       "0037_regional_workspace_generation_fence.sql",
       "0038_multi_region_safety_hardening.sql",
       "0039_regional_generation_safety_hardening.sql",
+      "0040_control_plane_safety_followup.sql",
+      "0041_regional_fence_lock_followup.sql",
     ]);
     expect(new Set(migrations.map((migration) => migration.sha256)).size).toBe(
       migrations.length,
@@ -71,6 +77,15 @@ describe("migration chain", () => {
     expect(() =>
       assertDisposableDatabaseUrl("postgresql://user:pass@127.0.0.1:5432/skillplane"),
     ).toThrow(/Refusing destructive reset/);
+  });
+
+  it("parses the standalone control migration region list", () => {
+    expect(parseWorkspaceRegions("in-south, us-east,eu-west")).toEqual([
+      "in-south",
+      "us-east",
+      "eu-west",
+    ]);
+    expect(parseWorkspaceRegions(undefined)).toBeUndefined();
   });
 
   it("assigns dynamic DataFn tables to regional databases", () => {

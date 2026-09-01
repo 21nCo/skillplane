@@ -36,6 +36,15 @@ export function requiresWorkspaceRollbackDrill(placement) {
   return placement === null || !isWorkspaceMigrationRecoveryPending(placement);
 }
 
+export function assertDistinctMigrationDatabases(databases) {
+  if (
+    new Set(Object.values(databases).map(({ fingerprint }) => fingerprint)).size !== 3
+  ) {
+    throw new Error("Migration control, source, and target databases must be distinct");
+  }
+  return databases;
+}
+
 export async function migrateConfiguredWorkspace() {
   const workspaceId = requireEnvironment("SKILLPLANE_WORKSPACE_ID", {
     pattern: /^[A-Za-z0-9:_-]{1,180}$/u,
@@ -47,7 +56,7 @@ export async function migrateConfiguredWorkspace() {
     bucketName("SKILLPLANE_SOURCE_BUCKET"),
     bucketName("SKILLPLANE_TARGET_BUCKET"),
   );
-  const databases = {
+  const databases = assertDistinctMigrationDatabases({
     control: parseDirectPostgresUrl(
       requireEnvironment("SKILLPLANE_CONTROL_DATABASE_URL"),
       "SKILLPLANE_CONTROL_DATABASE_URL",
@@ -60,10 +69,7 @@ export async function migrateConfiguredWorkspace() {
       requireEnvironment("SKILLPLANE_TARGET_DATABASE_URL"),
       "SKILLPLANE_TARGET_DATABASE_URL",
     ),
-  };
-  if (databases.source.fingerprint === databases.target.fingerprint) {
-    throw new Error("Migration source and target databases must be distinct");
-  }
+  });
   const control = new Pool({
     connectionString: databases.control.url,
     application_name: "skillplane-workspace-migration-control",

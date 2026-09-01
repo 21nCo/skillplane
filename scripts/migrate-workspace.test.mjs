@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  assertDistinctMigrationDatabases,
   assertDistinctMigrationBuckets,
   requiresWorkspaceRollbackDrill,
 } from "./migrate-workspace.mjs";
@@ -21,6 +22,20 @@ describe("workspace migration bucket safety", () => {
       () =>
         assertDistinctMigrationBuckets("skillplane-in-south", "skillplane-in-south"),
       /must be distinct/u,
+    );
+  });
+});
+
+describe("workspace migration database safety", () => {
+  it("rejects a control database aliased to either regional database", () => {
+    assert.throws(
+      () =>
+        assertDistinctMigrationDatabases({
+          control: { fingerprint: "same" },
+          source: { fingerprint: "same" },
+          target: { fingerprint: "target" },
+        }),
+      /control, source, and target databases must be distinct/u,
     );
   });
 });

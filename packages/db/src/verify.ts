@@ -8,6 +8,7 @@ import type { MigrationRole } from "./migrate.js";
 import {
   GLOBAL_CONTROL_TABLES,
   REGIONAL_WORKSPACE_TABLES,
+  physicalOwnershipPlan,
 } from "@skillplane/control-plane/table-ownership";
 
 export const REQUIRED_TABLES = [
@@ -101,14 +102,43 @@ export async function verifyDatabase(
         ORDER BY table_name`,
     );
     const tables = tableResult.rows.map((row) => row.table_name);
-    const requiredTables = [
-      ...(role === "regional" ? [] : GLOBAL_CONTROL_TABLES),
-      ...(role === "control" ? [] : REGIONAL_WORKSPACE_TABLES),
-      "skillplane_schema_migrations",
-    ];
+    const datafnTables =
+      role === "regional"
+        ? (
+            await pool.query<{ table_name: string }>(
+              `SELECT table_name
+                 FROM information_schema.tables AS candidate
+                WHERE table_schema = 'public'
+                  AND table_type = 'BASE TABLE'
+                  AND (
+                    left(table_name, 9) = '__datafn_'
+                    OR EXISTS (
+                      SELECT 1
+                        FROM information_schema.columns AS column_definition
+                       WHERE column_definition.table_schema = candidate.table_schema
+                         AND column_definition.table_name = candidate.table_name
+                         AND column_definition.column_name = '__ns'
+                    )
+                  )
+                ORDER BY table_name`,
+            )
+          ).rows.map((row) => row.table_name)
+        : [];
+    const ownedTables =
+      role === "combined"
+        ? [...GLOBAL_CONTROL_TABLES, ...REGIONAL_WORKSPACE_TABLES]
+        : physicalOwnershipPlan(role, datafnTables).expected;
+    const requiredTables = [...ownedTables, "skillplane_schema_migrations"];
     const missingTables = requiredTables.filter((table) => !tables.includes(table));
     if (missingTables.length > 0) {
       throw new Error(`Missing required tables: ${missingTables.join(", ")}`);
+    }
+    if (role !== "combined") {
+      const expected = new Set(requiredTables);
+      const unexpectedTables = tables.filter((table) => !expected.has(table));
+      if (unexpectedTables.length > 0) {
+        throw new Error(`Unexpected ${role} tables: ${unexpectedTables.join(", ")}`);
+      }
     }
 
     const constraintResult = await pool.query<{ conname: string }>(

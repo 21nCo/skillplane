@@ -1,4 +1,5 @@
 import type { Pool, PoolClient } from "pg";
+import { setCurrentWorkspaceRoutingEpoch } from "./routing-epoch.js";
 
 const DAY = /^\d{4}-\d{2}-\d{2}$/u;
 export const ALL_SKILLS_ROLLUP_ID = "";
@@ -251,6 +252,7 @@ async function rollupWorkspace(
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    await setCurrentWorkspaceRoutingEpoch(client, workspaceId);
     await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
       `skillplane-rollup:${workspaceId}:${day}`,
     ]);

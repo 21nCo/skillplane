@@ -212,12 +212,10 @@ export class PostgresAuditWriter {
     if (!client) throw new AuditWriteError();
     try {
       await client.query("BEGIN");
-      if (input.fencingEpoch !== undefined) {
-        await client.query(
-          "SELECT set_config('skillplane.workspace_routing_epoch', $1, true)",
-          [String(input.fencingEpoch)],
-        );
-      }
+      await client.query(
+        "SELECT set_config('skillplane.workspace_routing_epoch', $1, true)",
+        [String(input.fencingEpoch ?? 1)],
+      );
       const id = await writeAuditEvent(client, input);
       await client.query("COMMIT");
       return id;
@@ -444,7 +442,7 @@ function auditWhere(
       (position) =>
         source === "regional"
           ? `context_id = $${String(position)}`
-          : `metadata->>'contextId' = $${String(position)}`,
+          : `COALESCE(metadata->>'contextId', metadata->>'context_id') = $${String(position)}`,
       filters.contextId,
     );
   }

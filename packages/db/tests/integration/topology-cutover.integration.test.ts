@@ -379,7 +379,7 @@ describe("combined database topology cutover", () => {
     await migrateDatabase(legacyUrl, {
       role: "control",
       initialWorkspaceRegion: "in-south",
-      workspaceRegions: ["in-south"],
+      workspaceRegions: ["in-south", "us-east"],
     });
     const finalControl = new Pool({ connectionString: legacyUrl, max: 1 });
     const finalCell = new Pool({ connectionString: cellUrl, max: 1 });

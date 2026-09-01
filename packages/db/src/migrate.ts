@@ -4,10 +4,9 @@ import { Pool, type PoolClient } from "pg";
 import { packageRoot } from "./database-url.js";
 
 import { resolve } from "node:path";
-import {
-  GLOBAL_CONTROL_TABLES,
-  REGIONAL_WORKSPACE_TABLES,
-} from "@skillplane/control-plane/table-ownership";
+import { physicalOwnershipPlan } from "@skillplane/control-plane/table-ownership";
+
+export { physicalOwnershipPlan } from "@skillplane/control-plane/table-ownership";
 
 const migrationsDirectory = resolve(packageRoot, "migrations");
 const migrationPattern = /^\d{4}_[a-z0-9_]+\.sql$/;
@@ -29,30 +28,12 @@ export interface MigrationResult {
   readonly alreadyApplied: readonly string[];
 }
 
-export function physicalOwnershipPlan(
-  role: Exclude<MigrationRole, "combined">,
-  datafnTables: readonly string[],
-): {
-  readonly unowned: readonly string[];
-  readonly expected: readonly string[];
-} {
-  const staticTables = new Set<string>([
-    ...GLOBAL_CONTROL_TABLES,
-    ...REGIONAL_WORKSPACE_TABLES,
-    "skillplane_schema_migrations",
-  ]);
-  const dynamic = [...new Set(datafnTables)]
-    .filter((table) => !staticTables.has(table))
-    .sort();
-  return role === "control"
-    ? {
-        unowned: [...REGIONAL_WORKSPACE_TABLES, ...dynamic],
-        expected: [...GLOBAL_CONTROL_TABLES],
-      }
-    : {
-        unowned: [...GLOBAL_CONTROL_TABLES],
-        expected: [...REGIONAL_WORKSPACE_TABLES, ...dynamic],
-      };
+export function parseWorkspaceRegions(
+  value: string | undefined,
+): readonly string[] | undefined {
+  return value === undefined
+    ? undefined
+    : value.split(",").map((region) => region.trim());
 }
 
 function quoteIdentifier(value: string): string {
@@ -172,6 +153,16 @@ export async function migrateDatabase(
     !/^[a-z0-9][a-z0-9-]{0,62}$/u.test(initialWorkspaceRegion)
   ) {
     throw new Error("INITIAL_WORKSPACE_REGION_INVALID");
+  }
+  if (
+    options.workspaceRegions !== undefined &&
+    (options.workspaceRegions.length === 0 ||
+      new Set(options.workspaceRegions).size !== options.workspaceRegions.length ||
+      options.workspaceRegions.some(
+        (region) => !/^[a-z0-9][a-z0-9-]{0,62}$/u.test(region),
+      ))
+  ) {
+    throw new Error("WORKSPACE_REGIONS_INVALID");
   }
   if (role === "control" && initialWorkspaceRegion === undefined) {
     throw new Error("INITIAL_WORKSPACE_REGION_REQUIRED");

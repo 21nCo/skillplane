@@ -27,7 +27,7 @@ import {
 import { productionReleaseSmoke } from "./production-smoke.mjs";
 import { renderTopologyDeploymentConfigs } from "./render-topology-config.mjs";
 
-function routingKeys(manifest) {
+export function routingKeys(manifest) {
   const value = requireEnvironment("WORKSPACE_ROUTING_KEYS", {
     minimumLength: 32,
     trim: false,
@@ -42,13 +42,17 @@ function routingKeys(manifest) {
     received.length !== expected.size ||
     received.some((keyId) => !expected.has(keyId)) ||
     typeof parsed[manifest.routing.activeKeyId] !== "string" ||
+    new Set(Object.values(parsed)).size !== received.length ||
     Object.values(parsed).some(
       (secret) => typeof secret !== "string" || secret.length < 32,
     )
   ) {
     throw new Error("WORKSPACE_ROUTING_KEYS does not match the topology keyring");
   }
-  const identitySecrets = [process.env.AUTHFN_SECRET, process.env.OAUTH_TOKEN_PEPPER];
+  const identitySecrets = [
+    requireSecretEnvironment("AUTHFN_SECRET"),
+    requireSecretEnvironment("OAUTH_TOKEN_PEPPER"),
+  ];
   if (Object.values(parsed).some((secret) => identitySecrets.includes(secret))) {
     throw new Error("Workspace routing keys must be independent identity secrets");
   }

@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Pool } from "pg";
 import type { CallerDeclaration } from "@skillplane/mcp-schema";
-import { ControlPlaneMcpAuditWriter, type McpAuditRecord } from "./audit.js";
+import {
+  ControlPlaneMcpAuditWriter,
+  PostgresMcpAuditWriter,
+  type McpAuditRecord,
+} from "./audit.js";
 
 const caller: CallerDeclaration = {
   agentId: "agent:test",
@@ -93,6 +97,31 @@ describe("ControlPlaneMcpAuditWriter", () => {
       new ControlPlaneMcpAuditWriter(pool).record(record()),
     ).rejects.toMatchObject({ code: "AUDIT_WRITE_FAILED" });
     expect(query.mock.calls.at(-1)?.[0]).toBe("ROLLBACK");
+    expect(release).toHaveBeenCalledOnce();
+  });
+});
+
+describe("PostgresMcpAuditWriter", () => {
+  it("resets the routing epoch for every event in a batch", async () => {
+    const query = vi.fn(async (sql: string, values?: readonly unknown[]) => {
+      void sql;
+      void values;
+      return { rows: [], rowCount: 1 };
+    });
+    const release = vi.fn();
+    const pool = {
+      connect: vi.fn(async () => ({ query, release })),
+    } as unknown as Pool;
+
+    await new PostgresMcpAuditWriter(pool).recordBatch([
+      record({ fencingEpoch: 7 }),
+      record({ workspaceId: "workspace:second" }),
+    ]);
+
+    const epochs = query.mock.calls
+      .filter(([sql]) => String(sql).includes("workspace_routing_epoch"))
+      .map(([, values]) => values);
+    expect(epochs).toEqual([["7"], ["1"]]);
     expect(release).toHaveBeenCalledOnce();
   });
 });

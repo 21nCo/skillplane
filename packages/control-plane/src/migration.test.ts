@@ -41,6 +41,7 @@ describe("fenced workspace migration", () => {
     const journal = {
       started: vi.fn(async () => undefined),
       completed: vi.fn(async () => undefined),
+      completionPending: vi.fn(async () => undefined),
       failed: vi.fn(async () => undefined),
     };
     const result = await migrateWorkspaceWithJournal({
@@ -64,6 +65,44 @@ describe("fenced workspace migration", () => {
     expect(journal.failed).not.toHaveBeenCalled();
   });
 
+  it("persists completion-pending evidence when the final journal update fails", async () => {
+    const directory = createMemoryWorkspacePlacementDirectory();
+    await claimWorkspacePlacement({
+      directory,
+      workspaceId: "workspace:completion-pending",
+      regionId: "in-south",
+    });
+    const journal = {
+      started: vi.fn(async () => undefined),
+      completed: vi.fn(async () => {
+        throw new Error("control database unavailable");
+      }),
+      completionPending: vi.fn(async () => undefined),
+      failed: vi.fn(async () => undefined),
+    };
+
+    await expect(
+      migrateWorkspaceWithJournal({
+        migrationId: "migration:completion-pending",
+        directory,
+        workspaceId: "workspace:completion-pending",
+        targetRegionId: "us-east",
+        operations: operations(),
+        journal,
+      }),
+    ).rejects.toThrow("WORKSPACE_MIGRATION_JOURNAL_COMPLETION_FAILED");
+
+    expect(journal.completionPending).toHaveBeenCalledWith(
+      "migration:completion-pending",
+      expect.objectContaining({ workspaceId: "workspace:completion-pending" }),
+    );
+    expect(journal.failed).not.toHaveBeenCalled();
+    await expect(directory.get("workspace:completion-pending")).resolves.toMatchObject({
+      regionId: "us-east",
+      state: "active",
+    });
+  });
+
   it("rolls back and records failure when target verification differs", async () => {
     const directory = createMemoryWorkspacePlacementDirectory();
     await claimWorkspacePlacement({
@@ -75,6 +114,7 @@ describe("fenced workspace migration", () => {
     const journal = {
       started: vi.fn(async () => undefined),
       completed: vi.fn(async () => undefined),
+      completionPending: vi.fn(async () => undefined),
       failed: vi.fn(async () => undefined),
     };
     await expect(
@@ -159,6 +199,7 @@ describe("fenced workspace migration", () => {
     const journal = {
       started: vi.fn(async () => undefined),
       completed: vi.fn(async () => undefined),
+      completionPending: vi.fn(async () => undefined),
       failed: vi.fn(async () => undefined),
     };
 
@@ -217,6 +258,7 @@ describe("fenced workspace migration", () => {
     const journal = {
       started: vi.fn(async () => undefined),
       completed: vi.fn(async () => undefined),
+      completionPending: vi.fn(async () => undefined),
       failed: vi.fn(async () => undefined),
     };
 
