@@ -79,11 +79,10 @@ async function ensureLedger(client: PoolClient): Promise<void> {
   `);
 }
 
-async function enforcePhysicalOwnership(
-  client: PoolClient,
-  role: Exclude<MigrationRole, "combined">,
-): Promise<void> {
-  const datafnTables = await client.query<{ table_name: string }>(
+export async function listDatafnTables(
+  client: Pool | PoolClient,
+): Promise<readonly string[]> {
+  const result = await client.query<{ table_name: string }>(
     `SELECT table_name
          FROM information_schema.tables AS candidate
         WHERE table_schema = 'public'
@@ -100,10 +99,14 @@ async function enforcePhysicalOwnership(
           )
         ORDER BY table_name`,
   );
-  const plan = physicalOwnershipPlan(
-    role,
-    datafnTables.rows.map((row) => row.table_name),
-  );
+  return result.rows.map((row) => row.table_name);
+}
+
+async function enforcePhysicalOwnership(
+  client: PoolClient,
+  role: Exclude<MigrationRole, "combined">,
+): Promise<void> {
+  const plan = physicalOwnershipPlan(role, await listDatafnTables(client));
   if (role === "regional") {
     await client.query(
       "DROP TRIGGER IF EXISTS audit_events_public_stats_counter_insert ON audit_events",
@@ -237,7 +240,18 @@ export async function migrateDatabase(
       }
       if (role === "control" && initialWorkspaceRegion !== undefined) {
         const workspaceRegions = options.workspaceRegions ?? [initialWorkspaceRegion];
-        await client.query("UPDATE workspace_regions SET enabled = false");
+        // Disable only regions absent from the configured set. Transiently
+        // disabling a retained region queues a deferred `enabled = false` row
+        // image that `workspace_regions_protect_placements` rejects at commit
+        // whenever that region still has placements, even though the final
+        // state re-enables it. Truly removed regions that still hold placements
+        // remain correctly rejected.
+        await client.query(
+          `UPDATE workspace_regions
+              SET enabled = false, updated_at = now()
+            WHERE region_id <> ALL($1::text[])`,
+          [workspaceRegions],
+        );
         await client.query(
           `INSERT INTO workspace_regions (region_id, enabled, updated_at)
            SELECT region_id, true, now()

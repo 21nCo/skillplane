@@ -3,7 +3,7 @@ import {
   assertAuthfnCoreSchemaContract,
   assertAuthfnPluginSchemaContract,
 } from "./authfn.js";
-import { loadMigrations } from "./migrate.js";
+import { listDatafnTables, loadMigrations } from "./migrate.js";
 import type { MigrationRole } from "./migrate.js";
 import {
   GLOBAL_CONTROL_TABLES,
@@ -102,28 +102,7 @@ export async function verifyDatabase(
         ORDER BY table_name`,
     );
     const tables = tableResult.rows.map((row) => row.table_name);
-    const datafnTables =
-      role === "regional"
-        ? (
-            await pool.query<{ table_name: string }>(
-              `SELECT table_name
-                 FROM information_schema.tables AS candidate
-                WHERE table_schema = 'public'
-                  AND table_type = 'BASE TABLE'
-                  AND (
-                    left(table_name, 9) = '__datafn_'
-                    OR EXISTS (
-                      SELECT 1
-                        FROM information_schema.columns AS column_definition
-                       WHERE column_definition.table_schema = candidate.table_schema
-                         AND column_definition.table_name = candidate.table_name
-                         AND column_definition.column_name = '__ns'
-                    )
-                  )
-                ORDER BY table_name`,
-            )
-          ).rows.map((row) => row.table_name)
-        : [];
+    const datafnTables = role === "regional" ? await listDatafnTables(pool) : [];
     const ownedTables =
       role === "combined"
         ? [...GLOBAL_CONTROL_TABLES, ...REGIONAL_WORKSPACE_TABLES]
