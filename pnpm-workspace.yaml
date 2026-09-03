@@ -54,6 +54,11 @@ catalog:
   fumadocs-ui: 16.14.0
   hono: 4.12.32
   marked: 18.0.7
+  "@mdfn/core": 0.1.0
+  "@mdfn/extensions": 0.1.0
+  "@mdfn/markdown": 0.1.0
+  "@mdfn/render": 0.1.0
+  "@mdfn/svelte": 0.1.0
   next: 16.3.0
   pg: 8.22.0
   phosphor-svelte: 3.1.0
@@ -102,6 +107,14 @@ minimumReleaseAgeExclude:
   - "@mcpfn/client@0.0.3"
   - "@mcpfn/core@0.0.4"
   - "@mcpfn/testing@0.0.4"
+  - "@mdfn/core@0.1.0"
+  - "@mdfn/dom@0.1.0"
+  - "@mdfn/extensions@0.1.0"
+  - "@mdfn/markdown@0.1.0"
+  - "@mdfn/render@0.1.0"
+  - "@mdfn/source@0.1.0"
+  - "@mdfn/svelte@0.1.0"
+  - "@mdfn/adapter-kit@0.1.0"
   - "@superfunctions/oauth-core@0.1.1"
   - "@superfunctions/oauth-storage@0.1.0"
   - "@superfunctions/observability@0.0.1"

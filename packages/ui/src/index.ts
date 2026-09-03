@@ -33,3 +33,19 @@ export type { DropdownItem } from "./components/Dropdown.svelte";
 export type { SelectOption } from "./components/Select.svelte";
 export type { TabItem } from "./components/Tabs.svelte";
 export { renderSafeMarkdown } from "./markdown.js";
+export {
+  isMdfnRendererEnabled,
+  markdownRendererId,
+  type MarkdownRendererId,
+} from "./markdown-flags.js";
+export { renderLegacyMarkdown } from "./markdown-legacy.js";
+export {
+  SKILLPLANE_MARKDOWN_OPTIONS,
+  SKILLPLANE_MARKDOWN_PROFILE_NAME,
+  SKILLPLANE_MARKDOWN_PROFILE_VERSION,
+  SKILLPLANE_RENDER_POLICY,
+  inspectSkillplaneMarkdown,
+  parseSkillplaneMarkdown,
+  renderSkillplaneMarkdown,
+  type SkillplaneMarkdownInspection,
+} from "./markdown-profile.js";

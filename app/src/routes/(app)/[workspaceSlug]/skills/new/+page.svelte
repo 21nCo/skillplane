@@ -3,6 +3,7 @@
   import { resolve } from "$app/paths";
   import { page } from "$app/state";
   import { Button, Input, Select, Tabs, Textarea } from "@skillplane/ui";
+  import MarkdownEditor from "$lib/markdown/MarkdownEditor.svelte";
   import BundleUploader from "$lib/skills/BundleUploader.svelte";
   import SkillState from "$lib/skills/SkillState.svelte";
   import { createSkill } from "$lib/skills/api.js";
@@ -185,12 +186,13 @@
                 bind:value={tags}
                 oninput={changed}
               />
-              <Textarea
+              <MarkdownEditor
+                surface="skill-create"
                 label="SKILL.md"
                 description="Portable Markdown instructions delivered to agents."
                 rows={22}
                 required
-                maxlength={1_048_576}
+                maxCharacters={1_048_576}
                 bind:value={markdown}
                 oninput={changed}
               />

@@ -21,6 +21,7 @@
     "conduct:verify": "node scripts/verify-conduct.mjs",
     "boundaries:verify": "node scripts/verify-boundaries.mjs",
     "mcpfn:verify": "node scripts/verify-mcpfn-adoption.mjs",
+    "mdfn:verify": "node scripts/verify-mdfn-adoption.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint .",

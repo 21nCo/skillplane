@@ -1,6 +1,7 @@
 <script lang="ts">
   import { capturePostHog } from "$lib/analytics/posthog.client.js";
   import { Button, Input, Select, Textarea } from "@skillplane/ui";
+  import MarkdownEditor from "$lib/markdown/MarkdownEditor.svelte";
   import { WarningCircleIcon } from "phosphor-svelte";
   import { createContext } from "./api.js";
   import { learningMetadata, parseJsonObject } from "./metadata.js";
@@ -171,12 +172,14 @@
     oninput={changed}
   />
 
-  <Textarea
+  <MarkdownEditor
+    surface="context-create"
     label="Initial shared knowledge"
     description="Markdown source. This creates immutable knowledge revision 1."
     rows={12}
     required
-    maxlength={524_288}
+    maxBytes={524_288}
+    maxCharacters={524_288}
     bind:value={knowledge}
     oninput={changed}
   />

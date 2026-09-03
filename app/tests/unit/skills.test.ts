@@ -6,7 +6,11 @@ import {
   inspectSkillBundle,
   markdownFiles,
 } from "../../src/lib/skills/bundle.js";
-import { renderSafeMarkdown } from "@skillplane/ui";
+import {
+  inspectSkillplaneMarkdown,
+  renderSafeMarkdown,
+  renderSkillplaneMarkdown,
+} from "@skillplane/ui";
 
 describe("skill browser utilities", () => {
   it("builds a portable deterministic browser bundle", async () => {
@@ -62,14 +66,16 @@ describe("skill browser utilities", () => {
   });
 
   it("renders Markdown while neutralizing raw HTML and unsafe URLs", () => {
-    const html = renderSafeMarkdown(
-      '# Safe\n\n<script>alert("x")</script>\n\n[x](javascript:alert(1)) [web](https://example.com)\n\n![bad](data:text/html,x)',
-    );
+    const source =
+      '# Safe\n\n<script>alert("x")</script>\n\n[x](javascript:alert(1)) [web](https://example.com)\n\n![bad](data:text/html,x)';
+    const html = renderSafeMarkdown(source);
     expect(html).toContain("<h1>Safe</h1>");
     expect(html).toContain("&lt;script&gt;");
     expect(html).not.toContain("<script");
     expect(html).not.toContain("javascript:");
     expect(html).not.toContain("data:text");
     expect(html).toContain('rel="noreferrer noopener"');
+    expect(html).toBe(renderSkillplaneMarkdown(source).html);
+    expect(inspectSkillplaneMarkdown(source).profile).toBe("skillplane.markdown.v1");
   });
 });
