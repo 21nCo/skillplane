@@ -85,8 +85,28 @@ export function assertMigrationDatabaseRegions(input) {
   return { sourceRegionId, targetRegionId: input.targetRegionId };
 }
 
+export function assertMigrationBucketRegions(input) {
+  const expectedSource = input.regionalBuckets[input.sourceRegionId];
+  const expectedTarget = input.regionalBuckets[input.targetRegionId];
+  if (!expectedSource || input.buckets.sourceBucket !== expectedSource) {
+    throw new Error(
+      `SKILLPLANE_SOURCE_BUCKET must name the ${input.sourceRegionId} cell bucket`,
+    );
+  }
+  if (!expectedTarget || input.buckets.targetBucket !== expectedTarget) {
+    throw new Error(
+      `SKILLPLANE_TARGET_BUCKET must name the ${input.targetRegionId} cell bucket`,
+    );
+  }
+  return { sourceRegionId: input.sourceRegionId, targetRegionId: input.targetRegionId };
+}
+
 function cellDatabaseEnvironment(regionId) {
   return `SKILLPLANE_CELL_${regionId.replaceAll("-", "_").toUpperCase()}_DATABASE_URL`;
+}
+
+function cellBucketEnvironment(regionId) {
+  return `SKILLPLANE_CELL_${regionId.replaceAll("-", "_").toUpperCase()}_BUCKET`;
 }
 
 export async function migrateConfiguredWorkspace() {
@@ -123,23 +143,49 @@ export async function migrateConfiguredWorkspace() {
   let target;
   try {
     const directory = createPostgresWorkspacePlacementDirectory(control);
+    const journal = new PostgresWorkspaceMigrationJournal(control);
     const placement = await directory.get(workspaceId);
-    const sourceRegionId = migrationSourceRegionId(placement);
-    const regionalDatabases = Object.fromEntries(
-      [...new Set([sourceRegionId, targetRegionId])].map((regionId) => {
-        const environment = cellDatabaseEnvironment(regionId);
-        return [
-          regionId,
-          parseDirectPostgresUrl(requireEnvironment(environment), environment),
-        ];
-      }),
-    );
-    assertMigrationDatabaseRegions({
-      placement,
-      targetRegionId,
-      databases,
-      regionalDatabases,
-    });
+    // When a previous run activated the target but failed its final journal
+    // update, the placement is already active at the target region. Region
+    // assertions and the rollback drill only apply to an actual data move;
+    // a completion-pending run is finalized from its stored proof instead.
+    const pendingCompletion = await journal.pendingCompletion(workspaceId);
+    const finalizingCompletion = pendingCompletion?.targetRegionId === targetRegionId;
+    if (!finalizingCompletion) {
+      const sourceRegionId = migrationSourceRegionId(placement);
+      const regionIds = [...new Set([sourceRegionId, targetRegionId])];
+      const regionalDatabases = Object.fromEntries(
+        regionIds.map((regionId) => {
+          const environment = cellDatabaseEnvironment(regionId);
+          return [
+            regionId,
+            parseDirectPostgresUrl(requireEnvironment(environment), environment),
+          ];
+        }),
+      );
+      assertMigrationDatabaseRegions({
+        placement,
+        targetRegionId,
+        databases,
+        regionalDatabases,
+      });
+      // The copied bundles are verified against the same buckets they are
+      // written to, so a wrong-but-distinct bucket would pass every check while
+      // the target cell reads from its own configured bucket. Bind both
+      // buckets to their placement regions exactly like the databases above.
+      const regionalBuckets = Object.fromEntries(
+        regionIds.map((regionId) => {
+          const environment = cellBucketEnvironment(regionId);
+          return [regionId, bucketName(environment)];
+        }),
+      );
+      assertMigrationBucketRegions({
+        sourceRegionId,
+        targetRegionId,
+        buckets,
+        regionalBuckets,
+      });
+    }
     source = new Pool({
       connectionString: databases.source.url,
       application_name: "skillplane-workspace-migration-source",
@@ -157,7 +203,7 @@ export async function migrateConfiguredWorkspace() {
       new WranglerR2MigrationStore(buckets.sourceBucket),
       new WranglerR2MigrationStore(buckets.targetBucket),
     );
-    if (requiresWorkspaceRollbackDrill(placement)) {
+    if (!finalizingCompletion && requiresWorkspaceRollbackDrill(placement)) {
       await runWorkspaceRollbackDrill({
         directory,
         workspaceId,
@@ -167,7 +213,7 @@ export async function migrateConfiguredWorkspace() {
     }
     return await migrateWorkspaceWithJournal({
       directory,
-      journal: new PostgresWorkspaceMigrationJournal(control),
+      journal,
       workspaceId,
       targetRegionId,
       operations,

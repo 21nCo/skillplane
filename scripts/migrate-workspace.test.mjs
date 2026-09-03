@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import {
   assertDistinctMigrationDatabases,
   assertDistinctMigrationBuckets,
+  assertMigrationBucketRegions,
   assertMigrationDatabaseRegions,
   migrationSourceRegionId,
   requiresWorkspaceRollbackDrill,
@@ -24,6 +25,54 @@ describe("workspace migration bucket safety", () => {
       () =>
         assertDistinctMigrationBuckets("skillplane-in-south", "skillplane-in-south"),
       /must be distinct/u,
+    );
+  });
+
+  it("accepts buckets bound to their placement regions", () => {
+    assert.deepEqual(
+      assertMigrationBucketRegions({
+        sourceRegionId: "in-south",
+        targetRegionId: "us-east",
+        buckets: {
+          sourceBucket: "skillplane-in-south-bundles",
+          targetBucket: "skillplane-us-east-bundles",
+        },
+        regionalBuckets: {
+          "in-south": "skillplane-in-south-bundles",
+          "us-east": "skillplane-us-east-bundles",
+        },
+      }),
+      { sourceRegionId: "in-south", targetRegionId: "us-east" },
+    );
+  });
+
+  it("rejects a source or target bucket bound to the wrong region", () => {
+    const input = {
+      sourceRegionId: "in-south",
+      targetRegionId: "us-east",
+      buckets: {
+        sourceBucket: "skillplane-in-south-bundles",
+        targetBucket: "skillplane-eu-west-bundles",
+      },
+      regionalBuckets: {
+        "in-south": "skillplane-in-south-bundles",
+        "us-east": "skillplane-us-east-bundles",
+      },
+    };
+    assert.throws(
+      () => assertMigrationBucketRegions(input),
+      /TARGET_BUCKET must name the us-east cell bucket/u,
+    );
+    assert.throws(
+      () =>
+        assertMigrationBucketRegions({
+          ...input,
+          buckets: {
+            sourceBucket: "skillplane-eu-west-bundles",
+            targetBucket: "skillplane-us-east-bundles",
+          },
+        }),
+      /SOURCE_BUCKET must name the in-south cell bucket/u,
     );
   });
 });

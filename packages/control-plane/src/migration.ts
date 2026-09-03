@@ -60,6 +60,16 @@ export interface WorkspaceMigrationJournal {
   completed(id: string, proof: WorkspaceMigrationProof): Promise<void>;
   completionPending(id: string, proof: WorkspaceMigrationProof): Promise<void>;
   failed(id: string, errorCode: string): Promise<void>;
+  /**
+   * Returns the newest run whose fenced move finished but whose final journal
+   * update failed, so a retry can finalize the stored proof instead of
+   * repeating the data move.
+   */
+  pendingCompletion?(workspaceId: string): Promise<{
+    readonly id: string;
+    readonly targetRegionId: string;
+    readonly proof: WorkspaceMigrationProof;
+  } | null>;
 }
 
 export class PostgresWorkspaceMigrationJournal implements WorkspaceMigrationJournal {
@@ -110,6 +120,30 @@ export class PostgresWorkspaceMigrationJournal implements WorkspaceMigrationJour
         WHERE id = $1 AND status = 'running'`,
       [id, JSON.stringify({ errorCode, rollbackRequired: true })],
     );
+  }
+
+  async pendingCompletion(workspaceId: string) {
+    const result = await this.database.query<{
+      id: string;
+      target_region_id: string;
+      evidence: WorkspaceMigrationProof;
+    }>(
+      `SELECT id, target_region_id, evidence
+         FROM workspace_migration_runs
+        WHERE workspace_id = $1
+          AND status = 'running'
+          AND phase = 'completion-pending'
+        ORDER BY updated_at DESC
+        LIMIT 1`,
+      [workspaceId],
+    );
+    const row = result.rows[0];
+    if (!row) return null;
+    return {
+      id: row.id,
+      targetRegionId: row.target_region_id,
+      proof: row.evidence,
+    };
   }
 }
 
@@ -288,6 +322,21 @@ export async function migrateWorkspaceWithJournal(
     (source.state !== "active" && !isWorkspaceMigrationRecoveryPending(source))
   ) {
     throw new Error("WORKSPACE_MIGRATION_SOURCE_NOT_ACTIVE");
+  }
+  // A previous run may have activated the target and then failed its final
+  // journal update. Retrying that run reaches this entrypoint with the
+  // placement already active at the target, so finalize the stored proof
+  // instead of rejecting the retry or repeating the data move.
+  const pending = await input.journal.pendingCompletion?.(input.workspaceId);
+  if (pending?.targetRegionId === input.targetRegionId) {
+    try {
+      await input.journal.completed(pending.id, pending.proof);
+    } catch (error) {
+      const completion = new Error("WORKSPACE_MIGRATION_JOURNAL_COMPLETION_FAILED");
+      completion.cause = error;
+      throw completion;
+    }
+    return { migrationId: pending.id, placement: source, proof: pending.proof };
   }
   const origin = migrationSource(source);
   const migrationId = input.migrationId ?? `workspace-migration:${crypto.randomUUID()}`;

@@ -7,6 +7,7 @@ import {
   migrateWorkspaceWithJournal,
   runWorkspaceRollbackDrill,
   type WorkspaceMigrationOperations,
+  type WorkspaceMigrationProof,
 } from "./migration.js";
 
 function operations(overrides: Partial<WorkspaceMigrationOperations> = {}) {
@@ -101,6 +102,73 @@ describe("fenced workspace migration", () => {
       regionId: "us-east",
       state: "active",
     });
+  });
+
+  it("finalizes a completion-pending run without repeating the data move", async () => {
+    const directory = createMemoryWorkspacePlacementDirectory();
+    await claimWorkspacePlacement({
+      directory,
+      workspaceId: "workspace:completion-recovery",
+      regionId: "in-south",
+    });
+    let pendingRun: {
+      id: string;
+      targetRegionId: string;
+      proof: WorkspaceMigrationProof;
+    } | null = null;
+    let completionAttempts = 0;
+    const journal = {
+      started: vi.fn(async () => undefined),
+      completed: vi.fn(async () => {
+        completionAttempts += 1;
+        if (completionAttempts === 1) {
+          throw new Error("control database unavailable");
+        }
+        pendingRun = null;
+      }),
+      completionPending: vi.fn(async (id: string, proof: WorkspaceMigrationProof) => {
+        pendingRun = { id, targetRegionId: "us-east", proof };
+      }),
+      failed: vi.fn(async () => undefined),
+      pendingCompletion: vi.fn(async () => pendingRun),
+    };
+
+    await expect(
+      migrateWorkspaceWithJournal({
+        migrationId: "migration:completion-recovery",
+        directory,
+        workspaceId: "workspace:completion-recovery",
+        targetRegionId: "us-east",
+        operations: operations(),
+        journal,
+      }),
+    ).rejects.toThrow("WORKSPACE_MIGRATION_JOURNAL_COMPLETION_FAILED");
+
+    const retryOperations = operations();
+    const recovered = await migrateWorkspaceWithJournal({
+      migrationId: "migration:completion-recovery-retry",
+      directory,
+      workspaceId: "workspace:completion-recovery",
+      targetRegionId: "us-east",
+      operations: retryOperations,
+      journal,
+    });
+
+    expect(recovered.migrationId).toBe("migration:completion-recovery");
+    expect(recovered.placement).toMatchObject({
+      regionId: "us-east",
+      state: "active",
+    });
+    expect(recovered.proof).toMatchObject({
+      workspaceId: "workspace:completion-recovery",
+      targetRegionId: "us-east",
+    });
+    // The retry must not start a new run or repeat any move operations.
+    expect(journal.started).toHaveBeenCalledTimes(1);
+    expect(completionAttempts).toBe(2);
+    expect(retryOperations.prepareSource).not.toHaveBeenCalled();
+    expect(retryOperations.copyDatabase).not.toHaveBeenCalled();
+    expect(retryOperations.copyBundles).not.toHaveBeenCalled();
   });
 
   it("rolls back and records failure when target verification differs", async () => {
