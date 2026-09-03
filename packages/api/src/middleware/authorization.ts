@@ -90,6 +90,7 @@ export function authorizationMiddleware(): MiddlewareHandler<ApiEnvironment> {
       } catch (error) {
         const services = context.get("services");
         if (!services) throw error;
+        const fencingEpoch = routingEpoch(context);
         try {
           await new PostgresAuditWriter(services.database.pool).record({
             workspaceId: principal.workspaceId,
@@ -107,7 +108,7 @@ export function authorizationMiddleware(): MiddlewareHandler<ApiEnvironment> {
             resourceId: principal.workspaceId,
             channel: "app",
             retentionClass: "permanent",
-            fencingEpoch: routingEpoch(context),
+            fencingEpoch,
             metadata: {
               method: context.req.method,
               requestedAction: action,

@@ -1,5 +1,7 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { assertDisposableDatabaseUrl } from "./database-url.js";
+import { assertDisposableDatabaseUrl, packageRoot } from "./database-url.js";
 import {
   loadMigrations,
   parseWorkspaceRegions,
@@ -51,6 +53,8 @@ describe("migration chain", () => {
       "0039_regional_generation_safety_hardening.sql",
       "0040_control_plane_safety_followup.sql",
       "0041_regional_fence_lock_followup.sql",
+      "0042_control_outbox_cutover_fence_followup.sql",
+      "0043_control_placement_region_integrity_followup.sql",
     ]);
     expect(new Set(migrations.map((migration) => migration.sha256)).size).toBe(
       migrations.length,
@@ -60,7 +64,7 @@ describe("migration chain", () => {
       expect(migration.sql.trim().length).toBeGreaterThan(100);
       expect(migration.roles.length).toBeGreaterThan(0);
     }
-    expect(migrations.at(-1)?.roles).toEqual(["combined", "regional"]);
+    expect(migrations.at(-1)?.roles).toEqual(["combined", "control"]);
   });
 
   it("guards destructive test reset targets", () => {
@@ -86,6 +90,23 @@ describe("migration chain", () => {
       "eu-west",
     ]);
     expect(parseWorkspaceRegions(undefined)).toBeUndefined();
+    expect(parseWorkspaceRegions("")).toBeUndefined();
+    expect(parseWorkspaceRegions(" \t\n ")).toBeUndefined();
+  });
+
+  it("builds runtime dependencies before database entrypoints", () => {
+    const manifest = JSON.parse(
+      readFileSync(resolve(packageRoot, "package.json"), "utf8"),
+    ) as { scripts: Record<string, string> };
+    expect(manifest.scripts["migrate"]).toMatch(
+      /^pnpm run build:runtime-dependencies && pnpm run build && /u,
+    );
+    expect(manifest.scripts["verify"]).toMatch(
+      /^pnpm run build:runtime-dependencies && pnpm run build && /u,
+    );
+    expect(manifest.scripts["build:runtime-dependencies"]).toBe(
+      "pnpm --filter @skillplane/control-plane build",
+    );
   });
 
   it("assigns dynamic DataFn tables to regional databases", () => {

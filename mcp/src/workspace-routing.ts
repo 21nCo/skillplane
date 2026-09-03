@@ -335,6 +335,31 @@ function cleanPublicRequest(request: Request): Request {
   return new Request(request, { headers });
 }
 
+function mcpToolErrorResponse(error: McpToolError): Response {
+  if (
+    error.code === "AUTHENTICATION_REQUIRED" ||
+    error.code === "AUTH_INVALID" ||
+    error.code === "AUTH_SCOPE_REQUIRED"
+  ) {
+    return mcpAuthenticationResponse(
+      null,
+      new McpAuthenticationError(
+        error.code === "AUTH_SCOPE_REQUIRED" ? 403 : 401,
+        error.message,
+      ),
+    );
+  }
+  return Response.json(
+    {
+      error: error.code,
+      error_description: error.message,
+      retryable: error.retryable,
+      ...(error.details ? { details: error.details } : {}),
+    },
+    { status: error.status, headers: { "cache-control": "no-store" } },
+  );
+}
+
 /** Routes authenticated workspace tool calls to a private regional MCP cell. */
 export function createRoutedMcpApplication<Context>(input: {
   readonly local: McpApplication<Context>;
@@ -447,11 +472,7 @@ export function createRoutedMcpApplication<Context>(input: {
         }
         if (error instanceof McpRoutingError) return error.response();
         if (error instanceof McpToolError) {
-          return new McpRoutingError(
-            error.status,
-            error.code,
-            error.message,
-          ).response();
+          return mcpToolErrorResponse(error);
         }
         if (
           error &&

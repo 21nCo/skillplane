@@ -45,6 +45,50 @@ export function assertDistinctMigrationDatabases(databases) {
   return databases;
 }
 
+export function migrationSourceRegionId(placement) {
+  if (!placement) {
+    throw new Error("WORKSPACE_MIGRATION_SOURCE_NOT_ACTIVE");
+  }
+  if (!isWorkspaceMigrationRecoveryPending(placement)) {
+    return placement.regionId;
+  }
+  return (
+    placement.migration?.sourceRegionId ??
+    placement.previousRegionId ??
+    placement.regionId
+  );
+}
+
+export function assertMigrationDatabaseRegions(input) {
+  const sourceRegionId = migrationSourceRegionId(input.placement);
+  if (sourceRegionId === input.targetRegionId) {
+    throw new Error("Workspace migration source and target regions must be distinct");
+  }
+  const sourceDatabase = input.regionalDatabases[sourceRegionId];
+  const targetDatabase = input.regionalDatabases[input.targetRegionId];
+  if (
+    !sourceDatabase ||
+    input.databases.source.fingerprint !== sourceDatabase.fingerprint
+  ) {
+    throw new Error(
+      `SKILLPLANE_SOURCE_DATABASE_URL must identify the ${sourceRegionId} cell database`,
+    );
+  }
+  if (
+    !targetDatabase ||
+    input.databases.target.fingerprint !== targetDatabase.fingerprint
+  ) {
+    throw new Error(
+      `SKILLPLANE_TARGET_DATABASE_URL must identify the ${input.targetRegionId} cell database`,
+    );
+  }
+  return { sourceRegionId, targetRegionId: input.targetRegionId };
+}
+
+function cellDatabaseEnvironment(regionId) {
+  return `SKILLPLANE_CELL_${regionId.replaceAll("-", "_").toUpperCase()}_DATABASE_URL`;
+}
+
 export async function migrateConfiguredWorkspace() {
   const workspaceId = requireEnvironment("SKILLPLANE_WORKSPACE_ID", {
     pattern: /^[A-Za-z0-9:_-]{1,180}$/u,
@@ -75,17 +119,37 @@ export async function migrateConfiguredWorkspace() {
     application_name: "skillplane-workspace-migration-control",
     max: 2,
   });
-  const source = new Pool({
-    connectionString: databases.source.url,
-    application_name: "skillplane-workspace-migration-source",
-    max: 2,
-  });
-  const target = new Pool({
-    connectionString: databases.target.url,
-    application_name: "skillplane-workspace-migration-target",
-    max: 2,
-  });
+  let source;
+  let target;
   try {
+    const directory = createPostgresWorkspacePlacementDirectory(control);
+    const placement = await directory.get(workspaceId);
+    const sourceRegionId = migrationSourceRegionId(placement);
+    const regionalDatabases = Object.fromEntries(
+      [...new Set([sourceRegionId, targetRegionId])].map((regionId) => {
+        const environment = cellDatabaseEnvironment(regionId);
+        return [
+          regionId,
+          parseDirectPostgresUrl(requireEnvironment(environment), environment),
+        ];
+      }),
+    );
+    assertMigrationDatabaseRegions({
+      placement,
+      targetRegionId,
+      databases,
+      regionalDatabases,
+    });
+    source = new Pool({
+      connectionString: databases.source.url,
+      application_name: "skillplane-workspace-migration-source",
+      max: 2,
+    });
+    target = new Pool({
+      connectionString: databases.target.url,
+      application_name: "skillplane-workspace-migration-target",
+      max: 2,
+    });
     const operations = new PostgresWorkspaceMigrationOperations(
       source,
       target,
@@ -93,8 +157,6 @@ export async function migrateConfiguredWorkspace() {
       new WranglerR2MigrationStore(buckets.sourceBucket),
       new WranglerR2MigrationStore(buckets.targetBucket),
     );
-    const directory = createPostgresWorkspacePlacementDirectory(control);
-    const placement = await directory.get(workspaceId);
     if (requiresWorkspaceRollbackDrill(placement)) {
       await runWorkspaceRollbackDrill({
         directory,
@@ -112,7 +174,9 @@ export async function migrateConfiguredWorkspace() {
       rollbackTested: true,
     });
   } finally {
-    await Promise.allSettled([source.end(), target.end(), control.end()]);
+    await Promise.allSettled(
+      [source, target, control].filter(Boolean).map((pool) => pool.end()),
+    );
   }
 }
 

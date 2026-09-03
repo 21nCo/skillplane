@@ -63,7 +63,7 @@ export async function renderTopologyDeploymentConfigs(options = {}) {
       ];
     }),
   );
-  const configs = createCloudflareTopologyConfigs({
+  const configs = await createCloudflareTopologyConfigs({
     manifest,
     controlHyperdriveId,
     publicBucketName,

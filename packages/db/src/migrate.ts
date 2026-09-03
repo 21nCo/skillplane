@@ -31,7 +31,7 @@ export interface MigrationResult {
 export function parseWorkspaceRegions(
   value: string | undefined,
 ): readonly string[] | undefined {
-  return value === undefined
+  return value === undefined || value.trim() === ""
     ? undefined
     : value.split(",").map((region) => region.trim());
 }

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   createCloudflareTopologyConfigs,
+  createTopologyParserLoader,
   readProductionTopology,
 } from "./lib/topology-deployment.mjs";
 
@@ -12,8 +13,27 @@ const ids = {
 };
 
 describe("multi-cell Cloudflare topology adapter", () => {
+  it("builds lazily before importing and caches the current parser", async () => {
+    const calls = [];
+    const expected = () => undefined;
+    const load = createTopologyParserLoader({
+      build: async () => {
+        calls.push("build");
+      },
+      importParser: async () => {
+        calls.push("import");
+        return expected;
+      },
+    });
+
+    assert.deepEqual(calls, []);
+    assert.equal(await load(), expected);
+    assert.equal(await load(), expected);
+    assert.deepEqual(calls, ["build", "import"]);
+  });
+
   it("generates canonical gateways and two private least-privilege cells", async () => {
-    const configs = createCloudflareTopologyConfigs({
+    const configs = await createCloudflareTopologyConfigs({
       manifest: await readProductionTopology(),
       publicTurnstileSiteKey: "0x4AAAAAAAAAA-production-site-key",
       controlHyperdriveId: ids.control,
@@ -67,8 +87,8 @@ describe("multi-cell Cloudflare topology adapter", () => {
 
   it("rejects bucket reuse across public and regional storage", async () => {
     const manifest = await readProductionTopology();
-    assert.throws(
-      () =>
+    await assert.rejects(
+      async () =>
         createCloudflareTopologyConfigs({
           manifest,
           publicTurnstileSiteKey: "0x4AAAAAAAAAA-production-site-key",

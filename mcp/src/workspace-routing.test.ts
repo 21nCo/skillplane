@@ -1,7 +1,9 @@
+import { McpToolError } from "@skillplane/mcp-schema";
 import { describe, expect, it } from "vitest";
 import {
   authorizeMcpWorkspace,
   classifyMcpScope,
+  createRoutedMcpApplication,
   resolveMcpWorkspaceBatch,
 } from "./workspace-routing.js";
 
@@ -50,6 +52,66 @@ function services(routes: Readonly<Record<string, string>>) {
         }),
       },
     },
+  } as never;
+}
+
+function localBindings() {
+  const storage = {
+    head: async () => null,
+    get: async () => null,
+    put: async () => null,
+    delete: async () => undefined,
+    list: async () => ({ objects: [] }),
+  };
+  return {
+    RUNTIME_ENV: "local",
+    SKILLPLANE_ROLE: "control",
+    SKILLPLANE_TOPOLOGY: JSON.stringify({
+      version: 1,
+      mode: "multi-cell",
+      public: {
+        appAuthority: "https://app.skillplane.dev",
+        mcpResource: "https://mcp.skillplane.dev/mcp",
+      },
+      controlPlane: {
+        regionId: "global",
+        databaseBinding: "CONTROL_HYPERDRIVE",
+        publicObjectStorageBinding: "PUBLIC_SKILL_BUNDLES",
+        issuer: "https://app.skillplane.dev",
+        oauthResource: "https://mcp.skillplane.dev/mcp",
+      },
+      cells: [
+        {
+          regionId: "in-south",
+          databaseBinding: "CELL_HYPERDRIVE",
+          objectStorageBinding: "CELL_SKILL_BUNDLES",
+          appServiceBinding: "CELL_APP",
+          mcpServiceBinding: "CELL_MCP",
+          publiclyRoutable: false,
+        },
+        {
+          regionId: "us-east",
+          databaseBinding: "CELL_US_HYPERDRIVE",
+          objectStorageBinding: "CELL_US_SKILL_BUNDLES",
+          appServiceBinding: "CELL_US_APP",
+          mcpServiceBinding: "CELL_US_MCP",
+          publiclyRoutable: false,
+        },
+      ],
+      routing: {
+        activeKeyId: "current",
+        verificationKeyIds: ["current"],
+        assertionAudience: "skillplane-cell",
+        assertionTtlSeconds: 20,
+      },
+    }),
+    CONTROL_HYPERDRIVE: {
+      connectionString: "postgresql://fixture:fixture@localhost:5432/skillplane",
+    },
+    PUBLIC_SKILL_BUNDLES: storage,
+    WORKSPACE_ROUTING_KEYS: JSON.stringify({
+      current: "routing-only-secret-material-32-bytes",
+    }),
   } as never;
 }
 
@@ -176,5 +238,67 @@ describe("MCP workspace routing", () => {
         }),
       ),
     ).resolves.toMatchObject({ workspaceId: "workspace:one" });
+  });
+
+  it("preserves routed MCP tool retryability and details", async () => {
+    const app = createRoutedMcpApplication({
+      local: {
+        fetch() {
+          throw new McpToolError("DATABASE_UNAVAILABLE", "Database unavailable", {
+            status: 503,
+            retryable: true,
+            details: { region: "in-south", attempt: 2 },
+          });
+        },
+      },
+      services: async () => {
+        throw new Error("Services should not be loaded");
+      },
+    });
+
+    const response = await app.fetch(call("workspaces_list"), localBindings());
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({
+      error: "DATABASE_UNAVAILABLE",
+      error_description: "Database unavailable",
+      retryable: true,
+      details: { region: "in-south", attempt: 2 },
+    });
+  });
+
+  it.each([
+    {
+      code: "AUTH_INVALID" as const,
+      status: 401 as const,
+      oauthError: "invalid_token",
+    },
+    {
+      code: "AUTH_SCOPE_REQUIRED" as const,
+      status: 403 as const,
+      oauthError: "insufficient_scope",
+    },
+  ])("preserves routed $code authentication responses", async (expected) => {
+    const app = createRoutedMcpApplication({
+      local: {
+        fetch() {
+          throw new McpToolError(expected.code, "Credential rejected", {
+            status: expected.status,
+          });
+        },
+      },
+      services: async () => {
+        throw new Error("Services should not be loaded");
+      },
+    });
+
+    const response = await app.fetch(call("workspaces_list"), localBindings());
+
+    expect(response.status).toBe(expected.status);
+    expect(response.headers.get("www-authenticate")).toContain(expected.oauthError);
+    await expect(response.json()).resolves.toEqual({
+      error: expected.oauthError,
+      error_description: "Credential rejected",
+    });
   });
 });

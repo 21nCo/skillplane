@@ -18,17 +18,29 @@ afterEach(() => {
 const manifest = {
   routing: { activeKeyId: "current", verificationKeyIds: ["current", "previous"] },
 };
-const authSecret = "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6";
-const oauthSecret = "Q1w2E3r4T5y6U7i8O9p0A1s2D3f4G5h6";
-const routingSecret = "Z1x2C3v4B5n6M7a8S9d0F1g2H3j4K5l6";
+const authSecret = "test-only-authfn-secret-not-a-credential";
+const oauthSecret = "test-only-oauth-pepper-not-a-credential";
+const currentRoutingSecret = "test-only-current-routing-key-not-a-secret";
+const previousRoutingSecret = "test-only-previous-routing-key-not-a-secret";
 
 describe("production routing key safety", () => {
+  it("accepts distinct routing keys independent from identity secrets", () => {
+    process.env.AUTHFN_SECRET = authSecret;
+    process.env.OAUTH_TOKEN_PEPPER = oauthSecret;
+    process.env.WORKSPACE_ROUTING_KEYS = JSON.stringify({
+      current: currentRoutingSecret,
+      previous: previousRoutingSecret,
+    });
+
+    assert.equal(routingKeys(manifest), process.env.WORKSPACE_ROUTING_KEYS);
+  });
+
   it("rejects duplicate key values", () => {
     process.env.AUTHFN_SECRET = authSecret;
     process.env.OAUTH_TOKEN_PEPPER = oauthSecret;
     process.env.WORKSPACE_ROUTING_KEYS = JSON.stringify({
-      current: routingSecret,
-      previous: routingSecret,
+      current: currentRoutingSecret,
+      previous: currentRoutingSecret,
     });
     assert.throws(() => routingKeys(manifest), /does not match the topology keyring/u);
   });
@@ -38,7 +50,7 @@ describe("production routing key safety", () => {
     process.env.OAUTH_TOKEN_PEPPER = oauthSecret;
     process.env.WORKSPACE_ROUTING_KEYS = JSON.stringify({
       current: process.env.AUTHFN_SECRET,
-      previous: routingSecret,
+      previous: previousRoutingSecret,
     });
     assert.throws(() => routingKeys(manifest), /independent identity secrets/u);
   });

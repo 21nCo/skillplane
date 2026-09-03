@@ -1,22 +1,49 @@
-import { existsSync } from "node:fs";
+import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { spawnSync } from "node:child_process";
+import { promisify } from "node:util";
 import { pathToFileURL } from "node:url";
 import { root } from "./production-deployment.mjs";
 
 const controlPlaneEntry = resolve(root, "packages/control-plane/dist/index.js");
-if (!existsSync(controlPlaneEntry)) {
-  const build = spawnSync("pnpm", ["--filter", "@skillplane/control-plane", "build"], {
-    cwd: root,
-    stdio: "inherit",
-  });
-  if (build.error) throw build.error;
-  if (build.status !== 0 || !existsSync(controlPlaneEntry)) {
-    throw new Error("The control-plane topology parser build failed");
+const execFileAsync = promisify(execFile);
+
+async function buildControlPlane() {
+  try {
+    await execFileAsync("pnpm", ["--filter", "@skillplane/control-plane", "build"], {
+      cwd: root,
+    });
+  } catch (error) {
+    const failure = new Error("The control-plane topology parser build failed");
+    failure.cause = error;
+    throw failure;
   }
 }
-const { parseTopologyManifest } = await import(pathToFileURL(controlPlaneEntry).href);
+
+async function importControlPlaneTopologyParser() {
+  const entry = pathToFileURL(controlPlaneEntry);
+  entry.searchParams.set("built", `${Date.now()}`);
+  const { parseTopologyManifest } = await import(entry.href);
+  if (typeof parseTopologyManifest !== "function") {
+    throw new Error("The control-plane topology parser build is invalid");
+  }
+  return parseTopologyManifest;
+}
+
+export function createTopologyParserLoader(options = {}) {
+  const build = options.build ?? buildControlPlane;
+  const importParser = options.importParser ?? importControlPlaneTopologyParser;
+  let parser;
+  return async function loadTopologyParser() {
+    parser ??= (async () => {
+      await build();
+      return importParser();
+    })();
+    return parser;
+  };
+}
+
+const loadTopologyParser = createTopologyParserLoader();
 
 const hyperdriveId = /^[a-f0-9]{32}$/u;
 const bucketName = /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/u;
@@ -64,7 +91,8 @@ function workerBase(name, kind, variables) {
  * Cloudflare adapter for the provider-neutral topology manifest. Regional
  * workers intentionally have neither routes nor workers.dev exposure.
  */
-export function createCloudflareTopologyConfigs(input) {
+export async function createCloudflareTopologyConfigs(input) {
+  const parseTopologyManifest = await loadTopologyParser();
   const manifest = parseTopologyManifest(input.manifest, {
     production: input.runtimeEnvironment !== "preview",
   });
