@@ -267,6 +267,30 @@ export async function migrateDatabase(
           [initialWorkspaceRegion],
         );
       }
+      // Validate the placement region foreign keys (added NOT VALID in 0043)
+      // now that the declared regions are reconciled. On a populated
+      // pre-control-plane upgrade the constraint would otherwise abort mid-loop
+      // when 0043 scanned placements already remapped to a not-yet-seeded
+      // region. Only pending (unvalidated) constraints are scanned, so steady
+      // state reruns stay cheap.
+      if (role !== "regional") {
+        const pendingConstraints = await client.query<{ conname: string }>(
+          `SELECT conname
+             FROM pg_constraint
+            WHERE conrelid = to_regclass('public.workspace_placements')
+              AND conname IN (
+                'workspace_placements_region_id_fkey',
+                'workspace_placements_moving_to_region_id_fkey'
+              )
+              AND NOT convalidated
+            ORDER BY conname`,
+        );
+        for (const { conname } of pendingConstraints.rows) {
+          await client.query(
+            `ALTER TABLE workspace_placements VALIDATE CONSTRAINT ${quoteIdentifier(conname)}`,
+          );
+        }
+      }
       if (role !== "combined" && options.finalizePhysicalOwnership !== false) {
         await enforcePhysicalOwnership(client, role);
       }

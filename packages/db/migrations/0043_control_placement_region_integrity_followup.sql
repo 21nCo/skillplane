@@ -30,17 +30,25 @@ BEGIN
 END;
 $$;
 
+-- Added NOT VALID so the constraint does not scan existing rows here. During a
+-- populated pre-control-plane upgrade, 0023 has already remapped legacy
+-- placements onto the requested initial region while workspace_regions still
+-- holds only `legacy`; an immediate scan would abort the conversion before the
+-- migrator reconciles the configured regions. The migrator validates these
+-- constraints after seeding the declared regions.
 ALTER TABLE workspace_placements
   ADD CONSTRAINT workspace_placements_region_id_fkey
   FOREIGN KEY (region_id) REFERENCES workspace_regions(region_id)
   ON UPDATE RESTRICT ON DELETE RESTRICT
-  DEFERRABLE INITIALLY DEFERRED;
+  DEFERRABLE INITIALLY DEFERRED
+  NOT VALID;
 
 ALTER TABLE workspace_placements
   ADD CONSTRAINT workspace_placements_moving_to_region_id_fkey
   FOREIGN KEY (moving_to_region_id) REFERENCES workspace_regions(region_id)
   ON UPDATE RESTRICT ON DELETE RESTRICT
-  DEFERRABLE INITIALLY DEFERRED;
+  DEFERRABLE INITIALLY DEFERRED
+  NOT VALID;
 
 DROP TRIGGER IF EXISTS workspace_placements_declared_region
   ON workspace_placements;
