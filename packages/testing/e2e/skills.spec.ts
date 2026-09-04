@@ -146,6 +146,20 @@ test("@skills creates, versions, publishes, diffs, shares, archives, restores, a
     .fill("Evidence-backed pull request review instructions");
   await page.getByLabel("Tags").fill("review, git, evidence");
   await page.getByLabel("SKILL.md").fill(initialMarkdown);
+  await expect(page.getByTestId("markdown-editor")).toHaveAttribute(
+    "data-surface",
+    "skill-create",
+  );
+  await page.getByTestId("markdown-mode-preview").click();
+  await expect(page.getByTestId("markdown-editor")).toHaveAttribute(
+    "data-mode",
+    "preview",
+  );
+  await expect(page.getByTestId("safe-markdown")).toContainText(
+    "Confirm authorization boundaries.",
+  );
+  await page.getByTestId("markdown-mode-source").click();
+  await expect(page.getByLabel("SKILL.md")).toHaveValue(initialMarkdown);
   await page.getByLabel("Initial visibility").selectOption("public");
   await page.getByRole("button", { name: "Publish version 1.0.0" }).click();
 
@@ -169,6 +183,18 @@ test("@skills creates, versions, publishes, diffs, shares, archives, restores, a
     page.getByRole("heading", { name: "Browse exact version files" }),
   ).toBeVisible();
   await page.getByRole("button", { name: "Edit" }).click();
+  await expect(page.getByTestId("markdown-editor")).toHaveAttribute(
+    "data-surface",
+    "skill-amend",
+  );
+  await expect(page.getByLabel("Skill instructions")).toHaveValue(initialMarkdown);
+  await page.getByTestId("markdown-mode-split").click();
+  await expect(page.getByTestId("markdown-editor")).toHaveAttribute(
+    "data-mode",
+    "split",
+  );
+  await expect(page.getByLabel("Skill instructions")).toHaveValue(initialMarkdown);
+  await page.getByTestId("markdown-mode-source").click();
   await page.getByLabel("Skill instructions").fill(updatedMarkdown);
   await page
     .getByLabel("Change summary")

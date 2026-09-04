@@ -20,6 +20,9 @@
   },
   "dependencies": {
     "@fontsource-variable/dm-sans": "catalog:",
+    "@mdfn/extensions": "0.1.0",
+    "@mdfn/markdown": "0.1.0",
+    "@mdfn/render": "0.1.0",
     "marked": "catalog:",
     "phosphor-svelte": "catalog:"
   },

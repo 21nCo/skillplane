@@ -1,5 +1,6 @@
 <script lang="ts">
   import { Button, Select, Textarea } from "@skillplane/ui";
+  import MarkdownEditor from "$lib/markdown/MarkdownEditor.svelte";
   import { CheckCircleIcon, WarningCircleIcon } from "phosphor-svelte";
   import { SvelteMap } from "svelte/reactivity";
   import { capturePostHog } from "$lib/analytics/posthog.client.js";
@@ -21,7 +22,7 @@
     onCreated: (version: SkillVersion) => void;
   } = $props();
 
-  let markdown = $derived(initialMarkdown);
+  let markdown = $state(initialMarkdown);
   let changeSummary = $state("");
   let proposedBump = $state<SemanticBump>("patch");
   let saveState = $state<"idle" | "saving">("idle");
@@ -36,6 +37,10 @@
 
   async function submit(event: SubmitEvent) {
     event.preventDefault();
+    if (!markdown.trim()) {
+      error = "SKILL.md is required";
+      return;
+    }
     saveState = "saving";
     error = null;
     try {
@@ -99,13 +104,14 @@
     </span>
   </div>
 
-  <Textarea
+  <MarkdownEditor
+    surface="skill-amend"
     label="Skill instructions"
     description="Markdown shown to agents when this skill is retrieved."
     rows={20}
     required
-    minlength={1}
-    maxlength={1_048_576}
+    maxBytes={1_048_576}
+    maxCharacters={1_048_576}
     bind:value={markdown}
     oninput={changed}
   />

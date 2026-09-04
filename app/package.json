@@ -14,6 +14,10 @@
     "deploy:check": "wrangler deploy --config wrangler.jsonc --dry-run --outdir dist-worker/local && wrangler deploy --config wrangler.auth.jsonc --dry-run --outdir dist-worker/auth"
   },
   "dependencies": {
+    "@mdfn/core": "0.1.0",
+    "@mdfn/extensions": "0.1.0",
+    "@mdfn/markdown": "0.1.0",
+    "@mdfn/svelte": "0.1.0",
     "@skillplane/api": "workspace:*",
     "@skillplane/config": "workspace:*",
     "@skillplane/ui": "workspace:*",

@@ -1,8 +1,8 @@
 <script lang="ts">
   import { capturePostHog } from "$lib/analytics/posthog.client.js";
   import { SkillplaneApiError } from "$lib/api/client.js";
-  import { SafeMarkdown } from "@skillplane/ui";
   import { Button, Input, Textarea } from "@skillplane/ui";
+  import MarkdownEditor from "$lib/markdown/MarkdownEditor.svelte";
   import { ArrowsClockwiseIcon, WarningCircleIcon } from "phosphor-svelte";
   import { createContextNote, updateContextNote } from "./api.js";
   import {
@@ -135,24 +135,17 @@
     data-autofocus
   />
 
-  <div class="editor-grid">
-    <Textarea
-      label="Note Markdown"
-      rows={14}
-      maxlength={262_144}
-      required
-      bind:value={body}
-      oninput={changed}
-    />
-    <section class="preview" aria-label="Note preview">
-      <span>Sanitized preview</span>
-      {#if body.trim()}
-        <SafeMarkdown source={body} />
-      {:else}
-        <p>Start writing to preview this shared note.</p>
-      {/if}
-    </section>
-  </div>
+  <MarkdownEditor
+    surface="note"
+    label="Note Markdown"
+    mode="split"
+    rows={14}
+    required
+    maxBytes={262_144}
+    maxCharacters={262_144}
+    bind:value={body}
+    oninput={changed}
+  />
 
   <div class="learning">
     <Input
@@ -220,13 +213,11 @@
 
   header p,
   h2,
-  .conflict p,
-  .preview p {
+  .conflict p {
     margin: 0;
   }
 
-  header p,
-  .preview > span {
+  header p {
     color: var(--sp-color-text-subtle);
     font-size: var(--sp-font-size-1);
     font-weight: var(--sp-weight-bold);
@@ -244,34 +235,11 @@
     font-size: var(--sp-font-size-2);
   }
 
-  .editor-grid,
   .learning {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: var(--sp-space-4);
     align-items: start;
-  }
-
-  .preview {
-    overflow: auto;
-    min-height: 22rem;
-    max-height: 36rem;
-    border: 1px solid var(--sp-color-border);
-    border-radius: var(--sp-radius-md);
-    padding: var(--sp-space-4);
-    background: var(--sp-color-canvas);
-  }
-
-  .preview > span {
-    display: block;
-    margin-bottom: var(--sp-space-3);
-  }
-
-  .preview p {
-    color: var(--sp-color-text-subtle);
-  }
-
-  .learning {
     border: 1px solid var(--sp-color-border);
     border-radius: var(--sp-radius-lg);
     padding: var(--sp-space-4);
@@ -309,13 +277,8 @@
   }
 
   @media (max-width: 56rem) {
-    .editor-grid,
     .learning {
       grid-template-columns: 1fr;
-    }
-
-    .preview {
-      min-height: 14rem;
     }
 
     .conflict {
