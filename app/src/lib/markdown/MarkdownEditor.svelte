@@ -17,6 +17,8 @@
   } from "./types.js";
   import { untrack, type Component } from "svelte";
 
+  const DIAGNOSTICS_DEBOUNCE_MS = 200;
+
   let {
     value = $bindable(""),
     mode = $bindable<MarkdownEditorMode>("source"),
@@ -55,10 +57,8 @@
   let loadError = $state<string | null>(null);
   let VisualEditor = $state<Component<SkillplaneVisualEditorProps> | null>(null);
   let controller = $state<SkillplaneEditorController | null>(null);
+  let diagnostics = $state<readonly MarkdownDiagnostic[]>([]);
 
-  const diagnostics = $derived<readonly MarkdownDiagnostic[]>(
-    enabled ? markdownDiagnostics(value) : [],
-  );
   const dirty = $derived(value !== initialValue);
   const byteLength = $derived(encodedByteLength(value));
   const overBytes = $derived(
@@ -67,9 +67,19 @@
   const overCharacters = $derived(
     typeof maxCharacters === "number" ? value.length > maxCharacters : false,
   );
-  const usesVisual = $derived(enabled && mode === "visual");
-  const showsSource = $derived(!enabled || mode === "source" || mode === "split");
-  const showsPreview = $derived(enabled && (mode === "preview" || mode === "split"));
+  const usesVisual = $derived(enabled && mode === "visual" && !readOnly);
+  const showsLabeledSource = $derived(
+    !enabled ||
+      mode === "source" ||
+      mode === "split" ||
+      loadState === "failed" ||
+      (mode === "visual" && (!usesVisual || loadState !== "ready")),
+  );
+  const showsVisual = $derived(
+    usesVisual && loadState === "ready" && VisualEditor !== null && controller !== null,
+  );
+  const showsPreview = $derived(mode === "preview" || mode === "split");
+  const visualReadOnly = $derived(readOnly || disabled);
 
   function emit(next: string) {
     if (next === value) return;
@@ -90,6 +100,18 @@
   }
 
   $effect(() => {
+    if (!enabled) {
+      diagnostics = [];
+      return;
+    }
+    const source = value;
+    const timer = setTimeout(() => {
+      diagnostics = markdownDiagnostics(source);
+    }, DIAGNOSTICS_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  });
+
+  $effect(() => {
     if (!browser || !usesVisual) {
       VisualEditor = null;
       controller = null;
@@ -98,7 +120,6 @@
       return;
     }
 
-    const source = untrack(() => value);
     let cancelled = false;
     let unsubscribe: (() => void) | undefined;
     loadState = "loading";
@@ -106,8 +127,9 @@
     void loadMarkdownEditor()
       .then((loaded) => {
         if (cancelled) return;
+        const current = untrack(() => value);
         VisualEditor = loaded.MdfnEditor;
-        const next = loaded.createController(source);
+        const next = loaded.createController(current);
         controller = next;
         loadState = "ready";
         unsubscribe = next.subscribe((change) => {
@@ -173,21 +195,35 @@
     </div>
   {/if}
 
-  <div class="surfaces" class:split={showsSource && showsPreview}>
-    {#if showsSource || loadState === "failed" || (usesVisual && loadState !== "ready")}
+  <div class="surfaces" class:split={showsLabeledSource && showsPreview}>
+    {#if showsLabeledSource}
       <Textarea
         {label}
         {description}
         {rows}
         {required}
         {disabled}
-        readonly={readOnly || disabled}
+        readonly={visualReadOnly}
         maxlength={maxCharacters}
         bind:value
         oninput={sourceInput}
         data-testid="markdown-editor-source"
       />
-    {:else if usesVisual && loadState === "ready" && VisualEditor && controller}
+    {:else if required}
+      <div class="constraint-control">
+        <Textarea
+          {label}
+          hideLabel
+          {required}
+          maxlength={maxCharacters}
+          tabindex={-1}
+          bind:value
+          data-testid="markdown-editor-constraint"
+        />
+      </div>
+    {/if}
+
+    {#if showsVisual && VisualEditor && controller}
       <div class="visual">
         <span class="visual-label">{label}</span>
         {#if description}
@@ -196,7 +232,7 @@
         <VisualEditor
           {controller}
           mode="visual"
-          {readOnly}
+          readOnly={visualReadOnly}
           ariaLabel={label}
           onLoadError={(error) => {
             loadState = "failed";
@@ -251,6 +287,7 @@
 
 <style>
   .markdown-editor {
+    position: relative;
     display: grid;
     gap: var(--sp-space-3);
   }
@@ -308,6 +345,16 @@
   .surfaces.split {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     align-items: start;
+  }
+
+  .constraint-control {
+    position: absolute;
+    overflow: hidden;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
   }
 
   .visual-label,

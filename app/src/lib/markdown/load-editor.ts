@@ -37,16 +37,22 @@ export function loadMarkdownEditor(): Promise<LoadedMarkdownEditor> {
     import("@mdfn/svelte"),
     import("@mdfn/core"),
     import("@mdfn/markdown"),
-  ]).then(([svelte, core, markdown]) => ({
-    MdfnEditor: svelte.MdfnEditor as unknown as Component<SkillplaneVisualEditorProps>,
-    createController(source: string) {
-      return core.createEditor({
-        markdown: source,
-        projector: markdown.createMarkdownProjector(SKILLPLANE_MARKDOWN_OPTIONS),
-        extensions: defaultExtensions,
-      });
-    },
-  }));
+  ])
+    .then(([svelte, core, markdown]) => ({
+      MdfnEditor:
+        svelte.MdfnEditor as unknown as Component<SkillplaneVisualEditorProps>,
+      createController(source: string) {
+        return core.createEditor({
+          markdown: source,
+          projector: markdown.createMarkdownProjector(SKILLPLANE_MARKDOWN_OPTIONS),
+          extensions: defaultExtensions,
+        });
+      },
+    }))
+    .catch((cause: unknown) => {
+      resetMarkdownEditorLoader();
+      throw cause;
+    });
   return loading;
 }
 

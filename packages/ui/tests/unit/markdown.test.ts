@@ -1,8 +1,9 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { serializeMarkdown } from "@mdfn/markdown";
 import {
   SKILLPLANE_MARKDOWN_OPTIONS,
   SKILLPLANE_MARKDOWN_PROFILE_NAME,
+  applyMarkdownRendererEnv,
   inspectSkillplaneMarkdown,
   isMdfnRendererEnabled,
   markdownRendererId,
@@ -10,6 +11,7 @@ import {
   renderLegacyMarkdown,
   renderSafeMarkdown,
   renderSkillplaneMarkdown,
+  resetMarkdownRendererEnv,
 } from "../../src/index.js";
 
 const SECURITY_FIXTURE =
@@ -35,9 +37,31 @@ const PRESERVATION_FIXTURE = [
   "",
 ].join("\n");
 
+const RENDERER_FLAGS = [
+  "SKILLPLANE_MDFN_RENDERER",
+  "PUBLIC_SKILLPLANE_MDFN_RENDERER",
+] as const;
+
+const originalFlags = Object.fromEntries(
+  RENDERER_FLAGS.map((name) => [name, process.env[name]]),
+);
+
+function restoreRendererFlags() {
+  resetMarkdownRendererEnv();
+  for (const name of RENDERER_FLAGS) {
+    const previous = originalFlags[name];
+    if (previous === undefined) delete process.env[name];
+    else process.env[name] = previous;
+  }
+}
+
+beforeEach(() => {
+  restoreRendererFlags();
+  process.env.SKILLPLANE_MDFN_RENDERER = "1";
+});
+
 afterEach(() => {
-  delete process.env.SKILLPLANE_MDFN_RENDERER;
-  delete process.env.PUBLIC_SKILLPLANE_MDFN_RENDERER;
+  restoreRendererFlags();
 });
 
 describe("Skillplane Markdown profile", () => {
@@ -80,14 +104,16 @@ describe("Skillplane Markdown profile", () => {
     expect(
       parsed.diagnostics.some((entry) => entry.code === "MDFN_RAW_HTML_DISABLED"),
     ).toBe(true);
+    expect(() => renderSkillplaneMarkdown(PRESERVATION_FIXTURE)).not.toThrow();
   });
 
   it("permits safe relative, fragment, and mailto links", () => {
     const html = renderSafeMarkdown(
-      "[root](/docs) [rel](./guide.md) [frag](#section) [mail](mailto:ops@example.com)",
+      "[root](/docs) [rel](./guide.md) [guide](guide.md) [frag](#section) [mail](mailto:ops@example.com)",
     );
     expect(html).toContain('href="/docs"');
     expect(html).toContain('href="./guide.md"');
+    expect(html).toContain('href="guide.md"');
     expect(html).toContain('href="#section"');
     expect(html).toContain('href="mailto:ops@example.com"');
     expect(html).not.toContain('href="//example.com"');
@@ -98,12 +124,30 @@ describe("Skillplane Markdown profile", () => {
     expect(html).not.toContain("//example.com/secret");
   });
 
+  it("keeps scheme-less relative links in the legacy renderer", () => {
+    const html = renderLegacyMarkdown(
+      "[guide](guide.md) [nested](docs/guide.md) [slash](//example.com) [host](\\\\example.com/secret)",
+    );
+    expect(html).toContain('href="guide.md"');
+    expect(html).toContain('href="docs/guide.md"');
+    expect(html).not.toContain("//example.com");
+    expect(html).not.toContain("example.com/secret");
+  });
+
   it("rolls back to the legacy renderer when the flag is disabled", () => {
-    process.env.SKILLPLANE_MDFN_RENDERER = "0";
+    delete process.env.SKILLPLANE_MDFN_RENDERER;
+    process.env.PUBLIC_SKILLPLANE_MDFN_RENDERER = "0";
     expect(isMdfnRendererEnabled()).toBe(false);
     expect(markdownRendererId()).toBe("legacy");
     expect(renderSafeMarkdown(SECURITY_FIXTURE)).toBe(
       renderLegacyMarkdown(SECURITY_FIXTURE),
     );
+  });
+
+  it("honors runtime Worker bindings over process env", () => {
+    process.env.SKILLPLANE_MDFN_RENDERER = "1";
+    applyMarkdownRendererEnv({ PUBLIC_SKILLPLANE_MDFN_RENDERER: "legacy" });
+    expect(isMdfnRendererEnabled()).toBe(false);
+    expect(markdownRendererId()).toBe("legacy");
   });
 });

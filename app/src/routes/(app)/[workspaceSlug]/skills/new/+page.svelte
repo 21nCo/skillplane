@@ -58,6 +58,10 @@
   async function submit(event: SubmitEvent) {
     event.preventDefault();
     if (!workspace) return;
+    if (mode === "markdown" && !markdown.trim()) {
+      error = "SKILL.md is required";
+      return;
+    }
     saveState = "saving";
     error = null;
     try {
@@ -192,6 +196,7 @@
                 description="Portable Markdown instructions delivered to agents."
                 rows={22}
                 required
+                maxBytes={1_048_576}
                 maxCharacters={1_048_576}
                 bind:value={markdown}
                 oninput={changed}

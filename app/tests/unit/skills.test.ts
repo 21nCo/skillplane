@@ -1,16 +1,44 @@
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { strToU8, unzipSync } from "fflate";
-import { describe, expect, it } from "vitest";
+import {
+  inspectSkillplaneMarkdown,
+  renderSafeMarkdown,
+  renderSkillplaneMarkdown,
+  resetMarkdownRendererEnv,
+} from "@skillplane/ui";
 import {
   buildSkillBundle,
   bytesToBase64,
   inspectSkillBundle,
   markdownFiles,
 } from "../../src/lib/skills/bundle.js";
-import {
-  inspectSkillplaneMarkdown,
-  renderSafeMarkdown,
-  renderSkillplaneMarkdown,
-} from "@skillplane/ui";
+
+const RENDERER_FLAGS = [
+  "SKILLPLANE_MDFN_RENDERER",
+  "PUBLIC_SKILLPLANE_MDFN_RENDERER",
+] as const;
+
+const originalFlags = Object.fromEntries(
+  RENDERER_FLAGS.map((name) => [name, process.env[name]]),
+);
+
+function restoreRendererFlags() {
+  resetMarkdownRendererEnv();
+  for (const name of RENDERER_FLAGS) {
+    const previous = originalFlags[name];
+    if (previous === undefined) delete process.env[name];
+    else process.env[name] = previous;
+  }
+}
+
+beforeEach(() => {
+  restoreRendererFlags();
+  process.env.SKILLPLANE_MDFN_RENDERER = "1";
+});
+
+afterEach(() => {
+  restoreRendererFlags();
+});
 
 describe("skill browser utilities", () => {
   it("builds a portable deterministic browser bundle", async () => {

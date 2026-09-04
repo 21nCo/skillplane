@@ -12,21 +12,24 @@ function escapeHtml(value: string): string {
 function safeHref(value: string): string | null {
   const trimmed = value.trim();
   if (
-    trimmed.startsWith("#") ||
-    trimmed.startsWith("/") ||
-    trimmed.startsWith("./") ||
-    trimmed.startsWith("../")
+    trimmed === "" ||
+    trimmed.startsWith("//") ||
+    trimmed.includes("\\") ||
+    trimmed.includes(":///")
   ) {
-    return trimmed.startsWith("//") ? null : trimmed;
-  }
-  try {
-    const url = new URL(trimmed);
-    return ["https:", "http:", "mailto:"].includes(url.protocol)
-      ? url.toString()
-      : null;
-  } catch {
     return null;
   }
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/u.test(trimmed)) {
+    try {
+      const url = new URL(trimmed);
+      return ["https:", "http:", "mailto:"].includes(url.protocol)
+        ? url.toString()
+        : null;
+    } catch {
+      return null;
+    }
+  }
+  return trimmed;
 }
 
 const renderer = new Renderer();

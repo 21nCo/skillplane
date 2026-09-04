@@ -15,6 +15,10 @@ knowledge, or note persistence.
 The durable value across the boundary is a Markdown string. mdfn runtime state
 never enters API requests, skill bundles, revisions, or agent-facing contracts.
 
+Consumer manifests pin exact stable versions. Unused workspace catalog entries
+are intentionally omitted so `pnpm mdfn:verify` can assert the registry pin
+directly from each package.json.
+
 ## Registry package pin
 
 Skillplane consumes the reviewed stable npm releases directly:
@@ -36,7 +40,10 @@ pnpm mdfn:verify
 
 Unset flags keep mdfn enabled. Set a value of `0`, `false`, `off`, or `legacy`
 to roll a surface back to the previous source control over the same canonical
-Markdown.
+Markdown. App flags are read from SvelteKit `$env/dynamic/public` (Cloudflare
+Worker bindings at request time). The UI renderer flag is applied from those
+same runtime values in `hooks.server.ts` and `hooks.client.ts`, so production
+rollback does not require a rebuild.
 
 | Flag                                           | Effect                                          |
 | ---------------------------------------------- | ----------------------------------------------- |

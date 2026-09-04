@@ -34,8 +34,10 @@ export type { SelectOption } from "./components/Select.svelte";
 export type { TabItem } from "./components/Tabs.svelte";
 export { renderSafeMarkdown } from "./markdown.js";
 export {
+  applyMarkdownRendererEnv,
   isMdfnRendererEnabled,
   markdownRendererId,
+  resetMarkdownRendererEnv,
   type MarkdownRendererId,
 } from "./markdown-flags.js";
 export { renderLegacyMarkdown } from "./markdown-legacy.js";
