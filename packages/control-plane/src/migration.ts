@@ -65,11 +65,33 @@ export interface WorkspaceMigrationJournal {
    * update failed, so a retry can finalize the stored proof instead of
    * repeating the data move.
    */
-  pendingCompletion?(workspaceId: string): Promise<{
-    readonly id: string;
-    readonly targetRegionId: string;
-    readonly proof: WorkspaceMigrationProof;
-  } | null>;
+  pendingCompletion?(
+    workspaceId: string,
+  ): Promise<WorkspaceMigrationPendingCompletion | null>;
+}
+
+export interface WorkspaceMigrationPendingCompletion {
+  readonly id: string;
+  readonly targetRegionId: string;
+  readonly proof: WorkspaceMigrationProof;
+}
+
+export function canFinalizeWorkspaceMigrationCompletion(input: {
+  readonly placement: WorkspacePlacement | null;
+  readonly pending: WorkspaceMigrationPendingCompletion | null | undefined;
+  readonly workspaceId: string;
+  readonly targetRegionId: string;
+}): boolean {
+  const { placement, pending, workspaceId, targetRegionId } = input;
+  return (
+    placement?.state === "active" &&
+    pending?.targetRegionId === targetRegionId &&
+    pending.proof.workspaceId === workspaceId &&
+    pending.proof.targetRegionId === targetRegionId &&
+    placement.namespace === workspaceId &&
+    placement.regionId === targetRegionId &&
+    placement.epoch === pending.proof.finalEpoch
+  );
 }
 
 export class PostgresWorkspaceMigrationJournal implements WorkspaceMigrationJournal {
@@ -328,7 +350,15 @@ export async function migrateWorkspaceWithJournal(
   // placement already active at the target, so finalize the stored proof
   // instead of rejecting the retry or repeating the data move.
   const pending = await input.journal.pendingCompletion?.(input.workspaceId);
-  if (pending?.targetRegionId === input.targetRegionId) {
+  if (
+    pending &&
+    canFinalizeWorkspaceMigrationCompletion({
+      placement: source,
+      pending,
+      workspaceId: input.workspaceId,
+      targetRegionId: input.targetRegionId,
+    })
+  ) {
     try {
       await input.journal.completed(pending.id, pending.proof);
     } catch (error) {

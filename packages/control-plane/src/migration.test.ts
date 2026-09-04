@@ -4,6 +4,7 @@ import {
   createMemoryWorkspacePlacementDirectory,
 } from "./placement.js";
 import {
+  migrateWorkspace,
   migrateWorkspaceWithJournal,
   runWorkspaceRollbackDrill,
   type WorkspaceMigrationOperations,
@@ -169,6 +170,67 @@ describe("fenced workspace migration", () => {
     expect(retryOperations.prepareSource).not.toHaveBeenCalled();
     expect(retryOperations.copyDatabase).not.toHaveBeenCalled();
     expect(retryOperations.copyBundles).not.toHaveBeenCalled();
+  });
+
+  it("does not finalize a stale completion after the placement moved again", async () => {
+    const directory = createMemoryWorkspacePlacementDirectory();
+    await claimWorkspacePlacement({
+      directory,
+      workspaceId: "workspace:stale-completion",
+      regionId: "in-south",
+    });
+    const stale = await migrateWorkspace({
+      directory,
+      workspaceId: "workspace:stale-completion",
+      targetRegionId: "us-east",
+      operations: operations(),
+    });
+    await migrateWorkspace({
+      directory,
+      workspaceId: "workspace:stale-completion",
+      targetRegionId: "eu-west",
+      operations: operations(),
+    });
+    const journal = {
+      started: vi.fn(async () => undefined),
+      completed: vi.fn(async () => undefined),
+      completionPending: vi.fn(async () => undefined),
+      failed: vi.fn(async () => undefined),
+      pendingCompletion: vi.fn(async () => ({
+        id: "migration:stale-completion",
+        targetRegionId: "us-east",
+        proof: stale.proof,
+      })),
+    };
+    const retryOperations = operations();
+
+    const recovered = await migrateWorkspaceWithJournal({
+      migrationId: "migration:fresh-return",
+      directory,
+      workspaceId: "workspace:stale-completion",
+      targetRegionId: "us-east",
+      operations: retryOperations,
+      journal,
+    });
+
+    expect(recovered.migrationId).toBe("migration:fresh-return");
+    expect(recovered.placement).toMatchObject({
+      regionId: "us-east",
+      state: "active",
+      epoch: expect.any(Number),
+    });
+    expect(recovered.placement.epoch).toBeGreaterThan(stale.proof.finalEpoch);
+    expect(journal.started).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "migration:fresh-return",
+        sourceRegionId: "eu-west",
+      }),
+    );
+    expect(journal.completed).not.toHaveBeenCalledWith(
+      "migration:stale-completion",
+      stale.proof,
+    );
+    expect(retryOperations.copyDatabase).toHaveBeenCalledOnce();
   });
 
   it("rolls back and records failure when target verification differs", async () => {

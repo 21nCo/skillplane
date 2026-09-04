@@ -48,6 +48,7 @@ export function assertDistinctTopologyCutoverBuckets(
 export async function prepareLegacyControlDatabase(
   databaseUrl,
   migrate = migrateDatabase,
+  workspaceRegions = ["legacy"],
 ) {
   // The legacy database remains the regional copy source until cutover. Apply
   // every source-side fence/outbox migration before switching its ownership
@@ -60,6 +61,7 @@ export async function prepareLegacyControlDatabase(
   return migrate(databaseUrl, {
     role: "control",
     initialWorkspaceRegion: "legacy",
+    workspaceRegions,
     finalizePhysicalOwnership: false,
   });
 }
@@ -227,7 +229,10 @@ export async function migrateTopologyDatabases(options = {}) {
     );
   }
 
-  const preparedControl = await prepareLegacyControlDatabase(controlUrl);
+  await prepareLegacyControlDatabase(controlUrl, migrateDatabase, [
+    "legacy",
+    ...manifest.cells.map((cell) => cell.regionId),
+  ]);
   const controlPool = new Pool({
     connectionString: controlUrl,
     application_name: "skillplane-topology-cutover-control",
@@ -253,7 +258,7 @@ export async function migrateTopologyDatabases(options = {}) {
       alreadyComplete = true;
     } else if (current?.state === "complete") {
       cutover = { migrated: [], verifiedExisting: [] };
-      projection = { projected: 0 };
+      projection = { projected: 0, reconciledWorkspaces: 0 };
     } else {
       await controlPool.query(
         `UPDATE topology_cutover_state
@@ -297,13 +302,11 @@ export async function migrateTopologyDatabases(options = {}) {
     await Promise.allSettled([controlPool.end(), targetPool.end()]);
   }
 
-  const control = alreadyComplete
-    ? preparedControl
-    : await migrateDatabase(controlUrl, {
-        role: "control",
-        initialWorkspaceRegion,
-        workspaceRegions: manifest.cells.map((cell) => cell.regionId),
-      });
+  const control = await migrateDatabase(controlUrl, {
+    role: "control",
+    initialWorkspaceRegion,
+    workspaceRegions: manifest.cells.map((cell) => cell.regionId),
+  });
   await verifyProductionTopologyDatabaseOwnership(manifest, databases);
   const safety = await writeTopologyMigrationSafetyState({
     sourceRevision,
@@ -319,7 +322,7 @@ export async function migrateTopologyDatabases(options = {}) {
     control,
     cells,
     cutover: cutover ?? { migrated: [], verifiedExisting: [] },
-    projection: projection ?? { projected: 0 },
+    projection: projection ?? { projected: 0, reconciledWorkspaces: 0 },
     alreadyComplete,
     safety,
   };

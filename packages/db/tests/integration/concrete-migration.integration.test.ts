@@ -51,15 +51,13 @@ describe("concrete workspace migration rollback", () => {
     await migrateDatabase(targetUrl);
     source = new Pool({ connectionString: sourceUrl, max: 5 });
     target = new Pool({ connectionString: targetUrl, max: 3 });
-    for (const database of [source, target]) {
-      await database.query(
-        `CREATE TABLE IF NOT EXISTS __datafn_meta (
-           id text PRIMARY KEY,
-           namespace text NOT NULL,
-           next_server_seq integer NOT NULL
-         )`,
-      );
-    }
+    await source.query(
+      `CREATE TABLE IF NOT EXISTS __datafn_meta (
+         id text PRIMARY KEY,
+         namespace text NOT NULL,
+         next_server_seq integer NOT NULL
+       )`,
+    );
     await source.query(
       `INSERT INTO __datafn_meta (id, namespace, next_server_seq)
        VALUES ($1, $2, 7)
@@ -156,6 +154,11 @@ describe("concrete workspace migration rollback", () => {
 
   it("removes a copied published version and file only through the scoped drill", async () => {
     if (!source || !target) throw new Error("Migration fixture unavailable");
+    await expect(
+      target.query<{ relation: string | null }>(
+        "SELECT to_regclass('public.__datafn_meta')::text AS relation",
+      ),
+    ).resolves.toMatchObject({ rows: [{ relation: null }] });
     const sourceObjects = new MemoryObjects();
     const targetObjects = new MemoryObjects();
     sourceObjects.objects.set(bundleKey, new Uint8Array([0]));

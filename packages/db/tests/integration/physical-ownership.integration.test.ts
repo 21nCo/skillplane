@@ -73,6 +73,21 @@ describe("dynamic DataFn physical ownership", () => {
     await admin.end();
   }, 30_000);
 
+  it("removes the synthetic control stats seed from a fresh regional cell", async () => {
+    const regional = new Pool({ connectionString: regionalUrl, max: 1 });
+    try {
+      await expect(
+        regional.query<{ count: string }>(
+          `SELECT count(*)::text AS count
+             FROM public_stats_counters
+            WHERE id = 'global'`,
+        ),
+      ).resolves.toMatchObject({ rows: [{ count: "0" }] });
+    } finally {
+      await regional.end();
+    }
+  });
+
   it("removes dynamic tables from control and retains them in the regional cell", async () => {
     await migrateDatabase(controlUrl, {
       role: "control",

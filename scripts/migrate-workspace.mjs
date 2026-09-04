@@ -2,6 +2,7 @@
 
 import { Pool } from "pg";
 import {
+  canFinalizeWorkspaceMigrationCompletion,
   PostgresWorkspaceMigrationJournal,
   PostgresWorkspaceMigrationOperations,
   createPostgresWorkspacePlacementDirectory,
@@ -150,7 +151,12 @@ export async function migrateConfiguredWorkspace() {
     // assertions and the rollback drill only apply to an actual data move;
     // a completion-pending run is finalized from its stored proof instead.
     const pendingCompletion = await journal.pendingCompletion(workspaceId);
-    const finalizingCompletion = pendingCompletion?.targetRegionId === targetRegionId;
+    const finalizingCompletion = canFinalizeWorkspaceMigrationCompletion({
+      placement,
+      pending: pendingCompletion,
+      workspaceId,
+      targetRegionId,
+    });
     if (!finalizingCompletion) {
       const sourceRegionId = migrationSourceRegionId(placement);
       const regionIds = [...new Set([sourceRegionId, targetRegionId])];

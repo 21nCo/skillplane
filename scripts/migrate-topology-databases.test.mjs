@@ -16,6 +16,7 @@ describe("topology cutover preparation", () => {
         calls.push(options);
         return { role: options.role };
       },
+      ["legacy", "in-south", "us-east"],
     );
 
     assert.deepEqual(
@@ -26,6 +27,7 @@ describe("topology cutover preparation", () => {
       calls.every((options) => options.finalizePhysicalOwnership === false),
       true,
     );
+    assert.deepEqual(calls[1].workspaceRegions, ["legacy", "in-south", "us-east"]);
     assert.deepEqual(result, { role: "control" });
   });
 

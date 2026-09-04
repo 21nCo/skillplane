@@ -51,6 +51,7 @@ describe("combined database topology cutover", () => {
   const cellDatabase = `skillplane_cutover_cell_${suffix}_test`;
   const workspaceId = `workspace:cutover-${suffix}`;
   const skillId = `skill:cutover-${suffix}`;
+  const lateSkillId = `skill:cutover-late-${suffix}`;
   const versionId = `skill-version:cutover-${suffix}`;
   let admin: Pool | null = null;
   let legacyUrl = "";
@@ -176,6 +177,13 @@ describe("combined database topology cutover", () => {
     const control = new Pool({ connectionString: legacyUrl, max: 3 });
     const cell = new Pool({ connectionString: cellUrl, max: 3 });
     try {
+      // Simulate an old compatibility writer creating a skill after migration
+      // 0022 took its one-time snapshot but before this workspace is fenced.
+      await control.query(
+        `INSERT INTO skills (id, workspace_id, slug, name)
+         VALUES ($1, $2, 'late-private-fixture', 'Late private fixture')`,
+        [lateSkillId, workspaceId],
+      );
       const unplacedWorkspaceId = `workspace:cutover-unplaced-${suffix}`;
       await control.query(
         `INSERT INTO workspaces (id, workspace_id, slug, name)
@@ -284,6 +292,15 @@ describe("combined database topology cutover", () => {
         regionId: "in-south",
       });
       expect(projection.projected).toBe(1);
+      expect(projection.reconciledWorkspaces).toBe(3);
+      await expect(
+        control.query<{ total_skills: string }>(
+          `SELECT total_skills::text AS total_skills
+             FROM public_stats_counters
+            WHERE id = $1`,
+          [workspaceId],
+        ),
+      ).resolves.toMatchObject({ rows: [{ total_skills: "2" }] });
       const publicKey = globalPublishedBundleKey({
         workspaceId,
         skillId,

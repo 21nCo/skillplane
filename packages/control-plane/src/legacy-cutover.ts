@@ -196,6 +196,52 @@ export async function migrateLegacyWorkspaceBatch(input: {
   return { migrated, verifiedExisting };
 }
 
+/** Recounts active regional skills after every legacy workspace is fenced. */
+export async function reconcileLegacyPublicSkillTotals(input: {
+  readonly control: MigrationSqlPool;
+  readonly regional: MigrationSqlPool;
+  readonly regionId: string;
+}): Promise<{ readonly reconciledWorkspaces: number }> {
+  const placements = await input.control.query<{ workspace_id: string }>(
+    `SELECT workspace_id
+       FROM workspace_placements
+      WHERE region_id = $1 AND state = 'active'
+      ORDER BY workspace_id`,
+    [input.regionId],
+  );
+  if (placements.rows.length === 0) return { reconciledWorkspaces: 0 };
+  const workspaceIds = placements.rows.map((row) => row.workspace_id);
+  const counts = await input.regional.query<{
+    workspace_id: string;
+    total_skills: string;
+  }>(
+    `SELECT workspace_id, count(*)::text AS total_skills
+       FROM skills
+      WHERE workspace_id = ANY($1::text[]) AND archived_at IS NULL
+      GROUP BY workspace_id`,
+    [workspaceIds],
+  );
+  const totalByWorkspace = new Map(
+    counts.rows.map((row) => [row.workspace_id, row.total_skills]),
+  );
+  const reconciled = await input.control.query<{ id: string }>(
+    `INSERT INTO public_stats_counters
+       (id, agent_skill_uses, total_skills, updated_at)
+     SELECT workspace_id, 0, total_skills, now()
+       FROM unnest($1::text[], $2::numeric[])
+            AS workspace_total(workspace_id, total_skills)
+     ON CONFLICT (id) DO UPDATE
+       SET total_skills = EXCLUDED.total_skills,
+           updated_at = now()
+     RETURNING id`,
+    [
+      workspaceIds,
+      workspaceIds.map((workspaceId) => totalByWorkspace.get(workspaceId) ?? "0"),
+    ],
+  );
+  return { reconciledWorkspaces: reconciled.rows.length };
+}
+
 /**
  * Copies every current public bundle into the private global bucket, verifies
  * both digests, and only then exposes its metadata projection.
@@ -206,7 +252,10 @@ export async function backfillLegacyPublicSkillProjections(input: {
   readonly regionalObjects: ImmutablePublicationStore;
   readonly publicObjects: ImmutablePublicationStore;
   readonly regionId: string;
-}): Promise<{ readonly projected: number }> {
+}): Promise<{
+  readonly projected: number;
+  readonly reconciledWorkspaces: number;
+}> {
   const workspaces = await input.control.query<{
     workspace_id: string;
     workspace_slug: string;
@@ -318,5 +367,6 @@ export async function backfillLegacyPublicSkillProjections(input: {
       projected += 1;
     }
   }
-  return { projected };
+  const totals = await reconcileLegacyPublicSkillTotals(input);
+  return { projected, ...totals };
 }
