@@ -62,9 +62,11 @@ describe("Skillplane topology manifest", () => {
     const parsed = createSingleCellTopology({
       appAuthority: "https://app-dev.skillplane.dev",
       mcpResource: "https://mcp-dev.skillplane.dev/mcp",
+      regionId: "legacy",
     });
     expect(parsed.mode).toBe("single-cell");
     expect(parsed.cells).toHaveLength(1);
+    expect(parsed.cells[0]?.regionId).toBe("legacy");
   });
 
   it("rejects issuer drift, public cells, and duplicate bindings", () => {

@@ -88,7 +88,7 @@ describe("dynamic DataFn physical ownership", () => {
     }
   });
 
-  it("applies the seed cleanup after regional ownership already removed the table", async () => {
+  it("ledgers 0044 after regional ownership already removed the table", async () => {
     const regional = new Pool({ connectionString: regionalUrl, max: 1 });
     try {
       await regional.query(

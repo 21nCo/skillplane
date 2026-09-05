@@ -133,9 +133,12 @@ function duplicates(values: readonly string[]): string[] {
   return [...found].sort();
 }
 
-export function parseTopologyManifest(
+function parseTopologyManifestInternal(
   input: unknown,
-  options: { readonly production?: boolean } = {},
+  options: {
+    readonly production?: boolean;
+    readonly compatibilityMode?: boolean;
+  } = {},
 ): SkillplaneTopologyManifest {
   let raw: unknown = input;
   if (typeof input === "string") {
@@ -159,8 +162,9 @@ export function parseTopologyManifest(
   }
   const manifest = parsed.data;
   if (
-    manifest.controlPlane.regionId === "legacy" ||
-    manifest.cells.some((cell) => cell.regionId === "legacy")
+    !options.compatibilityMode &&
+    (manifest.controlPlane.regionId === "legacy" ||
+      manifest.cells.some((cell) => cell.regionId === "legacy"))
   ) {
     throw new TopologyError(
       "TOPOLOGY_RESERVED_REGION",
@@ -230,6 +234,13 @@ export function parseTopologyManifest(
   return manifest;
 }
 
+export function parseTopologyManifest(
+  input: unknown,
+  options: { readonly production?: boolean } = {},
+): SkillplaneTopologyManifest {
+  return parseTopologyManifestInternal(input, options);
+}
+
 export function createSingleCellTopology(input: {
   readonly appAuthority: string;
   readonly mcpResource: string;
@@ -239,42 +250,45 @@ export function createSingleCellTopology(input: {
   readonly regionalDatabaseBinding?: string;
   readonly regionalObjectStorageBinding?: string;
 }): SkillplaneTopologyManifest {
-  return parseTopologyManifest({
-    version: 1,
-    mode: "single-cell",
-    public: {
-      appAuthority: input.appAuthority,
-      mcpResource: input.mcpResource,
-    },
-    controlPlane: {
-      regionId: "global",
-      databaseBinding: input.controlDatabaseBinding ?? "CONTROL_HYPERDRIVE",
-      publicObjectStorageBinding:
-        input.publicObjectStorageBinding ?? "PUBLIC_SKILL_BUNDLES",
-      issuer: input.appAuthority,
-      oauthResource: input.mcpResource,
-    },
-    cells: [
-      {
-        regionId: input.regionId ?? "local",
-        placement: {
-          displayName: "Local",
-          latitude: 0,
-          longitude: 0,
-        },
-        databaseBinding: input.regionalDatabaseBinding ?? "CELL_HYPERDRIVE",
-        objectStorageBinding:
-          input.regionalObjectStorageBinding ?? "CELL_SKILL_BUNDLES",
-        appServiceBinding: "CELL_APP",
-        mcpServiceBinding: "CELL_MCP",
-        publiclyRoutable: false,
+  return parseTopologyManifestInternal(
+    {
+      version: 1,
+      mode: "single-cell",
+      public: {
+        appAuthority: input.appAuthority,
+        mcpResource: input.mcpResource,
       },
-    ],
-    routing: {
-      activeKeyId: "current",
-      verificationKeyIds: ["current"],
-      assertionAudience: "skillplane-cell",
-      assertionTtlSeconds: 20,
+      controlPlane: {
+        regionId: "global",
+        databaseBinding: input.controlDatabaseBinding ?? "CONTROL_HYPERDRIVE",
+        publicObjectStorageBinding:
+          input.publicObjectStorageBinding ?? "PUBLIC_SKILL_BUNDLES",
+        issuer: input.appAuthority,
+        oauthResource: input.mcpResource,
+      },
+      cells: [
+        {
+          regionId: input.regionId ?? "local",
+          placement: {
+            displayName: "Local",
+            latitude: 0,
+            longitude: 0,
+          },
+          databaseBinding: input.regionalDatabaseBinding ?? "CELL_HYPERDRIVE",
+          objectStorageBinding:
+            input.regionalObjectStorageBinding ?? "CELL_SKILL_BUNDLES",
+          appServiceBinding: "CELL_APP",
+          mcpServiceBinding: "CELL_MCP",
+          publiclyRoutable: false,
+        },
+      ],
+      routing: {
+        activeKeyId: "current",
+        verificationKeyIds: ["current"],
+        assertionAudience: "skillplane-cell",
+        assertionTtlSeconds: 20,
+      },
     },
-  });
+    { compatibilityMode: true },
+  );
 }

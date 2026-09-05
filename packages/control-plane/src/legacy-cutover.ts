@@ -202,18 +202,33 @@ export async function reconcileLegacyPublicSkillTotals(input: {
   readonly regional: MigrationSqlPool;
   readonly regionId: string;
 }): Promise<{ readonly reconciledWorkspaces: number }> {
-  const placements = await input.control.query<{ workspace_id: string }>(
-    `SELECT workspace_id
-       FROM workspace_placements
-      WHERE region_id = $1 AND state = 'active'
-      ORDER BY workspace_id`,
-    [input.regionId],
-  );
-  if (placements.rows.length === 0) return { reconciledWorkspaces: 0 };
-  const workspaceIds = placements.rows.map((row) => row.workspace_id);
-  const regional = await input.regional.connect();
+  const control = await input.control.connect();
+  let regional: Awaited<ReturnType<MigrationSqlPool["connect"]>> | null = null;
+  let controlOpen = false;
+  let regionalOpen = false;
   try {
+    await control.query("BEGIN");
+    controlOpen = true;
+    // Placement changes are the global ownership authority. Lock the selected
+    // rows before fencing their current cell so a concurrent move cannot
+    // publish a newer checkpoint and then be overwritten by this recount.
+    const placements = await control.query<{ workspace_id: string }>(
+      `SELECT workspace_id
+         FROM workspace_placements
+        WHERE region_id = $1 AND state = 'active'
+        ORDER BY workspace_id
+        FOR UPDATE`,
+      [input.regionId],
+    );
+    if (placements.rows.length === 0) {
+      await control.query("COMMIT");
+      controlOpen = false;
+      return { reconciledWorkspaces: 0 };
+    }
+    const workspaceIds = placements.rows.map((row) => row.workspace_id);
+    regional = await input.regional.connect();
     await regional.query("BEGIN");
+    regionalOpen = true;
     await regional.query(
       `INSERT INTO regional_workspace_migration_fences
          (workspace_id, source_epoch, active_epoch)
@@ -260,7 +275,7 @@ export async function reconcileLegacyPublicSkillTotals(input: {
     const totalByWorkspace = new Map(
       counts.rows.map((row) => [row.workspace_id, row.total_skills]),
     );
-    const reconciled = await input.control.query<{ id: string }>(
+    const reconciled = await control.query<{ id: string }>(
       `INSERT INTO public_stats_counters
          (id, agent_skill_uses, total_skills, updated_at)
        SELECT workspace_id, 0, total_skills, now()
@@ -275,13 +290,24 @@ export async function reconcileLegacyPublicSkillTotals(input: {
         workspaceIds.map((workspaceId) => totalByWorkspace.get(workspaceId) ?? "0"),
       ],
     );
+    // Publish the exact control count before releasing regional writers. Any
+    // later write then projects a delta on top of this committed baseline.
+    await control.query("COMMIT");
+    controlOpen = false;
     await regional.query("COMMIT");
+    regionalOpen = false;
     return { reconciledWorkspaces: reconciled.rows.length };
   } catch (error) {
-    await regional.query("ROLLBACK").catch(() => undefined);
+    if (regionalOpen) {
+      await regional?.query("ROLLBACK").catch(() => undefined);
+    }
+    if (controlOpen) {
+      await control.query("ROLLBACK").catch(() => undefined);
+    }
     throw error;
   } finally {
-    regional.release();
+    regional?.release();
+    control.release();
   }
 }
 

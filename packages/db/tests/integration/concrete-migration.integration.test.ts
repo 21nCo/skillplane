@@ -32,6 +32,7 @@ describe("concrete workspace migration rollback", () => {
   const versionId = `skill-version:migration-${suffix}`;
   const dynamicParentTable = `datafn_z_parent_${suffix}`;
   const dynamicChildTable = `datafn_a_child_${suffix}`;
+  const dynamicIdentitySequence = `datafn_parent_identity_${suffix}`;
   const bundleKey = `workspaces/${workspaceId}/skills/${skillId}/bundles/sha256/${"0".repeat(64)}.zip`;
   const targetDatabase = `skillplane_workspace_migration_${suffix}_test`;
   let sourceUrl = "";
@@ -60,7 +61,10 @@ describe("concrete workspace migration rollback", () => {
          next_server_seq integer NOT NULL
        );
        CREATE TABLE "${dynamicParentTable}" (
-         id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+         id bigint GENERATED ALWAYS AS IDENTITY (
+           SEQUENCE NAME "${dynamicIdentitySequence}"
+           START WITH 10 INCREMENT BY 2 CACHE 3
+         ) PRIMARY KEY,
          __ns text NOT NULL,
          value text NOT NULL
        );
@@ -210,6 +214,43 @@ describe("concrete workspace migration rollback", () => {
     try {
       await operations.drainOutboxes(context);
       await operations.copyDatabase(context);
+      // Leave unrelated target-cell rows on the source keys before retrying
+      // the copy. The retry must allocate fresh keys and rewrite the child FK.
+      const targetFixture = await target.connect();
+      try {
+        await targetFixture.query("BEGIN");
+        await targetFixture.query("SET LOCAL session_replication_role = replica");
+        await targetFixture.query(
+          `DELETE FROM "${dynamicChildTable}" WHERE __ns = $1`,
+          [workspaceId],
+        );
+        await targetFixture.query(
+          `DELETE FROM "${dynamicParentTable}" WHERE __ns = $1`,
+          [workspaceId],
+        );
+        await targetFixture.query(
+          `INSERT INTO "${dynamicParentTable}" (id, __ns, value)
+             OVERRIDING SYSTEM VALUE
+           VALUES (41, 'workspace:target-existing', 'existing target')`,
+        );
+        await targetFixture.query(
+          `INSERT INTO "${dynamicChildTable}" (id, __ns, parent_id)
+           VALUES (77, 'workspace:target-existing', 41)`,
+        );
+        await targetFixture.query("SELECT setval($1::regclass, 101, true)", [
+          `public.${dynamicIdentitySequence}`,
+        ]);
+        await targetFixture.query(
+          "SELECT setval(pg_get_serial_sequence($1, 'id'), 100, true)",
+          [`public.${dynamicChildTable}`],
+        );
+        await targetFixture.query("COMMIT");
+      } catch (error) {
+        await targetFixture.query("ROLLBACK");
+        throw error;
+      } finally {
+        targetFixture.release();
+      }
       await operations.copyDatabase(context);
       await operations.copyBundles(context);
       await expect(
@@ -229,6 +270,17 @@ describe("concrete workspace migration rollback", () => {
           [workspaceId],
         ),
       ).resolves.toMatchObject({
+        rows: [{ child_id: "101", parent_id: "103" }],
+      });
+      await expect(
+        target.query(
+          `SELECT child.id::text AS child_id, parent.id::text AS parent_id
+             FROM "${dynamicChildTable}" child
+             JOIN "${dynamicParentTable}" parent ON parent.id = child.parent_id
+            WHERE child.__ns = 'workspace:target-existing'
+              AND parent.__ns = 'workspace:target-existing'`,
+        ),
+      ).resolves.toMatchObject({
         rows: [{ child_id: "77", parent_id: "41" }],
       });
       await expect(
@@ -236,13 +288,26 @@ describe("concrete workspace migration rollback", () => {
           `SELECT nextval(pg_get_serial_sequence($1, 'id'))::text AS next_id`,
           [`public.${dynamicChildTable}`],
         ),
-      ).resolves.toMatchObject({ rows: [{ next_id: "78" }] });
+      ).resolves.toMatchObject({ rows: [{ next_id: "102" }] });
       await expect(
         target.query(
           `SELECT nextval(pg_get_serial_sequence($1, 'id'))::text AS next_id`,
           [`public.${dynamicParentTable}`],
         ),
-      ).resolves.toMatchObject({ rows: [{ next_id: "42" }] });
+      ).resolves.toMatchObject({ rows: [{ next_id: "105" }] });
+      await expect(
+        target.query(
+          `SELECT sequence_definition.seqstart::text AS start,
+                  sequence_definition.seqincrement::text AS increment,
+                  sequence_definition.seqcache::text AS cache
+             FROM pg_catalog.pg_sequence sequence_definition
+            WHERE sequence_definition.seqrelid =
+                  pg_catalog.to_regclass($1)`,
+          [`public.${dynamicIdentitySequence}`],
+        ),
+      ).resolves.toMatchObject({
+        rows: [{ start: "10", increment: "2", cache: "3" }],
+      });
       await expect(
         target.query("DELETE FROM skill_version_files WHERE workspace_id = $1", [
           workspaceId,

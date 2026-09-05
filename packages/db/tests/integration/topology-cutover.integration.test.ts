@@ -46,6 +46,44 @@ async function sha256(bytes: Uint8Array): Promise<`sha256:${string}`> {
     .join("")}`;
 }
 
+async function waitForRegionalRecountFence(
+  database: Pool,
+  workspaceId: string,
+): Promise<void> {
+  const deadline = Date.now() + 10_000;
+  for (;;) {
+    const observer = await database.connect();
+    try {
+      await observer.query("BEGIN");
+      await observer.query(
+        `SELECT workspace_id
+           FROM regional_workspace_migration_fences
+          WHERE workspace_id = $1
+          FOR SHARE NOWAIT`,
+        [workspaceId],
+      );
+      await observer.query("ROLLBACK");
+    } catch (error) {
+      await observer.query("ROLLBACK").catch(() => undefined);
+      if (
+        error &&
+        typeof error === "object" &&
+        "code" in error &&
+        error.code === "55P03"
+      ) {
+        return;
+      }
+      throw error;
+    } finally {
+      observer.release();
+    }
+    if (Date.now() >= deadline) {
+      throw new Error("Timed out waiting for the regional recount fence");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+
 describe("combined database topology cutover", () => {
   const suffix = crypto.randomUUID().replaceAll("-", "").slice(0, 12);
   const legacyDatabase = `skillplane_cutover_source_${suffix}_test`;
@@ -322,18 +360,43 @@ describe("combined database topology cutover", () => {
         publicObjects,
         regionId: "in-south",
       });
-      // The recount must hold the regional write fence while waiting for this
-      // pre-fence projection delta, then replace it with the exact row count.
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      // Observe both locks deterministically while the recount waits for this
+      // pre-fence projection delta.
+      await waitForRegionalRecountFence(cell, workspaceId);
+      await expect(
+        control.query(
+          `SELECT workspace_id
+             FROM workspace_placements
+            WHERE workspace_id = $1
+            FOR SHARE NOWAIT`,
+          [workspaceId],
+        ),
+      ).rejects.toMatchObject({ code: "55P03" });
+      const event = await cell.query<{
+        id: string;
+        workspace_id: string;
+        event_type: "public_stats.skill_count_changed";
+        payload: { workspaceId: string; delta: number };
+        fencing_epoch: string;
+        sequence: string;
+      }>(
+        `SELECT id, workspace_id, event_type, payload,
+                fencing_epoch::text, sequence::text
+           FROM regional_projection_outbox
+          WHERE id = $1`,
+        [statsEventId],
+      );
+      const pendingEvent = event.rows[0];
+      if (!pendingEvent) throw new Error("Stats projection fixture is missing");
       await applyPublicStatsProjectionCheckpoint({
         database: control,
-        eventId: statsEventId,
-        workspaceId,
-        eventType: "public_stats.skill_count_changed",
-        fencingEpoch: Number(placement.rows[0]?.epoch),
-        sequence: 1,
+        eventId: pendingEvent.id,
+        workspaceId: pendingEvent.workspace_id,
+        eventType: pendingEvent.event_type,
+        fencingEpoch: Number(pendingEvent.fencing_epoch),
+        sequence: Number(pendingEvent.sequence),
         agentSkillUses: 0,
-        totalSkills: 1,
+        totalSkills: pendingEvent.payload.delta,
       });
       await cell.query(
         `UPDATE regional_projection_outbox
