@@ -88,6 +88,28 @@ describe("dynamic DataFn physical ownership", () => {
     }
   });
 
+  it("applies the seed cleanup after regional ownership already removed the table", async () => {
+    const regional = new Pool({ connectionString: regionalUrl, max: 1 });
+    try {
+      await regional.query(
+        `DELETE FROM skillplane_schema_migrations
+          WHERE id = '0044_regional_remove_control_seed.sql';
+         DROP TABLE IF EXISTS public_stats_counters CASCADE`,
+      );
+    } finally {
+      await regional.end();
+    }
+
+    await expect(
+      migrateDatabase(regionalUrl, {
+        role: "regional",
+        finalizePhysicalOwnership: false,
+      }),
+    ).resolves.toMatchObject({
+      applied: ["0044_regional_remove_control_seed.sql"],
+    });
+  });
+
   it("removes dynamic tables from control and retains them in the regional cell", async () => {
     await migrateDatabase(controlUrl, {
       role: "control",

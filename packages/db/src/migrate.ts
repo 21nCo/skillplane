@@ -225,7 +225,21 @@ export async function migrateDatabase(
           continue;
         }
         const startedAt = performance.now();
-        await client.query(migration.sql);
+        // 0044 was published before accounting for regional databases whose
+        // physical-ownership pass had already dropped this control table.
+        // Preserve the immutable migration hash, but ledger its intended no-op
+        // instead of executing the now-inapplicable DELETE.
+        const skipMissingRegionalControlSeed =
+          role === "regional" &&
+          migration.id === "0044_regional_remove_control_seed.sql" &&
+          (
+            await client.query<{ relation: string | null }>(
+              "SELECT to_regclass('public.public_stats_counters')::text AS relation",
+            )
+          ).rows[0]?.relation === null;
+        if (!skipMissingRegionalControlSeed) {
+          await client.query(migration.sql);
+        }
         await client.query(
           `INSERT INTO skillplane_schema_migrations
              (id, sha256, execution_ms)

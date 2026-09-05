@@ -211,35 +211,78 @@ export async function reconcileLegacyPublicSkillTotals(input: {
   );
   if (placements.rows.length === 0) return { reconciledWorkspaces: 0 };
   const workspaceIds = placements.rows.map((row) => row.workspace_id);
-  const counts = await input.regional.query<{
-    workspace_id: string;
-    total_skills: string;
-  }>(
-    `SELECT workspace_id, count(*)::text AS total_skills
-       FROM skills
-      WHERE workspace_id = ANY($1::text[]) AND archived_at IS NULL
-      GROUP BY workspace_id`,
-    [workspaceIds],
-  );
-  const totalByWorkspace = new Map(
-    counts.rows.map((row) => [row.workspace_id, row.total_skills]),
-  );
-  const reconciled = await input.control.query<{ id: string }>(
-    `INSERT INTO public_stats_counters
-       (id, agent_skill_uses, total_skills, updated_at)
-     SELECT workspace_id, 0, total_skills, now()
-       FROM unnest($1::text[], $2::numeric[])
-            AS workspace_total(workspace_id, total_skills)
-     ON CONFLICT (id) DO UPDATE
-       SET total_skills = EXCLUDED.total_skills,
-           updated_at = now()
-     RETURNING id`,
-    [
-      workspaceIds,
-      workspaceIds.map((workspaceId) => totalByWorkspace.get(workspaceId) ?? "0"),
-    ],
-  );
-  return { reconciledWorkspaces: reconciled.rows.length };
+  const regional = await input.regional.connect();
+  try {
+    await regional.query("BEGIN");
+    await regional.query(
+      `INSERT INTO regional_workspace_migration_fences
+         (workspace_id, source_epoch, active_epoch)
+       SELECT workspace_id, 0, 1
+         FROM unnest($1::text[]) AS workspace(workspace_id)
+       ON CONFLICT (workspace_id) DO NOTHING`,
+      [workspaceIds],
+    );
+    // Regional writes hold a shared lock on this row. Taking every row
+    // exclusively waits for in-flight writes and blocks new writes until the
+    // exact count has replaced every pre-fence projection delta.
+    await regional.query(
+      `SELECT workspace_id
+         FROM regional_workspace_migration_fences
+        WHERE workspace_id = ANY($1::text[])
+        ORDER BY workspace_id
+        FOR UPDATE`,
+      [workspaceIds],
+    );
+    const deadline = Date.now() + 75_000;
+    for (;;) {
+      const pending = await regional.query<{ count: string }>(
+        `SELECT count(*)::text AS count
+           FROM regional_projection_outbox
+          WHERE workspace_id = ANY($1::text[]) AND processed_at IS NULL`,
+        [workspaceIds],
+      );
+      if (pending.rows[0]?.count === "0") break;
+      if (Date.now() >= deadline) {
+        throw new Error("TOPOLOGY_PUBLIC_STATS_OUTBOX_NOT_DRAINED");
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+    }
+    const counts = await regional.query<{
+      workspace_id: string;
+      total_skills: string;
+    }>(
+      `SELECT workspace_id, count(*)::text AS total_skills
+         FROM skills
+        WHERE workspace_id = ANY($1::text[]) AND archived_at IS NULL
+        GROUP BY workspace_id`,
+      [workspaceIds],
+    );
+    const totalByWorkspace = new Map(
+      counts.rows.map((row) => [row.workspace_id, row.total_skills]),
+    );
+    const reconciled = await input.control.query<{ id: string }>(
+      `INSERT INTO public_stats_counters
+         (id, agent_skill_uses, total_skills, updated_at)
+       SELECT workspace_id, 0, total_skills, now()
+         FROM unnest($1::text[], $2::numeric[])
+              AS workspace_total(workspace_id, total_skills)
+       ON CONFLICT (id) DO UPDATE
+         SET total_skills = EXCLUDED.total_skills,
+             updated_at = now()
+       RETURNING id`,
+      [
+        workspaceIds,
+        workspaceIds.map((workspaceId) => totalByWorkspace.get(workspaceId) ?? "0"),
+      ],
+    );
+    await regional.query("COMMIT");
+    return { reconciledWorkspaces: reconciled.rows.length };
+  } catch (error) {
+    await regional.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    regional.release();
+  }
 }
 
 /**

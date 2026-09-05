@@ -8,6 +8,11 @@ const identifier = z
   .min(1)
   .max(80)
   .regex(/^[a-z][a-z0-9-]*$/u);
+const regionId = z
+  .string()
+  .min(1)
+  .max(63)
+  .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/u);
 const bindingName = z
   .string()
   .min(1)
@@ -46,7 +51,7 @@ const mcpResource = z.url().refine((value) => {
 
 const cellSchema = z
   .object({
-    regionId: identifier,
+    regionId,
     placement: z
       .object({
         displayName: z.string().trim().min(1).max(80),
@@ -75,7 +80,7 @@ const topologySchema = z
       .strict(),
     controlPlane: z
       .object({
-        regionId: identifier,
+        regionId,
         databaseBinding: bindingName,
         publicObjectStorageBinding: bindingName,
         issuer: authority,
@@ -102,6 +107,7 @@ export type TopologyErrorCode =
   | "TOPOLOGY_DUPLICATE_REGION"
   | "TOPOLOGY_DUPLICATE_BINDING"
   | "TOPOLOGY_REGION_COUNT_INVALID"
+  | "TOPOLOGY_RESERVED_REGION"
   | "TOPOLOGY_ISSUER_DRIFT"
   | "TOPOLOGY_KEY_ROTATION_INVALID";
 
@@ -152,6 +158,16 @@ export function parseTopologyManifest(
     );
   }
   const manifest = parsed.data;
+  if (
+    manifest.controlPlane.regionId === "legacy" ||
+    manifest.cells.some((cell) => cell.regionId === "legacy")
+  ) {
+    throw new TopologyError(
+      "TOPOLOGY_RESERVED_REGION",
+      "The legacy compatibility region ID is reserved",
+      ["controlPlane.regionId", "cells.regionId"],
+    );
+  }
   const duplicateRegions = duplicates(manifest.cells.map((cell) => cell.regionId));
   if (
     duplicateRegions.length > 0 ||

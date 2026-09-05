@@ -1,4 +1,5 @@
 import {
+  applyPublicStatsProjectionCheckpoint,
   backfillLegacyPublicSkillProjections,
   globalPublishedBundleKey,
   migrateLegacyWorkspaceBatch,
@@ -284,13 +285,63 @@ describe("combined database topology cutover", () => {
         ]),
       ).rejects.toMatchObject({ code: "55000" });
 
-      const projection = await backfillLegacyPublicSkillProjections({
+      const placement = await control.query<{ epoch: string }>(
+        "SELECT epoch::text AS epoch FROM workspace_placements WHERE workspace_id = $1",
+        [workspaceId],
+      );
+      const statsEventId = `event:cutover-stats-${suffix}`;
+      const eventWriter = await cell.connect();
+      try {
+        await eventWriter.query("BEGIN");
+        await eventWriter.query(
+          "SELECT set_config('skillplane.workspace_routing_epoch', $1, true)",
+          [placement.rows[0]?.epoch],
+        );
+        await eventWriter.query(
+          `INSERT INTO regional_projection_outbox
+             (id, workspace_id, event_type, payload, fencing_epoch, sequence)
+           VALUES ($1, $2, 'public_stats.skill_count_changed', $3::jsonb, $4, 1)`,
+          [
+            statsEventId,
+            workspaceId,
+            JSON.stringify({ workspaceId, delta: 1 }),
+            placement.rows[0]?.epoch,
+          ],
+        );
+        await eventWriter.query("COMMIT");
+      } catch (error) {
+        await eventWriter.query("ROLLBACK");
+        throw error;
+      } finally {
+        eventWriter.release();
+      }
+      const projectionPromise = backfillLegacyPublicSkillProjections({
         control,
         regional: cell,
         regionalObjects: cellObjects,
         publicObjects,
         regionId: "in-south",
       });
+      // The recount must hold the regional write fence while waiting for this
+      // pre-fence projection delta, then replace it with the exact row count.
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      await applyPublicStatsProjectionCheckpoint({
+        database: control,
+        eventId: statsEventId,
+        workspaceId,
+        eventType: "public_stats.skill_count_changed",
+        fencingEpoch: Number(placement.rows[0]?.epoch),
+        sequence: 1,
+        agentSkillUses: 0,
+        totalSkills: 1,
+      });
+      await cell.query(
+        `UPDATE regional_projection_outbox
+            SET processed_at = now()
+          WHERE id = $1`,
+        [statsEventId],
+      );
+      const projection = await projectionPromise;
       expect(projection.projected).toBe(1);
       expect(projection.reconciledWorkspaces).toBe(3);
       await expect(
@@ -301,6 +352,10 @@ describe("combined database topology cutover", () => {
           [workspaceId],
         ),
       ).resolves.toMatchObject({ rows: [{ total_skills: "2" }] });
+      await cell.query(
+        "DELETE FROM regional_projection_outbox WHERE id = $1 AND processed_at IS NOT NULL",
+        [statsEventId],
+      );
       const publicKey = globalPublishedBundleKey({
         workspaceId,
         skillId,

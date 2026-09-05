@@ -31,7 +31,7 @@ const PUBLIC_SKILL_READ_HEADER = "x-skillplane-public-skill-read";
 
 type ApiScope =
   | { readonly kind: "global" }
-  | { readonly kind: "workspace"; readonly workspaceId: string }
+  | { readonly kind: "workspace"; readonly workspaceId: string | undefined }
   | {
       readonly kind: "resource";
       readonly resourceType: RoutableResourceType;
@@ -127,11 +127,10 @@ export function classifyApiScope(request: Request): ApiScope {
   const url = new URL(request.url);
   const path = url.pathname;
   if (path.startsWith("/datafn/")) {
+    const workspaceId = request.headers.get("x-skillplane-workspace-id");
     return {
       kind: "workspace",
-      workspaceId: segment(
-        request.headers.get("x-skillplane-workspace-id") ?? undefined,
-      ),
+      workspaceId: workspaceId === null ? undefined : segment(workspaceId),
     };
   }
   let match = /^\/api\/v1\/workspaces\/([^/]+)\/skills(?:\/|$)/u.exec(path);

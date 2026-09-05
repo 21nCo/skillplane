@@ -91,4 +91,24 @@ describe("Skillplane topology manifest", () => {
       expect.objectContaining({ code: "TOPOLOGY_DUPLICATE_BINDING" }),
     );
   });
+
+  it("rejects operationally invalid and reserved region IDs", () => {
+    for (const invalid of ["us--east", "us-east-", "a".repeat(64)]) {
+      const topology = productionTopology();
+      const firstCell = topology.cells[0];
+      if (!firstCell) throw new Error("topology fixture has no first cell");
+      firstCell.regionId = invalid;
+      expect(() => parseTopologyManifest(topology)).toThrow(
+        expect.objectContaining({ code: "TOPOLOGY_INVALID" }),
+      );
+    }
+
+    const reserved = productionTopology();
+    const firstCell = reserved.cells[0];
+    if (!firstCell) throw new Error("topology fixture has no first cell");
+    firstCell.regionId = "legacy";
+    expect(() => parseTopologyManifest(reserved)).toThrow(
+      expect.objectContaining({ code: "TOPOLOGY_RESERVED_REGION" }),
+    );
+  });
 });

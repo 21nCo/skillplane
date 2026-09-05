@@ -243,6 +243,35 @@ describe("API scope classification", () => {
     ).resolves.toBe("regional");
   });
 
+  it("authenticates a headerless regional DataFn request before route lookup", async () => {
+    const routed = createRoutedApiApplication({
+      local: { fetch: async () => new Response("unexpected local response") },
+      services: async () =>
+        ({
+          auth: { provider: { authenticate: async () => null } },
+        }) as never,
+    });
+
+    const response = await routed.fetch(
+      new Request("http://localhost:5700/datafn/query", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          resource: "skills",
+          version: 1,
+          select: ["id"],
+          limit: 1,
+        }),
+      }),
+      gatewayBindings,
+    );
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: "AUTHENTICATION_REQUIRED" },
+    });
+  });
+
   it("terminates anonymous public-by-ID reads at the global projection", async () => {
     const local = { fetch: async () => new Response("global projection") };
     const services = async () =>

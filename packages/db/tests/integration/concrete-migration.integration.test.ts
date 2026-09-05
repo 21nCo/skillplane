@@ -30,6 +30,8 @@ describe("concrete workspace migration rollback", () => {
   const workspaceId = `workspace:migration-${suffix}`;
   const skillId = `skill:migration-${suffix}`;
   const versionId = `skill-version:migration-${suffix}`;
+  const dynamicParentTable = `datafn_z_parent_${suffix}`;
+  const dynamicChildTable = `datafn_a_child_${suffix}`;
   const bundleKey = `workspaces/${workspaceId}/skills/${skillId}/bundles/sha256/${"0".repeat(64)}.zip`;
   const targetDatabase = `skillplane_workspace_migration_${suffix}_test`;
   let sourceUrl = "";
@@ -56,6 +58,16 @@ describe("concrete workspace migration rollback", () => {
          id text PRIMARY KEY,
          namespace text NOT NULL,
          next_server_seq integer NOT NULL
+       );
+       CREATE TABLE "${dynamicParentTable}" (
+         id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+         __ns text NOT NULL,
+         value text NOT NULL
+       );
+       CREATE TABLE "${dynamicChildTable}" (
+         id bigserial PRIMARY KEY,
+         __ns text NOT NULL,
+         parent_id bigint NOT NULL REFERENCES "${dynamicParentTable}"(id)
        )`,
     );
     await source.query(
@@ -65,6 +77,17 @@ describe("concrete workspace migration rollback", () => {
          SET namespace = EXCLUDED.namespace,
              next_server_seq = EXCLUDED.next_server_seq`,
       [`datafn-meta:${suffix}`, workspaceId],
+    );
+    await source.query(
+      `INSERT INTO "${dynamicParentTable}" (id, __ns, value)
+         OVERRIDING SYSTEM VALUE
+       VALUES (41, $1, 'parent')`,
+      [workspaceId],
+    );
+    await source.query(
+      `INSERT INTO "${dynamicChildTable}" (id, __ns, parent_id)
+       VALUES (77, $1, 41)`,
+      [workspaceId],
     );
     await source.query(
       `INSERT INTO workspaces (id, workspace_id, slug, name)
@@ -129,6 +152,8 @@ describe("concrete workspace migration rollback", () => {
         await client.query("DELETE FROM __datafn_meta WHERE namespace = $1", [
           workspaceId,
         ]);
+        await client.query(`DROP TABLE "${dynamicChildTable}"`);
+        await client.query(`DROP TABLE "${dynamicParentTable}"`);
         await client.query("DELETE FROM workspaces WHERE id = $1", [workspaceId]);
         await client.query("COMMIT");
       } catch (error) {
@@ -195,6 +220,29 @@ describe("concrete workspace migration rollback", () => {
           [workspaceId],
         ),
       ).resolves.toMatchObject({ rows: [{ next_server_seq: 7 }] });
+      await expect(
+        target.query(
+          `SELECT child.id::text AS child_id, parent.id::text AS parent_id
+             FROM "${dynamicChildTable}" child
+             JOIN "${dynamicParentTable}" parent ON parent.id = child.parent_id
+            WHERE child.__ns = $1 AND parent.__ns = $1`,
+          [workspaceId],
+        ),
+      ).resolves.toMatchObject({
+        rows: [{ child_id: "77", parent_id: "41" }],
+      });
+      await expect(
+        target.query(
+          `SELECT nextval(pg_get_serial_sequence($1, 'id'))::text AS next_id`,
+          [`public.${dynamicChildTable}`],
+        ),
+      ).resolves.toMatchObject({ rows: [{ next_id: "78" }] });
+      await expect(
+        target.query(
+          `SELECT nextval(pg_get_serial_sequence($1, 'id'))::text AS next_id`,
+          [`public.${dynamicParentTable}`],
+        ),
+      ).resolves.toMatchObject({ rows: [{ next_id: "42" }] });
       await expect(
         target.query("DELETE FROM skill_version_files WHERE workspace_id = $1", [
           workspaceId,
