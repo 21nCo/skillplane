@@ -1,7 +1,22 @@
 # Production deployment
 
-This repository deploys the Skillplane app and MCP Cloudflare Workers backed by
-one PostgreSQL database through Hyperdrive and one private R2 bucket. The
+For the global-control/regional-cell ownership model, routing assertions,
+failure behavior, workspace moves, outages, and key rotation, see
+[`global-control-plane.md`](./global-control-plane.md). The topology manifest
+must be validated and every private cell deployed before enabling gateway mode.
+
+The checked-in transition deployment still deploys the single-cell Skillplane
+app and MCP Workers backed by one PostgreSQL database and one private R2 bucket.
+The multi-cell renderer in `scripts/lib/topology-deployment.mjs` generates the
+next-stage canonical app/MCP gateways plus private app/MCP workers for every
+cell in `deployment/topology.production.json`. It requires separate control and
+cell Hyperdrive IDs and separate public/regional bucket names. Generated cell
+workers have no route, no `workers.dev` exposure, no downstream service
+bindings, and no Email Service binding. Promotion of those generated configs is
+an explicit rollout step after the cells and projection drainer are provisioned;
+it is not an automatic side effect of the legacy `deploy:all` command.
+
+The
 landing Worker is maintained and deployed independently from the 21n monorepo's
 `landing/skillplane` workspace. The production hosts are
 `skillplane.dev`, `app.skillplane.dev`, `mcp.skillplane.dev`, and the PostHog
@@ -73,6 +88,18 @@ Worker as a secret.
 | `PUBLIC_TURNSTILE_SITE_KEY`                           | Public site key for the production widget                               |
 | `SKILLPLANE_RELEASE_TAG`                              | Optional stable release label; generated when omitted                   |
 
+The one-time multi-cell conversion additionally requires
+`SKILLPLANE_CONTROL_DATABASE_URL`, one
+`SKILLPLANE_CELL_<REGION>_DATABASE_URL` and
+`SKILLPLANE_CELL_<REGION>_BUCKET` per manifest cell, and the public bucket in
+`SKILLPLANE_PUBLIC_BUCKET`. `SKILLPLANE_LEGACY_BUCKET` defaults to the legacy
+`skillplane-skill-bundles` bucket when omitted. Control and cell database URLs
+must all be distinct.
+`SKILLPLANE_PRODUCTION_DATABASE_URL` must identify the same database as
+`SKILLPLANE_CONTROL_DATABASE_URL`; it remains the canonical input to the
+encrypted backup workflow. The public and every regional bucket must also be
+distinct.
+
 The direct URL may use any PostgreSQL provider, but it must include a host,
 username, password, and database name. `sslmode` defaults to `require`; only
 `require`, `verify-ca`, and `verify-full` are accepted. The controlled
@@ -129,15 +156,23 @@ Run the blocking app/MCP release sequence from the repository root:
 
 ```bash
 pnpm deploy:check
-pnpm db:backup:production
-pnpm db:migrate:production
+pnpm db:migrate:topology
 pnpm deploy:all
 pnpm smoke:production:release
 ```
 
-`deploy:all` already runs `smoke:production:release` before it writes the
-release manifest. The explicit invocation above is the final operator-visible
-verification of the recorded app/MCP pair.
+`db:migrate:topology` writes a short-lived safety record tied to the exact Git
+commit, topology manifest, verified encrypted backups of the control database
+and every cell, and control/cell database fingerprints. All backups complete
+before the first schema or data mutation, and their digests are bound into the
+migration record. `deploy:all` refuses to upload a Worker unless that record is
+less than two hours old, every database still has the expected physical
+ownership, each live cache-disabled Hyperdrive targets its declared database,
+and every bucket exists with private access and a safe lifecycle. It captures
+each uploaded Worker version ID, proves that exact version is active at 100%,
+rechecks every gateway, cell, and projection Worker after the upload set, and
+runs `smoke:production:release` before returning success. The explicit smoke
+invocation above remains the final operator-visible verification.
 
 Run the cross-system topology check separately before and after the release, or
 from the landing deployment's own operational workflow:
@@ -152,18 +187,33 @@ landing failure is an environment incident that must be escalated to the
 landing owner, but it does not invalidate or prevent recording a healthy
 app/MCP deployment that this repository can roll back.
 
+For the first conversion from the combined database, provision every empty
+cell database and private bucket, render the topology, and run
+`pnpm db:migrate:topology` before deploying any gateway. The command is
+resumable and deliberately ordered: it backs up and verifies the control
+database and every cell before mutation, initializes cells, upgrades the
+combined source without pruning it, enables a database write fence, runs a
+rollback drill plus row/bundle checksum verification for every workspace,
+copies and digest-verifies every existing public release into the global
+public bucket, marks placements active in the first declared cell, and only
+then drops regional tables from the control database. A failure leaves the
+source regional tables intact and the durable cutover state at `copying`; fix
+the cause and rerun the same command. Do not deploy gateway mode unless the
+command returns a completed cutover and the normal smoke gates pass.
+
 The commands enforce these boundaries:
 
-- `db:backup:production` performs `pg_dump --format=custom`, encrypts the
-  archive with AES-256-GCM and a scrypt-derived key, verifies decryption, and
-  proves `pg_restore --list` can read it. Its Postgres client image matches the
+- `db:migrate:topology` runs `pg_dump --format=custom` against the control
+  database and every cell, encrypts each archive with AES-256-GCM and a
+  scrypt-derived key, verifies decryption, and proves `pg_restore --list` can
+  read it before changing any database. Its Postgres client image matches each
   PostgreSQL server major version, and no plaintext dump is written.
 - `db:migrate:production` applies committed migrations directly to PostgreSQL,
   verifies every migration hash, table, constraint, trigger, and required query
   plan, records the exact application Git commit, and never uses Hyperdrive.
-- `deploy:all` refuses to start unless the matching backup is less than 24
-  hours old, verified migration state is less than two hours old, and that
-  migration was produced from the exact application commit being deployed.
+- `deploy:all` refuses to start unless every matching topology backup is less
+  than 24 hours old, verified migration state is less than two hours old, and
+  that migration was produced from the exact application commit being deployed.
   This commit lock is required for forward-only compatibility changes such as
   the workspace-sharded public statistics counter in migration 0019; do not
   canary or roll back an older app binary against that migrated schema. Deploy

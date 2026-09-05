@@ -1,4 +1,4 @@
-import { AuthFnError } from "@authfn/core";
+import { AuthFnError } from "authfn";
 
 export type OAuthErrorCode =
   | "invalid_request"

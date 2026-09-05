@@ -1,7 +1,10 @@
 import { Hono } from "hono";
 import { describe, expect, it, vi } from "vitest";
 import type { ApiEnvironment, ApiServiceProvider, ApiServices } from "../context.js";
-import { authenticationMiddleware } from "./authentication.js";
+import {
+  authenticationMiddleware,
+  requiresPersonalWorkspace,
+} from "./authentication.js";
 
 function requestScopedProvider() {
   const services = {
@@ -19,6 +22,16 @@ function requestScopedProvider() {
 }
 
 describe("authenticationMiddleware service lifetime", () => {
+  it("provisions personal workspaces only for workspace-backed APIs", () => {
+    expect(requiresPersonalWorkspace("/api/v1/workspaces")).toBe(true);
+    expect(requiresPersonalWorkspace("/datafn/query")).toBe(true);
+    expect(requiresPersonalWorkspace("/auth/session")).toBe(false);
+    expect(requiresPersonalWorkspace("/auth/oauth/authorize")).toBe(false);
+    expect(requiresPersonalWorkspace("/.well-known/oauth-authorization-server")).toBe(
+      false,
+    );
+  });
+
   it("releases request-scoped services after a successful response", async () => {
     const { provider, release, services } = requestScopedProvider();
     const app = new Hono<ApiEnvironment>();

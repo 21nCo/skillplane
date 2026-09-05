@@ -426,6 +426,13 @@ describe("amendments, learning provenance, policy, and review", () => {
         "The evidence, context provenance, exact diff, and integration validation are complete.",
     });
 
+    const makePublic = await app.request(`/api/v1/skills/${skillId}`, {
+      method: "PATCH",
+      headers: headers(owner, `public-${suffix}`),
+      body: JSON.stringify({ visibility: "public" }),
+    });
+    expect(makePublic.status, await makePublic.clone().text()).toBe(200);
+
     const servicePrincipal = await app.request(
       `/api/v1/workspaces/${owner.workspaceId}/service-principals`,
       {
@@ -506,6 +513,18 @@ describe("amendments, learning provenance, policy, and review", () => {
       },
       policyDecision: { outcome: "auto_publish", matchedRule: 0 },
       autoPublished: true,
+    });
+    await expect(
+      services.database.pool.query<{ version_id: string }>(
+        `SELECT payload->>'versionId' AS version_id
+           FROM regional_projection_outbox
+          WHERE workspace_id = $1
+            AND event_type = 'public_skill.published'
+            AND payload->>'versionId' = $2`,
+        [owner.workspaceId, autoPublished.candidate.id],
+      ),
+    ).resolves.toMatchObject({
+      rows: [{ version_id: autoPublished.candidate.id }],
     });
 
     const versionCount = await services.database.pool.query<{ count: string }>(

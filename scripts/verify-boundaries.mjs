@@ -45,10 +45,7 @@ for (const workspace of requiredWorkspaces) {
   }
 }
 
-for (const forbiddenPath of [
-  "app/src/lib/domain",
-  "mcp/src/domain",
-]) {
+for (const forbiddenPath of ["app/src/lib/domain", "mcp/src/domain"]) {
   if (await exists(join(repoRoot, forbiddenPath))) {
     findings.push({
       code: "WORKSPACE_BOUNDARY_VIOLATION",

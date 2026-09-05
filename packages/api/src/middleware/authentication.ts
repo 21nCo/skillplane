@@ -4,8 +4,13 @@ import type { MiddlewareHandler } from "hono";
 import type { ApiEnvironment, ApiServiceProvider } from "../context.js";
 import { authenticateServicePrincipalRequest } from "../service-principal-auth.js";
 import { ensurePersonalWorkspace } from "../tenancy.js";
+import { initialWorkspaceRegionForRequest } from "../workspace-placement.js";
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+
+export function requiresPersonalWorkspace(path: string): boolean {
+  return path.startsWith("/api/v1/") || path.startsWith("/datafn/");
+}
 
 export function enforceCookieCsrf(
   request: Request,
@@ -63,8 +68,10 @@ export function authenticationMiddleware(
         ? null
         : await services.auth.provider.authenticate(context.req.raw);
       context.set("session", session);
-      if (session) {
-        await ensurePersonalWorkspace(services.database.pool, session);
+      if (session && requiresPersonalWorkspace(context.req.path)) {
+        await ensurePersonalWorkspace(services.controlDatabase.pool, session, () =>
+          initialWorkspaceRegionForRequest(context.req.raw, services, session.actorId),
+        );
       }
       enforceCookieCsrf(context.req.raw, Boolean(session), Boolean(servicePrincipal));
       await next();

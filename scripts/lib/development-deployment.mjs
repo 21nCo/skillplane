@@ -144,6 +144,11 @@ export function developmentCloudflareEnvironment() {
     "SKILLPLANE_DEV_OAUTH_TOKEN_PEPPER",
     "SKILLPLANE_DEV_TURNSTILE_SECRET_KEY",
     "SKILLPLANE_DEV_DATABASE_URL",
+    "SKILLPLANE_DEV_CONTROL_DATABASE_URL",
+    "SKILLPLANE_DEV_USEAST_DATABASE_URL",
+    "SKILLPLANE_DEV_EUWEST_DATABASE_URL",
+    "SKILLPLANE_DEV_WORKSPACE_ROUTING_SECRET",
+    "SKILLPLANE_DEV_BACKUP_ENCRYPTION_KEY",
     "PUBLIC_POSTHOG_KEY",
     "PUBLIC_POSTHOG_HOST",
     "POSTHOG_PROJECT_TOKEN",
@@ -296,7 +301,9 @@ export function verifyDevelopmentHyperdrive(
   database = developmentDatabase(),
   options = {},
 ) {
-  const id = requireDevelopmentHyperdriveId();
+  const id = requireDevelopmentHyperdriveId(
+    options.hyperdriveId ?? process.env.CLOUDFLARE_DEV_HYPERDRIVE_ID,
+  );
   const record = parseHyperdrive(
     captureWrangler(["hyperdrive", "get", id], options).stdout,
   );
@@ -320,21 +327,26 @@ function bucketNames(output) {
 }
 
 export function ensureDevelopmentBucket(options = {}) {
+  return ensurePrivateDevelopmentBucket(developmentBucket, options);
+}
+
+export function ensurePrivateDevelopmentBucket(bucketName, options = {}) {
+  if (!/^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/u.test(bucketName)) {
+    throw new Error("The development R2 bucket name is invalid");
+  }
   const listed = captureWrangler(["r2", "bucket", "list"], options).stdout;
   let created = false;
-  if (!bucketNames(listed).includes(developmentBucket)) {
-    run("pnpm", ["exec", "wrangler", "r2", "bucket", "create", developmentBucket], {
+  if (!bucketNames(listed).includes(bucketName)) {
+    run("pnpm", ["exec", "wrangler", "r2", "bucket", "create", bucketName], {
       env: options.env,
     });
     created = true;
   }
   const privacy = assertPrivateDevelopmentBucket(
-    captureWrangler(["r2", "bucket", "dev-url", "get", developmentBucket], options)
-      .stdout,
-    captureWrangler(["r2", "bucket", "domain", "list", developmentBucket], options)
-      .stdout,
+    captureWrangler(["r2", "bucket", "dev-url", "get", bucketName], options).stdout,
+    captureWrangler(["r2", "bucket", "domain", "list", bucketName], options).stdout,
   );
-  return { name: developmentBucket, created, ...privacy };
+  return { name: bucketName, created, ...privacy };
 }
 
 export function assertPrivateDevelopmentBucket(devUrl, domains) {

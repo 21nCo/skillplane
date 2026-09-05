@@ -25,6 +25,7 @@ import {
   type McpIdentity,
 } from "./auth.js";
 import {
+  ControlPlaneMcpAuditWriter,
   persistMcpAudit,
   PostgresMcpAuditWriter,
   type McpAuditWriter,
@@ -39,6 +40,7 @@ import { McpCursorCodec } from "./pagination.js";
 import { createSkillplaneMcpServer } from "./server.js";
 import { resolveSkill, resolveVersion } from "./tools/resolve.js";
 import { loadExactCanonicalBundle } from "./tools/retrieve.js";
+import { createRoutedMcpApplication } from "./workspace-routing.js";
 import {
   mapMcpToolError,
   type McpToolRuntime,
@@ -388,6 +390,13 @@ function createRuntime(
   request: Request,
   now: () => Date,
 ): McpToolRuntime {
+  const fencingEpoch = Number(request.headers.get("x-skillplane-routing-epoch") ?? "1");
+  if (!Number.isSafeInteger(fencingEpoch) || fencingEpoch < 1) {
+    throw new McpToolError(
+      "VALIDATION_FAILED",
+      "The workspace routing epoch is invalid",
+    );
+  }
   return {
     services,
     identity,
@@ -395,6 +404,7 @@ function createRuntime(
     cursors: new McpCursorCodec(services.tenancySecret, now),
     downloadSecret: services.auth.oauth.tokenPepper,
     origin: new URL(request.url).origin,
+    fencingEpoch,
     now,
   };
 }
@@ -609,9 +619,12 @@ export function createMcpApp(options: CreateMcpAppOptions = {}) {
   const auditFor = (services: ApiServices): McpAuditWriter => {
     const existing = writer.get(services);
     if (existing) return existing;
+    const role = services.database.role;
     const created =
       options.createAuditWriter?.(services) ??
-      new PostgresMcpAuditWriter(services.database.pool);
+      (role === "control"
+        ? new ControlPlaneMcpAuditWriter(services.database.pool)
+        : new PostgresMcpAuditWriter(services.database.pool, role === "regional"));
     writer.set(services, created);
     return created;
   };
@@ -833,7 +846,9 @@ export function createMcpApp(options: CreateMcpAppOptions = {}) {
   return app;
 }
 
-export const app = createMcpApp();
+const services = createApiServiceProvider({ authentication: "oauth-only" });
+export const app = createMcpApp({ getServices: services });
+const routedApp = createRoutedMcpApplication({ local: app, services });
 
 interface WorkerHandler<Bindings> {
   fetch(
@@ -849,6 +864,6 @@ interface WorkerHandler<Bindings> {
 
 export default {
   fetch(request, environment, context) {
-    return app.fetch(request, environment, context);
+    return routedApp.fetch(request, environment, context);
   },
 } satisfies WorkerHandler<RuntimeBindings>;

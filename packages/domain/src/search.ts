@@ -44,7 +44,6 @@ export interface SkillSearchPage {
 interface SearchRow {
   readonly id: string;
   readonly workspace_id: string;
-  readonly workspace_slug: string;
   readonly slug: string;
   readonly name: string;
   readonly description: string;
@@ -238,10 +237,35 @@ function normalizeSearchInput(options: {
   return { query, tags, visibility, archive, limit };
 }
 
+export function normalizePublicSearchInput(options: {
+  readonly query?: string;
+  readonly tags?: readonly string[];
+  readonly limit?: number;
+}): {
+  readonly query: string;
+  readonly tags: readonly string[];
+  readonly limit: number;
+} {
+  const normalized = normalizeSearchInput({
+    query: options.query ?? "",
+    visibility: ["public"],
+    archive: "active",
+    allowEmptyQuery: true,
+    ...(options.tags ? { tags: options.tags } : {}),
+    ...(options.limit !== undefined ? { limit: options.limit } : {}),
+  });
+  return {
+    query: normalized.query,
+    tags: normalized.tags,
+    limit: normalized.limit,
+  };
+}
+
 export class SkillSearchService {
   constructor(
     private readonly pool: Pool,
     private readonly cursorSecret: string,
+    private readonly controlPool: Pool = pool,
   ) {}
 
   async search(options: {
@@ -336,14 +360,13 @@ export class SkillSearchService {
     const workspaceId = options.principal?.workspaceId ?? options.workspaceId ?? null;
     const result = await this.pool.query<SearchRow>(
       `WITH authorized AS MATERIALIZED (
-         SELECT skill.id, skill.workspace_id, workspace.slug AS workspace_slug,
-                skill.slug, skill.name, skill.description, skill.tags,
+         SELECT skill.id, skill.workspace_id, skill.slug, skill.name,
+                skill.description, skill.tags,
                 skill.visibility, skill.current_published_version_id,
                 version.semantic_version, version.content_digest,
                 skill.archived_at, skill.created_at, skill.updated_at,
                 skill.${document} AS document
            FROM skills skill
-           JOIN workspaces workspace ON workspace.id = skill.workspace_id
            JOIN skill_versions version
              ON version.id = skill.current_published_version_id
           WHERE ${authorization}
@@ -370,7 +393,7 @@ export class SkillSearchService {
             OR authorized.document @@ websearch_to_tsquery('simple', $3)
           )
        )
-       SELECT id, workspace_id, workspace_slug, slug, name, description, tags,
+       SELECT id, workspace_id, slug, name, description, tags,
               visibility, current_published_version_id, semantic_version,
               content_digest, archived_at, created_at, updated_at, score::text
          FROM ranked
@@ -394,23 +417,43 @@ export class SkillSearchService {
     );
     const hasNext = result.rows.length > normalized.limit;
     const pageRows = result.rows.slice(0, normalized.limit);
-    const skills = pageRows.map((row): SkillSearchResult => ({
-      id: row.id,
-      workspaceId: row.workspace_id,
-      workspaceSlug: row.workspace_slug,
-      slug: row.slug,
-      name: row.name,
-      description: row.description,
-      tags: row.tags,
-      visibility: row.visibility,
-      currentVersionId: row.current_published_version_id,
-      semanticVersion: row.semantic_version,
-      digest: row.content_digest,
-      archivedAt: row.archived_at?.toISOString() ?? null,
-      createdAt: row.created_at.toISOString(),
-      updatedAt: row.updated_at.toISOString(),
-      score: row.score,
-    }));
+    const workspaceIds = [...new Set(pageRows.map((row) => row.workspace_id))];
+    const workspaceResult =
+      workspaceIds.length === 0
+        ? { rows: [] as { id: string; slug: string }[] }
+        : await this.controlPool.query<{ id: string; slug: string }>(
+            "SELECT id, slug FROM workspaces WHERE id = ANY($1::text[])",
+            [workspaceIds],
+          );
+    const workspaceSlugs = new Map(
+      workspaceResult.rows.map((row) => [row.id, row.slug]),
+    );
+    if (workspaceIds.some((workspaceId) => !workspaceSlugs.has(workspaceId))) {
+      throw new DomainError("NOT_FOUND", "Workspace resource was not found", 404);
+    }
+    const skills = pageRows.map((row): SkillSearchResult => {
+      const workspaceSlug = workspaceSlugs.get(row.workspace_id);
+      if (!workspaceSlug) {
+        throw new DomainError("NOT_FOUND", "Workspace resource was not found", 404);
+      }
+      return {
+        id: row.id,
+        workspaceId: row.workspace_id,
+        workspaceSlug,
+        slug: row.slug,
+        name: row.name,
+        description: row.description,
+        tags: row.tags,
+        visibility: row.visibility,
+        currentVersionId: row.current_published_version_id,
+        semanticVersion: row.semantic_version,
+        digest: row.content_digest,
+        archivedAt: row.archived_at?.toISOString() ?? null,
+        createdAt: row.created_at.toISOString(),
+        updatedAt: row.updated_at.toISOString(),
+        score: row.score,
+      };
+    });
     const boundary = hasNext ? skills.at(-1) : undefined;
     return {
       skills,

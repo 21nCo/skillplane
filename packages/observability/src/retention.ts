@@ -1,6 +1,7 @@
 import type { Pool } from "pg";
 import { rollupUtcDay } from "./rollups.js";
 import { writeAuditEvent } from "./audit.js";
+import { setCurrentWorkspaceRoutingEpoch } from "./routing-epoch.js";
 
 export interface RetentionResult {
   readonly cutoff: string;
@@ -77,65 +78,77 @@ export async function runAuditRetention(
   }
   let deleted = 0;
   let batches = 0;
-  let count = 1;
-  while (count > 0) {
-    const client = await pool.connect();
+  for (const workspace of eligible.rows) {
+    let workspaceDeleted = 0;
+    let count = 1;
+    while (count > 0) {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        await setCurrentWorkspaceRoutingEpoch(client, workspace.workspace_id);
+        await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
+          "skillplane-audit-retention-v1",
+        ]);
+        await client.query(
+          "SELECT set_config('skillplane.audit_retention_job', 'enabled', true)",
+        );
+        const batch = await client.query<{ id: string }>(
+          `WITH candidates AS (
+             SELECT id
+               FROM audit_events
+              WHERE workspace_id = $3
+                AND retention_class = 'detailed_read_90d'
+                AND occurred_at < $1
+              ORDER BY occurred_at, id
+              LIMIT $2
+              FOR UPDATE SKIP LOCKED
+           )
+           DELETE FROM audit_events event
+            USING candidates
+            WHERE event.id = candidates.id
+           RETURNING event.id`,
+          [cutoff, batchSize, workspace.workspace_id],
+        );
+        count = batch.rowCount ?? 0;
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK").catch(() => undefined);
+        throw error;
+      } finally {
+        client.release();
+      }
+      if (count > 0) {
+        deleted += count;
+        workspaceDeleted += count;
+        batches += 1;
+      }
+    }
+
+    const auditClient = await pool.connect();
     try {
-      await client.query("BEGIN");
-      await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
-        "skillplane-audit-retention-v1",
-      ]);
-      await client.query(
-        "SELECT set_config('skillplane.audit_retention_job', 'enabled', true)",
-      );
-      const batch = await client.query<{ id: string }>(
-        `WITH candidates AS (
-           SELECT id
-             FROM audit_events
-            WHERE retention_class = 'detailed_read_90d'
-              AND occurred_at < $1
-            ORDER BY occurred_at, id
-            LIMIT $2
-            FOR UPDATE SKIP LOCKED
-         )
-         DELETE FROM audit_events event
-          USING candidates
-          WHERE event.id = candidates.id
-         RETURNING event.id`,
-        [cutoff, batchSize],
-      );
-      count = batch.rowCount ?? 0;
-      await client.query("COMMIT");
+      await auditClient.query("BEGIN");
+      await setCurrentWorkspaceRoutingEpoch(auditClient, workspace.workspace_id);
+      await writeAuditEvent(auditClient, {
+        workspaceId: workspace.workspace_id,
+        eventType: "audit.retention.completed",
+        action: "audit:retain",
+        outcome: "success",
+        actorType: "system",
+        actorId: "system:audit-retention",
+        requestId: `retention:${crypto.randomUUID()}`,
+        resourceType: "workspace",
+        resourceId: workspace.workspace_id,
+        channel: "system",
+        retentionClass: "permanent",
+        metadata: { cutoff, deletedEventCount: workspaceDeleted, retentionDays },
+      });
+      await auditClient.query("COMMIT");
     } catch (error) {
-      await client.query("ROLLBACK").catch(() => undefined);
+      await auditClient.query("ROLLBACK").catch(() => undefined);
       throw error;
     } finally {
-      client.release();
+      auditClient.release();
     }
-    if (count > 0) {
-      deleted += count;
-      batches += 1;
-    }
-  }
-  for (const workspace of eligible.rows) {
-    await writeAuditEvent(pool, {
-      workspaceId: workspace.workspace_id,
-      eventType: "audit.retention.completed",
-      action: "audit:retain",
-      outcome: "success",
-      actorType: "system",
-      actorId: "system:audit-retention",
-      requestId: `retention:${crypto.randomUUID()}`,
-      resourceType: "workspace",
-      resourceId: workspace.workspace_id,
-      channel: "system",
-      retentionClass: "permanent",
-      metadata: {
-        cutoff,
-        deletedEventCount: Number(workspace.event_count),
-        retentionDays,
-      },
-    });
   }
   return {
     cutoff,

@@ -1,4 +1,4 @@
-import type { AuthFnInstance } from "@authfn/core";
+import type { AuthFnServer } from "authfn";
 import { describe, expect, it } from "vitest";
 import { createAuthApplication } from "./app.js";
 
@@ -8,7 +8,7 @@ function testAuthFn() {
       handle: () => Promise.resolve(Response.json({ ok: true })),
       match: () => null,
     },
-  } as unknown as AuthFnInstance;
+  } as unknown as AuthFnServer;
 }
 
 describe("auth application guards", () => {

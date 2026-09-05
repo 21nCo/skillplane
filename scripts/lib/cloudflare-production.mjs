@@ -32,7 +32,11 @@ export function ensureCloudflareSession() {
   }
 }
 
-export function assertHyperdriveOriginRecord(database, expectedIdentity) {
+export function assertHyperdriveOriginRecord(
+  database,
+  expectedIdentity,
+  label = "CLOUDFLARE_HYPERDRIVE_ID",
+) {
   const origin = database?.origin;
   const actual = {
     host: origin?.host?.trim().toLowerCase(),
@@ -46,9 +50,7 @@ export function assertHyperdriveOriginRecord(database, expectedIdentity) {
     actual.port !== expectedIdentity.port ||
     actual.database !== expectedIdentity.database
   ) {
-    throw new Error(
-      "CLOUDFLARE_HYPERDRIVE_ID does not target the configured production database",
-    );
+    throw new Error(`${label} does not target the configured production database`);
   }
   if (database.caching?.disabled !== true) {
     throw new Error(
@@ -77,17 +79,27 @@ export function parseWranglerJson(output, label = "Wrangler response") {
 
 export function verifyProductionHyperdrive(expectedIdentity) {
   const hyperdriveId = requireHyperdriveId();
-  const output = captureWrangler(["hyperdrive", "get", hyperdriveId]).stdout;
-  const database = parseWranglerJson(output, "Cloudflare Hyperdrive response");
-  return assertHyperdriveOriginRecord(database, expectedIdentity);
+  return verifyProductionHyperdriveById(
+    hyperdriveId,
+    expectedIdentity,
+    "CLOUDFLARE_HYPERDRIVE_ID",
+  );
 }
 
-export function ensureProductionBucket() {
+export function verifyProductionHyperdriveById(hyperdriveId, expectedIdentity, label) {
+  const id = requireHyperdriveId(hyperdriveId);
+  const output = captureWrangler(["hyperdrive", "get", id]).stdout;
+  const database = parseWranglerJson(output, "Cloudflare Hyperdrive response");
+  return assertHyperdriveOriginRecord(database, expectedIdentity, label);
+}
+
+function productionBucketSafety(bucketName, options = {}) {
   const listed = captureWrangler(["r2", "bucket", "list"]).stdout;
-  let created = false;
-  if (!bucketNames(listed).includes(productionBucket)) {
-    wrangler(["r2", "bucket", "create", productionBucket]);
-    created = true;
+  if (!bucketNames(listed).includes(bucketName)) {
+    if (!options.create) {
+      throw new Error(`Production R2 bucket ${bucketName} does not exist`);
+    }
+    wrangler(["r2", "bucket", "create", bucketName]);
   }
   const readLifecycleActions = () => {
     const lifecycle = captureWrangler([
@@ -95,20 +107,20 @@ export function ensureProductionBucket() {
       "bucket",
       "lifecycle",
       "list",
-      productionBucket,
+      bucketName,
     ]).stdout;
     return [...lifecycle.matchAll(/^action:\s+(.+)$/gmu)].map((match) =>
       match[1].trim(),
     );
   };
   let actions = readLifecycleActions();
-  if (actions.length === 0) {
+  if (actions.length === 0 && options.create) {
     wrangler([
       "r2",
       "bucket",
       "lifecycle",
       "add",
-      productionBucket,
+      bucketName,
       "skillplane-abort-incomplete-multipart",
       "--abort-multipart-days",
       "7",
@@ -126,13 +138,7 @@ export function ensureProductionBucket() {
       "The production R2 lifecycle contains an object expiry or storage transition rule",
     );
   }
-  const devUrl = captureWrangler([
-    "r2",
-    "bucket",
-    "dev-url",
-    "get",
-    productionBucket,
-  ]).stdout;
+  const devUrl = captureWrangler(["r2", "bucket", "dev-url", "get", bucketName]).stdout;
   if (!/public access .* is disabled/iu.test(devUrl)) {
     throw new Error("The production R2 r2.dev URL must remain disabled");
   }
@@ -141,19 +147,27 @@ export function ensureProductionBucket() {
     "bucket",
     "domain",
     "list",
-    productionBucket,
+    bucketName,
   ]).stdout;
   if (!/no custom domains/iu.test(domains)) {
     throw new Error("The production R2 bucket must not expose a custom domain");
   }
   return {
-    name: productionBucket,
-    created,
+    name: bucketName,
+    created: options.create && !bucketNames(listed).includes(bucketName),
     private: true,
     lifecycleActions: actions,
     r2DevDisabled: true,
     customDomainCount: 0,
   };
+}
+
+export function verifyPrivateProductionBucket(bucketName) {
+  return productionBucketSafety(bucketName);
+}
+
+export function ensureProductionBucket() {
+  return productionBucketSafety(productionBucket, { create: true });
 }
 
 function packageName(kind) {

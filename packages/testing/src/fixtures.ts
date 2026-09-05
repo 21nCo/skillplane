@@ -1,5 +1,7 @@
 import { createAuthfnSchema, createDatabaseClient } from "@skillplane/db";
-import { createUser, issueSession, type AuthFnConfig } from "@authfn/core";
+import type { AuthFnRuntimeConfig } from "authfn";
+import { issueSession } from "authfn/core/sessions";
+import { createUser } from "authfn/core/users";
 import { Pool } from "pg";
 
 export interface TenantFixture {
@@ -27,7 +29,7 @@ export async function seedTenantFixture(
     const workspaceId = `workspace:${suffix}`;
     const skillId = `skill:${suffix}`;
     const contextId = `context:${suffix}`;
-    const authConfig: AuthFnConfig = {
+    const authConfig: AuthFnRuntimeConfig = {
       database: database.adapter,
       plugins: [],
       namespace: "authfn",

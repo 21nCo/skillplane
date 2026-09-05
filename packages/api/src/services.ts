@@ -1,11 +1,19 @@
 import {
   CloudflareTurnstileVerifier,
+  createSkillplaneAuthFnMultiRegionConfig,
   createPostgresOtpRateLimiter,
   createSkillplaneAuthServer,
 } from "@skillplane/auth";
 import { parseRuntimeConfig, type RuntimeBindings } from "@skillplane/config";
+import {
+  createPostgresPermissionDirectory,
+  createPostgresRoutingReplayStore,
+  createPostgresWorkspacePlacementDirectory,
+  createWorkspaceRoutingAssertions,
+  logWorkspaceRoutingEvent,
+} from "@skillplane/control-plane";
 import { createSkillplaneDatafnServer } from "@skillplane/datafn";
-import { createRuntimeDatabaseClient } from "@skillplane/db";
+import { createDatabaseClient } from "@skillplane/db";
 import { createSkillplaneSendFn } from "@skillplane/email";
 import {
   AmendmentPolicyService,
@@ -25,6 +33,7 @@ import {
   type R2DigestCacheLike,
 } from "@skillplane/storage";
 import type { ApiServiceProvider, ApiServices } from "./context.js";
+import { PublicSkillProjectionService } from "./public-projections.js";
 
 export interface BuildApiServicesOptions {
   readonly authentication?: "full" | "oauth-only";
@@ -35,7 +44,23 @@ export async function buildApiServices(
   options: BuildApiServicesOptions = {},
 ): Promise<ApiServices> {
   const runtime = parseRuntimeConfig(bindings, options);
-  const database = createRuntimeDatabaseClient(runtime);
+  const single = runtime.deployment.role === "single";
+  const controlDatabase = createDatabaseClient({
+    connectionString: runtime.controlDatabase.connectionString,
+    applicationName: `skillplane-${runtime.environment}-control`,
+    maxConnections: runtime.controlDatabase.source === "hyperdrive" ? 5 : 10,
+    role: single ? "combined" : "control",
+  });
+  const database = runtime.regionalDatabase
+    ? single
+      ? controlDatabase
+      : createDatabaseClient({
+          connectionString: runtime.regionalDatabase.connectionString,
+          applicationName: `skillplane-${runtime.environment}-${runtime.deployment.regionId ?? "cell"}`,
+          maxConnections: runtime.regionalDatabase.source === "hyperdrive" ? 5 : 10,
+          role: "regional",
+        })
+    : controlDatabase;
   const email = runtime.email
     ? createSkillplaneSendFn({
         binding: runtime.email.binding,
@@ -46,17 +71,25 @@ export async function buildApiServices(
     : null;
   try {
     const auth = createSkillplaneAuthServer({
-      database,
+      database: controlDatabase,
       oauth: {
         issuer: runtime.oauth.issuer,
         resource: runtime.oauth.resource,
         tokenPepper: runtime.oauth.tokenPepper,
       },
+      ...(!single
+        ? {
+            multiRegion: createSkillplaneAuthFnMultiRegionConfig({
+              issuer: runtime.oauth.issuer,
+              resource: runtime.oauth.resource,
+            }),
+          }
+        : {}),
       ...(email ? { delivery: email.delivery } : {}),
       ...(runtime.auth
         ? {
             rateLimiter: createPostgresOtpRateLimiter({
-              pool: database.pool,
+              pool: controlDatabase.pool,
               pepper: runtime.auth.rateLimitPepper,
             }),
             turnstile: new CloudflareTurnstileVerifier({
@@ -68,9 +101,34 @@ export async function buildApiServices(
           }
         : {}),
     });
+    const assertions = createWorkspaceRoutingAssertions({
+      activeKeyId: runtime.routing.activeKeyId,
+      keys: runtime.routing.keys,
+    });
+    const placementDirectory = createPostgresWorkspacePlacementDirectory(
+      controlDatabase.pool,
+    );
     const datafn = await createSkillplaneDatafnServer({
       database,
+      controlDatabase,
       auth: auth.provider,
+      ...(runtime.deployment.role === "cell" && runtime.deployment.regionId
+        ? {
+            regionId: runtime.deployment.regionId,
+            permissionDirectory: createPostgresPermissionDirectory(
+              controlDatabase.pool,
+            ),
+            placement: {
+              directory: placementDirectory,
+              requireRoutingAssertion: true,
+              assertionVerifier: assertions,
+              replayStore: createPostgresRoutingReplayStore(controlDatabase.pool),
+              assertionAudience: runtime.routing.audience,
+              onEvent: (event) => logWorkspaceRoutingEvent("datafn", event),
+            },
+            trustDirectWorkspaceHeader: false,
+          }
+        : {}),
       debug: runtime.environment === "local",
       onTiming: (event) => {
         const phases =
@@ -118,34 +176,69 @@ export async function buildApiServices(
       runtime.secrets.authfn ??
       (options.authentication === "oauth-only"
         ? runtime.oauth.tokenPepper
-        : `skillplane-local-tenancy:${runtime.database.connectionString}`);
+        : `skillplane-local-tenancy:${runtime.controlDatabase.connectionString}`);
     const workerCaches = (
       globalThis as unknown as {
         readonly caches?: { readonly default?: R2DigestCacheLike };
       }
     ).caches;
     const bundleStorage = new R2BundleRepository(
-      runtime.objectStorage as R2BucketLike,
+      (runtime.regionalObjectStorage ??
+        runtime.publicObjectStorage ??
+        runtime.objectStorage) as R2BucketLike,
       workerCaches?.default,
     );
-    const skillService = new SkillService(database.pool, bundleStorage);
+    const publicBundleStorage = runtime.publicObjectStorage
+      ? new R2BundleRepository(
+          runtime.publicObjectStorage as R2BucketLike,
+          workerCaches?.default,
+        )
+      : null;
+    const skillService = new SkillService(
+      database.pool,
+      bundleStorage,
+      controlDatabase.pool,
+    );
     const contextService = new ContextService(database.pool, skillService.idempotency);
     const amendmentPolicyService = new AmendmentPolicyService(
       database.pool,
       skillService.idempotency,
+      controlDatabase.pool,
     );
     return {
       database,
+      controlDatabase,
+      workspaceRegions: runtime.deployment.topology.cells.map((cell) => cell.regionId),
+      workspaceRegionCandidates: runtime.deployment.topology.cells.map((cell) => ({
+        regionId: cell.regionId,
+        displayName: cell.placement?.displayName ?? cell.regionId,
+        ...(cell.placement
+          ? {
+              latitude: cell.placement.latitude,
+              longitude: cell.placement.longitude,
+            }
+          : {}),
+      })),
+      deploymentRole: runtime.deployment.role,
       auth,
       datafn,
       email,
       tenancySecret,
       bundleStorage,
+      publicProjectionService:
+        runtime.deployment.role === "gateway" || runtime.deployment.role === "control"
+          ? new PublicSkillProjectionService(
+              controlDatabase.pool,
+              publicBundleStorage ?? bundleStorage,
+              tenancySecret,
+            )
+          : null,
       skillService,
       amendmentService: new AmendmentService(
         database.pool,
         bundleStorage,
         skillService.idempotency,
+        controlDatabase.pool,
       ),
       amendmentPolicyService,
       amendmentReviewService: new AmendmentReviewService(
@@ -163,7 +256,11 @@ export async function buildApiServices(
         bundleStorage,
         skillService.idempotency,
       ),
-      skillSearchService: new SkillSearchService(database.pool, tenancySecret),
+      skillSearchService: new SkillSearchService(
+        database.pool,
+        tenancySecret,
+        controlDatabase.pool,
+      ),
       contextService,
       contextKnowledgeService: new ContextKnowledgeService(
         database.pool,
@@ -176,7 +273,8 @@ export async function buildApiServices(
     };
   } catch (error) {
     await email?.close();
-    await database.close();
+    if (database !== controlDatabase) await database.close();
+    await controlDatabase.close();
     throw error;
   }
 }
@@ -196,7 +294,10 @@ export async function closeApiServices(services: ApiServices): Promise<void> {
   if (email) {
     await close(() => email.close());
   }
-  await close(() => services.database.close());
+  if (services.database !== services.controlDatabase) {
+    await close(() => services.database.close());
+  }
+  await close(() => services.controlDatabase.close());
 
   if (firstError instanceof Error) throw firstError;
   if (firstError !== undefined) {

@@ -4,12 +4,13 @@ import {
   WorkspaceAccessError,
   authorize,
 } from "@skillplane/domain";
-import { writeAuditEvent } from "@skillplane/observability";
+import { PostgresAuditWriter } from "@skillplane/observability";
 import type { WorkspaceAction } from "@skillplane/domain";
 import type { MiddlewareHandler } from "hono";
 import { routePath } from "hono/route";
 import type { ApiEnvironment } from "../context.js";
-import { resolveWorkspaceRequestContext } from "./context.js";
+import { requestedWorkspaceId, resolveWorkspaceRequestContext } from "./context.js";
+import { routingEpoch } from "../routes/shared.js";
 
 export function requiredAction(path: string, method: string): WorkspaceAction | null {
   const read = ["GET", "HEAD", "OPTIONS"].includes(method);
@@ -62,9 +63,15 @@ export function authorizationMiddleware(): MiddlewareHandler<ApiEnvironment> {
         return;
       }
       const servicePrincipal = context.get("servicePrincipal");
-      const requestedWorkspace = context.req.header("x-skillplane-workspace-id");
+      const requestedWorkspace = requestedWorkspaceId(context);
+      const routedPublicSkillRead =
+        action === "skills:read" &&
+        context.req.header("x-skillplane-public-skill-read") === "1" &&
+        /^\/api\/v1\/skills\/[^/]+\/versions(?:\/|$)/u.test(context.req.path);
       const publicSkillRead =
-        action === "skills:read" && !servicePrincipal && !requestedWorkspace;
+        action === "skills:read" &&
+        !servicePrincipal &&
+        (!requestedWorkspace || routedPublicSkillRead);
       if (publicSkillRead) {
         await next();
         return;
@@ -83,8 +90,9 @@ export function authorizationMiddleware(): MiddlewareHandler<ApiEnvironment> {
       } catch (error) {
         const services = context.get("services");
         if (!services) throw error;
+        const fencingEpoch = routingEpoch(context);
         try {
-          await writeAuditEvent(services.database.pool, {
+          await new PostgresAuditWriter(services.database.pool).record({
             workspaceId: principal.workspaceId,
             eventType: "authorization.denied",
             action,
@@ -100,6 +108,7 @@ export function authorizationMiddleware(): MiddlewareHandler<ApiEnvironment> {
             resourceId: principal.workspaceId,
             channel: "app",
             retentionClass: "permanent",
+            fencingEpoch,
             metadata: {
               method: context.req.method,
               requestedAction: action,

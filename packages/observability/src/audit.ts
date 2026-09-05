@@ -50,6 +50,24 @@ export interface AuditWriteInput {
   readonly metadata?: Readonly<Record<string, unknown>>;
   readonly occurredAt?: Date;
   readonly id?: string;
+  readonly fencingEpoch?: number | undefined;
+}
+
+export interface ControlPlaneAuditWriteInput {
+  readonly workspaceId?: string | null;
+  readonly eventType: string;
+  readonly action: string;
+  readonly outcome: string;
+  readonly actorType: string;
+  readonly actorId: string;
+  readonly userId?: string | null;
+  readonly requestId: string;
+  readonly resourceType?: string;
+  readonly resourceId?: string;
+  readonly errorCode?: string;
+  readonly metadata?: Readonly<Record<string, unknown>>;
+  readonly channel?: string;
+  readonly id?: string;
 }
 
 export interface AuditQueryable {
@@ -147,6 +165,45 @@ export async function writeAuditEvent(
   }
 }
 
+/** Writes global identity, tenancy, and routing decisions to the control authority. */
+export async function writeControlPlaneAuditEvent(
+  queryable: { query(text: string, values?: readonly unknown[]): Promise<unknown> },
+  input: ControlPlaneAuditWriteInput,
+): Promise<string> {
+  const id = input.id ?? `control-audit:${crypto.randomUUID()}`;
+  const redacted = redactAuditMetadata({
+    ...(input.metadata ?? {}),
+    ...(input.errorCode ? { errorCode: input.errorCode } : {}),
+  });
+  await queryable.query(
+    `INSERT INTO control_plane_audit_events
+       (id, workspace_id, event_type, action, outcome, actor_type, actor_id,
+        user_id, request_id, resource_type, resource_id, metadata, channel)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+    [
+      id,
+      input.workspaceId ?? null,
+      input.eventType,
+      input.action,
+      input.outcome,
+      input.actorType,
+      input.actorId,
+      input.userId ?? null,
+      input.requestId,
+      input.resourceType ?? null,
+      input.resourceId ?? null,
+      JSON.stringify({
+        ...redacted.value,
+        ...(redacted.removedFieldCount > 0
+          ? { redaction: { removedFieldCount: redacted.removedFieldCount } }
+          : {}),
+      }),
+      input.channel ?? "app",
+    ],
+  );
+  return id;
+}
+
 export class PostgresAuditWriter {
   constructor(private readonly pool: Pool) {}
 
@@ -155,6 +212,10 @@ export class PostgresAuditWriter {
     if (!client) throw new AuditWriteError();
     try {
       await client.query("BEGIN");
+      await client.query(
+        "SELECT set_config('skillplane.workspace_routing_epoch', $1, true)",
+        [String(input.fencingEpoch ?? 1)],
+      );
       const id = await writeAuditEvent(client, input);
       await client.query("COMMIT");
       return id;
@@ -361,6 +422,7 @@ function auditWhere(
   workspaceId: string,
   filters: AuditFilters,
   cursor?: CursorPayload,
+  source: "regional" | "control" = "regional",
 ): { readonly sql: string; readonly values: unknown[] } {
   const clauses = ["workspace_id = $1", "occurred_at >= $2", "occurred_at < $3"];
   const values: unknown[] = [workspaceId, filters.from, filters.to];
@@ -376,7 +438,13 @@ function auditWhere(
     );
   }
   if (filters.contextId) {
-    add((position) => `context_id = $${String(position)}`, filters.contextId);
+    add(
+      (position) =>
+        source === "regional"
+          ? `context_id = $${String(position)}`
+          : `COALESCE(metadata->>'contextId', metadata->>'context_id') = $${String(position)}`,
+      filters.contextId,
+    );
   }
   if (filters.tool) {
     add((position) => `action = $${String(position)}`, filters.tool);
@@ -385,10 +453,22 @@ function auditWhere(
     add((position) => `outcome = $${String(position)}`, filters.outcome);
   }
   if (filters.agent) {
-    add((position) => `agent = $${String(position)}`, filters.agent);
+    add(
+      (position) =>
+        source === "regional"
+          ? `agent = $${String(position)}`
+          : `(metadata->>'agent' = $${String(position)} OR metadata->'caller'->>'agentName' = $${String(position)})`,
+      filters.agent,
+    );
   }
   if (filters.model) {
-    add((position) => `model = $${String(position)}`, filters.model);
+    add(
+      (position) =>
+        source === "regional"
+          ? `model = $${String(position)}`
+          : `(metadata->>'model' = $${String(position)} OR metadata->'caller'->>'modelName' = $${String(position)})`,
+      filters.model,
+    );
   }
   if (cursor) {
     values.push(cursor.occurredAt, cursor.id);
@@ -399,6 +479,50 @@ function auditWhere(
   return { sql: clauses.join(" AND "), values };
 }
 
+function compareAuditRows(left: AuditRow, right: AuditRow): number {
+  const time = right.occurred_at.getTime() - left.occurred_at.getTime();
+  if (time !== 0) return time;
+  return left.id === right.id ? 0 : left.id < right.id ? 1 : -1;
+}
+
+async function readAuditRows(
+  pool: Pool,
+  source: "regional" | "control",
+  options: {
+    readonly workspaceId: string;
+    readonly filters: AuditFilters;
+    readonly cursor?: CursorPayload;
+    readonly limit: number;
+  },
+): Promise<readonly AuditRow[]> {
+  const where = auditWhere(
+    options.workspaceId,
+    options.filters,
+    options.cursor,
+    source,
+  );
+  const selection =
+    source === "regional"
+      ? `SELECT id, occurred_at, event_type, action, outcome, actor_type, actor_id,
+                user_id, request_id, resource_type, resource_id, context_id,
+                metadata, retention_class
+           FROM audit_events`
+      : `SELECT id, occurred_at, event_type, action, outcome, actor_type, actor_id,
+                user_id, request_id, resource_type, resource_id,
+                COALESCE(metadata->>'contextId', metadata->>'context_id') AS context_id,
+                metadata || jsonb_build_object('channel', channel) AS metadata,
+                'permanent'::text AS retention_class
+           FROM control_plane_audit_events`;
+  const result = await pool.query<AuditRow>(
+    `${selection}
+      WHERE ${where.sql}
+      ORDER BY occurred_at DESC, id DESC
+      LIMIT $${String(where.values.length + 1)}`,
+    [...where.values, options.limit],
+  );
+  return result.rows;
+}
+
 export async function readAuditEvents(
   pool: Pool,
   options: {
@@ -407,28 +531,40 @@ export async function readAuditEvents(
     readonly cursorSecret: string;
     readonly cursor?: string;
     readonly limit?: number;
+    readonly controlPool?: Pool;
   },
 ): Promise<AuditPage> {
   const cursor = options.cursor
     ? await decodeCursor(options.cursorSecret, options.cursor, options.workspaceId)
     : undefined;
-  const where = auditWhere(options.workspaceId, options.filters, cursor);
   const limit = Math.min(100, Math.max(1, Math.floor(options.limit ?? 50)));
-  const result = await pool.query<AuditRow>(
-    `SELECT id, occurred_at, event_type, action, outcome, actor_type, actor_id,
-            user_id, request_id, resource_type, resource_id, context_id,
-            metadata, retention_class
-       FROM audit_events
-      WHERE ${where.sql}
-      ORDER BY occurred_at DESC, id DESC
-      LIMIT $${String(where.values.length + 1)}`,
-    [...where.values, limit + 1],
-  );
-  const hasMore = result.rows.length > limit;
-  const rows = result.rows.slice(0, limit);
-  const last = rows.at(-1);
+  const rows = (
+    await Promise.all([
+      readAuditRows(pool, "regional", {
+        workspaceId: options.workspaceId,
+        filters: options.filters,
+        ...(cursor ? { cursor } : {}),
+        limit: limit + 1,
+      }),
+      ...(options.controlPool
+        ? [
+            readAuditRows(options.controlPool, "control", {
+              workspaceId: options.workspaceId,
+              filters: options.filters,
+              ...(cursor ? { cursor } : {}),
+              limit: limit + 1,
+            }),
+          ]
+        : []),
+    ])
+  )
+    .flat()
+    .sort(compareAuditRows);
+  const hasMore = rows.length > limit;
+  const pageRows = rows.slice(0, limit);
+  const last = pageRows.at(-1);
   return {
-    events: rows.map(auditView),
+    events: pageRows.map(auditView),
     nextCursor:
       hasMore && last
         ? await encodeCursor(options.cursorSecret, {
@@ -456,20 +592,31 @@ export async function exportAuditEventsCsv(
     readonly workspaceId: string;
     readonly filters: AuditFilters;
     readonly limit?: number;
+    readonly controlPool?: Pool;
   },
 ): Promise<string> {
-  const where = auditWhere(options.workspaceId, options.filters);
   const limit = Math.min(10_000, Math.max(1, Math.floor(options.limit ?? 5_000)));
-  const result = await pool.query<AuditRow>(
-    `SELECT id, occurred_at, event_type, action, outcome, actor_type, actor_id,
-            user_id, request_id, resource_type, resource_id, context_id,
-            metadata, retention_class
-       FROM audit_events
-      WHERE ${where.sql}
-      ORDER BY occurred_at DESC, id DESC
-      LIMIT $${String(where.values.length + 1)}`,
-    [...where.values, limit],
-  );
+  const rows = (
+    await Promise.all([
+      readAuditRows(pool, "regional", {
+        workspaceId: options.workspaceId,
+        filters: options.filters,
+        limit,
+      }),
+      ...(options.controlPool
+        ? [
+            readAuditRows(options.controlPool, "control", {
+              workspaceId: options.workspaceId,
+              filters: options.filters,
+              limit,
+            }),
+          ]
+        : []),
+    ])
+  )
+    .flat()
+    .sort(compareAuditRows)
+    .slice(0, limit);
   const header = [
     "occurred_at",
     "event_type",
@@ -490,7 +637,7 @@ export async function exportAuditEventsCsv(
     "error_code",
     "retention_class",
   ];
-  const lines = result.rows.map((row) => {
+  const lines = rows.map((row) => {
     const event = auditView(row);
     return [
       event.occurredAt,

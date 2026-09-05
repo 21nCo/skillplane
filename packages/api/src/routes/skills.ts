@@ -8,12 +8,14 @@ import { skillFileResponse } from "@skillplane/storage";
 import type { Hono } from "hono";
 import type { ApiEnvironment } from "../context.js";
 import { success } from "../envelopes.js";
+import { registerResourceRoutes } from "../resource-routing.js";
 import {
   publicSkillVersion,
   publicPublishedSkillVersion,
   readBundleUpload,
   readJsonObject,
   requireIdempotencyKey,
+  routingEpoch,
   workspacePrincipal,
 } from "./shared.js";
 
@@ -67,7 +69,12 @@ export function registerSkillRoutes(app: Hono<ApiEnvironment>): void {
       visibility: parseSkillVisibility(upload.fields.visibility ?? "private"),
       idempotencyKey: requireIdempotencyKey(context),
       requestId: context.get("requestId"),
+      fencingEpoch: routingEpoch(context),
     });
+    await registerResourceRoutes(services, principal.workspaceId, [
+      { resourceType: "skill", resourceId: created.skill.id },
+      { resourceType: "skill_version", resourceId: created.version.id },
+    ]);
     context.header("Cache-Control", "private, no-store");
     return context.json(
       success(context, {
@@ -183,12 +190,15 @@ export function registerSkillRoutes(app: Hono<ApiEnvironment>): void {
         .map((tag) => tag.trim())
         .filter(Boolean) ?? [];
     const limit = parseLimit(context.req.query("limit"));
-    const page = await services.skillSearchService.discoverPublic({
+    const discovery = {
       query: context.req.query("q") ?? "",
       tags: [...repeatedTags, ...commaTags],
       ...(limit !== undefined ? { limit } : {}),
       cursor: context.req.query("cursor") ?? null,
-    });
+    };
+    const page = services.publicProjectionService
+      ? await services.publicProjectionService.discover(discovery)
+      : await services.skillSearchService.discoverPublic(discovery);
     context.header("Cache-Control", "public, max-age=0, must-revalidate");
     return context.json(success(context, page));
   });
@@ -199,6 +209,24 @@ export function registerSkillRoutes(app: Hono<ApiEnvironment>): void {
       const services = context.get("services");
       if (!services) {
         throw new DomainError("SKILL_NOT_FOUND", "Skill was not found", 404);
+      }
+      if (services.publicProjectionService) {
+        const versions = await services.publicProjectionService.listVersions(
+          context.req.param("workspaceSlug"),
+          context.req.param("skillSlug"),
+          parseLimit(context.req.query("limit")),
+        );
+        const etag = `"versions-${versions[0]?.digest ?? "empty"}-${versions.length.toString()}"`;
+        context.header("Cache-Control", "public, max-age=0, must-revalidate");
+        context.header("ETag", etag);
+        if (context.req.header("if-none-match") === etag) {
+          return context.body(null, 304);
+        }
+        return context.json(
+          success(context, {
+            versions: versions.map(publicPublishedSkillVersion),
+          }),
+        );
       }
       const skill = await services.skillService.getPublicBySlug({
         workspaceSlug: context.req.param("workspaceSlug"),
@@ -235,6 +263,21 @@ export function registerSkillRoutes(app: Hono<ApiEnvironment>): void {
       if (!path || !/^sha256:[a-f0-9]{64}$/u.test(digest)) {
         throw new DomainError("SKILL_FILE_NOT_FOUND", "Skill file was not found", 404);
       }
+      if (services.publicProjectionService) {
+        const file = await services.publicProjectionService.retrieveFile({
+          workspaceSlug: context.req.param("workspaceSlug"),
+          skillSlug: context.req.param("skillSlug"),
+          versionId: context.req.param("versionId"),
+          digest: digest as `sha256:${string}`,
+          path,
+        });
+        const ifNoneMatch = context.req.header("if-none-match");
+        return skillFileResponse(file, {
+          publicImmutable: true,
+          ...(ifNoneMatch ? { ifNoneMatch } : {}),
+          download: context.req.query("download") === "true",
+        });
+      }
       const skill = await services.skillService.getPublicBySlug({
         workspaceSlug: context.req.param("workspaceSlug"),
         skillSlug: context.req.param("skillSlug"),
@@ -265,6 +308,25 @@ export function registerSkillRoutes(app: Hono<ApiEnvironment>): void {
     if (!services) {
       throw new DomainError("SKILL_NOT_FOUND", "Skill was not found", 404);
     }
+    if (services.publicProjectionService) {
+      const projection = await services.publicProjectionService.getCurrent(
+        context.req.param("workspaceSlug"),
+        context.req.param("skillSlug"),
+      );
+      const digest = projection.version.digest;
+      const etag = `"${digest}"`;
+      context.header("Cache-Control", "public, max-age=0, must-revalidate");
+      context.header("ETag", etag);
+      if (context.req.header("if-none-match") === etag) {
+        return context.body(null, 304);
+      }
+      return context.json(
+        success(context, {
+          skill: projection.skill,
+          version: publicPublishedSkillVersion(projection.version),
+        }),
+      );
+    }
     const skill = await services.skillService.getPublicBySlug({
       workspaceSlug: context.req.param("workspaceSlug"),
       skillSlug: context.req.param("skillSlug"),
@@ -292,8 +354,16 @@ export function registerSkillRoutes(app: Hono<ApiEnvironment>): void {
     if (!services) {
       throw new DomainError("SKILL_NOT_FOUND", "Skill was not found", 404);
     }
+    const skillId = context.req.param("skillId");
+    if (!context.get("principal") && services.publicProjectionService) {
+      const projection =
+        await services.publicProjectionService.getCurrentBySkillId(skillId);
+      context.header("Cache-Control", "public, max-age=0, must-revalidate");
+      context.header("ETag", `"${projection.version.digest}"`);
+      return context.json(success(context, { skill: projection.skill }));
+    }
     const skill = await services.skillService.get({
-      skillId: context.req.param("skillId"),
+      skillId,
       principal: context.get("principal"),
       allowArchived: Boolean(context.get("principal")),
     });
@@ -328,6 +398,7 @@ export function registerSkillRoutes(app: Hono<ApiEnvironment>): void {
       visibility: parseSkillVisibility(body.visibility),
       idempotencyKey: requireIdempotencyKey(context),
       requestId: context.get("requestId"),
+      fencingEpoch: routingEpoch(context),
     });
     context.header("Cache-Control", "private, no-store");
     return context.json(success(context, { skill }));
@@ -352,6 +423,7 @@ export function registerSkillRoutes(app: Hono<ApiEnvironment>): void {
           archived,
           idempotencyKey: requireIdempotencyKey(context),
           requestId: context.get("requestId"),
+          fencingEpoch: routingEpoch(context),
         });
         context.header("Cache-Control", "private, no-store");
         return context.json(success(context, { skill }));

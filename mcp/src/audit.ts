@@ -1,11 +1,15 @@
 import type { CallerDeclaration } from "@skillplane/mcp-schema";
 import { McpToolError, type McpErrorCode } from "@skillplane/mcp-schema";
 import {
+  auditMetadata,
   AuditWriteError,
   PostgresAuditWriter,
   writeAuditEvent,
+  writeControlPlaneAuditEvent,
   type AuditWriteInput,
+  type ControlPlaneAuditWriteInput,
 } from "@skillplane/observability";
+import { enqueueAgentSkillUseProjection } from "@skillplane/domain";
 import type { Pool } from "pg";
 import type { McpIdentity } from "./auth.js";
 
@@ -25,6 +29,7 @@ export interface McpAuditRecord {
   readonly errorCode?: McpErrorCode;
   readonly latencyMs: number;
   readonly countMetric?: boolean;
+  readonly fencingEpoch?: number;
 }
 
 export interface McpAuditWriter {
@@ -99,19 +104,110 @@ function auditInput(event: McpAuditRecord): AuditWriteInput {
     ...(event.contextId ? { contextId: event.contextId } : {}),
     ...(event.errorCode ? { errorCode: event.errorCode } : {}),
     latencyMs: event.latencyMs,
+    fencingEpoch: event.fencingEpoch,
   };
+}
+
+function controlPlaneAuditInput(event: McpAuditRecord): ControlPlaneAuditWriteInput {
+  const input = auditInput(event);
+  return {
+    workspaceId: input.workspaceId,
+    eventType: input.eventType,
+    action: input.action,
+    outcome: input.outcome,
+    actorType: input.actorType,
+    actorId: input.actorId,
+    requestId: input.requestId,
+    channel: "mcp",
+    ...(input.userId !== undefined ? { userId: input.userId } : {}),
+    ...(input.resourceType ? { resourceType: input.resourceType } : {}),
+    ...(input.resourceId ? { resourceId: input.resourceId } : {}),
+    ...(input.errorCode ? { errorCode: input.errorCode } : {}),
+    metadata: {
+      ...auditMetadata(input),
+      ...(event.contextId ? { contextId: event.contextId } : {}),
+    },
+  };
+}
+
+export class ControlPlaneMcpAuditWriter implements McpAuditWriter {
+  constructor(private readonly pool: Pool) {}
+
+  async record(event: McpAuditRecord): Promise<void> {
+    await this.recordBatch([event]);
+  }
+
+  async recordBatch(events: readonly McpAuditRecord[]): Promise<void> {
+    if (events.length === 0) return;
+    const client = await this.pool.connect().catch(() => null);
+    if (!client) {
+      throw new McpToolError(
+        "AUDIT_WRITE_FAILED",
+        "The access event could not be recorded",
+        { status: 503, retryable: true },
+      );
+    }
+    try {
+      await client.query("BEGIN");
+      for (const event of events) {
+        await writeControlPlaneAuditEvent(client, controlPlaneAuditInput(event));
+      }
+      await client.query("COMMIT");
+    } catch {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw new McpToolError(
+        "AUDIT_WRITE_FAILED",
+        "The access event could not be recorded",
+        { status: 503, retryable: true },
+      );
+    } finally {
+      client.release();
+    }
+  }
 }
 
 export class PostgresMcpAuditWriter implements McpAuditWriter {
   readonly #writer: PostgresAuditWriter;
 
-  constructor(private readonly pool: Pool) {
+  constructor(
+    private readonly pool: Pool,
+    private readonly projectionEnabled = false,
+  ) {
     this.#writer = new PostgresAuditWriter(pool);
   }
 
   async record(event: McpAuditRecord): Promise<void> {
+    const countUse =
+      this.projectionEnabled &&
+      event.tool === "skill_retrieve" &&
+      event.outcome === "success" &&
+      event.countMetric !== false;
     try {
-      await this.#writer.record(auditInput(event));
+      if (!countUse) {
+        await this.#writer.record(auditInput(event));
+        return;
+      }
+      const client = await this.pool.connect().catch((error: unknown) => {
+        throw new AuditWriteError(error);
+      });
+      try {
+        await client.query("BEGIN");
+        await client.query(
+          "SELECT set_config('skillplane.workspace_routing_epoch', $1, true)",
+          [String(event.fencingEpoch ?? 1)],
+        );
+        await writeAuditEvent(client, auditInput(event));
+        await enqueueAgentSkillUseProjection(client, {
+          workspaceId: event.workspaceId,
+          fencingEpoch: event.fencingEpoch,
+        });
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK").catch(() => undefined);
+        throw error instanceof AuditWriteError ? error : new AuditWriteError(error);
+      } finally {
+        client.release();
+      }
     } catch (error) {
       if (!(error instanceof AuditWriteError)) throw error;
       throw new McpToolError(
@@ -135,7 +231,22 @@ export class PostgresMcpAuditWriter implements McpAuditWriter {
     try {
       await client.query("BEGIN");
       for (const event of events) {
+        await client.query(
+          "SELECT set_config('skillplane.workspace_routing_epoch', $1, true)",
+          [String(event.fencingEpoch ?? 1)],
+        );
         await writeAuditEvent(client, auditInput(event));
+        if (
+          this.projectionEnabled &&
+          event.tool === "skill_retrieve" &&
+          event.outcome === "success" &&
+          event.countMetric !== false
+        ) {
+          await enqueueAgentSkillUseProjection(client, {
+            workspaceId: event.workspaceId,
+            fencingEpoch: event.fencingEpoch,
+          });
+        }
       }
       await client.query("COMMIT");
     } catch {
