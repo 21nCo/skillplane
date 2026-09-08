@@ -434,10 +434,13 @@ interface WritableTableColumn extends Record<string, unknown> {
   readonly is_identity: "YES" | "NO";
   readonly sequence_name: string | null;
   readonly sequence_increment: string | null;
+  readonly sequence_cycle: boolean | null;
   readonly is_globally_unique: boolean;
 }
 
 interface DynamicForeignKeyColumn extends Record<string, unknown> {
+  readonly constraint_name: string;
+  readonly match_full: boolean;
   readonly column_name: string;
   readonly referenced_table_name: string;
   readonly referenced_column_name: string;
@@ -459,6 +462,7 @@ async function writableTableColumns(
                 attribute.attname
               ) AS sequence_name,
               sequence_definition.seqincrement::text AS sequence_increment,
+              sequence_definition.seqcycle AS sequence_cycle,
               EXISTS (
                 SELECT 1
                   FROM pg_catalog.pg_index unique_index
@@ -498,7 +502,9 @@ async function dynamicForeignKeyColumns(
 ): Promise<readonly DynamicForeignKeyColumn[]> {
   return (
     await database.query<DynamicForeignKeyColumn>(
-      `SELECT child_attribute.attname AS column_name,
+      `SELECT constraint_definition.conname AS constraint_name,
+              constraint_definition.confmatchtype = 'f' AS match_full,
+              child_attribute.attname AS column_name,
               parent_relation.relname AS referenced_table_name,
               parent_attribute.attname AS referenced_column_name
          FROM pg_catalog.pg_constraint constraint_definition
@@ -549,83 +555,202 @@ async function rowsForWorkspace(
   ).rows.map((row) => row.row_json);
 }
 
-async function synchronizeTableSequences(
+function required<T>(value: T | null | undefined): T {
+  if (value === null || value === undefined) {
+    throw new Error("WORKSPACE_MIGRATION_METADATA_MISSING");
+  }
+  return value;
+}
+
+interface DynamicKeyColumn {
+  readonly table: string;
+  readonly column: WritableTableColumn;
+}
+
+type DynamicKeyRoots = ReadonlyMap<string, DynamicKeyColumn>;
+const columnKey = (table: string, column: string): string => `${table}.${column}`;
+
+/** Resolve shared PK/FK chains before choosing any replacement values. */
+function dynamicKeyRoots(
+  tables: readonly DynamicNamespaceTable[],
+  columns: ReadonlyMap<string, readonly WritableTableColumn[]>,
+  foreignKeys: ReadonlyMap<string, readonly DynamicForeignKeyColumn[]>,
+): DynamicKeyRoots {
+  const nodes = new Map<string, DynamicKeyColumn>();
+  for (const { tableName } of tables) {
+    for (const column of columns.get(tableName) ?? []) {
+      nodes.set(columnKey(tableName, column.column_name), { table: tableName, column });
+    }
+  }
+  const roots = new Map<string, DynamicKeyColumn>();
+  const visited = new Set<string>();
+  const visiting = new Set<string>();
+  const resolve = (key: string): DynamicKeyColumn | undefined => {
+    if (visited.has(key)) return roots.get(key);
+    const node = nodes.get(key);
+    if (!node) return undefined;
+    if (visiting.has(key)) throw new Error("WORKSPACE_MIGRATION_KEY_CYCLE_UNSUPPORTED");
+    visiting.add(key);
+    let root: DynamicKeyColumn | undefined;
+    for (const foreignKey of foreignKeys.get(node.table) ?? []) {
+      if (foreignKey.column_name !== node.column.column_name) continue;
+      const referenced = resolve(
+        columnKey(foreignKey.referenced_table_name, foreignKey.referenced_column_name),
+      );
+      if (root && referenced && root !== referenced) {
+        throw new Error("WORKSPACE_MIGRATION_KEY_RELATIONSHIP_UNSUPPORTED");
+      }
+      root ??= referenced;
+    }
+    if (!root && node.column.sequence_name && node.column.is_globally_unique)
+      root = node;
+    if (root) roots.set(key, root);
+    visiting.delete(key);
+    visited.add(key);
+    return root;
+  };
+  for (const key of nodes.keys()) resolve(key);
+  return roots;
+}
+
+/** ALTER ... RESTART replaces sequence storage, invalidating other backends' caches. */
+async function restartSequenceBeyond(
+  client: MigrationSqlClient,
+  column: WritableTableColumn,
+  boundary: bigint,
+): Promise<void> {
+  if (!column.sequence_name || !column.sequence_increment) return;
+  if (column.sequence_cycle)
+    throw new Error("WORKSPACE_MIGRATION_CYCLING_SEQUENCE_UNSUPPORTED");
+  const next = boundary + BigInt(column.sequence_increment);
+  await client.query(
+    `ALTER SEQUENCE ${sequenceIdentifier(column.sequence_name)} RESTART WITH ${next.toString()}`,
+  );
+}
+
+async function sequenceBoundary(
   client: MigrationSqlClient,
   table: string,
-  columns: readonly WritableTableColumn[],
-): Promise<void> {
-  const sequenceColumns = columns.filter((column) => column.sequence_name);
-  if (sequenceColumns.length === 0) return;
-  // Ordinary inserts acquire ROW EXCLUSIVE first, so this lock prevents a
-  // concurrent nextval between observing and advancing the sequence.
-  await client.query(`LOCK TABLE ${identifier(table)} IN SHARE ROW EXCLUSIVE MODE`);
-  for (const column of sequenceColumns) {
-    if (!column.sequence_name || !column.sequence_increment) continue;
-    const state = await client.query<{
-      current_value: string | null;
-      row_extreme: string | null;
-    }>(
-      `SELECT pg_sequence_last_value($1::regclass)::text AS current_value,
-              ${BigInt(column.sequence_increment) > 0n ? "max" : "min"}(
-                ${identifier(column.column_name)}
-              )::text AS row_extreme
-         FROM ${identifier(table)}`,
-      [column.sequence_name],
+  column: WritableTableColumn,
+  rows: readonly string[],
+  increment: bigint,
+): Promise<bigint | undefined> {
+  const aggregate = increment > 0n ? "max" : "min";
+  const values = await client.query<{ extreme: string | null }>(
+    `SELECT ${aggregate}(value)::text AS extreme FROM (
+       SELECT ${identifier(column.column_name)}::bigint AS value FROM ${identifier(table)}
+       UNION ALL
+       SELECT (value ->> $2)::bigint FROM jsonb_array_elements($1::jsonb)
+     ) values_to_reserve`,
+    [`[${rows.join(",")}]`, column.column_name],
+  );
+  let boundary =
+    values.rows[0]?.extreme == null ? undefined : BigInt(values.rows[0].extreme);
+  if (column.sequence_name) {
+    if (column.sequence_cycle)
+      throw new Error("WORKSPACE_MIGRATION_CYCLING_SEQUENCE_UNSUPPORTED");
+    if (BigInt(column.sequence_increment ?? "0") * increment <= 0n) {
+      throw new Error("WORKSPACE_MIGRATION_SEQUENCE_DIRECTION_UNSUPPORTED");
+    }
+    const state = await client.query<{ last_value: string }>(
+      `SELECT last_value::text FROM ${sequenceIdentifier(column.sequence_name)}`,
     );
-    const current = state.rows[0]?.current_value;
-    const extreme = state.rows[0]?.row_extreme;
-    if (extreme === null || extreme === undefined) continue;
-    const safeValue =
-      current === null || current === undefined
-        ? BigInt(extreme)
-        : BigInt(column.sequence_increment) > 0n
-          ? BigInt(current) > BigInt(extreme)
-            ? BigInt(current)
-            : BigInt(extreme)
-          : BigInt(current) < BigInt(extreme)
-            ? BigInt(current)
-            : BigInt(extreme);
-    await client.query("SELECT setval($1::regclass, $2::bigint, true)", [
-      column.sequence_name,
-      safeValue.toString(),
-    ]);
+    const current = BigInt(required(state.rows[0]).last_value);
+    if (
+      boundary === undefined ||
+      (increment > 0n ? current > boundary : current < boundary)
+    )
+      boundary = current;
   }
+  return boundary;
 }
 
 async function reserveDynamicKeyMappings(
   client: MigrationSqlClient,
+  roots: DynamicKeyRoots,
+  columns: ReadonlyMap<string, readonly WritableTableColumn[]>,
+  rows: ReadonlyMap<string, readonly string[]>,
+): Promise<void> {
+  for (const root of new Set(roots.values())) {
+    const increment = BigInt(required(root.column.sequence_increment));
+    let boundary: bigint | undefined;
+    // Include descendant sequences: a shared child key may already have issued
+    // values that its parent sequence has not reached yet.
+    for (const [key, candidate] of roots) {
+      if (candidate !== root) continue;
+      const [table, name] = key.split(".") as [string, string];
+      const column = required(
+        columns.get(table)?.find((value) => value.column_name === name),
+      );
+      const extreme = await sequenceBoundary(
+        client,
+        table,
+        column,
+        rows.get(table) ?? [],
+        increment,
+      );
+      if (
+        extreme !== undefined &&
+        (boundary === undefined ||
+          (increment > 0n ? extreme > boundary : extreme < boundary))
+      )
+        boundary = extreme;
+    }
+    await restartSequenceBeyond(client, root.column, required(boundary));
+    await client.query(
+      `INSERT INTO pg_temp.skillplane_workspace_migration_key_map
+         (table_name, column_name, old_value, new_value)
+       SELECT $1, $2, value ->> $2, nextval($4::regclass)::text
+         FROM jsonb_array_elements($3::jsonb)
+        WHERE value ->> $2 IS NOT NULL`,
+      [
+        root.table,
+        root.column.column_name,
+        `[${(rows.get(root.table) ?? []).join(",")}]`,
+        root.column.sequence_name,
+      ],
+    );
+  }
+}
+
+async function remapRows(
+  client: MigrationSqlClient,
   table: string,
   rows: readonly string[],
   columns: readonly WritableTableColumn[],
-): Promise<void> {
-  for (const column of columns) {
-    if (!column.sequence_name || !column.is_globally_unique) continue;
-    for (const row of rows) {
-      await client.query(
-        `WITH source_row AS (
-           SELECT *
-             FROM jsonb_populate_record(NULL::${identifier(table)}, $1::jsonb)
-         )
-         INSERT INTO pg_temp.skillplane_workspace_migration_key_map
-           (table_name, column_name, old_value, new_value)
-         SELECT $2, $3, ${identifier(column.column_name)}::text,
-                CASE
-                  WHEN EXISTS (
-                    SELECT 1
-                      FROM ${identifier(table)} target_row
-                     WHERE target_row.${identifier(column.column_name)} =
-                           source_row.${identifier(column.column_name)}
-                  )
-                  THEN nextval($4::regclass)::text
-                  ELSE ${identifier(column.column_name)}::text
-                END
-           FROM source_row
-          WHERE ${identifier(column.column_name)} IS NOT NULL
-         ON CONFLICT (table_name, column_name, old_value) DO NOTHING`,
-        [row, table, column.column_name, column.sequence_name],
-      );
-    }
+  roots: DynamicKeyRoots,
+): Promise<readonly string[]> {
+  const mapped = columns.filter((column) =>
+    roots.has(columnKey(table, column.column_name)),
+  );
+  if (mapped.length === 0) return rows;
+  const values: unknown[] = [`[${rows.join(",")}]`];
+  const parameter = (value: unknown): string => {
+    values.push(value);
+    return `$${values.length.toString()}`;
+  };
+  const patches = mapped.map((column) => {
+    const root = required(roots.get(columnKey(table, column.column_name)));
+    const name = parameter(column.column_name);
+    return `jsonb_build_object(${name}::text,
+      (SELECT mapping.new_value::${column.data_type}
+         FROM pg_temp.skillplane_workspace_migration_key_map mapping
+        WHERE mapping.table_name = ${parameter(root.table)}
+          AND mapping.column_name = ${parameter(root.column.column_name)}
+          AND mapping.old_value = source_row.value ->> ${name}))`;
+  });
+  const result = await client.query<{ row_json: string; missing: boolean }>(
+    `SELECT (value || ${patches.join(" || ")})::text AS row_json,
+            EXISTS (SELECT 1 FROM jsonb_each(value || ${patches.join(" || ")}) entry
+                     WHERE entry.value = 'null'::jsonb
+                       AND value -> entry.key IS DISTINCT FROM 'null'::jsonb) AS missing
+       FROM jsonb_array_elements($1::jsonb) source_row(value)`,
+    values,
+  );
+  if (result.rows.some((row) => row.missing)) {
+    throw new Error("WORKSPACE_MIGRATION_REFERENCED_KEY_OUTSIDE_WORKSPACE");
   }
+  return result.rows.map((row) => row.row_json);
 }
 
 async function insertRows(
@@ -633,63 +758,59 @@ async function insertRows(
   table: string,
   rows: readonly string[],
   columns: readonly WritableTableColumn[],
-  foreignKeys: readonly DynamicForeignKeyColumn[],
-  remapDynamicKeys: boolean,
 ): Promise<void> {
-  const columnNames = columns.map((column) => column.column_name);
+  if (columns.length === 0) return;
+  const names = columns.map((column) => identifier(column.column_name)).join(", ");
   const overriding = columns.some((column) => column.is_identity === "YES")
     ? " OVERRIDING SYSTEM VALUE"
     : "";
-  const sequenceColumns = new Set(
-    columns
-      .filter((column) => column.sequence_name && column.is_globally_unique)
-      .map((column) => column.column_name),
-  );
-  const foreignKeyByColumn = new Map(
-    foreignKeys.map((foreignKey) => [foreignKey.column_name, foreignKey]),
-  );
   for (const row of rows) {
-    if (columnNames.length === 0) continue;
-    const values: unknown[] = [row];
-    const parameter = (value: unknown): string => {
-      values.push(value);
-      return `$${values.length.toString()}`;
-    };
-    const expressions = columns.map((column) => {
-      if (remapDynamicKeys && sequenceColumns.has(column.column_name)) {
-        return `(SELECT mapping.new_value::${column.data_type}
-                   FROM pg_temp.skillplane_workspace_migration_key_map mapping
-                  WHERE mapping.table_name = ${parameter(table)}
-                    AND mapping.column_name = ${parameter(column.column_name)}
-                    AND mapping.old_value =
-                        source_row.${identifier(column.column_name)}::text)`;
-      }
-      const foreignKey = remapDynamicKeys
-        ? foreignKeyByColumn.get(column.column_name)
-        : undefined;
-      if (foreignKey) {
-        return `COALESCE(
-          (SELECT mapping.new_value::${column.data_type}
-             FROM pg_temp.skillplane_workspace_migration_key_map mapping
-            WHERE mapping.table_name = ${parameter(foreignKey.referenced_table_name)}
-              AND mapping.column_name = ${parameter(foreignKey.referenced_column_name)}
-              AND mapping.old_value =
-                  source_row.${identifier(column.column_name)}::text),
-          source_row.${identifier(column.column_name)})`;
-      }
-      return `source_row.${identifier(column.column_name)}`;
-    });
     await client.query(
-      `WITH source_row AS (
-         SELECT *
-           FROM jsonb_populate_record(NULL::${identifier(table)}, $1::jsonb)
-       )
-       INSERT INTO ${identifier(table)}
-         (${columnNames.map(identifier).join(", ")})${overriding}
-       SELECT ${expressions.join(", ")}
-         FROM source_row`,
-      values,
+      `INSERT INTO ${identifier(table)} (${names})${overriding}
+       SELECT ${names} FROM jsonb_populate_record(NULL::${identifier(table)}, $1::jsonb)`,
+      [row],
     );
+  }
+}
+
+async function checksumRows(client: MigrationSqlQueryable, rows: readonly string[]) {
+  const result = await client.query<{ count: string; checksum: string }>(
+    `SELECT count(*)::text AS count,
+            md5(COALESCE(string_agg(value::text, '' ORDER BY value::text), '')) AS checksum
+       FROM jsonb_array_elements($1::jsonb)`,
+    [`[${rows.join(",")}]`],
+  );
+  return required(result.rows[0]);
+}
+
+async function verifyForeignKeys(
+  client: MigrationSqlClient,
+  table: DynamicNamespaceTable,
+  keys: readonly DynamicForeignKeyColumn[],
+  workspaceId: string,
+): Promise<void> {
+  for (const name of new Set(keys.map((key) => key.constraint_name))) {
+    const parts = keys.filter((key) => key.constraint_name === name);
+    const present = parts.map(
+      (key) => `child.${identifier(key.column_name)} IS NOT NULL`,
+    );
+    const equality = parts.map(
+      (key) =>
+        `parent.${identifier(key.referenced_column_name)} = child.${identifier(key.column_name)}`,
+    );
+    const partialNull = required(parts[0]).match_full
+      ? `((${present.join(" OR ")}) AND NOT (${present.join(" AND ")})) OR`
+      : "";
+    const broken = await client.query<{ broken: boolean }>(
+      `SELECT EXISTS (SELECT 1 FROM ${identifier(table.tableName)} child
+        WHERE child.${identifier(table.namespaceColumn)} = $1
+          AND (${partialNull} ((${present.join(" AND ")}) AND NOT EXISTS (
+            SELECT 1 FROM ${identifier(required(parts[0]).referenced_table_name)} parent
+             WHERE ${equality.join(" AND ")})))) AS broken`,
+      [workspaceId],
+    );
+    if (broken.rows[0]?.broken)
+      throw new Error(`WORKSPACE_MIGRATION_FOREIGN_KEY_INVALID:${name}`);
   }
 }
 
@@ -698,17 +819,16 @@ async function checksum(
   table: string,
   workspaceId: string,
   namespaceColumn: NamespaceColumn,
-  ignoredColumns: readonly string[] = [],
 ): Promise<{ readonly count: string; readonly checksum: string }> {
   const result = await pool.query<{ count: string; checksum: string }>(
     `SELECT count(*)::text AS count,
             md5(COALESCE(string_agg(
-              (to_jsonb(row_value) - $2::text[])::text, ''
-              ORDER BY (to_jsonb(row_value) - $2::text[])::text
+              to_jsonb(row_value)::text, ''
+              ORDER BY to_jsonb(row_value)::text
             ), '')) AS checksum
        FROM ${identifier(table)} row_value
       WHERE ${identifier(namespaceColumn)} = $1`,
-    [workspaceId, ignoredColumns],
+    [workspaceId],
   );
   return result.rows[0] ?? { count: "0", checksum: "" };
 }
@@ -725,6 +845,10 @@ async function digest(bytes: Uint8Array): Promise<string> {
 export class PostgresWorkspaceMigrationOperations implements WorkspaceMigrationOperations {
   private quiescedSource: MigrationSqlClient | null = null;
   private sourceQuiesced = false;
+  private expectedDatabaseChecks = new Map<
+    string,
+    { count: string; checksum: string }
+  >();
 
   constructor(
     private readonly source: MigrationSqlPool,
@@ -823,7 +947,23 @@ export class PostgresWorkspaceMigrationOperations implements WorkspaceMigrationO
     const dynamic = await dynamicNamespaceTables(this.source);
     const tables = migrationTables(dynamic);
     try {
-      await target.query("BEGIN ISOLATION LEVEL SERIALIZABLE");
+      await target.query("BEGIN ISOLATION LEVEL READ COMMITTED");
+      this.expectedDatabaseChecks.clear();
+      // Take table locks before sequence DDL. READ COMMITTED observes writers
+      // that committed while these locks were being acquired.
+      for (const table of [...dynamic].sort((a, b) =>
+        a.tableName.localeCompare(b.tableName),
+      )) {
+        const exists = await target.query<{ present: boolean }>(
+          "SELECT to_regclass($1) IS NOT NULL AS present",
+          [table.tableName],
+        );
+        if (exists.rows[0]?.present) {
+          await target.query(
+            `LOCK TABLE ${identifier(table.tableName)} IN SHARE ROW EXCLUSIVE MODE`,
+          );
+        }
+      }
       for (const table of dynamic) {
         await cloneDynamicTableColumns(source, target, table.tableName);
       }
@@ -869,12 +1009,12 @@ export class PostgresWorkspaceMigrationOperations implements WorkspaceMigrationO
         );
         const columns = await writableTableColumns(target, table.tableName);
         columnsByTable.set(table.tableName, columns);
-        await synchronizeTableSequences(target, table.tableName, columns);
       }
       for (const table of dynamic) {
         const foreignKeys = await dynamicForeignKeyColumns(source, table.tableName);
         foreignKeysByTable.set(table.tableName, foreignKeys);
       }
+      const roots = dynamicKeyRoots(dynamic, columnsByTable, foreignKeysByTable);
       // Preserve the source row image exactly. Application triggers derive
       // search fields and timestamps as related rows arrive, which would make
       // a logically identical copy fail the stable checksum. Sequence-backed
@@ -890,23 +1030,52 @@ export class PostgresWorkspaceMigrationOperations implements WorkspaceMigrationO
           [context.namespace],
         );
       }
-      for (const table of dynamic) {
-        await reserveDynamicKeyMappings(
+      await reserveDynamicKeyMappings(target, roots, columnsByTable, rowsByTable);
+      for (const table of tables) {
+        const columns = columnsByTable.get(table.tableName) ?? [];
+        const expected = await remapRows(
           target,
           table.tableName,
           rowsByTable.get(table.tableName) ?? [],
-          columnsByTable.get(table.tableName) ?? [],
+          columns,
+          roots,
+        );
+        this.expectedDatabaseChecks.set(
+          table.tableName,
+          await checksumRows(target, expected),
+        );
+        await insertRows(target, table.tableName, expected, columns);
+      }
+      for (const table of dynamic) {
+        await verifyForeignKeys(
+          target,
+          table,
+          foreignKeysByTable.get(table.tableName) ?? [],
+          context.namespace,
         );
       }
       for (const table of tables) {
-        await insertRows(
+        for (const column of columnsByTable.get(table.tableName) ?? []) {
+          if (!column.sequence_name) continue;
+          const boundary = await sequenceBoundary(
+            target,
+            table.tableName,
+            column,
+            [],
+            BigInt(required(column.sequence_increment)),
+          );
+          await restartSequenceBeyond(target, column, required(boundary));
+        }
+        const expected = required(this.expectedDatabaseChecks.get(table.tableName));
+        const actual = await checksum(
           target,
           table.tableName,
-          rowsByTable.get(table.tableName) ?? [],
-          columnsByTable.get(table.tableName) ?? [],
-          foreignKeysByTable.get(table.tableName) ?? [],
-          dynamic.some((entry) => entry.tableName === table.tableName),
+          context.namespace,
+          table.namespaceColumn,
         );
+        if (expected.count !== actual.count || expected.checksum !== actual.checksum) {
+          throw new Error(`WORKSPACE_MIGRATION_ROW_IMAGE_MISMATCH:${table.tableName}`);
+        }
       }
       await target.query("COMMIT");
     } catch (error) {
@@ -939,61 +1108,61 @@ export class PostgresWorkspaceMigrationOperations implements WorkspaceMigrationO
     context: DatafnNamespaceMigrationContext,
   ): Promise<readonly MigrationCheck[]> {
     const dynamic = await dynamicNamespaceTables(this.source);
-    const sequenceKeys = new Set<string>();
-    const ignoredColumns = new Map<string, Set<string>>();
-    for (const table of dynamic) {
-      for (const column of await writableTableColumns(
-        this.quiescedSource ?? this.source,
-        table.tableName,
-      )) {
-        if (!column.sequence_name || !column.is_globally_unique) continue;
-        sequenceKeys.add(`${table.tableName}.${column.column_name}`);
-        const ignored = ignoredColumns.get(table.tableName) ?? new Set<string>();
-        ignored.add(column.column_name);
-        ignoredColumns.set(table.tableName, ignored);
-      }
-    }
-    for (const table of dynamic) {
-      for (const foreignKey of await dynamicForeignKeyColumns(
-        this.quiescedSource ?? this.source,
-        table.tableName,
-      )) {
+    if (this.expectedDatabaseChecks.size === 0) {
+      // A restarted cutover verifies completed moves without copying again.
+      // Only v2 checks contain complete row images, including remapped keys.
+      const recorded = await this.control.query<{
+        evidence: { checks?: MigrationCheck[] };
+      }>(
+        `SELECT evidence FROM workspace_migration_runs
+          WHERE workspace_id = $1 AND target_region_id = $2 AND final_epoch = $3
+            AND (status = 'completed' OR (status = 'running' AND phase = 'completion-pending'))
+            AND evidence->>'workspaceId' = $1
+            AND evidence->>'targetRegionId' = $2
+            AND evidence->>'finalEpoch' = $3::text
+          ORDER BY updated_at DESC LIMIT 1`,
+        [context.namespace, context.targetRegionId, context.movingEpoch],
+      );
+      for (const check of recorded.rows[0]?.evidence.checks ?? []) {
         if (
-          !sequenceKeys.has(
-            `${foreignKey.referenced_table_name}.${foreignKey.referenced_column_name}`,
-          )
-        ) {
+          !check.name.startsWith("database:v2:") ||
+          !check.matched ||
+          typeof check.source !== "string" ||
+          check.source !== check.target
+        )
           continue;
-        }
-        const ignored = ignoredColumns.get(table.tableName) ?? new Set<string>();
-        ignored.add(foreignKey.column_name);
-        ignoredColumns.set(table.tableName, ignored);
+        const match = /^(\d+):([a-f0-9]{32})$/u.exec(check.source);
+        if (match)
+          this.expectedDatabaseChecks.set(check.name.slice("database:v2:".length), {
+            count: required(match[1]),
+            checksum: required(match[2]),
+          });
       }
     }
     const checks: MigrationCheck[] = [];
     for (const table of migrationTables(dynamic)) {
-      const ignored = [...(ignoredColumns.get(table.tableName) ?? [])].sort();
-      const [source, target] = await Promise.all([
-        checksum(
+      // Older moves without complete recorded evidence must match the original
+      // source exactly. Never infer equivalence by excluding identity columns.
+      const expected =
+        this.expectedDatabaseChecks.get(table.tableName) ??
+        (await checksum(
           this.quiescedSource ?? this.source,
           table.tableName,
           context.namespace,
           table.namespaceColumn,
-          ignored,
-        ),
-        checksum(
-          this.target,
-          table.tableName,
-          context.namespace,
-          table.namespaceColumn,
-          ignored,
-        ),
-      ]);
+        ));
+      const target = await checksum(
+        this.target,
+        table.tableName,
+        context.namespace,
+        table.namespaceColumn,
+      );
       checks.push({
-        name: `database:${table.tableName}`,
-        source: `${source.count}:${source.checksum}`,
+        name: `database:v2:${table.tableName}`,
+        source: `${expected.count}:${expected.checksum}`,
         target: `${target.count}:${target.checksum}`,
-        matched: source.count === target.count && source.checksum === target.checksum,
+        matched:
+          expected.count === target.count && expected.checksum === target.checksum,
       });
     }
     return checks;

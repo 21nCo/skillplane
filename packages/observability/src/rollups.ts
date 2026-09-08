@@ -1,5 +1,8 @@
 import type { Pool, PoolClient } from "pg";
-import { setCurrentWorkspaceRoutingEpoch } from "./routing-epoch.js";
+import {
+  setCurrentWorkspaceRoutingEpoch,
+  WorkspaceMaintenanceFencedError,
+} from "./routing-epoch.js";
 
 const DAY = /^\d{4}-\d{2}-\d{2}$/u;
 export const ALL_SKILLS_ROLLUP_ID = "";
@@ -343,13 +346,19 @@ export async function rollupUtcDay(
         )
       ).rows;
   let sourceEvents = 0;
+  let processedWorkspaces = 0;
   for (const row of workspaces) {
-    sourceEvents += await rollupWorkspace(
-      pool,
-      row.workspace_id,
-      day,
-      options.preserveFullerSnapshot ?? false,
-    );
+    try {
+      sourceEvents += await rollupWorkspace(
+        pool,
+        row.workspace_id,
+        day,
+        options.preserveFullerSnapshot ?? false,
+      );
+      processedWorkspaces += 1;
+    } catch (error) {
+      if (!(error instanceof WorkspaceMaintenanceFencedError)) throw error;
+    }
   }
-  return { day, workspaces: workspaces.length, sourceEvents };
+  return { day, workspaces: processedWorkspaces, sourceEvents };
 }

@@ -13,6 +13,16 @@ const migrationPattern = /^\d{4}_[a-z0-9_]+\.sql$/;
 const migrationRolesPattern =
   /^-- skillplane:roles=(combined|control|regional)(?:,(combined|control|regional))*$/mu;
 
+// 0043 was shipped with immediate validation before its NOT VALID repair.
+// Both versions install the same constraints; the reconciliation pass below
+// validates them. Preserve the original ledger hash and accept only this exact
+// historical/current pair, never an arbitrary change to an applied migration.
+const placementRegionMigrationHashes = {
+  id: "0043_control_placement_region_integrity_followup.sql",
+  original: "c98b92689d5e4ff9276c5c28bf414f6818209f387e97d22b58f5b1a950541ed2",
+  repaired: "e018ccc5c56eff432246686ea6a24b85cbda5c79bbe49fedb753159e1ce79979",
+} as const;
+
 export type MigrationRole = "combined" | "control" | "regional";
 
 export interface Migration {
@@ -216,7 +226,11 @@ export async function migrateDatabase(
       for (const migration of migrations) {
         const previousHash = known.get(migration.id);
         if (previousHash !== undefined) {
-          if (previousHash !== migration.sha256) {
+          const compatiblePlacementMigration =
+            migration.id === placementRegionMigrationHashes.id &&
+            previousHash === placementRegionMigrationHashes.original &&
+            migration.sha256 === placementRegionMigrationHashes.repaired;
+          if (previousHash !== migration.sha256 && !compatiblePlacementMigration) {
             throw new Error(
               `Applied migration ${migration.id} no longer matches its recorded hash`,
             );

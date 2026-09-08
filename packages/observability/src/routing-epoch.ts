@@ -1,5 +1,11 @@
 import type { PoolClient } from "pg";
 
+export class WorkspaceMaintenanceFencedError extends Error {
+  constructor() {
+    super("WORKSPACE_MAINTENANCE_FENCED");
+  }
+}
+
 /** Pins trusted maintenance to the current generation without bypassing a source fence. */
 export async function setCurrentWorkspaceRoutingEpoch(
   client: PoolClient,
@@ -20,10 +26,10 @@ export async function setCurrentWorkspaceRoutingEpoch(
     [workspaceId],
   );
   const row = fence.rows[0];
-  if (!row || Number(row.source_epoch) > 0) {
-    throw new Error("WORKSPACE_MAINTENANCE_FENCED");
+  if (row && Number(row.source_epoch) > 0) {
+    throw new WorkspaceMaintenanceFencedError();
   }
-  const epoch = Number(row.active_epoch);
+  const epoch = Number(row?.active_epoch);
   if (!Number.isSafeInteger(epoch) || epoch < 1) {
     throw new Error("WORKSPACE_MAINTENANCE_EPOCH_INVALID");
   }

@@ -128,6 +128,28 @@ internal service targets, or routing keys.
 7. Retain the source as read-only recovery data until the rollback window
    expires. Record the final epoch, timings, checks, and probe results.
 
+Dynamic-table copies allocate new target values for globally unique sequence
+keys and propagate them through foreign keys, including shared primary/foreign
+keys. These IDs can change even when no existing target row collides. Sequence
+restarts reserve space beyond incoming rows, existing rows, and cached sequence
+allocations; gaps are expected. Target dynamic-table writers wait for the copy
+transaction. Cyclic key dependencies, cycling sequences, incompatible sequence
+directions, and references to remapped keys outside the workspace are rejected
+before the copy transaction commits.
+
+Verification compares complete transformed row images and checks foreign-key
+relationships before committing the copy. Completed migration journals contain
+`database:v2:` checksums so an interrupted cutover can verify the copy after a
+process restart. Older journals without these complete checksums require exact
+source/target equality; excluded-key checksums are not accepted as proof.
+
+The database regression matrix covers fresh and populated targets, multiple
+incoming keys, cached allocations, shared keys, descending sequences, integers
+above JavaScript's safe range, retries, move-back, restart verification, changed
+relationships, rollback cleanup, and rejection of cycling sequences. Separate
+tests cover the original applied 0043 migration and maintenance of active tenants
+while migrated source rows remain fenced.
+
 If copy or validation fails, DataFn invokes the rollback hook: keep the target
 fenced, restore the source as the only active home with a higher epoch,
 invalidate caches, resume the source, verify read/write probes, and record the

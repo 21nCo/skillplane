@@ -1,7 +1,10 @@
 import type { Pool } from "pg";
 import { rollupUtcDay } from "./rollups.js";
 import { writeAuditEvent } from "./audit.js";
-import { setCurrentWorkspaceRoutingEpoch } from "./routing-epoch.js";
+import {
+  setCurrentWorkspaceRoutingEpoch,
+  WorkspaceMaintenanceFencedError,
+} from "./routing-epoch.js";
 
 export interface RetentionResult {
   readonly cutoff: string;
@@ -55,6 +58,11 @@ export async function runAuditRetention(
        FROM audit_events
       WHERE retention_class = 'detailed_read_90d'
         AND occurred_at < $1
+        AND NOT EXISTS (
+          SELECT 1 FROM regional_workspace_migration_fences fence
+           WHERE fence.workspace_id = audit_events.workspace_id
+             AND fence.source_epoch > 0
+        )
       GROUP BY workspace_id
       ORDER BY workspace_id`,
     [cutoff],
@@ -78,7 +86,8 @@ export async function runAuditRetention(
   }
   let deleted = 0;
   let batches = 0;
-  for (const workspace of eligible.rows) {
+  const affectedWorkspaces = new Set<string>();
+  workspaceLoop: for (const workspace of eligible.rows) {
     let workspaceDeleted = 0;
     let count = 1;
     while (count > 0) {
@@ -113,6 +122,7 @@ export async function runAuditRetention(
         await client.query("COMMIT");
       } catch (error) {
         await client.query("ROLLBACK").catch(() => undefined);
+        if (error instanceof WorkspaceMaintenanceFencedError) continue workspaceLoop;
         throw error;
       } finally {
         client.release();
@@ -121,6 +131,7 @@ export async function runAuditRetention(
         deleted += count;
         workspaceDeleted += count;
         batches += 1;
+        affectedWorkspaces.add(workspace.workspace_id);
       }
     }
 
@@ -145,6 +156,7 @@ export async function runAuditRetention(
       await auditClient.query("COMMIT");
     } catch (error) {
       await auditClient.query("ROLLBACK").catch(() => undefined);
+      if (error instanceof WorkspaceMaintenanceFencedError) continue;
       throw error;
     } finally {
       auditClient.release();
@@ -154,6 +166,6 @@ export async function runAuditRetention(
     cutoff,
     deleted,
     batches,
-    affectedWorkspaces: eligible.rows.map((row) => row.workspace_id),
+    affectedWorkspaces: [...affectedWorkspaces],
   };
 }
