@@ -41,6 +41,8 @@ describe("workspace migration key matrix", () => {
     "fresh",
     "populated",
     "cached",
+    "sequence-race",
+    "cross-workspace",
     "shared-key",
     "tampered",
     "restart",
@@ -63,19 +65,56 @@ describe("workspace migration key matrix", () => {
         sourceEpoch: 1,
         movingEpoch: 2,
       } as Parameters<PostgresWorkspaceMigrationOperations["quiesceSource"]>[0];
+      let raced = false;
+      const migrationTarget = {
+        query: target.query.bind(target),
+        async connect() {
+          const client = await target.connect();
+          return {
+            async query<Row extends Record<string, unknown>>(
+              sql: string,
+              values?: readonly unknown[],
+            ) {
+              const result = await client.query<Row>(
+                sql,
+                values ? [...values] : undefined,
+              );
+              if (
+                scenario === "sequence-race" &&
+                !raced &&
+                sql.includes(`last_value::text FROM "public"."${parent}_id_seq"`)
+              ) {
+                raced = true;
+                const concurrent = await target.connect();
+                try {
+                  await concurrent.query("SET statement_timeout = '200ms'");
+                  await expect(
+                    concurrent.query(`SELECT nextval('"${parent}_id_seq"')`),
+                  ).rejects.toMatchObject({ code: "57014" });
+                } finally {
+                  await concurrent.query("RESET statement_timeout");
+                  concurrent.release();
+                }
+              }
+              return result;
+            },
+            release: () => client.release(),
+          };
+        },
+      };
       const operations = new PostgresWorkspaceMigrationOperations(
         source,
-        target,
+        migrationTarget,
         source,
         objects,
         objects,
       );
       const ddl = `CREATE TABLE "${parent}" (
-        id bigserial PRIMARY KEY, __ns text NOT NULL, value text NOT NULL
+        id ${scenario === "cross-workspace" ? "bigint" : "bigserial"} PRIMARY KEY, __ns text NOT NULL, value text NOT NULL
       ); CREATE TABLE "${child}" (
         id bigserial PRIMARY KEY ${scenario === "shared-key" || scenario === "key-cycle" ? `REFERENCES "${parent}"(id)` : ""},
         __ns text NOT NULL, parent_id bigint REFERENCES "${parent}"(id), value text NOT NULL
-      ); ALTER SEQUENCE "${parent}_id_seq" CACHE 10;
+      ); ${scenario === "cross-workspace" ? "" : `ALTER SEQUENCE "${parent}_id_seq" CACHE 10;`}
       ALTER SEQUENCE "${child}_id_seq" CACHE 10;`;
       const first =
         scenario === "large-integer"
@@ -149,6 +188,9 @@ describe("workspace migration key matrix", () => {
             );
           }
         }
+        if (scenario === "cross-workspace") {
+          await source.query(`UPDATE "${parent}" SET __ns = 'other' WHERE id = 1`);
+        }
         await operations.quiesceSource(context);
         quiesced = true;
         await operations.drainOutboxes(context);
@@ -164,7 +206,14 @@ describe("workspace migration key matrix", () => {
           ).toEqual([{ value: "existing" }]);
           return;
         }
+        if (scenario === "cross-workspace") {
+          await expect(operations.copyDatabase(context)).rejects.toThrow(
+            "WORKSPACE_MIGRATION_FOREIGN_KEY_INVALID",
+          );
+          return;
+        }
         await operations.copyDatabase(context);
+        if (scenario === "sequence-race") expect(raced).toBe(true);
         expect(
           (await operations.verifyDatabase(context)).every((check) => check.matched),
         ).toBe(true);
@@ -315,7 +364,11 @@ describe("workspace migration key matrix", () => {
                 [workspace],
               )
             ).rows,
-          ).toEqual([{ value: "first" }, { value: "second" }]);
+          ).toEqual(
+            scenario === "cross-workspace"
+              ? [{ value: "second" }]
+              : [{ value: "first" }, { value: "second" }],
+          );
         }
         for (const pool of [source, target]) {
           await pool.query(`DROP TABLE IF EXISTS "${child}", "${parent}" CASCADE`);

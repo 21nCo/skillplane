@@ -56,6 +56,7 @@ describe("migration chain", () => {
       "0042_control_outbox_cutover_fence_followup.sql",
       "0043_control_placement_region_integrity_followup.sql",
       "0044_regional_remove_control_seed.sql",
+      "0045_control_upgrade_fence_reconciliation.sql",
     ]);
     expect(new Set(migrations.map((migration) => migration.sha256)).size).toBe(
       migrations.length,
@@ -65,7 +66,7 @@ describe("migration chain", () => {
       expect(migration.sql.trim().length).toBeGreaterThan(100);
       expect(migration.roles.length).toBeGreaterThan(0);
     }
-    expect(migrations.at(-1)?.roles).toEqual(["regional"]);
+    expect(migrations.at(-1)?.roles).toEqual(["combined", "control"]);
   });
 
   it("guards destructive test reset targets", () => {

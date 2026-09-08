@@ -267,9 +267,35 @@ describe("MCP workspace routing", () => {
     });
   });
 
+  it("preserves invalid download grant errors without a bearer challenge", async () => {
+    const app = createRoutedMcpApplication({
+      local: {
+        fetch() {
+          throw new McpToolError("AUTH_INVALID", "The download grant has expired", {
+            status: 401,
+            retryable: false,
+            details: { reason: "expired" },
+          });
+        },
+      },
+      services: async () => {
+        throw new Error("Services should not be loaded");
+      },
+    });
+    const response = await app.fetch(call("workspaces_list"), localBindings());
+    expect(response.status).toBe(401);
+    expect(response.headers.has("www-authenticate")).toBe(false);
+    await expect(response.json()).resolves.toEqual({
+      error: "AUTH_INVALID",
+      error_description: "The download grant has expired",
+      retryable: false,
+      details: { reason: "expired" },
+    });
+  });
+
   it.each([
     {
-      code: "AUTH_INVALID" as const,
+      code: "AUTHENTICATION_REQUIRED" as const,
       status: 401 as const,
       oauthError: "invalid_token",
     },

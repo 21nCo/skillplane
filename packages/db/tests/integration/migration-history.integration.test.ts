@@ -6,6 +6,7 @@ import {
   loadMigrations,
   migrateDatabase,
   resolveTestDatabaseUrl,
+  verifyDatabase,
 } from "../../src/index.js";
 
 it("upgrades the originally applied 0043 without changing its ledger or accepting unknown hashes", async () => {
@@ -39,9 +40,62 @@ it("upgrades the originally applied 0043 without changing its ledger or acceptin
     await database.query(
       "INSERT INTO workspaces (id, workspace_id, slug, name) VALUES ('history', 'history', 'history', 'History')",
     );
+    await database.query(
+      "INSERT INTO workspace_placements (workspace_id, region_id, epoch, state) VALUES ('history', 'legacy', 1, 'active')",
+    );
+    // Reproduce an upgrade where 0040 arrived after 0043 was already applied.
+    await database.query(
+      "DELETE FROM skillplane_schema_migrations WHERE id IN ('0040_control_plane_safety_followup.sql', '0045_control_upgrade_fence_reconciliation.sql')",
+    );
     await expect(migrateDatabase(address.toString())).resolves.toMatchObject({
-      applied: [],
+      applied: [
+        "0040_control_plane_safety_followup.sql",
+        "0045_control_upgrade_fence_reconciliation.sql",
+      ],
     });
+    // An admitted legacy write must hold both transition rows until commit.
+    await database.query(
+      "UPDATE topology_cutover_state SET state = 'copying', target_region_id = 'legacy' WHERE id = 'legacy-to-cells'",
+    );
+    const writer = await database.connect();
+    const transition = new Pool({ connectionString: address.toString(), max: 1 });
+    try {
+      await writer.query("BEGIN");
+      await writer.query(
+        "INSERT INTO skills (id, workspace_id, slug, name) VALUES ('history-skill', 'history', 'history-skill', 'History skill')",
+      );
+      await transition.query("SET lock_timeout = '200ms'");
+      await expect(
+        transition.query(
+          "UPDATE topology_cutover_state SET state = 'complete' WHERE id = 'legacy-to-cells'",
+        ),
+      ).rejects.toMatchObject({ code: "55P03" });
+      await transition.query("SET lock_timeout = '200ms'");
+      await expect(
+        transition.query(
+          "UPDATE workspace_placements SET epoch = epoch + 1 WHERE workspace_id = 'history'",
+        ),
+      ).rejects.toMatchObject({ code: "55P03" });
+      await writer.query("COMMIT");
+    } finally {
+      await writer.query("ROLLBACK");
+      writer.release();
+      await transition.end();
+    }
+    await expect(
+      database.query(
+        "UPDATE workspace_placements SET moving_to_region_id = 'legacy', state = 'moving' WHERE workspace_id = 'history'",
+      ),
+    ).resolves.toBeDefined();
+    await database.query(
+      "INSERT INTO workspace_regions (region_id, enabled) VALUES ('disabled', false)",
+    );
+    await expect(
+      database.query(
+        "UPDATE workspace_placements SET moving_to_region_id = 'disabled' WHERE workspace_id = 'history'",
+      ),
+    ).rejects.toThrow("declared enabled current and moving regions");
+
     expect(
       (
         await database.query(
@@ -56,12 +110,16 @@ it("upgrades the originally applied 0043 without changing its ledger or acceptin
       WHERE conrelid = 'workspace_placements'::regclass AND contype = 'f' AND NOT convalidated`)
       ).rows,
     ).toEqual([]);
+    await expect(verifyDatabase(address.toString())).resolves.toBeDefined();
     await database.query(
       "UPDATE skillplane_schema_migrations SET sha256 = $2 WHERE id = $1",
       [id, "0".repeat(64)],
     );
     await expect(migrateDatabase(address.toString())).rejects.toThrow(
       "no longer matches its recorded hash",
+    );
+    await expect(verifyDatabase(address.toString())).rejects.toThrow(
+      "Migration ledger mismatch",
     );
   } finally {
     await database.end();

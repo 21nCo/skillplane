@@ -23,6 +23,19 @@ const placementRegionMigrationHashes = {
   repaired: "e018ccc5c56eff432246686ea6a24b85cbda5c79bbe49fedb753159e1ce79979",
 } as const;
 
+export function migrationHashMatches(
+  id: string,
+  recorded: string | undefined,
+  current: string,
+): boolean {
+  return (
+    recorded === current ||
+    (id === placementRegionMigrationHashes.id &&
+      recorded === placementRegionMigrationHashes.original &&
+      current === placementRegionMigrationHashes.repaired)
+  );
+}
+
 export type MigrationRole = "combined" | "control" | "regional";
 
 export interface Migration {
@@ -223,14 +236,38 @@ export async function migrateDatabase(
 
     await client.query("BEGIN");
     try {
+      // Historical projection backfills must not race a live projector. Take
+      // the same parent-before-projection lock order used by publication.
+      if (
+        migrations.some(
+          (migration) =>
+            !known.has(migration.id) &&
+            [
+              "0025_control_projection_ordering.sql",
+              "0032_control_public_skill_heads.sql",
+              "0038_multi_region_safety_hardening.sql",
+              "0040_control_plane_safety_followup.sql",
+            ].includes(migration.id),
+        )
+      ) {
+        for (const table of [
+          "public_skill_projection_heads",
+          "public_skill_projections",
+        ]) {
+          const present = await client.query<{ relation: string | null }>(
+            "SELECT to_regclass($1)::text AS relation",
+            [table],
+          );
+          if (present.rows[0]?.relation)
+            await client.query(
+              `LOCK TABLE ${quoteIdentifier(table)} IN SHARE ROW EXCLUSIVE MODE`,
+            );
+        }
+      }
       for (const migration of migrations) {
         const previousHash = known.get(migration.id);
         if (previousHash !== undefined) {
-          const compatiblePlacementMigration =
-            migration.id === placementRegionMigrationHashes.id &&
-            previousHash === placementRegionMigrationHashes.original &&
-            migration.sha256 === placementRegionMigrationHashes.repaired;
-          if (previousHash !== migration.sha256 && !compatiblePlacementMigration) {
+          if (!migrationHashMatches(migration.id, previousHash, migration.sha256)) {
             throw new Error(
               `Applied migration ${migration.id} no longer matches its recorded hash`,
             );

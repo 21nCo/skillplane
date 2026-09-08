@@ -788,6 +788,7 @@ async function verifyForeignKeys(
   table: DynamicNamespaceTable,
   keys: readonly DynamicForeignKeyColumn[],
   workspaceId: string,
+  tables: readonly { tableName: string; namespaceColumn: NamespaceColumn }[],
 ): Promise<void> {
   for (const name of new Set(keys.map((key) => key.constraint_name))) {
     const parts = keys.filter((key) => key.constraint_name === name);
@@ -798,6 +799,11 @@ async function verifyForeignKeys(
       (key) =>
         `parent.${identifier(key.referenced_column_name)} = child.${identifier(key.column_name)}`,
     );
+    const parent = tables.find(
+      (candidate) => candidate.tableName === required(parts[0]).referenced_table_name,
+    );
+    if (!parent) throw new Error("WORKSPACE_MIGRATION_FOREIGN_KEY_PARENT_UNSCOPED");
+    equality.push(`parent.${identifier(parent.namespaceColumn)} = $1`);
     const partialNull = required(parts[0]).match_full
       ? `((${present.join(" OR ")}) AND NOT (${present.join(" AND ")})) OR`
       : "";
@@ -1015,6 +1021,23 @@ export class PostgresWorkspaceMigrationOperations implements WorkspaceMigrationO
         foreignKeysByTable.set(table.tableName, foreignKeys);
       }
       const roots = dynamicKeyRoots(dynamic, columnsByTable, foreignKeysByTable);
+      // Lock every sequence before observing last_value. Table locks alone do
+      // not block standalone nextval calls. A no-op ALTER takes the sequence
+      // DDL lock without rewinding it; keep it until the copy commits.
+      const sequences = new Map<string, WritableTableColumn>();
+      for (const columns of columnsByTable.values()) {
+        for (const column of columns) {
+          if (column.sequence_name) sequences.set(column.sequence_name, column);
+        }
+      }
+      for (const [name, column] of [...sequences].sort(([a], [b]) =>
+        a.localeCompare(b),
+      )) {
+        await target.query(
+          `ALTER SEQUENCE ${sequenceIdentifier(name)} INCREMENT BY ${required(column.sequence_increment)}`,
+        );
+      }
+
       // Preserve the source row image exactly. Application triggers derive
       // search fields and timestamps as related rows arrive, which would make
       // a logically identical copy fail the stable checksum. Sequence-backed
@@ -1052,6 +1075,7 @@ export class PostgresWorkspaceMigrationOperations implements WorkspaceMigrationO
           table,
           foreignKeysByTable.get(table.tableName) ?? [],
           context.namespace,
+          tables,
         );
       }
       for (const table of tables) {

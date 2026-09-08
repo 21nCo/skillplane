@@ -3,7 +3,7 @@ import {
   assertAuthfnCoreSchemaContract,
   assertAuthfnPluginSchemaContract,
 } from "./authfn.js";
-import { listDatafnTables, loadMigrations } from "./migrate.js";
+import { listDatafnTables, loadMigrations, migrationHashMatches } from "./migrate.js";
 import type { MigrationRole } from "./migrate.js";
 import {
   GLOBAL_CONTROL_TABLES,
@@ -166,7 +166,7 @@ export async function verifyDatabase(
     );
     for (const migration of migrations) {
       const applied = migrationResult.rows.find((row) => row.id === migration.id);
-      if (applied?.sha256 !== migration.sha256) {
+      if (!migrationHashMatches(migration.id, applied?.sha256, migration.sha256)) {
         throw new Error(`Migration ledger mismatch for ${migration.id}`);
       }
     }

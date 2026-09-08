@@ -338,7 +338,6 @@ function cleanPublicRequest(request: Request): Request {
 function mcpToolErrorResponse(error: McpToolError): Response {
   if (
     error.code === "AUTHENTICATION_REQUIRED" ||
-    error.code === "AUTH_INVALID" ||
     error.code === "AUTH_SCOPE_REQUIRED"
   ) {
     return mcpAuthenticationResponse(
