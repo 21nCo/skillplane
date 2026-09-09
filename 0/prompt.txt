@@ -1,0 +1,3 @@
+1. does the changes belong in skillplane or upstream in datafn, authfn etc?
+2. If belongs in skillplane - how to avoid similar situation for any other consumers of similar multi region gateway setup of datafn, authfn?
+3. I remember earlier ideating about carrying out authentication etc via gateway and then querying, syncing data via direct regional datafn urls (is this support implemented upstream?) - also there is a pending issue in skillplane linear which points out that skillplane isn't using intended datafn endpoints for querying, mutation etc - which is a dependant issue that needs to be implemented first before making use of direct regional querying of datafn in multi region approach
