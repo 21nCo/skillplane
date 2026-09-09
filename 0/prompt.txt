@@ -1,0 +1,1 @@
+run all tests for latest code and if everything is working fine - deploy latest version of app, mcp to dev, live environments
