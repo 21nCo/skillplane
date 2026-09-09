@@ -1,0 +1,2 @@
+1. what hyperdrive id is used for dev deployment currently?
+2. how to migrate current prod deployed db data to new prod db and use the current prod db hyperdrive for dev instead?
