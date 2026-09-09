@@ -1,0 +1,232 @@
+<skill>
+<name>pr-refetch-fix</name>
+<path>/Users/serro/.agents/skills/pr-refetch-fix/SKILL.md</path>
+---
+name: pr-refetch-fix
+description: Run exactly one bounded GitHub PR review-remediation pass: fetch all pending review surfaces, validate findings against the exact PR worktree, fix current valid issues, verify, push one reviewed fix commit to the PR, report, and stop without any post-push refetch, CI wait, or reviewer loop.
+---
+
+# PR Refetch Fix
+
+Refetch the current GitHub pull-request review queue, fix the findings that remain valid against the exact PR worktree, verify the affected code, push the fixes to the PR once, report, and stop.
+
+## Absolute single-round boundary
+
+This skill performs exactly one bounded round per invocation.
+
+One round is:
+
+1. identify the PR, authentication context, exact head branch, and dedicated worktree
+2. fetch the current review surfaces once
+3. classify the fetched findings against the current worktree
+4. fix only the valid findings from that fetched snapshot
+5. run proportionate local verification
+6. when fixes were made, create one reviewed commit and push it to the PR head branch
+7. report the result and stop
+
+After step 7, the invocation is complete.
+
+Do not:
+
+- refetch review feedback after the push
+- wait for reviewers or bots to analyze the new commit
+- poll CI until completion
+- begin another fetch/fix/test/push cycle
+- keep working because new feedback arrives asynchronously
+- interpret "latest", "complete", or "fix pending findings" as permission for an open-ended loop
+
+A second round requires a new, explicit user invocation. If CI or reviewer checks are still running, report them as pending and stop. If no actionable findings are present, report that and stop. If the round is blocked, report the blocker and stop rather than monitoring for a state change.
+
+## Core review rule
+
+Use current unresolved review threads as the primary queue. Timestamp filtering is secondary.
+
+The workflow must prevent these failure modes:
+
+- querying only inline comments after a guessed cutoff
+- missing findings in review threads, review bodies, or issue comments
+- ignoring an older unresolved thread that is still valid on the current head
+- treating every unresolved bot comment as valid without inspecting current code
+- fixing against the wrong branch or worktree
+- starting an unbounded post-push review loop
+
+## 1. Identify the PR and authentication context
+
+Preserve the user's established GitHub authentication context for every GitHub command, for example:
+
+```bash
+GH_CONFIG_DIR=~/.config/gh-other
+```
+
+Resolve the repository and PR number from the current branch, worktree, supplied PR URL, or explicit user input.
+
+## 2. Use only the PR's corresponding worktree
+
+Before fetching comments or editing code:
+
+1. locate the PR's dedicated worktree
+2. confirm its checked-out branch equals the PR head branch
+3. inspect its existing tracked, staged, unstaged, and untracked state
+4. preserve unrelated work and artifacts
+
+Minimum checks:
+
+```bash
+git branch --show-current
+git status --short
+git remote -v
+```
+
+Treat that exact worktree as the source of truth for code, validation, staging, and commit decisions. Do not validate comments against a main checkout, base branch, sibling branch, or another PR's worktree.
+
+If multiple PRs are requested, each PR is a separate round unless the user explicitly defines one bounded multi-PR round.
+
+## 3. Fetch the current review surfaces once
+
+Start with paginated GraphQL review threads. Fetch every page when more than 100 threads may exist.
+
+```bash
+GH_CONFIG_DIR=~/.config/gh-other gh api graphql --paginate -f query='
+query($endCursor: String) {
+  repository(owner: "OWNER", name: "REPO") {
+    pullRequest(number: PR_NUMBER) {
+      reviewThreads(first: 100, after: $endCursor) {
+        nodes {
+          isResolved
+          path
+          comments(first: 20) {
+            nodes {
+              body
+              author { login }
+              createdAt
+              outdated
+              url
+              diffHunk
+              originalLine
+              line
+            }
+          }
+        }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+}'
+```
+
+Then inspect the supplementary surfaces once:
+
+1. PR review bodies
+2. PR issue comments
+3. raw inline review comments when needed for metadata or export
+
+```bash
+GH_CONFIG_DIR=~/.config/gh-other gh pr view PR_NUMBER --repo OWNER/REPO --json headRefOid,reviews,comments,updatedAt,url
+```
+
+```bash
+GH_CONFIG_DIR=~/.config/gh-other gh api --paginate repos/OWNER/REPO/pulls/PR_NUMBER/comments
+```
+
+Do not replace unresolved-thread discovery with only `gh pr view --json comments`, only `pulls/<n>/comments`, or only a timestamp query.
+
+## 4. Use timestamps only as a secondary lens
+
+If the user explicitly asks for findings since a push:
+
+1. resolve the exact pushed commit SHA
+2. read its absolute UTC timestamp
+3. use that timestamp only to describe which feedback arrived later
+
+Still include an older unresolved thread when it remains actionable on the current head.
+
+## 5. Classify before editing
+
+Classify every relevant fetched finding into exactly one status.
+
+### Actionable
+
+- the thread or finding is still pending or unresolved
+- it matches the current file and behavior
+- the issue is not already fixed
+- it is within the authorized scope
+
+### Skipped (Already Fixed / Stale)
+
+- the thread or hunk is outdated
+- current code already addresses it
+- it describes a prior diff shape
+- another current change supersedes it
+
+### Not Attempted
+
+- non-code bot bookkeeping or merge-queue noise
+- an unrelated baseline or aggregate quality gate without a concrete scoped finding
+- a finding outside the user's authority or requested scope
+- a blocked item that cannot be safely changed in this round
+
+Deduplicate multiple reviewers reporting the same root cause so it receives one fix and one status.
+
+## 6. Verify each actionable finding against current code
+
+Before editing:
+
+1. open the current file in the PR worktree
+2. inspect the exact code and surrounding contract
+3. reproduce or reason through the current behavior
+4. check whether existing tests already cover it
+5. decide whether the finding is valid now
+
+Do not trust the review diff alone.
+
+## 7. Fix only valid findings from the fetched snapshot
+
+Make the narrowest complete fixes tied to the actionable findings. Add focused regression coverage when practical.
+
+Preserve unrelated dirty work. Keep unrelated untracked and `.conduct/` artifacts out of commits unless explicitly requested.
+
+Do not expand into repository-wide cleanup merely because a bot reports an aggregate quality gate.
+
+## 8. Verify locally
+
+Run focused tests first, then the relevant typecheck, lint, test, and build gates in proportion to risk. Distinguish:
+
+- failures caused by the changes
+- pre-existing or unrelated failures
+- local proof
+- pending external CI or reviewer state
+
+Do not wait for external CI as part of this skill. A single immediate check snapshot is allowed only for reporting; no polling.
+
+## 9. Commit and push the fixes exactly once
+
+Invoking this skill authorizes one reviewed commit and one normal push of the fixes produced by this round to the PR head branch. Do not leave completed fixes only in the local worktree. If the fetched snapshot contains no actionable findings and no changes were made, do not create an empty commit or push.
+
+Before committing:
+
+1. review the exact staged allowlist
+2. run `git diff --cached --check`
+3. confirm unrelated artifacts are excluded
+
+Create exactly one commit for the reviewed fix batch and push it once to the PR head branch. Do not force-push. Verify the local, remote, and PR head SHAs once after pushing.
+
+Do not refetch review feedback after the push. Do not wait for the pushed commit to receive new reviews.
+
+## 10. Report and terminate
+
+Report with these explicit buckets:
+
+- `Fixed`
+- `Skipped (Already Fixed / Stale)`
+- `Not Attempted`
+- `Verification`
+
+Include the exact pushed commit SHA and PR URL. If no changes were needed, say explicitly that no commit or push was created. State any pending CI or reviewer checks without waiting for them.
+
+End with a clear termination statement such as:
+
+> One review round is complete. No post-push refetch or additional review loop was performed.
+
+Then stop.
+
+</skill>
