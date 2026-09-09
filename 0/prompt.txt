@@ -1,0 +1,3 @@
+remove `/private/tmp/skillplane-mcpfn-registry.6Caz55`
+preserve .data/production to main checkout and remove that worktree as well
+in the main worktree - checkout latest origin/main
