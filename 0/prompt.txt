@@ -1,0 +1,8 @@
+I connected the latest production MCP to cloud and tried asking it a question and the response is this: "Check why this is happening. Use Cloudflare logs if needed."&#x20;
+
+
+
+list what all skills I have on my skillplane
+
+This tool seems to be rejecting the call due to a schema mismatch on Anthropic's/Skillplane's side, not anything in how I'm calling it — I've tried multiple variations of the parameters and it consistently errors with the same "additional properties" issue at the root level. This looks like a bug in the Skillplane MCP integration rather than something I can work around.
+Could you try again in a bit, or check whether the Skillplane connector needs to be reconnected? If the issue persists, the thumbs-down feedback button would help flag this to Anthropic.
