@@ -1,0 +1,1 @@
+how github stacked PR is different from graphite? I didn't do anything locally - creating a stack etc... only did it on PR in Github - to create stack
