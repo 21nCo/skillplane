@@ -1,0 +1,1 @@
+how to test the working of this gateway approach? deploying to dev and test? what are things to you need for testing multi region support?
