@@ -1,0 +1,5 @@
+proceed and fix and test in dev
+for org workspaces - provide explicit selection on UI when creation
+
+This belongs in Skillplane’s control-plane placement policy—not AuthFn or DataFn
+why? any other similar product needs to duplicate this policy right? how can we avoid that?
