@@ -1,0 +1,29 @@
+# Files pasted by the user:
+
+## "[ { \"timestamp\": \"2026-08-23T06:09:26.145Z\", \"source\": \"oauth\", \"serverId\": \"sk…": /Users/serro/.codex/attachments/5d14d492-545d-4365-8f06-651a1e25ced3/pasted-text.txt
+
+## My request:
+I am trying to test local MCP via MCPJAM but its failing
+
+
+terminal logs:
+[wrangler:info] GET /apple-touch-icon-precomposed.png 404 Not Found (28ms)
+[wrangler:info] GET /mcp 401 Unauthorized (25ms)
+[wrangler:info] POST /mcp 401 Unauthorized (25ms)
+[wrangler:info] GET /mcp 401 Unauthorized (10ms)
+[wrangler:info] POST /mcp 401 Unauthorized (21ms)
+[wrangler:info] GET /mcp 401 Unauthorized (9ms)
+[wrangler:info] GET /.well-known/oauth-protected-resource/mcp 200 OK (7ms)
+[wrangler:info] OPTIONS /mcp 401 Unauthorized (10ms)
+[wrangler:info] POST /mcp 401 Unauthorized (7ms)
+[wrangler:info] POST /mcp 401 Unauthorized (32ms)
+[wrangler:info] GET /mcp 401 Unauthorized (10ms)
+[wrangler:info] POST /mcp 401 Unauthorized (20ms)
+[wrangler:info] GET /mcp 401 Unauthorized (10ms)
+[wrangler:info] GET /.well-known/oauth-protected-resource/mcp 200 OK (4ms)
+[wrangler:info] OPTIONS /mcp 401 Unauthorized (8ms)
+[wrangler:info] POST /mcp 401 Unauthorized (12ms)
+
+
+mcp jam logs:
+attached
