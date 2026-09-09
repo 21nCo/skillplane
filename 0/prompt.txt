@@ -1,0 +1,3 @@
+splane work linear issue [https://linear.app/21n/issue/SKI-13/refactor-skillplane-into-a-global-control-plane-and-regional-workspace](https://linear.app/21n/issue/SKI-13/refactor-skillplane-into-a-global-control-plane-and-regional-workspace) in a new worktree off of main
+
+if there any bugs or issues that needs to be fixed in authfn or datafn - fix those in a separate worktree of superfunctions based on latest origin/dev
