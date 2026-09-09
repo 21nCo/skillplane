@@ -1,0 +1,8 @@
+When I am trying to use skillplane MCP with Factory droid CLI... this happened
+
+&#x20;I’ll load the pr-refetch-fix skill from Skillplane, then apply its instructions to PR #8.
+
+●  Error: 400 Invalid schema for function 'Skillplane\_\_\_skills\_search': '^[\\\p{L}\\\p{N}.\_:-]+$' is not a 'regex'.
+
+
+why?
