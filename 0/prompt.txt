@@ -1,0 +1,3 @@
+Default local (pnpm dev:app:worker) turns auth off. AUTH_MODE=disabled, no SEND_EMAIL binding, so OTP and invitation delivery are unavailable. That is intentional so everyday local work does not open a remote email connection.
+
+if we cant even login - what is this mode useful for then?
