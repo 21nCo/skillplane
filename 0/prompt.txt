@@ -1,0 +1,6 @@
+Retrying Skillplane-local now.
+9:48 PMBot0
+Still blocked. Same check: `redirect_uris contains an unsafe or malformed URI`. Status flipped to needsAuth, but sign-in never starts.
+Auth is `https://app-local.skillplane.dev` with DCR at `/auth/oauth/register`. Whatever client metadata is coming back has a redirect URI this host won't accept.
+
+Still same issue happening when testing local via Grok Bot... why?
