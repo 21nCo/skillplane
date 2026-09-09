@@ -1,0 +1,1 @@
+create a new superfunctions worktree off of next branch and work on all of this recommended mcpfn end to end without leaving any scaffolding
