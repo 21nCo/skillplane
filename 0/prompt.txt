@@ -1,0 +1,5 @@
+Skillplane is added, but sign-in never started. The server’s OAuth config failed a check: `redirect_uris contains an unsafe or malformed URI`. That’s on Skillplane’s side (auth at `app.skillplane.dev`), not something a Settings login would fix.
+Once those redirect URIs are valid, I can retry the connect.
+
+
+This happened from Grok bot when I tried to add skill plane MCP. We already fixed this and pushed it to production, right? Why is this happening again? This also happened when I tried to connect skill plane MCP from cursor.
