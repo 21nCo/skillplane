@@ -1,0 +1,3 @@
+you created a new worktree? add the commit directly on local main and push to origin/main once verified locally
+
+for verifying locally - run local mcp-local and app-local - I will manually verify
