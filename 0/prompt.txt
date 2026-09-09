@@ -1,0 +1,8 @@
+[https://app.skillplane.dev/auth/oauth/authorize?response\_type=code&client\_id=https%3A%2F%2Fchatgpt.com%2Foauth%2Fcodex%2FzrStvbHj9pRN%2Fclient.json&state=aj4JHqso2lZ490tT6lEoeg&code\REDACTED&code\_challenge\_method=S256&redirect\_uri=http%3A%2F%2F127.0.0.1%3A49188%2Fcallback%2FzrStvbHj9pRN&scope=audit%3Aread+contexts%3Aread+contexts%3Awrite+skills%3Aamend+skills%3Apublish+skills%3Aread+skills%3Awrite&resource=https%3A%2F%2Fmcp.skillplane.dev%2Fmcp](https://app.skillplane.dev/auth/oauth/authorize?response_type=code\&client_id=https%3A%2F%2Fchatgpt.com%2Foauth%2Fcodex%2FzrStvbHj9pRN%2Fclient.json\&state=aj4JHqso2lZ490tT6lEoeg\&REDACTED\&code_challenge_method=S256\&redirect_uri=http%3A%2F%2F127.0.0.1%3A49188%2Fcallback%2FzrStvbHj9pRN\&scope=audit%3Aread+contexts%3Aread+contexts%3Awrite+skills%3Aamend+skills%3Apublish+skills%3Aread+skills%3Awrite\&resource=https%3A%2F%2Fmcp.skillplane.dev%2Fmcp)
+
+
+
+{"error":"invalid\_client\_metadata","error\_description":"redirect\_uris contains an unsafe or malformed URI"}
+
+
+Why is this happening?
