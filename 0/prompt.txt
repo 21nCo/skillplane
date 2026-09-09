@@ -1,0 +1,77 @@
+Short answer: Skillplane embeds AuthFn as a library inside its workers; it does not call a separate AuthFn service. Also, PR #3 does not currently depend on unpublished AuthFn code—it is pinned to the published `@authfn/core@0.1.1`.
+
+PR #3 merged into `main` today, August 25.
+
+### How Skillplane consumes AuthFn
+
+The dependency is centrally pinned in [pnpm-workspace.yaml (line 26)]\(/Users/serro/Documents/dev/n/agent/experiments/skillplane-pr-3-review/pnpm-workspace.yaml:26). Skillplane constructs an AuthFn instance with:
+
+- Skillplane’s Postgres database adapter and `authfn` namespace.
+- AuthFn email-OTP and API-key plugins.
+- A Skillplane-owned MCP OAuth plugin.
+- Skillplane’s SendFn delivery adapter, cookies, rate limiting, Turnstile, and observability.
+
+That composition happens in [packages/auth/src/server.ts (line 85)]\(/Users/serro/Documents/dev/n/agent/experiments/skillplane-pr-3-review/packages/auth/src/server.ts:85). `/auth/*` requests are forwarded directly into the embedded AuthFn router in [packages/api/src/app.ts (line 141)]\(/Users/serro/Documents/dev/n/agent/experiments/skillplane-pr-3-review/packages/api/src/app.ts:141).
+
+Skillplane also materializes AuthFn’s tables in its own Drizzle schema and checks them for contract drift in [packages/db/src/authfn.ts (line 23)]\(/Users/serro/Documents/dev/n/agent/experiments/skillplane-pr-3-review/packages/db/src/authfn.ts:23).
+
+### What PR #3 changed
+
+PR #3 moved agent credentials from Skillplane-owned `sps_...` hashes to AuthFn-owned `spk_...` API keys:
+```vbnet
+Bearer spk_...
+    → AuthFn hashes/authenticates the key
+    → returns API-key actor ID and metadata
+    → Skillplane resolves authfn_api_key_id
+    → validates workspace, credential version, role and scopes
+    → authorizes the MCP tool call
+```
+
+The responsibility split is:
+
+| AuthFn ownsSkillplane owns            |                                         |
+| ------------------------------------- | --------------------------------------- |
+| Secret generation and `spk_` prefix   | Service-principal identity              |
+| Secret hashing                        | Workspace association                   |
+| Key expiry and revocation             | Role, scopes and delegation             |
+| AuthFn key record and usage timestamp | Credential version and audit events     |
+| Returning the authenticated key actor | Mapping the key to the domain principal |
+
+The migration removes `service_principals.credential_hash` and replaces it with an FK to `authfn_api_keys` in [0016\_authfn\_service\_principal\_keys.sql (line 1)]\(/Users/serro/Documents/dev/n/agent/experiments/skillplane-pr-3-review/packages/db/migrations/0016\_authfn\_service\_principal\_keys.sql:1).
+
+Authentication is implemented in [service-principal-auth.ts (line 65)]\(/Users/serro/Documents/dev/n/agent/experiments/skillplane-pr-3-review/packages/api/src/service-principal-auth.ts:65). It cross-checks the AuthFn key’s metadata against the Skillplane row, including workspace ID and credential version. MCP then distinguishes `spk_` credentials from OAuth access tokens in [mcp/src/auth.ts (line 205)]\(/Users/serro/Documents/dev/n/agent/experiments/skillplane-pr-3-review/mcp/src/auth.ts:205).
+
+### The unpublished-AuthFn situation
+
+The current dependency chain is reproducible and published:
+
+- `@authfn/core@0.1.1`, published May 16.
+- Transitive `@superfunctions/auth@0.1.2`, published May 14.
+- Both are integrity-pinned in `pnpm-lock.yaml`.
+
+There is one compatibility workaround: Skillplane creates service credentials without an AuthFn user owner by passing:
+```yaml
+userId: null as unknown as string
+```
+
+That is visible in [server.ts (line 147)]\(/Users/serro/Documents/dev/n/agent/experiments/skillplane-pr-3-review/packages/auth/src/server.ts:147). AuthFn’s database schema permits `NULL`, and its runtime handles it, but its public `CreateApiKeyInput` incorrectly requires `userId: string`.
+
+Crucially, the latest unpublished Superfunctions `next` source still declares `userId: string` in [api-keys.ts (line 6)]\(/Users/serro/Documents/dev/n/superfunctions/authfn/core/src/core/api-keys.ts:6). So even the unpublished version does not remove that cast.
+
+The unpublished AuthFn tree is also undergoing a larger packaging transition:
+
+- Core now declares itself as `authfn`, not `@authfn/core`, in [package.json (line 2)]\(/Users/serro/Documents/dev/n/superfunctions/authfn/core/package.json:2).
+- API keys have moved into `@authfn/api-keys` in its [package manifest (line 2)]\(/Users/serro/Documents/dev/n/superfunctions/authfn/api-keys/package.json:2).
+- `@authfn/api-keys` is not published on npm.
+- The release manifest still calls the core package `@authfn/core`, creating an unresolved naming mismatch.
+- npm already has an older `authfn@0.1.2`, while the new source declares `authfn@0.1.1`.
+
+So if the intended claim was “PR #3 runs against the latest unpublished modular AuthFn,” that is not true. It runs against the older published monolithic API. Moving it to current unpublished AuthFn would require a deliberate package migration and coherent prerelease publication, not merely a version bump.
+
+
+
+
+
+
+
+Is there anything that needs to be fixed on authfn side from this convo?
