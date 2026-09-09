@@ -1,0 +1,5 @@
+When I am using current production app - it is loading a bit slower than previous db... is it because of db location and latency?
+
+I am located in Hyderabad, India and previous prod db (which is now dev db) is located in asia while the new prod db is located in US
+
+check cloudflare logs for definitive answer for slowness
