@@ -1,0 +1,1 @@
+when I run skillplane locally... how does email sending work? does local still use cloudflare for sending email?
