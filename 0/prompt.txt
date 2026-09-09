@@ -1,0 +1,1 @@
+the whole reason why we implemented multi region approach is to minimize latency... what's the point if we randomly allocate user to a region?
