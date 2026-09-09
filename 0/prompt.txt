@@ -1,0 +1,72 @@
+Yes. `app-dev.skillplane.dev` / `mcp-dev.skillplane.dev` is a rename, not an architecture change. Email is the one place SKI-8 knowingly did **not** isolate, and that is the weakest part of the environment split.
+
+## Hosts: `app-dev` is possible, and more consistent
+
+Preview already uses suffix-style names everywhere except DNS:
+
+- Workers: `skillplane-app-dev` / `skillplane-mcp-dev`
+- R2: `skillplane-skill-bundles-dev`
+- Local tunnels: `app-local` / `mcp-local`
+
+`app.dev.skillplane.dev` is the outlier. Switching to `app-dev` / `mcp-dev` would match local, sit on `*.skillplane.dev` (one-label wildcard), and keep OAuth issuers distinct. Production already rejects anything that is not exactly `https://app.skillplane.dev`.
+
+What would have to move together: Wrangler custom domains, Turnstile allowed hostnames, hardcoded issuer/resource in `packages/config` and `scripts/lib/development-deployment.mjs`, smoke/OAuth tests, and docs. Cut over the Cloudflare custom domains in the same deploy; old `*.dev.skillplane.dev` clients would then fail discovery. There is no runtime reason to keep the nested form.
+
+## Email: shared on purpose, and you should isolate it
+
+Apex `skillplane.dev` could not be onboarded because `_domainkey.skillplane.dev` is delegated to Afternic. Email Sending was enabled on `auth.skillplane.dev` instead. Cloudflare Email Service only sends from an authorized address, so SKI-8 reused that mailbox for local, preview, and production.
+
+Config still **requires** that domain:
+```205:213:packages/config/src/index.ts
+function parseEmailSender(value: string | undefined, missing: string[]): string | null {
+  if (
+    typeof value !== "string" ||
+    !/^(?:[^<>\r\n]+\s*<)?[^\s<>@]+@auth\.skillplane\.dev>?$/.test(value.trim())
+  ) {
+```
+
+Preview only changes the display name (`Skillplane Dev <no-reply@auth.skillplane.dev>`). Local auth uses the **production** From line. The OTP body is the same in every environment: “Continue to Skillplane”, no host, no env. Recipients cannot tell which database the code belongs to.
+
+That is a real isolation hole:
+
+- A compromised preview (or `dev:app:auth`) Worker can send as the production sender.
+- Dev abuse and production deliverability share one SPF/DKIM reputation.
+- A human can type a local/dev OTP on `app.skillplane.dev` (it will not verify, but the mail looks official).
+
+Docs call this an explicit shared boundary. It is a cost tradeoff, not a platform limit. You can onboard `auth-dev.skillplane.dev` the same way you onboarded `auth.`, bind `no-reply@auth-dev.skillplane.dev`, and put the environment plus sign-in URL in the template. Local should not impersonate production at all: either a local sender, or keep OTP off in default local.
+
+Mailbox isolation matters more than the hostname rename.
+
+## Other SKI-8 isolation gaps
+
+These are the other places the new env split is weaker than the rest of the design:
+
+1. **Local Wrangler still wears production names.** `app/wrangler.jsonc` and `wrangler.auth.jsonc` are both `name: skillplane-app` with `bucket_name: skillplane-skill-bundles`. `pnpm deploy:check` is dry-run, but a raw `wrangler deploy --config wrangler.auth.jsonc` would target the production Worker. Preview deploy correctly uses `skillplane-app-dev`.
+
+2. **Local OTP is live production mail.** `wrangler.auth.jsonc` has `send_email` with `remote: true` and the production From. Default local avoids that; authenticated local does not.
+
+3. **Preview secrets are not checked against production.** Dev deploy requires the three *dev* secrets to differ from each other, and the Railway DB to differ from `RAILWAY_DATABASE_URL`. It will not refuse a copied `AUTHFN_SECRET` / pepper / Turnstile key.
+
+4. **Hardcoded local crypto fallbacks.** Unset `OAUTH_TOKEN_PEPPER` becomes `skillplane-local-oauth-pepper-not-for-production`. With `AUTH_MODE=disabled`, invitation crypto uses `skillplane-local-tenancy:${DATABASE_URL}`. Fine only if `local:init` was run and that URL never leaks.
+
+5. **`preview`****&#x20;vs&#x20;****`development`****&#x20;naming.** Hosted “dev” is `RUNTIME_ENV=preview`. Easy to mix up with local.
+
+6. **Same Cloudflare account** for prod, preview, and the laptop tunnel. Wrangler credentials that can deploy preview can see production resources. Email is the shared *identity*; the account is the shared *control plane*.
+
+What SKI-8 did isolate well: Workers, hosts, OAuth issuers, R2, Hyperdrive, Railway DB name, Turnstile widgets, deploy scripts that do not read the other env file.
+
+This branch also still contains SKI-1 (AuthFn API keys) and public stats. Those are a different class of issues (credential lifecycle, rotation locking, stats rollup). They are not environment-isolation bugs.
+
+If you change one thing, change the mail identity. The `app-dev` rename is cosmetic consistency; shared `no-reply@auth.skillplane.dev` is the actual cross-environment coupling.
+
+
+
+
+
+
+
+
+
+
+
+what all things are valid and we should work on?
