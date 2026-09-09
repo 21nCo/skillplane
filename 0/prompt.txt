@@ -1,0 +1,3 @@
+I started docker and after installing the dependencies - will I be able to test end 2 end?
+
+or for oauth flow mcp - i need https url? if yes, we can configure one using cloudflare tunnel - let me know
