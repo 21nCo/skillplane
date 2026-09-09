@@ -1,0 +1,3 @@
+how about copying the skills content projection and asking the agent to use skillplane CLI or MCP if available then fallback to the below content in the skill file?
+
+pros and cons compared to previous approach?
