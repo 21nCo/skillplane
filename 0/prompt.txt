@@ -1,0 +1,26 @@
+So any changes needed on the linear issues from this ideation?
+
+
+
+Yes. Implemented faithfully, [MCP-3](https://linear.app/21n/issue/MCP-3/add-deterministic-client-profile-contracts-and-actionable-schema) and [SKI-14](https://linear.app/21n/issue/SKI-14/adapt-skillplane-tool-contracts-for-authenticated-client-compatibility) should catch this regression.
+
+That conclusion still holds: no claude.ai account or login is required for the deterministic regression suite. Annotation 1
+
+I recommend two small clarifications, not another issue:
+
+- **MCP-3:** Require consumer-provided, redacted argument fixtures captured from real failures to run through the same production call-preparation lifecycle—not a testing-only approximation.
+- **SKI-14:** Require the original listing incident as an explicit red/green regression:
+  - capture the effective `tools/list` schema and exact rejected `tools/call.params.arguments`;
+  - prove the pre-fix implementation fails;
+  - prove the corrected catalog plus trusted enrichment reaches the handler and returns the skill list;
+  - retain the old malformed call as a negative diagnostic test that names the rejected property.
+
+I would also clarify the existing “controlled deployed verification” criterion:
+
+> Run the original prompt through a real target-family model using the configured client profile, and assert successful tool execution and response.
+
+That requires model access—hosted inference or an API key—but not an account or login to the actual client application.
+
+The deterministic tests will catch recurrence of the known contract defects: exposed server-owned fields, asymmetric enrichment, selector inconsistency, and lost validation details. The model-in-loop check covers a different risk: the model begins generating a new problematic argument shape despite the deterministic contracts being valid.
+
+No issue restructuring or dependency changes are needed. These additions can remain vendor-neutral and avoid naming any external testing product.
