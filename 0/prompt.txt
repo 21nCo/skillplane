@@ -1,0 +1,1 @@
+perform thorough code review of `/Users/serro/Documents/dev/n/worktrees/skillplane/SKI-13` against  [https://linear.app/21n/issue/SKI-13/refactor-skillplane-into-a-global-control-plane-and-regional-workspace](https://linear.app/21n/issue/SKI-13/refactor-skillplane-into-a-global-control-plane-and-regional-workspace)
