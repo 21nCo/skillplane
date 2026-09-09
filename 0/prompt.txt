@@ -1,0 +1,1 @@
+which worktrees can be removed? and what local uncommited changes does ski-6 worktree contain?
