@@ -1,0 +1,12 @@
+this is happening when testing from actual claude as well... how is this mcpjam issue then?
+
+
+
+I'm hitting a persistent error trying to connect to your localplane workspace — the tool is rejecting the request due to a schema mismatch on its end (`must NOT have additional properties`), even with minimal parameters. This looks like an issue with the localplane MCP connector itself rather than something I can work around.
+
+A couple of options:
+
+- Try again in a moment — this could be a transient issue on localplane's side.
+- Check your localplane connector settings/auth in Claude's settings to make sure it's properly connected.
+
+Would you like me to try a different approach, or do you want to check the connector status first?
