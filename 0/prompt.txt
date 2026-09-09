@@ -1,0 +1,1 @@
+why are you assuming we use railway database only? why the env value is RAILWAY\_DATABASE\_URL?
