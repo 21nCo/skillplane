@@ -1,0 +1,1 @@
+When I am trying to create a new skill via MCB Jam, it is failing on local MCB test. Check why.&#x20;
