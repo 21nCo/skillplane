@@ -1,0 +1,1 @@
+I want to test skillplane locally end to end - I am I able to do it with current state ? just answer
