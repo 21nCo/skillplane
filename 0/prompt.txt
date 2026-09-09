@@ -1,0 +1,6 @@
+# Files pasted by the user:
+
+## "{ \"system\": \"You are a helpful assistant with access to MCP tools.\", \"tools\": {…": /Users/serro/.codex/attachments/9d24ec09-6eb5-45f7-98f5-86567b0c8e9d/pasted-text.txt
+
+## My request:
+Check these logs - when testing via local mcp on mcpjam
