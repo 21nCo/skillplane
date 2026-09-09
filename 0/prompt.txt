@@ -1,0 +1,1 @@
+but why resolver in each skill folder? are we complicating it?
