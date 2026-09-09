@@ -1,0 +1,4 @@
+Plan the architecture based on below features
+
+1. Ability to use Skillplane locally without Skillplane managed cloud
+2. Ability to sync Skillplane skills to \~/.agent/skills and claude skills directories like how skills.sh does so that users can use / slash commands for skillplane skills
