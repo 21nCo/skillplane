@@ -70,6 +70,7 @@ describe("ControlPlaneMcpAuditWriter", () => {
     expect(query.mock.calls[2]?.[0]).toContain(
       "INSERT INTO control_plane_audit_events",
     );
+    expect(query.mock.calls[1]?.[1]?.[13]).toBe("detailed_read_90d");
     expect(query.mock.calls[3]?.[0]).toBe("COMMIT");
     expect(
       query.mock.calls.some(([sql]) =>

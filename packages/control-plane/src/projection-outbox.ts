@@ -163,6 +163,7 @@ export async function drainRegionalProjectionOutbox(input: {
   readonly process: (event: RegionalProjectionEvent) => Promise<void>;
   readonly limit?: number;
   readonly leaseSeconds?: number;
+  readonly maxDurationMs?: number;
   readonly claimToken?: string;
   readonly onEvent?: (event: {
     readonly type: "processed" | "failed";
@@ -172,17 +173,30 @@ export async function drainRegionalProjectionOutbox(input: {
 }): Promise<{ readonly processed: number; readonly failed: number }> {
   const limit = input.limit ?? 50;
   const leaseSeconds = input.leaseSeconds ?? 60;
-  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) {
+  if (
+    !Number.isSafeInteger(limit) ||
+    limit < 1 ||
+    limit > (input.maxDurationMs === undefined ? 500 : 50_000)
+  ) {
     throw new Error("PUBLICATION_OUTBOX_LIMIT_INVALID");
   }
   if (!Number.isSafeInteger(leaseSeconds) || leaseSeconds < 10 || leaseSeconds > 600) {
     throw new Error("PUBLICATION_OUTBOX_LEASE_INVALID");
   }
+  if (
+    input.maxDurationMs !== undefined &&
+    (!Number.isFinite(input.maxDurationMs) ||
+      input.maxDurationMs <= 0 ||
+      input.maxDurationMs > 50_000)
+  ) {
+    throw new Error("PUBLICATION_OUTBOX_DURATION_INVALID");
+  }
+  const deadline = performance.now() + (input.maxDurationMs ?? Infinity);
   const claimToken = input.claimToken ?? `projection-claim:${crypto.randomUUID()}`;
   let processed = 0;
   let failed = 0;
   const blockedWorkspaceIds = new Set<string>();
-  while (processed + failed < limit) {
+  while (processed + failed < limit && performance.now() < deadline) {
     const claimed = await input.database.query(
       `WITH candidates AS (
          SELECT candidate.id
@@ -208,7 +222,12 @@ export async function drainRegionalProjectionOutbox(input: {
         WHERE event.id = candidates.id
         RETURNING event.id, event.workspace_id, event.event_type,
                   event.payload, event.fencing_epoch, event.sequence`,
-      [limit - processed - failed, leaseSeconds, claimToken, [...blockedWorkspaceIds]],
+      [
+        input.maxDurationMs === undefined ? limit - processed - failed : 1,
+        leaseSeconds,
+        claimToken,
+        [...blockedWorkspaceIds],
+      ],
     );
     if (claimed.rows.length === 0) break;
     for (const row of claimed.rows as readonly ProjectionOutboxRow[]) {
@@ -531,4 +550,18 @@ export async function applyRegionalPublicProjection(input: {
     searchText: payload.searchText,
   });
   return { objectKey };
+}
+
+/** Expire detailed control-plane reads without touching permanent audit evidence. */
+export async function cleanupControlPlaneAuditReads(input: {
+  readonly database: ProjectionOutboxSqlClient;
+}): Promise<number> {
+  const result = await input.database.query(`WITH expired AS (
+    SELECT id FROM control_plane_audit_events
+    WHERE retention_class = 'detailed_read_90d'
+      AND occurred_at < now() - interval '90 days'
+    ORDER BY occurred_at, id LIMIT 5000 FOR UPDATE SKIP LOCKED
+  ) DELETE FROM control_plane_audit_events audit USING expired
+    WHERE audit.id = expired.id RETURNING audit.id`);
+  return result.rows.length;
 }

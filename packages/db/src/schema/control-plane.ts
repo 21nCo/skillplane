@@ -283,6 +283,7 @@ export const controlPlaneAuditEvents = pgTable(
     resourceId: text("resource_id"),
     metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
     channel: text("channel").notNull(),
+    retentionClass: text("retention_class").notNull().default("permanent"),
   },
   (table) => [
     index("control_plane_audit_workspace_time_idx").on(
@@ -290,6 +291,14 @@ export const controlPlaneAuditEvents = pgTable(
       table.occurredAt,
     ),
     index("control_plane_audit_request_idx").on(table.requestId),
+    check(
+      "control_plane_audit_retention_valid",
+      sql`${table.retentionClass} IN ('permanent', 'detailed_read_90d')`,
+    ),
+    index("control_plane_audit_retention_idx").on(
+      table.retentionClass,
+      table.occurredAt,
+    ),
   ],
 );
 

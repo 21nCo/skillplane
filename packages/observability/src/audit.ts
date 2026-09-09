@@ -54,6 +54,7 @@ export interface AuditWriteInput {
 }
 
 export interface ControlPlaneAuditWriteInput {
+  readonly retentionClass?: "permanent" | "detailed_read_90d";
   readonly workspaceId?: string | null;
   readonly eventType: string;
   readonly action: string;
@@ -178,8 +179,8 @@ export async function writeControlPlaneAuditEvent(
   await queryable.query(
     `INSERT INTO control_plane_audit_events
        (id, workspace_id, event_type, action, outcome, actor_type, actor_id,
-        user_id, request_id, resource_type, resource_id, metadata, channel)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+        user_id, request_id, resource_type, resource_id, metadata, channel, retention_class)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
     [
       id,
       input.workspaceId ?? null,
@@ -199,6 +200,7 @@ export async function writeControlPlaneAuditEvent(
           : {}),
       }),
       input.channel ?? "app",
+      input.retentionClass ?? "permanent",
     ],
   );
   return id;
@@ -511,7 +513,7 @@ async function readAuditRows(
                 user_id, request_id, resource_type, resource_id,
                 COALESCE(metadata->>'contextId', metadata->>'context_id') AS context_id,
                 metadata || jsonb_build_object('channel', channel) AS metadata,
-                'permanent'::text AS retention_class
+                retention_class
            FROM control_plane_audit_events`;
   const result = await pool.query<AuditRow>(
     `${selection}

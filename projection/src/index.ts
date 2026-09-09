@@ -4,6 +4,7 @@ import {
   applyRegionalPublicProjection,
   cleanupProcessedRegionalProjectionOutbox,
   cleanupPublicStatsProjectionEvents,
+  cleanupControlPlaneAuditReads,
   createImmutableObjectPublicationStore,
   createPostgresResourceRoutingDirectory,
   createPostgresWorkspacePlacementDirectory,
@@ -55,7 +56,8 @@ export async function drainProjectionCell(
     const result = await drainRegionalProjectionOutbox({
       regionId,
       database: regional.pool,
-      limit: 100,
+      limit: 50_000,
+      maxDurationMs: 45_000,
       process: (event) =>
         applyRegionalPublicProjection({
           event,
@@ -106,6 +108,7 @@ export async function drainProjectionCell(
     await Promise.all([
       cleanupProcessedRegionalProjectionOutbox({ database: regional.pool }),
       cleanupPublicStatsProjectionEvents({ database: control.pool }),
+      cleanupControlPlaneAuditReads({ database: control.pool }),
     ]);
     return result;
   } finally {

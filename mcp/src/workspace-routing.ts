@@ -109,13 +109,42 @@ function downloadToken(value: string | undefined): string | null {
   }
 }
 
+const workspaceTools = new Set([
+  "skills_list",
+  "skills_search",
+  "skill_retrieve",
+  "skill_asset_retrieve",
+  "skill_versions_list",
+  "skill_versions_diff",
+  "skill_candidates_list",
+  "skill_amendment_policy_get",
+  "contexts_list",
+  "context_get",
+  "context_knowledge_history",
+  "context_notes_list",
+  "skill_amend",
+  "skill_create",
+  "skill_visibility_update",
+  "skill_archive",
+  "skill_restore",
+  "skill_candidate_approve",
+  "skill_candidate_reject",
+  "skill_amendment_policy_update",
+  "context_create",
+  "context_update",
+  "context_archive",
+  "context_restore",
+  "context_knowledge_update",
+  "context_note_upsert",
+]);
+
 function scopeForMessage(message: unknown): McpScope {
   const root = record(message);
   const params = record(root?.params);
   if (root?.method !== "tools/call" || typeof params?.name !== "string") {
     return { kind: "global" };
   }
-  if (params.name === "workspaces_list") return { kind: "global" };
+  if (!workspaceTools.has(params.name)) return { kind: "global" };
   const arguments_ = record(params.arguments);
   const allowPublic =
     params.name === "skills_search" ||

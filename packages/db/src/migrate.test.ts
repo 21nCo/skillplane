@@ -57,6 +57,7 @@ describe("migration chain", () => {
       "0043_control_placement_region_integrity_followup.sql",
       "0044_regional_remove_control_seed.sql",
       "0045_control_upgrade_fence_reconciliation.sql",
+      "0046_control_audit_read_retention.sql",
     ]);
     expect(new Set(migrations.map((migration) => migration.sha256)).size).toBe(
       migrations.length,

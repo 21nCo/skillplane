@@ -240,6 +240,35 @@ describe("MCP workspace routing", () => {
     ).resolves.toMatchObject({ workspaceId: "workspace:one" });
   });
 
+  it("passes unknown tools to protocol validation even with workspace-looking arguments", async () => {
+    for (const args of [{}, { workspaceId: "workspace:one" }]) {
+      await expect(classifyMcpScope(call("future_tool", args))).resolves.toEqual({
+        kind: "global",
+      });
+    }
+    const app = createRoutedMcpApplication({
+      local: {
+        async fetch(request: Request) {
+          const body = (await request.json()) as { id: number };
+          return Response.json({
+            jsonrpc: "2.0",
+            id: body.id,
+            error: { code: -32602, message: "Unknown tool" },
+          });
+        },
+      },
+      services: async () => {
+        throw new Error("Must reach protocol handler");
+      },
+    });
+    const response = await app.fetch(call("future_tool"), localBindings());
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      id: 1,
+      error: { code: -32602 },
+    });
+  });
+
   it("preserves routed MCP tool retryability and details", async () => {
     const app = createRoutedMcpApplication({
       local: {

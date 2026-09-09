@@ -111,6 +111,7 @@ function auditInput(event: McpAuditRecord): AuditWriteInput {
 function controlPlaneAuditInput(event: McpAuditRecord): ControlPlaneAuditWriteInput {
   const input = auditInput(event);
   return {
+    retentionClass: input.retentionClass ?? "permanent",
     workspaceId: input.workspaceId,
     eventType: input.eventType,
     action: input.action,
