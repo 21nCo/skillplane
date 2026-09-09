@@ -1,0 +1,2 @@
+I want us to work on setting up this local way to test fully and also separate deployment for dev environment... if we create a branch off of SKI-1 - will it become stacked branch?
+I want this since we need to test the new changes on SKI-1 locally in this new local-dev changes branch
