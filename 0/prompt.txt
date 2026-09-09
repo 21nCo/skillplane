@@ -1,0 +1,3 @@
+we should refactor skillplane to use multi region approach similar to nucleus project - how can we achieve that?
+
+read-only audit
