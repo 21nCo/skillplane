@@ -1,0 +1,1 @@
+inventory skillplane worktrees, stop local server (I remember the local server is running on a different work tree. )
