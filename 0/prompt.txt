@@ -1,0 +1,6 @@
+proceed with the better architecture and let me know which envs should I update (the raw postgres urls) etc
+
+for production use -> live-skillplane (**566994f4aa8040cdbe48fec534e46f4c)** hyperdrive
+for dev -> use earlier production hyperdrive -> dev-insouth-skillplane (**24aa11b74b8841d486715e146f7f9f6c)**
+
+Once I update the envs - perform the migration of data present in old prod to new prod
