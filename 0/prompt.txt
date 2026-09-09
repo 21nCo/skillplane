@@ -1,0 +1,1 @@
+copy the bundles from prod to dev so that dev works fine with old data
