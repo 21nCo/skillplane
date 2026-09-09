@@ -1,0 +1,1 @@
+how can I validate this locally? via app-local.skillplane and mcp-local?
