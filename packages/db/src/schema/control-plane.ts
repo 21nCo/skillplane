@@ -298,6 +298,7 @@ export const controlPlaneAuditEvents = pgTable(
     index("control_plane_audit_retention_idx").on(
       table.retentionClass,
       table.occurredAt,
+      table.id,
     ),
   ],
 );

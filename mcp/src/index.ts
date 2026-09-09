@@ -488,9 +488,12 @@ async function handleDownload(
   now: () => Date,
 ): Promise<Response> {
   const startedAt = performance.now();
+  let fencingEpoch = 1;
   let scope: ToolAuditScope = {};
   let grant: Awaited<ReturnType<typeof verifyDownloadGrant>> | undefined;
   try {
+    const runtime = createRuntime(services, identity, audit, request, now);
+    fencingEpoch = runtime.fencingEpoch;
     grant = await verifyDownloadGrant(token, services.auth.oauth.tokenPepper, now());
     scope = {
       workspaceId: grant.workspaceId,
@@ -507,7 +510,6 @@ async function handleDownload(
         { status: 401 },
       );
     }
-    const runtime = createRuntime(services, identity, audit, request, now);
     const execution: ToolExecution = {
       requestId: grant.requestId,
       scope,
@@ -560,6 +562,7 @@ async function handleDownload(
       versionDigest: version.digest,
       latencyMs: performance.now() - startedAt,
       countMetric: false,
+      fencingEpoch,
     });
     const filename = path.split("/").at(-1) ?? "skill-asset";
     const body = new Uint8Array(bytes.byteLength);
@@ -600,6 +603,7 @@ async function handleDownload(
           errorCode: error.code,
           latencyMs: performance.now() - startedAt,
           countMetric: false,
+          fencingEpoch,
         });
       } catch (auditError) {
         error = mapMcpToolError(auditError);

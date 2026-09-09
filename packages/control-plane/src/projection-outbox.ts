@@ -163,6 +163,7 @@ export async function drainRegionalProjectionOutbox(input: {
   readonly process: (event: RegionalProjectionEvent) => Promise<void>;
   readonly limit?: number;
   readonly leaseSeconds?: number;
+  /** Soft claim/start budget. In-flight I/O completes before returning; this is not cancellation. */
   readonly maxDurationMs?: number;
   readonly claimToken?: string;
   readonly onEvent?: (event: {
@@ -223,7 +224,7 @@ export async function drainRegionalProjectionOutbox(input: {
         RETURNING event.id, event.workspace_id, event.event_type,
                   event.payload, event.fencing_epoch, event.sequence`,
       [
-        input.maxDurationMs === undefined ? limit - processed - failed : 1,
+        Math.min(limit - processed - failed, 25),
         leaseSeconds,
         claimToken,
         [...blockedWorkspaceIds],
@@ -231,6 +232,16 @@ export async function drainRegionalProjectionOutbox(input: {
     );
     if (claimed.rows.length === 0) break;
     for (const row of claimed.rows as readonly ProjectionOutboxRow[]) {
+      if (performance.now() >= deadline) {
+        // Return unused claims immediately instead of parking them until lease expiry.
+        await input.database.query(
+          `UPDATE regional_projection_outbox
+          SET claim_token = NULL, claimed_at = NULL
+          WHERE claim_token = $1 AND processed_at IS NULL`,
+          [claimToken],
+        );
+        return { processed, failed };
+      }
       const event: RegionalProjectionEvent = {
         id: row.id,
         regionId: input.regionId,

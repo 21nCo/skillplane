@@ -33,6 +33,22 @@ export function assertDistinctMigrationBuckets(sourceBucket, targetBucket) {
   return { sourceBucket, targetBucket };
 }
 
+export async function withVerifiedRollback({
+  placement,
+  finalizingCompletion,
+  drill,
+  migrate,
+}) {
+  let rollbackTested = false;
+  if (!finalizingCompletion && requiresWorkspaceRollbackDrill(placement)) {
+    await drill();
+    rollbackTested = true;
+  }
+  // Resuming a move cannot certify an unjournaled interrupted drill. A pending
+  // completion instead preserves the exact proof already stored by the journal.
+  return migrate(rollbackTested);
+}
+
 export function requiresWorkspaceRollbackDrill(placement) {
   return placement === null || !isWorkspaceMigrationRecoveryPending(placement);
 }
@@ -209,21 +225,25 @@ export async function migrateConfiguredWorkspace() {
       new WranglerR2MigrationStore(buckets.sourceBucket),
       new WranglerR2MigrationStore(buckets.targetBucket),
     );
-    if (!finalizingCompletion && requiresWorkspaceRollbackDrill(placement)) {
-      await runWorkspaceRollbackDrill({
-        directory,
-        workspaceId,
-        targetRegionId,
-        operations,
-      });
-    }
-    return await migrateWorkspaceWithJournal({
-      directory,
-      journal,
-      workspaceId,
-      targetRegionId,
-      operations,
-      rollbackTested: true,
+    return await withVerifiedRollback({
+      placement,
+      finalizingCompletion,
+      drill: () =>
+        runWorkspaceRollbackDrill({
+          directory,
+          workspaceId,
+          targetRegionId,
+          operations,
+        }),
+      migrate: (rollbackTested) =>
+        migrateWorkspaceWithJournal({
+          directory,
+          journal,
+          workspaceId,
+          targetRegionId,
+          operations,
+          rollbackTested,
+        }),
     });
   } finally {
     await Promise.allSettled(

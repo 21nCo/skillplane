@@ -57,6 +57,7 @@ export async function drainProjectionCell(
       regionId,
       database: regional.pool,
       limit: 50_000,
+      // Stop starting work after 45s; an in-flight operation may finish later.
       maxDurationMs: 45_000,
       process: (event) =>
         applyRegionalPublicProjection({

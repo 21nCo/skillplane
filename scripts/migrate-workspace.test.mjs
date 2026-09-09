@@ -7,6 +7,7 @@ import {
   assertMigrationDatabaseRegions,
   migrationSourceRegionId,
   requiresWorkspaceRollbackDrill,
+  withVerifiedRollback,
 } from "./migrate-workspace.mjs";
 
 describe("workspace migration bucket safety", () => {
@@ -172,4 +173,33 @@ describe("workspace migration recovery", () => {
       false,
     );
   });
+});
+
+it("certifies rollback only after this invocation completes its drill", async () => {
+  for (const state of ["active", "moving"]) {
+    let drilled = false;
+    const result = await withVerifiedRollback({
+      placement: { state },
+      finalizingCompletion: false,
+      drill: async () => {
+        drilled = true;
+      },
+      migrate: async (rollbackTested) => rollbackTested,
+    });
+    assert.equal(result, state === "active");
+    assert.equal(drilled, state === "active");
+  }
+  await assert.rejects(
+    withVerifiedRollback({
+      placement: { state: "active" },
+      finalizingCompletion: false,
+      drill: async () => {
+        throw new Error("interrupted drill");
+      },
+      migrate: async () => {
+        assert.fail("Must not migrate after a failed drill");
+      },
+    }),
+    /interrupted drill/u,
+  );
 });
