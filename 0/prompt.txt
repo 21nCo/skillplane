@@ -1,0 +1,1 @@
+change the host names to app-local.skillplane.dev and mcp-local.skillplane.dev
