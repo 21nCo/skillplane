@@ -1,0 +1,1 @@
+ignore the PR reports, copy the env values to the main worktree (the values which aren't present on main worktree) and the remove the worktree
