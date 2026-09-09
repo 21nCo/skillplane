@@ -1,0 +1,5 @@
+is it possible to observe latencies - how much time is taken where per regional workspace?
+
+I am testing on app-dev and it is taking \~1.5 sec on skills page to refresh for in-south region and about 2.5s for US region...
+
+why still 1.5s is taken? I am in Hyderabad, India
