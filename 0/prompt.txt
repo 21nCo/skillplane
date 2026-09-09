@@ -1,0 +1,7 @@
+splane work linear issue [https://linear.app/21n/issue/SKI-6/adopt-mcpfn-for-skillplane-mcp-runtime-authorization-and-quality-gates](https://linear.app/21n/issue/SKI-6/adopt-mcpfn-for-skillplane-mcp-runtime-authorization-and-quality-gates)
+
+use cached skill if skillplane MCP is not available
+use local latest mcpfn worktree (later we can replace with npm published packages)
+If any fixes are needed in mcpfn, authfn etc - make them on that latest mcpfn worktree as you go
+
+No scaffolding or shims or backward support needed in skillplane
