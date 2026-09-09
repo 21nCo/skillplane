@@ -1,0 +1,1 @@
+use skillplane local MCP not just skillplane
