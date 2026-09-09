@@ -1,0 +1,5 @@
+<environment_context>
+  <current_date>2026-08-23</current_date>
+  <timezone>Asia/Kolkata</timezone>
+  <filesystem><workspace_roots><root>/Users/serro/Documents/dev/n/agent/experiments/skillplane</root><root>/Users/serro/.codex/visualizations/2026/08/21/01a0245a-0210-7521-9228-8c8a3fa8b2b7</root></workspace_roots><permission_profile type="disabled"><file_system type="unrestricted" /></permission_profile></filesystem>
+</environment_context>
