@@ -1,0 +1,6 @@
+# Files pasted by the user:
+
+## "## Findings 1. **[P1] Regional execution still requires globally owned tables.*…": /Users/serro/.codex/attachments/a4070487-5d75-48d9-a0a3-f6db0e766e50/pasted-text.txt
+
+## My request:
+what do you think of this code review?
