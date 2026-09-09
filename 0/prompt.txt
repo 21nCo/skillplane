@@ -1,0 +1,2 @@
+perform all of this checks
+Use aside browser for browser based flows and my logged in gmail for signing up
