@@ -1,0 +1,6 @@
+in this approach - how to
+
+1. support both local workspaces and cloud workspaces, multiple accounts?
+2. analytics - how many times a skill is used and by which agent?
+3. amendments, skill creation etc (right now - exposed via MCP)
+4. Cloud ephemeral agent environments - skillplane use via only MCP is possible
