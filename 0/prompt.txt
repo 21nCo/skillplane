@@ -1,0 +1,6 @@
+perform an audit of all the local ports used in all the projects (all surfaces like web app, local db etc)
+create an inventory file of ports and recommended changes in various projects to not overlap and cohesive neighbour ports according to project (ex: nucleum project has some groups of unique ports already configured)
+
+then choose unique ports for skillplane from recommendation
+
+I authorized the tunnel request
