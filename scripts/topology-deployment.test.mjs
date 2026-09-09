@@ -38,6 +38,7 @@ describe("multi-cell Cloudflare topology adapter", () => {
       publicTurnstileSiteKey: "0x4AAAAAAAAAA-production-site-key",
       controlHyperdriveId: ids.control,
       publicBucketName: "skillplane-public-bundles",
+      mcpVariables: { POSTHOG_HOST: "https://analytics.example.test" },
       cells: {
         "in-south": {
           hyperdriveId: ids.inSouth,
@@ -66,6 +67,12 @@ describe("multi-cell Cloudflare topology adapter", () => {
           assert.deepEqual(worker.triggers.crons, ["* * * * *"]);
         }
       }
+    }
+    for (const config of [
+      configs.gateway.mcp,
+      ...Object.values(configs.cells).map((cell) => cell.mcp),
+    ]) {
+      assert.equal(config.vars.POSTHOG_HOST, "https://analytics.example.test");
     }
     assert.equal(configs.gateway.app.vars.AUTH_MODE, "otp");
     assert.equal(configs.gateway.app.vars.EMAIL_PROVIDER, "cloudflare-email");

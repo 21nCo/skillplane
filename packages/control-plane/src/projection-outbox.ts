@@ -231,14 +231,15 @@ export async function drainRegionalProjectionOutbox(input: {
       ],
     );
     if (claimed.rows.length === 0) break;
-    for (const row of claimed.rows as readonly ProjectionOutboxRow[]) {
+    const rows = claimed.rows as readonly ProjectionOutboxRow[];
+    for (const [index, row] of rows.entries()) {
       if (performance.now() >= deadline) {
         // Return unused claims immediately instead of parking them until lease expiry.
         await input.database.query(
           `UPDATE regional_projection_outbox
           SET claim_token = NULL, claimed_at = NULL
-          WHERE claim_token = $1 AND processed_at IS NULL`,
-          [claimToken],
+          WHERE claim_token = $1 AND processed_at IS NULL AND id = ANY($2::text[])`,
+          [claimToken, rows.slice(index).map((unused) => unused.id)],
         );
         return { processed, failed };
       }

@@ -226,7 +226,10 @@ export async function createCloudflareTopologyConfigs(input) {
             ...bindings,
           },
           mcp: {
-            ...workerBase(names.mcpCell(cell.regionId), "mcp", variables),
+            ...workerBase(names.mcpCell(cell.regionId), "mcp", {
+              ...(input.mcpVariables ?? {}),
+              ...variables,
+            }),
             ...bindings,
           },
           projection: {

@@ -177,7 +177,8 @@ export async function migrateLegacyWorkspaceBatch(input: {
         workspaceId: row.workspace_id,
         targetRegionId: input.targetRegionId,
         operations,
-        rollbackTested: true,
+        // Recovery alone is not evidence that the preflight drill completed.
+        rollbackTested: !recovering,
       });
     let result;
     try {

@@ -429,6 +429,10 @@ describe("MCP read surface", () => {
     );
     const pool = environment.services.database.pool;
     const workspaceId = environment.skill.skill.workspaceId;
+    const previousFence = await pool.query<{ active_epoch: number | string }>(
+      "SELECT active_epoch FROM regional_workspace_migration_fences WHERE workspace_id = $1",
+      [workspaceId],
+    );
     await pool.query(
       `INSERT INTO regional_workspace_migration_fences (workspace_id, source_epoch, active_epoch)
       VALUES ($1, 0, 3) ON CONFLICT (workspace_id) DO UPDATE SET active_epoch = 3`,
@@ -460,10 +464,18 @@ describe("MCP read surface", () => {
       );
       expect(denied.status).toBe(401);
     } finally {
-      await pool.query(
-        "UPDATE regional_workspace_migration_fences SET active_epoch = 1 WHERE workspace_id = $1",
-        [workspaceId],
-      );
+      const previous = previousFence.rows[0];
+      if (previous) {
+        await pool.query(
+          "UPDATE regional_workspace_migration_fences SET active_epoch = $2 WHERE workspace_id = $1",
+          [workspaceId, previous.active_epoch],
+        );
+      } else {
+        await pool.query(
+          "DELETE FROM regional_workspace_migration_fences WHERE workspace_id = $1",
+          [workspaceId],
+        );
+      }
     }
   });
 

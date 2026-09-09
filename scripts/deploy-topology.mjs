@@ -59,14 +59,14 @@ export function routingKeys(manifest) {
   return value;
 }
 
-function secretsFor(output, manifest) {
+export function secretsFor(output, manifest) {
   if (output.kind === "projection") return null;
   const shared = {
     OAUTH_TOKEN_PEPPER: requireSecretEnvironment("OAUTH_TOKEN_PEPPER"),
     WORKSPACE_ROUTING_KEYS: routingKeys(manifest),
   };
   if (output.id === "gateway:app") return { ...productionSecrets(), ...shared };
-  if (output.id === "gateway:mcp") {
+  if (output.kind === "mcp") {
     return { ...shared, POSTHOG_PROJECT_TOKEN: requirePostHogProjectToken() };
   }
   return shared;
