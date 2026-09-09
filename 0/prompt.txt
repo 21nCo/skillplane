@@ -1,0 +1,4 @@
+hyperdrive: dev-insouth-skillplane-control
+disabled caching
+
+current India db - use for india user data and wipe the authfn data
