@@ -1,0 +1,1 @@
+instead of hooks - is it possible to create the skill projections with message on top asking agent to retrieve skill using skillplane CLI - skillplane {skill\_slug} - so that in CLI - we can make sure that the skill is latest synced, record analytics etc?
