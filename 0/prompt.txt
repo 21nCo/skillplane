@@ -1,0 +1,3 @@
+1. why is this happening only now and worked earlier?
+2. does any existing linear issue already reports this?
+3. does using MCPfn (from superfunctions - check superfunctions repos) would have flagged this early?
