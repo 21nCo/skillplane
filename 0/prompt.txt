@@ -1,0 +1,21 @@
+Partly—but the immediate production fix belongs in Skillplane.
+
+- Skillplane owns the problematic contract: required ten-field `caller`, the Linear-only adaptation, and inconsistent `workspace` versus `workspaceId` inputs. McpFn cannot infer how Skillplane wants caller provenance constructed.
+- McpFn correctly enforces `additionalProperties: false`; loosening that upstream would hide malformed calls.
+- One upstream McpFn fix is warranted: preserve AJV details such as `additionalProperty` and `missingProperty` in validation errors. Today it reduces the error to “additional properties at `/`,” preventing agents from correcting themselves.
+- McpFn could also offer a generic catalog-transform/input-enrichment hook, but client recognition and injected values would remain Skillplane configuration.
+
+Recommended split:
+
+1. **Skillplane hotfix:** hide and inject `caller` for Claude—or preferably all OAuth clients—and standardize workspace selectors.
+2. **McpFn follow-up:** improve validation error details and optionally formalize per-client schema/input adapters.
+
+So I would not block the Skillplane production fix on an upstream McpFn release.
+
+
+
+
+
+
+
+Should we still make this fix?
