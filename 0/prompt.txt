@@ -1,0 +1,5 @@
+are there any mcp testing frameworks available in the world out there?
+how to maintain a project regression-free like skillplane whose main point of consumption is MCP
+
+
+also check this on what this exactly does [https://github.com/vaquarkhan/mcp-test-harness](https://github.com/vaquarkhan/mcp-test-harness)
