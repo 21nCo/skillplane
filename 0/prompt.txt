@@ -1,0 +1,3 @@
+clear local SKI-8 .conduct artifacts, checkout main branch and sync with remote
+
+remove pr-3-review worktree safely
