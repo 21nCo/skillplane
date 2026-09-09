@@ -1,0 +1,1 @@
+merge mcpfn pr, publish all latest mcpfn packages using publish superfunctions skill) and then replace local-links in skillplane with npm published packages
