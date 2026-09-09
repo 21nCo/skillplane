@@ -1,0 +1,1 @@
+push the commits to remote and deploy latest to prod (dont deploy to dev as dev has other SKI-13 region based deployment going)
