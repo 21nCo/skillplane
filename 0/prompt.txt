@@ -1,0 +1,5 @@
+Retrying Skillplane-local.
+4:22 PMBot0
+Didn't get to auth this time. Cloudflare 1033: `mcp-local.skillplane.dev` is set up as a tunnel, but the origin isn't connected (530). Bring the tunnel up and I can retry.
+
+This happened
