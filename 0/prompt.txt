@@ -1,0 +1,8 @@
+# Response annotations:
+Each item contains text selected from an earlier Codex response and may include a user comment. Treat items as Annotation 1, Annotation 2, and so on in array order. Use every selection as context and address every comment. For every annotation you address, include its inline directive `:codex-annotation{index="N"}`, where N is its one-based array position (for example, `:codex-annotation{index="1"}`). Do not use unstructured annotation labels.
+<response-annotations>
+[{"text":"The proper follow-up is to add a narrowly scoped exact allowlist for trusted native callbacks such as Cursor/Grok’s—not accept arbitrary custom schemes—and add real Cursor/Grok registration fixtures to @mcpfn/auth. The current Skillplane policy only enables dynamic loopback ports and localhost in redirect-policy.ts."}]
+</response-annotations>
+
+## My request:
+narrowly scoped exact allowlist - is this scalable?
