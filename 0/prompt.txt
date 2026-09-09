@@ -1,0 +1,25 @@
+is the below ideation for this issue same as what you suggested?
+
+
+
+After checking Cursor’s current implementation, I’d revise the earlier recommendation: don’t maintain a URL-by-URL allowlist.
+
+Cursor always registers the complete callback set—including `cursor:`—even when it intends to use the loopback callback. Skillplane cannot currently tell it to submit only the standards-compliant entries.
+
+The practical fix is:
+
+1. Add an opt-in compatibility mode to `@mcpfn/auth`, for example:
+   ```yaml
+   privateUseSchemePolicy: "rfc8252" | "compatible"
+   ```
+2. Keep `rfc8252` as the secure default. In `compatible` mode, accept well-formed non-HTTP native schemes such as `cursor:`, while still rejecting `file:`, `javascript:`, `data:`, credentials, fragments, malformed URLs, and non-loopback HTTP.
+3. Preserve the actual security boundaries:
+   - Exact registered redirect matching during authorization
+   - Mandatory PKCE S256
+   - Public-client treatment—no trusted client secret
+   - No dynamic-port relaxation outside loopback
+   - Audit logging of compatibility redirects
+4. Enable compatibility mode for Skillplane, add Cursor and Grok’s real full registration payloads as tests, publish the new `@mcpfn/auth` version, upgrade Skillplane, deploy, and test both clients end to end.
+5. Separately report the non-conforming `cursor:` callback to Cursor so this compatibility mode can eventually be unnecessary.
+
+This solves the whole class of native-client interoperability problems without accumulating Cursor/Grok/version-specific URI entries. I have not implemented it yet.
