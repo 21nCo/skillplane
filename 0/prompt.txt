@@ -1,0 +1,5 @@
+is it possible to change the dev deployment to app-dev, mcp-dev etc?
+
+Also why are we using same email auth.skillplane.dev for all environments? should we isolate that as well per environment?
+
+Also any other best practice breaches happened in this branch changes?
