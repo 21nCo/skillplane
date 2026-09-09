@@ -1,0 +1,1 @@
+deploy both environments - dev and prod pointing to new dbs
