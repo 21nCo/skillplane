@@ -1,0 +1,1 @@
+so if cursor used `com.cursor.app:/oauth/callback` - it would have worked?
