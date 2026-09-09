@@ -1,0 +1,3 @@
+any changes in local to push to remote?
+
+Also inventory all skillplane worktrees
