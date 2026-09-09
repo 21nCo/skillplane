@@ -1,0 +1,3 @@
+use dev-insouth-skillplane hyperdrive for insouth region, dev-useast-skillplane for useast region, dev-euwest-skillplane for euwest region
+
+Added the connection strings in .env.development.local as well
