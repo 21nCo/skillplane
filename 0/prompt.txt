@@ -1,0 +1,5 @@
+if we create mcpfn as part of super functions and use it for mcp testing and mcp regression testing - like apifn - would it help us in the long run?
+
+also mcpfn - using as a MCP layer built on top of datafn - by simply using mcpfn's datafn plugin to expose mcp tools from existing datafn with minimal extra effort
+
+What do you think of these ideas? refer superfunctions repos/worktrees thoroughly before responding
