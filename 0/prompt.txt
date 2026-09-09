@@ -1,0 +1,8 @@
+for Skillplane initialization - I want one single command like curl skillplane.dev/install.sh or similar
+
+which should install skillplane CLI, install the desktop app (we will add these features soon)
+
+What can I use? add a install script like above or something else?
+I also want to cover non technical users - like may be creating skillplane initialization skill and providing that via skills.sh for users to use AI agents to initialize Skillplane instead
+
+What do you think?
