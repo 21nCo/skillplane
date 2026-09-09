@@ -136,7 +136,7 @@ async function withSecretFile(secrets, operation) {
   }
 }
 
-function topologySecrets(output) {
+export function topologySecrets(output) {
   if (output.kind === "projection") return null;
   const development = developmentSecrets();
   const shared = {
@@ -152,7 +152,7 @@ function topologySecrets(output) {
       ...shared,
     };
   }
-  if (output.id === "gateway:mcp") {
+  if (output.kind === "mcp") {
     return {
       ...shared,
       POSTHOG_PROJECT_TOKEN: developmentPostHogProjectToken(),

@@ -303,8 +303,11 @@ describe("combined database topology cutover", () => {
         workspaceId,
         sourceRegionId: "legacy",
         targetRegionId: "in-south",
-        rollbackTested: true,
+        rollbackTested: false,
       });
+      expect(
+        first.migrated.find((proof) => proof.workspaceId === unplacedWorkspaceId),
+      ).toMatchObject({ rollbackTested: true });
       expect(
         first.migrated
           .find((proof) => proof.workspaceId === workspaceId)

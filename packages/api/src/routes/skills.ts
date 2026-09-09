@@ -19,6 +19,19 @@ import {
   workspacePrincipal,
 } from "./shared.js";
 
+async function publicVersionsEtag(
+  versions: readonly ReturnType<typeof publicPublishedSkillVersion>[],
+): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(JSON.stringify(versions)),
+  );
+  const hex = [...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+  return `"versions-${hex}"`;
+}
+
 function parseLimit(value: string | undefined): number | undefined {
   if (value === undefined) return undefined;
   const parsed = Number(value);
@@ -216,7 +229,8 @@ export function registerSkillRoutes(app: Hono<ApiEnvironment>): void {
           context.req.param("skillSlug"),
           parseLimit(context.req.query("limit")),
         );
-        const etag = `"versions-${versions[0]?.digest ?? "empty"}-${versions.length.toString()}"`;
+        const publicVersions = versions.map(publicPublishedSkillVersion);
+        const etag = await publicVersionsEtag(publicVersions);
         context.header("Cache-Control", "public, max-age=0, must-revalidate");
         context.header("ETag", etag);
         if (context.req.header("if-none-match") === etag) {
@@ -224,7 +238,7 @@ export function registerSkillRoutes(app: Hono<ApiEnvironment>): void {
         }
         return context.json(
           success(context, {
-            versions: versions.map(publicPublishedSkillVersion),
+            versions: publicVersions,
           }),
         );
       }
@@ -237,7 +251,8 @@ export function registerSkillRoutes(app: Hono<ApiEnvironment>): void {
         skillId: skill.id,
         ...(limit !== undefined ? { limit } : {}),
       });
-      const etag = `"versions-${versions[0]?.digest ?? "empty"}-${versions.length.toString()}"`;
+      const publicVersions = versions.map(publicPublishedSkillVersion);
+      const etag = await publicVersionsEtag(publicVersions);
       context.header("Cache-Control", "public, max-age=0, must-revalidate");
       context.header("ETag", etag);
       if (context.req.header("if-none-match") === etag) {
@@ -245,7 +260,7 @@ export function registerSkillRoutes(app: Hono<ApiEnvironment>): void {
       }
       return context.json(
         success(context, {
-          versions: versions.map(publicPublishedSkillVersion),
+          versions: publicVersions,
         }),
       );
     },
