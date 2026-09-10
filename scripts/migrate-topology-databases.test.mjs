@@ -17,6 +17,7 @@ describe("topology cutover preparation", () => {
         return { role: options.role };
       },
       ["legacy", "in-south", "us-east"],
+      async () => null,
     );
 
     assert.deepEqual(

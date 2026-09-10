@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
 import { it } from "vitest";
-import { resolveTestDatabaseUrl } from "../../src/index.js";
+import { migrateDatabase, resolveTestDatabaseUrl } from "../../src/index.js";
 import { Pool } from "pg";
-import { completeTopologyCutover } from "../../../../scripts/migrate-topology-databases.mjs";
+import {
+  completeTopologyCutover,
+  prepareLegacyControlDatabase,
+} from "../../../../scripts/migrate-topology-databases.mjs";
 
 it("rejects uncertified legacy migration evidence before completing cutover", async () => {
   const pool = new Pool({ connectionString: await resolveTestDatabaseUrl(), max: 1 });
@@ -52,3 +55,62 @@ it("rejects uncertified legacy migration evidence before completing cutover", as
     await pool.end();
   }
 });
+
+it("applies only control migrations when refreshing a completed pruned cutover", async () => {
+  const baseUrl = await resolveTestDatabaseUrl();
+  const admin = new Pool({ connectionString: baseUrl, max: 1 });
+  const name = `skillplane_refresh_${crypto.randomUUID().replaceAll("-", "")}_test`;
+  const url = new URL(baseUrl);
+  url.pathname = `/${name}`;
+  let control;
+  try {
+    await admin.query(`CREATE DATABASE "${name}"`);
+    await prepareLegacyControlDatabase(url.href);
+    control = new Pool({ connectionString: url.href, max: 1 });
+    await control.query(
+      "UPDATE topology_cutover_state SET state = 'copying', target_region_id = 'in-south' WHERE id = 'legacy-to-cells'",
+    );
+    await completeTopologyCutover(control, "in-south");
+    await migrateDatabase(url.href, {
+      role: "control",
+      initialWorkspaceRegion: "in-south",
+      workspaceRegions: ["in-south"],
+    });
+    assert.equal(
+      (
+        await control.query(
+          "SELECT to_regclass('public.regional_projection_outbox') AS relation",
+        )
+      ).rows[0].relation,
+      null,
+    );
+    // Simulate a pending regional ALTER TABLE after physical ownership pruning.
+    await control.query(
+      "DELETE FROM skillplane_schema_migrations WHERE id = '0039_regional_generation_safety_hardening.sql'",
+    );
+    await assert.rejects(
+      migrateDatabase(url.href, { role: "combined", finalizePhysicalOwnership: false }),
+      /regional_projection_outbox/,
+    );
+    await prepareLegacyControlDatabase(url.href, migrateDatabase, [
+      "legacy",
+      "in-south",
+    ]);
+    const pending = await control.query(
+      "SELECT id FROM skillplane_schema_migrations WHERE id = '0039_regional_generation_safety_hardening.sql'",
+    );
+    assert.equal(pending.rows.length, 0);
+    assert.equal(
+      (
+        await control.query(
+          "SELECT state FROM topology_cutover_state WHERE id = 'legacy-to-cells'",
+        )
+      ).rows[0].state,
+      "complete",
+    );
+  } finally {
+    await control?.end();
+    await admin.query(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`);
+    await admin.end();
+  }
+}, 30000);

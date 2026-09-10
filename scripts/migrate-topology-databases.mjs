@@ -46,19 +46,40 @@ export function assertDistinctTopologyCutoverBuckets(
   return { legacyBucketName, initialCellBucketName };
 }
 
+async function readControlCutoverState(databaseUrl) {
+  const pool = new Pool({ connectionString: databaseUrl, max: 1 });
+  try {
+    const relation = await pool.query(
+      "SELECT to_regclass('public.topology_cutover_state')::text AS relation",
+    );
+    if (!relation.rows[0]?.relation) return null;
+    const result = await pool.query(
+      "SELECT state FROM topology_cutover_state WHERE id = 'legacy-to-cells'",
+    );
+    return result.rows[0]?.state ?? null;
+  } finally {
+    await pool.end();
+  }
+}
+
 export async function prepareLegacyControlDatabase(
   databaseUrl,
   migrate = migrateDatabase,
   workspaceRegions = ["legacy"],
+  readState = readControlCutoverState,
 ) {
   // The legacy database remains the regional copy source until cutover. Apply
   // every source-side fence/outbox migration before switching its ownership
   // role to control and eventually pruning regional tables.
-  await migrate(databaseUrl, {
-    role: "combined",
-    initialWorkspaceRegion: "legacy",
-    finalizePhysicalOwnership: false,
-  });
+  // Completed cutovers no longer have a regional copy source. In particular,
+  // never replay pending regional migrations against a pruned control schema.
+  if ((await readState(databaseUrl)) !== "complete") {
+    await migrate(databaseUrl, {
+      role: "combined",
+      initialWorkspaceRegion: "legacy",
+      finalizePhysicalOwnership: false,
+    });
+  }
   return migrate(databaseUrl, {
     role: "control",
     initialWorkspaceRegion: "legacy",
