@@ -33,6 +33,21 @@ describe.each(["combined", "regional"] as const)(
         role: "control",
       });
       const database = createDatabaseClient({ connectionString: databaseUrl, role });
+      // Keep revision 1 published while adding a newer draft to exercise history order.
+      await database.pool.query(
+        `INSERT INTO skill_versions
+           (id, workspace_id, skill_id, revision, base_version_id, status, source, content_digest,
+            r2_object_key, bundle_byte_size, manifest, change_summary,
+            created_by_actor_type, created_by_actor_id)
+         SELECT $1, workspace_id, skill_id, 2, id, 'draft', source, content_digest,
+                r2_object_key, bundle_byte_size, manifest, 'History ordering fixture',
+                created_by_actor_type, created_by_actor_id
+           FROM skill_versions WHERE skill_id = $2 AND revision = 1`,
+        [`skill-version:datafn-a-revision-2`, tenantA.skillId],
+      );
+      await database.pool.query(`UPDATE skills SET next_revision = 3 WHERE id = $1`, [
+        tenantA.skillId,
+      ]);
       const auth = authfn({
         plugins: [],
         namespace: "authfn",
@@ -118,7 +133,7 @@ describe.each(["combined", "regional"] as const)(
         );
       });
 
-      it("reads version history through the domain model name with tenant isolation", async () => {
+      it("reads descending version history through the domain model name with tenant isolation", async () => {
         const response = await handle(
           request(tenantA, "/datafn/query", {
             resource: "skillVersions",
@@ -131,12 +146,16 @@ describe.each(["combined", "regional"] as const)(
         );
         expect(response.status).toBe(200);
         const payload = await response.json();
-        expect(payload.result.data).toHaveLength(1);
-        expect(payload.result.data[0]).toMatchObject({
-          skillId: tenantA.skillId,
-          semanticVersion: "1.0.0",
-        });
-        expect(payload.result.data[0].createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T/u);
+        expect(
+          payload.result.data.map((version: { revision: number }) => version.revision),
+        ).toEqual([2, 1]);
+        expect(payload.result.data).toMatchObject([
+          { skillId: tenantA.skillId, revision: 2, status: "draft" },
+          { skillId: tenantA.skillId, revision: 1, semanticVersion: "1.0.0" },
+        ]);
+        for (const version of payload.result.data) {
+          expect(version.createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T/u);
+        }
         const foreign = await handle(
           request(tenantA, "/datafn/query", {
             resource: "skillVersions",
