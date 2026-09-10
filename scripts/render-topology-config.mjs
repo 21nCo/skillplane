@@ -4,9 +4,12 @@ import { resolve } from "node:path";
 import {
   isMain,
   portablePath,
+  productionPostHogHost,
+  productionPostHogProxyHost,
   publicTurnstileSiteKey,
   requireEnvironment,
   requireHyperdriveId,
+  requirePostHogProjectToken,
   root,
   sha256,
   writeJsonAtomic,
@@ -60,12 +63,17 @@ export async function renderTopologyDeploymentConfigs(options = {}) {
       ];
     }),
   );
-  const configs = createCloudflareTopologyConfigs({
+  const configs = await createCloudflareTopologyConfigs({
     manifest,
     controlHyperdriveId,
     publicBucketName,
     cells,
     publicTurnstileSiteKey: options.publicTurnstileSiteKey ?? publicTurnstileSiteKey(),
+    appVariables: {
+      PUBLIC_POSTHOG_KEY: options.postHogProjectToken ?? requirePostHogProjectToken(),
+      PUBLIC_POSTHOG_HOST: productionPostHogProxyHost,
+    },
+    mcpVariables: { POSTHOG_HOST: productionPostHogHost },
   });
   const outputs = [
     {
@@ -101,6 +109,12 @@ export async function renderTopologyDeploymentConfigs(options = {}) {
   return {
     ok: true,
     manifest,
+    buckets: {
+      public: publicBucketName,
+      cells: Object.fromEntries(
+        Object.entries(cells).map(([regionId, cell]) => [regionId, cell.bucketName]),
+      ),
+    },
     outputs: outputs.map((output) => ({
       ...output,
       path: portablePath(output.path),

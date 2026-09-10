@@ -1,6 +1,7 @@
 import { Client, type ClientOptions } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import type { PostHog } from "@posthog/mcp";
 import { buildApiServices, createApiApp, type ApiServices } from "@skillplane/api";
 import {
   AUTH_CSRF_COOKIE,
@@ -319,6 +320,7 @@ export function parseToolError(result: CallToolResult): {
 
 export async function startMcpTestEnvironment(
   label: string,
+  options: { readonly posthog?: PostHog | null } = {},
 ): Promise<McpTestEnvironment> {
   const databaseUrl = await resolveTestDatabaseUrl();
   await migrateDatabase(databaseUrl);
@@ -375,6 +377,7 @@ export async function startMcpTestEnvironment(
   });
   const mcpApp = createMcpApp({
     getServices: async () => services,
+    posthog: options.posthog,
   });
   const cookie = `${AUTH_SESSION_COOKIE}=${encodeURIComponent(
     owner.sessionToken,

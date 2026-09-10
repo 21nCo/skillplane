@@ -1,6 +1,10 @@
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { migrateDatabase, resolveTestDatabaseUrl } from "../../src/index.js";
+import {
+  migrateDatabase,
+  resolveTestDatabaseUrl,
+  verifyDatabase,
+} from "../../src/index.js";
 
 describe("dynamic DataFn physical ownership", () => {
   const suffix = crypto.randomUUID().replaceAll("-", "").slice(0, 12);
@@ -28,6 +32,7 @@ describe("dynamic DataFn physical ownership", () => {
     await migrateDatabase(controlUrl, {
       role: "control",
       initialWorkspaceRegion: "in-south",
+      workspaceRegions: ["in-south"],
       finalizePhysicalOwnership: false,
     });
     await migrateDatabase(regionalUrl, {
@@ -68,10 +73,48 @@ describe("dynamic DataFn physical ownership", () => {
     await admin.end();
   }, 30_000);
 
+  it("removes the synthetic control stats seed from a fresh regional cell", async () => {
+    const regional = new Pool({ connectionString: regionalUrl, max: 1 });
+    try {
+      await expect(
+        regional.query<{ count: string }>(
+          `SELECT count(*)::text AS count
+             FROM public_stats_counters
+            WHERE id = 'global'`,
+        ),
+      ).resolves.toMatchObject({ rows: [{ count: "0" }] });
+    } finally {
+      await regional.end();
+    }
+  });
+
+  it("ledgers 0044 after regional ownership already removed the table", async () => {
+    const regional = new Pool({ connectionString: regionalUrl, max: 1 });
+    try {
+      await regional.query(
+        `DELETE FROM skillplane_schema_migrations
+          WHERE id = '0044_regional_remove_control_seed.sql';
+         DROP TABLE IF EXISTS public_stats_counters CASCADE`,
+      );
+    } finally {
+      await regional.end();
+    }
+
+    await expect(
+      migrateDatabase(regionalUrl, {
+        role: "regional",
+        finalizePhysicalOwnership: false,
+      }),
+    ).resolves.toMatchObject({
+      applied: ["0044_regional_remove_control_seed.sql"],
+    });
+  });
+
   it("removes dynamic tables from control and retains them in the regional cell", async () => {
     await migrateDatabase(controlUrl, {
       role: "control",
       initialWorkspaceRegion: "in-south",
+      workspaceRegions: ["in-south"],
     });
     await migrateDatabase(regionalUrl, { role: "regional" });
 
@@ -93,6 +136,19 @@ describe("dynamic DataFn physical ownership", () => {
         runtime: "datafn_runtime_records",
         internal: "__datafn_permission_directory_outbox",
       });
+      await expect(
+        verifyDatabase(controlUrl, { role: "control" }),
+      ).resolves.toBeDefined();
+      await expect(
+        verifyDatabase(regionalUrl, { role: "regional" }),
+      ).resolves.toBeDefined();
+
+      await control.query(
+        "CREATE TABLE unexpected_regional_copy (id text PRIMARY KEY)",
+      );
+      await expect(verifyDatabase(controlUrl, { role: "control" })).rejects.toThrow(
+        "Unexpected control tables: unexpected_regional_copy",
+      );
     } finally {
       await Promise.all([control.end(), regional.end()]);
     }

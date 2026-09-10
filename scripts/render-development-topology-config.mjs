@@ -88,7 +88,7 @@ export async function renderDevelopmentTopologyConfigs(options = {}) {
   );
   const postHogProjectToken =
     options.postHogProjectToken ?? developmentPostHogProjectToken();
-  const configs = createCloudflareTopologyConfigs({
+  const configs = await createCloudflareTopologyConfigs({
     manifest,
     controlHyperdriveId,
     publicBucketName,

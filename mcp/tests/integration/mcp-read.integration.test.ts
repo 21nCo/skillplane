@@ -427,17 +427,56 @@ describe("MCP read surface", () => {
     expect(Date.parse(large.expiresAt) - Date.now()).toBeLessThanOrEqual(
       5 * 60 * 1_000,
     );
-    const download = await environment.app.fetch(
-      new Request(large.url, {
-        headers: { authorization: `Bearer ${environment.serviceToken}` },
-      }),
+    const pool = environment.services.database.pool;
+    const workspaceId = environment.skill.skill.workspaceId;
+    const previousFence = await pool.query<{ active_epoch: number | string }>(
+      "SELECT active_epoch FROM regional_workspace_migration_fences WHERE workspace_id = $1",
+      [workspaceId],
     );
-    expect(download.status).toBe(200);
-    expect(download.headers.get("cache-control")).toContain("no-store");
-    expect(download.headers.get("content-security-policy")).toContain("sandbox");
-    expect(new Uint8Array(await download.arrayBuffer())).toEqual(
-      environment.skill.largeAsset,
+    await pool.query(
+      `INSERT INTO regional_workspace_migration_fences (workspace_id, source_epoch, active_epoch)
+      VALUES ($1, 0, 3) ON CONFLICT (workspace_id) DO UPDATE SET active_epoch = 3`,
+      [workspaceId],
     );
+    try {
+      const download = await environment.app.fetch(
+        new Request(large.url, {
+          headers: {
+            authorization: `Bearer ${environment.serviceToken}`,
+            "x-skillplane-routing-epoch": "3",
+          },
+        }),
+      );
+      expect(download.status).toBe(200);
+      expect(download.headers.get("cache-control")).toContain("no-store");
+      expect(download.headers.get("content-security-policy")).toContain("sandbox");
+      expect(new Uint8Array(await download.arrayBuffer())).toEqual(
+        environment.skill.largeAsset,
+      );
+      const otherToken = await environment.issueOAuthToken();
+      const denied = await environment.app.fetch(
+        new Request(large.url, {
+          headers: {
+            authorization: `Bearer ${otherToken}`,
+            "x-skillplane-routing-epoch": "3",
+          },
+        }),
+      );
+      expect(denied.status).toBe(401);
+    } finally {
+      const previous = previousFence.rows[0];
+      if (previous) {
+        await pool.query(
+          "UPDATE regional_workspace_migration_fences SET active_epoch = $2 WHERE workspace_id = $1",
+          [workspaceId, previous.active_epoch],
+        );
+      } else {
+        await pool.query(
+          "DELETE FROM regional_workspace_migration_fences WHERE workspace_id = $1",
+          [workspaceId],
+        );
+      }
+    }
   });
 
   it("paginates authorized published and candidate version history deterministically", async () => {

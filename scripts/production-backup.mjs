@@ -13,6 +13,7 @@ import {
   productionStateDirectory,
   productionDatabase,
   requireSecretEnvironment,
+  validateSecretValue,
   sha256,
   writeJsonAtomic,
 } from "./lib/production-deployment.mjs";
@@ -222,8 +223,10 @@ function verifyProtectedDump(protectedDump, passphrase, expectedDump, clientImag
 
 export async function backupProductionDatabase(options = {}) {
   const database = options.database ?? productionDatabase();
-  const passphrase =
-    options.passphrase ?? requireSecretEnvironment("SKILLPLANE_BACKUP_ENCRYPTION_KEY");
+  const passphrase = validateSecretValue(
+    "SKILLPLANE_BACKUP_ENCRYPTION_KEY",
+    options.passphrase ?? requireSecretEnvironment("SKILLPLANE_BACKUP_ENCRYPTION_KEY"),
+  );
   const source = await openBackupSnapshot(database);
   let dump;
   try {

@@ -68,8 +68,11 @@ describe("public projection events", () => {
     const payloads: Record<string, unknown>[] = [];
     const query = vi.fn(async (text: string, values?: readonly unknown[]) => {
       if (text.includes("jsonb_build_object")) {
+        expect(text).toContain(
+          "(version.id = skill.current_published_version_id) DESC",
+        );
         return {
-          rows: [first, current].map((versionDocument) => ({
+          rows: [current, first].map((versionDocument) => ({
             search_text: "public history",
             version_document: versionDocument,
           })),
@@ -87,12 +90,12 @@ describe("public projection events", () => {
     );
 
     expect(payloads.map((payload) => payload.versionId)).toEqual([
-      "version:one",
       "version:two",
+      "version:one",
     ]);
     expect(payloads.map((payload) => payload.publishedAt)).toEqual([
-      first.publishedAt,
       current.publishedAt,
+      first.publishedAt,
     ]);
   });
 

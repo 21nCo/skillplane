@@ -331,6 +331,7 @@ export class ContextNoteService {
       operation: `context.note.create:${options.contextId}`,
       key: options.idempotencyKey,
       requestHash,
+      fencingEpoch: options.fencingEpoch,
     });
     if (claim.state === "replay") return claim.responseBody.note;
 
@@ -340,117 +341,122 @@ export class ContextNoteService {
     const actor = principalAuditActor(options.principal);
     const attribution = mutationAttribution(options.auditContext);
     try {
-      return await withTransaction(this.pool, options.requestId, async ({ client }) => {
-        const context = await client.query<{
-          archived_at: Date | null;
-          skill_archived_at: Date | null;
-        }>(
-          `SELECT context.archived_at, skill.archived_at AS skill_archived_at
+      return await withTransaction(
+        this.pool,
+        options.requestId,
+        async ({ client }) => {
+          const context = await client.query<{
+            archived_at: Date | null;
+            skill_archived_at: Date | null;
+          }>(
+            `SELECT context.archived_at, skill.archived_at AS skill_archived_at
                FROM skill_contexts context
                JOIN skills skill
                  ON skill.id = context.skill_id
                 AND skill.workspace_id = context.workspace_id
               WHERE context.id = $1 AND context.workspace_id = $2
               FOR SHARE OF context`,
-          [options.contextId, options.principal.workspaceId],
-        );
-        const contextRow = context.rows[0];
-        if (!contextRow) {
-          throw new DomainError("CONTEXT_NOT_FOUND", "Context was not found", 404);
-        }
-        if (contextRow.archived_at || contextRow.skill_archived_at) {
-          throw new DomainError(
-            "CONTEXT_ARCHIVED",
-            "Archived contexts cannot receive notes",
-            409,
+            [options.contextId, options.principal.workspaceId],
           );
-        }
-        const count = await client.query<{ count: string }>(
-          `SELECT count(*)::text AS count
+          const contextRow = context.rows[0];
+          if (!contextRow) {
+            throw new DomainError("CONTEXT_NOT_FOUND", "Context was not found", 404);
+          }
+          if (contextRow.archived_at || contextRow.skill_archived_at) {
+            throw new DomainError(
+              "CONTEXT_ARCHIVED",
+              "Archived contexts cannot receive notes",
+              409,
+            );
+          }
+          const count = await client.query<{ count: string }>(
+            `SELECT count(*)::text AS count
                FROM context_notes
               WHERE context_id = $1 AND archived_at IS NULL`,
-          [options.contextId],
-        );
-        if (Number(count.rows[0]?.count ?? 0) >= MAX_ACTIVE_NOTES) {
-          throw new DomainError(
-            "NOTE_LIMIT_REACHED",
-            "A context cannot contain more than 500 active notes",
-            409,
+            [options.contextId],
           );
-        }
-        await client.query(
-          `INSERT INTO context_notes
+          if (Number(count.rows[0]?.count ?? 0) >= MAX_ACTIVE_NOTES) {
+            throw new DomainError(
+              "NOTE_LIMIT_REACHED",
+              "A context cannot contain more than 500 active notes",
+              409,
+            );
+          }
+          await client.query(
+            `INSERT INTO context_notes
                (id, workspace_id, context_id, note_key, title)
              VALUES ($1, $2, $3, $4, $5)`,
-          [noteId, options.principal.workspaceId, options.contextId, noteKey, title],
-        );
-        await client.query(
-          `INSERT INTO context_note_revisions
+            [noteId, options.principal.workspaceId, options.contextId, noteKey, title],
+          );
+          await client.query(
+            `INSERT INTO context_note_revisions
                (id, workspace_id, note_id, revision, base_revision_id,
                 title, body, body_digest, learning_metadata,
                 created_by_actor_type, created_by_actor_id, created_by_agent,
                 created_by_model, created_for_user_id)
              VALUES ($1, $2, $3, 1, NULL, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
-          [
-            revisionId,
-            options.principal.workspaceId,
-            noteId,
-            title,
-            body,
-            bodyDigest,
-            learningMetadata,
-            actor.actorType,
-            actor.actorId,
-            attribution.agent,
-            attribution.model,
-            options.principal.kind === "user"
-              ? options.principal.userId
-              : (options.principal.delegatedUserId ?? null),
-          ],
-        );
-        await client.query(
-          `UPDATE context_notes
+            [
+              revisionId,
+              options.principal.workspaceId,
+              noteId,
+              title,
+              body,
+              bodyDigest,
+              learningMetadata,
+              actor.actorType,
+              actor.actorId,
+              attribution.agent,
+              attribution.model,
+              options.principal.kind === "user"
+                ? options.principal.userId
+                : (options.principal.delegatedUserId ?? null),
+            ],
+          );
+          await client.query(
+            `UPDATE context_notes
                 SET current_revision_id = $2, updated_at = now()
               WHERE id = $1`,
-          [noteId, revisionId],
-        );
-        const inserted = await client.query<NoteRow>(
-          `${noteSelect} WHERE note.id = $1 AND note.workspace_id = $2`,
-          [noteId, options.principal.workspaceId],
-        );
-        const row = inserted.rows[0];
-        if (!row) {
-          throw new DomainError(
-            "NOTE_NOT_FOUND",
-            "Context note could not be created",
-            500,
+            [noteId, revisionId],
           );
-        }
-        const note = toNoteRecord(row);
-        await insertMutationAudit(client, options.principal, options.auditContext, {
-          eventType: "context.note.created",
-          action: "contexts:write",
-          requestId: options.requestId,
-          resourceType: "context_note_revision",
-          resourceId: note.currentRevisionId,
-          contextId: options.contextId,
-          metadata: {
-            noteId: note.id,
-            revision: note.currentRevision,
-            baseRevisionId: note.currentRevisionBaseId,
-            digest: note.bodyDigest,
-          },
-        });
-        await enqueueResourceRoutingProjection(client, {
-          workspaceId: options.principal.workspaceId,
-          resources: [{ resourceType: "context_note", resourceId: note.id }],
-          fencingEpoch: options.fencingEpoch,
-        });
-        await this.idempotency.complete(client, claim.identity, 201, { note });
-        return note;
-      });
+          const inserted = await client.query<NoteRow>(
+            `${noteSelect} WHERE note.id = $1 AND note.workspace_id = $2`,
+            [noteId, options.principal.workspaceId],
+          );
+          const row = inserted.rows[0];
+          if (!row) {
+            throw new DomainError(
+              "NOTE_NOT_FOUND",
+              "Context note could not be created",
+              500,
+            );
+          }
+          const note = toNoteRecord(row);
+          await insertMutationAudit(client, options.principal, options.auditContext, {
+            eventType: "context.note.created",
+            action: "contexts:write",
+            requestId: options.requestId,
+            resourceType: "context_note_revision",
+            resourceId: note.currentRevisionId,
+            contextId: options.contextId,
+            metadata: {
+              noteId: note.id,
+              revision: note.currentRevision,
+              baseRevisionId: note.currentRevisionBaseId,
+              digest: note.bodyDigest,
+            },
+          });
+          await enqueueResourceRoutingProjection(client, {
+            workspaceId: options.principal.workspaceId,
+            resources: [{ resourceType: "context_note", resourceId: note.id }],
+            fencingEpoch: options.fencingEpoch,
+          });
+          await this.idempotency.complete(client, claim.identity, 201, { note });
+          return note;
+        },
+        { fencingEpoch: options.fencingEpoch },
+      );
     } catch (error) {
-      await this.idempotency.release(claim.identity);
+      await this.idempotency.release(claim.identity, options.fencingEpoch);
       throw error;
     }
   }
@@ -464,6 +470,7 @@ export class ContextNoteService {
     readonly learningMetadata?: Readonly<Record<string, unknown>>;
     readonly idempotencyKey: string;
     readonly requestId: string;
+    readonly fencingEpoch?: number;
     readonly auditContext?: MutationAuditContext;
   }): Promise<ContextNoteRecord> {
     authorize(options.principal, "contexts:write");
@@ -489,6 +496,7 @@ export class ContextNoteService {
       operation: `context.note.update:${options.noteId}`,
       key: options.idempotencyKey,
       requestHash,
+      fencingEpoch: options.fencingEpoch,
     });
     if (claim.state === "replay") return claim.responseBody.note;
 
@@ -496,16 +504,19 @@ export class ContextNoteService {
     const actor = principalAuditActor(options.principal);
     const attribution = mutationAttribution(options.auditContext);
     try {
-      return await withTransaction(this.pool, options.requestId, async ({ client }) => {
-        const current = await client.query<{
-          context_id: string;
-          current_revision_id: string;
-          current_revision: number;
-          note_archived_at: Date | null;
-          context_archived_at: Date | null;
-          skill_archived_at: Date | null;
-        }>(
-          `SELECT note.context_id, note.current_revision_id,
+      return await withTransaction(
+        this.pool,
+        options.requestId,
+        async ({ client }) => {
+          const current = await client.query<{
+            context_id: string;
+            current_revision_id: string;
+            current_revision: number;
+            note_archived_at: Date | null;
+            context_archived_at: Date | null;
+            skill_archived_at: Date | null;
+          }>(
+            `SELECT note.context_id, note.current_revision_id,
                     revision.revision AS current_revision,
                     note.archived_at AS note_archived_at,
                     context.archived_at AS context_archived_at,
@@ -522,97 +533,99 @@ export class ContextNoteService {
                 AND skill.workspace_id = context.workspace_id
               WHERE note.id = $1 AND note.workspace_id = $2
               FOR UPDATE OF note`,
-          [options.noteId, options.principal.workspaceId],
-        );
-        const currentRow = current.rows[0];
-        if (!currentRow) {
-          throw new DomainError("NOTE_NOT_FOUND", "Context note was not found", 404);
-        }
-        if (currentRow.note_archived_at) {
-          throw new DomainError(
-            "NOTE_ARCHIVED",
-            "Archived notes cannot receive revisions",
-            409,
+            [options.noteId, options.principal.workspaceId],
           );
-        }
-        if (currentRow.context_archived_at || currentRow.skill_archived_at) {
-          throw new DomainError(
-            "CONTEXT_ARCHIVED",
-            "Archived contexts cannot receive note revisions",
-            409,
-          );
-        }
-        if (currentRow.current_revision !== expectedRevision) {
-          throw new DomainError(
-            "NOTE_REVISION_CONFLICT",
-            "The note changed after the editor was opened",
-            409,
-            {
-              currentRevision: currentRow.current_revision,
-              currentRevisionId: currentRow.current_revision_id,
-            },
-          );
-        }
-        await client.query(
-          `INSERT INTO context_note_revisions
+          const currentRow = current.rows[0];
+          if (!currentRow) {
+            throw new DomainError("NOTE_NOT_FOUND", "Context note was not found", 404);
+          }
+          if (currentRow.note_archived_at) {
+            throw new DomainError(
+              "NOTE_ARCHIVED",
+              "Archived notes cannot receive revisions",
+              409,
+            );
+          }
+          if (currentRow.context_archived_at || currentRow.skill_archived_at) {
+            throw new DomainError(
+              "CONTEXT_ARCHIVED",
+              "Archived contexts cannot receive note revisions",
+              409,
+            );
+          }
+          if (currentRow.current_revision !== expectedRevision) {
+            throw new DomainError(
+              "NOTE_REVISION_CONFLICT",
+              "The note changed after the editor was opened",
+              409,
+              {
+                currentRevision: currentRow.current_revision,
+                currentRevisionId: currentRow.current_revision_id,
+              },
+            );
+          }
+          await client.query(
+            `INSERT INTO context_note_revisions
                (id, workspace_id, note_id, revision, base_revision_id,
                 title, body, body_digest, learning_metadata,
                 created_by_actor_type, created_by_actor_id, created_by_agent,
                 created_by_model, created_for_user_id)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
-          [
-            revisionId,
-            options.principal.workspaceId,
-            options.noteId,
-            currentRow.current_revision + 1,
-            currentRow.current_revision_id,
-            title,
-            body,
-            bodyDigest,
-            learningMetadata,
-            actor.actorType,
-            actor.actorId,
-            attribution.agent,
-            attribution.model,
-            options.principal.kind === "user"
-              ? options.principal.userId
-              : (options.principal.delegatedUserId ?? null),
-          ],
-        );
-        await client.query(
-          `UPDATE context_notes
+            [
+              revisionId,
+              options.principal.workspaceId,
+              options.noteId,
+              currentRow.current_revision + 1,
+              currentRow.current_revision_id,
+              title,
+              body,
+              bodyDigest,
+              learningMetadata,
+              actor.actorType,
+              actor.actorId,
+              attribution.agent,
+              attribution.model,
+              options.principal.kind === "user"
+                ? options.principal.userId
+                : (options.principal.delegatedUserId ?? null),
+            ],
+          );
+          await client.query(
+            `UPDATE context_notes
                 SET title = $3, current_revision_id = $4, updated_at = now()
               WHERE id = $1 AND workspace_id = $2`,
-          [options.noteId, options.principal.workspaceId, title, revisionId],
-        );
-        const updated = await client.query<NoteRow>(
-          `${noteSelect} WHERE note.id = $1 AND note.workspace_id = $2`,
-          [options.noteId, options.principal.workspaceId],
-        );
-        const row = updated.rows[0];
-        if (!row) {
-          throw new DomainError("NOTE_NOT_FOUND", "Context note was not found", 404);
-        }
-        const note = toNoteRecord(row);
-        await insertMutationAudit(client, options.principal, options.auditContext, {
-          eventType: "context.note.revised",
-          action: "contexts:write",
-          requestId: options.requestId,
-          resourceType: "context_note_revision",
-          resourceId: note.currentRevisionId,
-          contextId: currentRow.context_id,
-          metadata: {
-            noteId: note.id,
-            revision: note.currentRevision,
-            baseRevisionId: note.currentRevisionBaseId,
-            digest: note.bodyDigest,
-          },
-        });
-        await this.idempotency.complete(client, claim.identity, 200, { note });
-        return note;
-      });
+            [options.noteId, options.principal.workspaceId, title, revisionId],
+          );
+          const updated = await client.query<NoteRow>(
+            `${noteSelect} WHERE note.id = $1 AND note.workspace_id = $2`,
+            [options.noteId, options.principal.workspaceId],
+          );
+          const row = updated.rows[0];
+          if (!row) {
+            throw new DomainError("NOTE_NOT_FOUND", "Context note was not found", 404);
+          }
+          const note = toNoteRecord(row);
+          await insertMutationAudit(client, options.principal, options.auditContext, {
+            eventType: "context.note.revised",
+            action: "contexts:write",
+            requestId: options.requestId,
+            resourceType: "context_note_revision",
+            resourceId: note.currentRevisionId,
+            contextId: currentRow.context_id,
+            metadata: {
+              noteId: note.id,
+              revision: note.currentRevision,
+              baseRevisionId: note.currentRevisionBaseId,
+              digest: note.bodyDigest,
+            },
+          });
+          await this.idempotency.complete(client, claim.identity, 200, { note });
+          return note;
+        },
+        { fencingEpoch: options.fencingEpoch },
+      );
     } catch (error) {
-      await this.idempotency.release(claim.identity);
+      await this.idempotency.release(claim.identity, options.fencingEpoch);
       throw error;
     }
   }
@@ -622,6 +635,7 @@ export class ContextNoteService {
     readonly principal: Principal;
     readonly idempotencyKey: string;
     readonly requestId: string;
+    readonly fencingEpoch?: number;
   }): Promise<ContextNoteRecord> {
     authorize(options.principal, "contexts:write");
     const requestHash = await hashIdempotentRequest({
@@ -634,34 +648,40 @@ export class ContextNoteService {
       operation: `context.note.archive:${options.noteId}`,
       key: options.idempotencyKey,
       requestHash,
+      fencingEpoch: options.fencingEpoch,
     });
     if (claim.state === "replay") return claim.responseBody.note;
     try {
-      return await withTransaction(this.pool, options.requestId, async ({ client }) => {
-        const archived = await client.query(
-          `UPDATE context_notes
+      return await withTransaction(
+        this.pool,
+        options.requestId,
+        async ({ client }) => {
+          const archived = await client.query(
+            `UPDATE context_notes
                 SET archived_at = COALESCE(archived_at, now()), updated_at = now()
               WHERE id = $1 AND workspace_id = $2
               RETURNING id`,
-          [options.noteId, options.principal.workspaceId],
-        );
-        if (archived.rowCount !== 1) {
-          throw new DomainError("NOTE_NOT_FOUND", "Context note was not found", 404);
-        }
-        const result = await client.query<NoteRow>(
-          `${noteSelect} WHERE note.id = $1 AND note.workspace_id = $2`,
-          [options.noteId, options.principal.workspaceId],
-        );
-        const row = result.rows[0];
-        if (!row) {
-          throw new DomainError("NOTE_NOT_FOUND", "Context note was not found", 404);
-        }
-        const note = toNoteRecord(row);
-        await this.idempotency.complete(client, claim.identity, 200, { note });
-        return note;
-      });
+            [options.noteId, options.principal.workspaceId],
+          );
+          if (archived.rowCount !== 1) {
+            throw new DomainError("NOTE_NOT_FOUND", "Context note was not found", 404);
+          }
+          const result = await client.query<NoteRow>(
+            `${noteSelect} WHERE note.id = $1 AND note.workspace_id = $2`,
+            [options.noteId, options.principal.workspaceId],
+          );
+          const row = result.rows[0];
+          if (!row) {
+            throw new DomainError("NOTE_NOT_FOUND", "Context note was not found", 404);
+          }
+          const note = toNoteRecord(row);
+          await this.idempotency.complete(client, claim.identity, 200, { note });
+          return note;
+        },
+        { fencingEpoch: options.fencingEpoch },
+      );
     } catch (error) {
-      await this.idempotency.release(claim.identity);
+      await this.idempotency.release(claim.identity, options.fencingEpoch);
       throw error;
     }
   }

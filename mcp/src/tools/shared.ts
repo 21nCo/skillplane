@@ -365,6 +365,7 @@ export async function executeMutationTool<T extends object>(
           outcome,
           identity: runtime.identity,
           caller,
+          fencingEpoch: runtime.fencingEpoch,
           ...(scope.resourceType ? { resourceType: scope.resourceType } : {}),
           ...(scope.resourceId ? { resourceId: scope.resourceId } : {}),
           ...(scope.skillId ? { skillId: scope.skillId } : {}),

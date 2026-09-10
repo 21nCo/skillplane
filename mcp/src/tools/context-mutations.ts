@@ -36,6 +36,7 @@ export function contextKnowledgeUpdate(
         learningMetadata: input.learningMetadata,
         idempotencyKey: input.idempotencyKey,
         requestId: execution.requestId,
+        fencingEpoch: runtime.fencingEpoch,
         auditContext: mutationAuditContext(runtime, input.caller),
       });
       execution.setScope({
@@ -140,6 +141,7 @@ export function contextNoteUpsert(
           learningMetadata: input.learningMetadata,
           idempotencyKey: input.idempotencyKey,
           requestId: execution.requestId,
+          fencingEpoch: runtime.fencingEpoch,
           auditContext,
         });
       }

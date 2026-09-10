@@ -387,6 +387,7 @@ export class AmendmentService {
       operation: `skill.amend:${options.skillId}`,
       key: options.idempotencyKey,
       requestHash,
+      fencingEpoch: options.fencingEpoch,
     });
     if (claim.state === "replay") return claim.responseBody.result;
 
@@ -817,10 +818,13 @@ export class AmendmentService {
           });
           return response;
         },
+        { fencingEpoch: options.fencingEpoch },
       );
       return result;
     } catch (error) {
-      await this.idempotency.release(claim.identity).catch(() => undefined);
+      await this.idempotency
+        .release(claim.identity, options.fencingEpoch)
+        .catch(() => undefined);
       if (stored) {
         await this.storage
           .deleteIfUnreferenced(stored.key, async (key) => {

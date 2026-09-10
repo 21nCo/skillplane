@@ -249,7 +249,8 @@ export async function enqueueCurrentSkillProjection(
       WHERE skill.id = $1 AND skill.workspace_id = $2
         AND version.status = 'published'
         AND ($3::boolean OR version.id = skill.current_published_version_id)
-      ORDER BY version.published_at, version.id`,
+      ORDER BY (version.id = skill.current_published_version_id) DESC,
+               version.published_at, version.id`,
     [input.skill.id, input.skill.workspaceId, input.includePublishedHistory ?? false],
   );
   const rows = result.rows as readonly ProjectionRow[];

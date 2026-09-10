@@ -36,7 +36,7 @@ async function stablePersonalSlug(userId: string): Promise<string> {
 export async function ensurePersonalWorkspace(
   pool: Pool,
   session: AuthFnSession,
-  homeRegionId = "legacy",
+  homeRegionId: string | (() => string) = "legacy",
 ): Promise<string> {
   const client = await pool.connect();
   try {
@@ -52,6 +52,8 @@ export async function ensurePersonalWorkspace(
     );
     let workspaceId = existing.rows[0]?.id;
     if (!workspaceId) {
+      const resolvedHomeRegionId =
+        typeof homeRegionId === "function" ? homeRegionId() : homeRegionId;
       workspaceId = id("workspace");
       const email =
         typeof session.subject.email === "string" ? session.subject.email : undefined;
@@ -68,6 +70,12 @@ export async function ensurePersonalWorkspace(
           session.actorId,
         ],
       );
+      await client.query(
+        `INSERT INTO workspace_placements
+           (workspace_id, region_id, epoch, state)
+         VALUES ($1, $2, 1, 'active')`,
+        [workspaceId, resolvedHomeRegionId],
+      );
     }
     await client.query(
       `INSERT INTO workspace_memberships
@@ -76,13 +84,6 @@ export async function ensurePersonalWorkspace(
        ON CONFLICT (workspace_id, user_id)
        DO UPDATE SET role = 'owner', updated_at = now()`,
       [id("membership"), workspaceId, session.actorId],
-    );
-    await client.query(
-      `INSERT INTO workspace_placements
-         (workspace_id, region_id, epoch, state)
-       VALUES ($1, $2, 1, 'active')
-       ON CONFLICT (workspace_id) DO NOTHING`,
-      [workspaceId, homeRegionId],
     );
     await client.query(
       `INSERT INTO resource_routing_directory

@@ -315,6 +315,7 @@ export class AmendmentReviewService {
       operation: `amendment.review.${options.decision}:${options.reviewId}`,
       key: options.idempotencyKey,
       requestHash,
+      fencingEpoch: options.fencingEpoch,
     });
     if (claim.state === "replay") return claim.responseBody.detail;
     try {
@@ -534,9 +535,12 @@ export class AmendmentReviewService {
           await this.idempotency.complete(client, claim.identity, 200, { detail });
           return detail;
         },
+        { fencingEpoch: options.fencingEpoch },
       );
     } catch (error) {
-      await this.idempotency.release(claim.identity).catch(() => undefined);
+      await this.idempotency
+        .release(claim.identity, options.fencingEpoch)
+        .catch(() => undefined);
       if (semverConflict(error)) {
         throw new DomainError(
           "SKILL_PUBLISH_CONFLICT",

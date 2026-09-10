@@ -9,6 +9,11 @@
       "types": "./src/index.ts",
       "development": "./src/index.ts",
       "default": "./dist/index.js"
+    },
+    "./table-ownership": {
+      "types": "./src/table-ownership.ts",
+      "development": "./src/table-ownership.ts",
+      "default": "./dist/table-ownership.js"
     }
   },
   "files": [

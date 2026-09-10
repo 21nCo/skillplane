@@ -16,6 +16,7 @@ describe("topology cutover preparation", () => {
         calls.push(options);
         return { role: options.role };
       },
+      ["legacy", "in-south", "us-east"],
     );
 
     assert.deepEqual(
@@ -26,6 +27,8 @@ describe("topology cutover preparation", () => {
       calls.every((options) => options.finalizePhysicalOwnership === false),
       true,
     );
+    assert.deepEqual(calls[1].workspaceRegions, ["legacy", "in-south", "us-east"]);
+    assert.equal(calls[0].skipRegionalAfterCutover, true);
     assert.deepEqual(result, { role: "control" });
   });
 
@@ -101,9 +104,10 @@ describe("topology cutover completion", () => {
     assert.match(calls[1].sql, /FOR UPDATE/u);
     assert.match(calls[2].sql, /LEFT JOIN workspace_placements/u);
     assert.deepEqual(calls[2].values, ["in-south"]);
-    assert.match(calls[3].sql, /state = 'complete'/u);
-    assert.equal(calls[4].sql, "COMMIT");
-    assert.equal(calls[5].sql, "RELEASE");
+    assert.match(calls[3].sql, /rollbackTested/u);
+    assert.match(calls[4].sql, /state = 'complete'/u);
+    assert.equal(calls[5].sql, "COMMIT");
+    assert.equal(calls[6].sql, "RELEASE");
   });
 
   it("rolls back without completing when a workspace is not placed", async () => {

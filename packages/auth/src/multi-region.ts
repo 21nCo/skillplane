@@ -70,6 +70,9 @@ export function createPostgresAuthFnPlacementDirectory(
     },
     async compareAndSet(input) {
       const value = input.placement;
+      if (value.identityKey !== input.identityKey) {
+        throw new Error("AUTHFN_PLACEMENT_IDENTITY_MISMATCH");
+      }
       const result = await pool.query<PlacementRow>(
         `UPDATE authfn_identity_placements
             SET region_id = $4, epoch = $5, state = $6,
