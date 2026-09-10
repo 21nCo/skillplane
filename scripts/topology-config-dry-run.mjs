@@ -11,6 +11,7 @@ export async function dryRunTopologyConfigs(options = {}) {
     controlHyperdriveId: "1".repeat(32),
     publicBucketName: "skillplane-public-bundles",
     publicTurnstileSiteKey: "production-self-test-site-key",
+    postHogProjectToken: `phc_${"a".repeat(32)}`,
     cells: Object.fromEntries(
       manifest.cells.map((cell, index) => [
         cell.regionId,

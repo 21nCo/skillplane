@@ -74,7 +74,11 @@ export async function migrateProductionDatabase(options = {}) {
   const database = options.database ?? productionDatabase();
   const backup = await requireFreshBackup(database);
   const ssl = await verifySsl(database);
-  const environment = { ...process.env, MIGRATION_DATABASE_URL: database.url };
+  const environment = {
+    ...process.env,
+    MIGRATION_DATABASE_URL: database.url,
+    SKILLPLANE_DATABASE_ROLE: "combined",
+  };
   delete environment.DATABASE_URL;
   const migration = parseCommandJson(
     capture("pnpm", ["--filter", "@skillplane/db", "migrate"], {

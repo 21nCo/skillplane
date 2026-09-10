@@ -27,7 +27,7 @@ import {
 import { productionReleaseSmoke } from "./production-smoke.mjs";
 import { renderTopologyDeploymentConfigs } from "./render-topology-config.mjs";
 
-function routingKeys() {
+export function routingKeys(manifest) {
   const value = requireEnvironment("WORKSPACE_ROUTING_KEYS", {
     minimumLength: 32,
     trim: false,
@@ -36,17 +36,37 @@ function routingKeys() {
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Error("WORKSPACE_ROUTING_KEYS must be a JSON object");
   }
+  const expected = new Set(manifest.routing.verificationKeyIds);
+  const received = Object.keys(parsed);
+  if (
+    received.length !== expected.size ||
+    received.some((keyId) => !expected.has(keyId)) ||
+    typeof parsed[manifest.routing.activeKeyId] !== "string" ||
+    new Set(Object.values(parsed)).size !== received.length ||
+    Object.values(parsed).some(
+      (secret) => typeof secret !== "string" || secret.length < 32,
+    )
+  ) {
+    throw new Error("WORKSPACE_ROUTING_KEYS does not match the topology keyring");
+  }
+  const identitySecrets = [
+    requireSecretEnvironment("AUTHFN_SECRET"),
+    requireSecretEnvironment("OAUTH_TOKEN_PEPPER"),
+  ];
+  if (Object.values(parsed).some((secret) => identitySecrets.includes(secret))) {
+    throw new Error("Workspace routing keys must be independent identity secrets");
+  }
   return value;
 }
 
-function secretsFor(output) {
+export function secretsFor(output, manifest) {
   if (output.kind === "projection") return null;
   const shared = {
     OAUTH_TOKEN_PEPPER: requireSecretEnvironment("OAUTH_TOKEN_PEPPER"),
-    WORKSPACE_ROUTING_KEYS: routingKeys(),
+    WORKSPACE_ROUTING_KEYS: routingKeys(manifest),
   };
   if (output.id === "gateway:app") return { ...productionSecrets(), ...shared };
-  if (output.id === "gateway:mcp") {
+  if (output.kind === "mcp") {
     return { ...shared, POSTHOG_PROJECT_TOKEN: requirePostHogProjectToken() };
   }
   return shared;
@@ -189,6 +209,10 @@ export async function deployTopology(options = {}) {
   const safety = await readAndAssertTopologySafety({
     manifest: rendered.manifest,
     databases,
+    buckets: {
+      accountId: requireEnvironment("CLOUDFLARE_ACCOUNT_ID"),
+      ...rendered.buckets,
+    },
     sourceRevision,
   });
   const hyperdrives = verifyTopologyHyperdrives(rendered, databases);
@@ -197,7 +221,9 @@ export async function deployTopology(options = {}) {
   const selected = rendered.outputs.filter((output) => !only || output.kind === only);
   // Resolve every secret before the first Worker mutation so a late missing
   // gateway secret cannot leave a partially deployed topology.
-  const secrets = new Map(selected.map((output) => [output.id, secretsFor(output)]));
+  const secrets = new Map(
+    selected.map((output) => [output.id, secretsFor(output, rendered.manifest)]),
+  );
   run("pnpm", ["build"], { failureMessage: "Production monorepo build failed" });
   // Private cells and projectors must exist before the public gateways bind them.
   selected.sort(

@@ -1,6 +1,10 @@
 import { resolve } from "node:path";
 import { Pool } from "pg";
 import {
+  GLOBAL_CONTROL_TABLES,
+  REGIONAL_WORKSPACE_TABLES,
+} from "../../packages/control-plane/dist/table-ownership.js";
+import {
   parseDirectPostgresUrl,
   postgresTlsEvidence,
   productionDatabase,
@@ -124,14 +128,36 @@ function backupEvidence(backups) {
   };
 }
 
+function bucketEvidence(manifest, buckets) {
+  const regions = manifest.cells.map((cell) => cell.regionId).sort();
+  const names = [buckets?.public, ...regions.map((region) => buckets?.cells?.[region])];
+  if (
+    !/^[a-f0-9]{32}$/u.test(buckets?.accountId ?? "") ||
+    JSON.stringify(Object.keys(buckets?.cells ?? {}).sort()) !==
+      JSON.stringify(regions) ||
+    names.some(
+      (name) =>
+        typeof name !== "string" || !/^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/u.test(name),
+    ) ||
+    new Set(names).size !== names.length
+  )
+    throw new Error("Topology bucket identities must match the complete resource set");
+  return {
+    accountId: buckets.accountId,
+    public: buckets.public,
+    cells: Object.fromEntries(regions.map((region) => [region, buckets.cells[region]])),
+  };
+}
+
 export function createTopologyMigrationSafetyState(input) {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     ok: true,
     createdAt: input.createdAt ?? new Date().toISOString(),
     applicationCommit: input.sourceRevision.commit,
     topologySha256: sha256(JSON.stringify(input.manifest)),
     databaseFingerprints: fingerprints(input.databases),
+    bucketIdentities: bucketEvidence(input.manifest, input.buckets),
     backups: backupEvidence(input.backups),
     controlRole: input.control.role,
     cellRoles: Object.fromEntries(
@@ -150,13 +176,15 @@ export function assertRecentTopologyMigrationState(input) {
     manifest.cells.map((cell) => [cell.regionId, "regional"]),
   );
   if (
-    state?.schemaVersion !== 2 ||
+    state?.schemaVersion !== 3 ||
     state.ok !== true ||
     state.applicationCommit !== sourceRevision.commit ||
     state.topologySha256 !== sha256(JSON.stringify(manifest)) ||
     JSON.stringify(state.databaseFingerprints) !==
       JSON.stringify(expectedFingerprints) ||
     JSON.stringify(state.backups) !== JSON.stringify(backupEvidence(backups)) ||
+    JSON.stringify(state.bucketIdentities) !==
+      JSON.stringify(bucketEvidence(manifest, input.buckets)) ||
     state.controlRole !== "control" ||
     JSON.stringify(state.cellRoles) !== JSON.stringify(expectedCells) ||
     state.cutoverComplete !== true ||
@@ -224,12 +252,8 @@ export async function verifyProductionTopologyDatabaseOwnership(manifest, databa
     "skillplane-production-topology-control-preflight",
   );
   try {
-    requireTables(
-      control.tables,
-      ["authfn_users", "workspaces", "workspace_placements", "topology_cutover_state"],
-      "CONTROL",
-    );
-    forbidTables(control.tables, ["skills", "regional_projection_outbox"], "CONTROL");
+    requireTables(control.tables, GLOBAL_CONTROL_TABLES, "CONTROL");
+    forbidTables(control.tables, REGIONAL_WORKSPACE_TABLES, "CONTROL");
     const allowedRegions = manifest.cells.map((cell) => cell.regionId);
     const cutover = await control.pool.query(
       `SELECT state, target_region_id
@@ -268,14 +292,10 @@ export async function verifyProductionTopologyDatabaseOwnership(manifest, databa
     try {
       requireTables(
         regional.tables,
-        ["skills", "skill_versions", "regional_projection_outbox"],
+        REGIONAL_WORKSPACE_TABLES,
         `CELL_${cell.regionId}`,
       );
-      forbidTables(
-        regional.tables,
-        ["authfn_users", "workspaces", "workspace_placements"],
-        `CELL_${cell.regionId}`,
-      );
+      forbidTables(regional.tables, GLOBAL_CONTROL_TABLES, `CELL_${cell.regionId}`);
       cells[cell.regionId] = {
         tableCount: regional.tables.size,
         tls: regional.tls,
@@ -312,6 +332,7 @@ export async function readAndAssertTopologySafety(input) {
     backups,
     manifest: input.manifest,
     databases: input.databases,
+    buckets: input.buckets,
     sourceRevision: input.sourceRevision,
     now,
   });

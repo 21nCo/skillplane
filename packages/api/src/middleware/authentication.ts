@@ -80,9 +80,7 @@ export function authenticationMiddleware(
         session &&
         requiresPersonalWorkspace(context.req.raw, services.deploymentRole)
       ) {
-        await ensurePersonalWorkspace(
-          services.controlDatabase.pool,
-          session,
+        await ensurePersonalWorkspace(services.controlDatabase.pool, session, () =>
           initialWorkspaceRegionForRequest(context.req.raw, services, session.actorId),
         );
       }

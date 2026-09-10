@@ -30,6 +30,9 @@ describe("concrete workspace migration rollback", () => {
   const workspaceId = `workspace:migration-${suffix}`;
   const skillId = `skill:migration-${suffix}`;
   const versionId = `skill-version:migration-${suffix}`;
+  const dynamicParentTable = `datafn_z_parent_${suffix}`;
+  const dynamicChildTable = `datafn_a_child_${suffix}`;
+  const dynamicIdentitySequence = `datafn_parent_identity_${suffix}`;
   const bundleKey = `workspaces/${workspaceId}/skills/${skillId}/bundles/sha256/${"0".repeat(64)}.zip`;
   const targetDatabase = `skillplane_workspace_migration_${suffix}_test`;
   let sourceUrl = "";
@@ -51,15 +54,26 @@ describe("concrete workspace migration rollback", () => {
     await migrateDatabase(targetUrl);
     source = new Pool({ connectionString: sourceUrl, max: 5 });
     target = new Pool({ connectionString: targetUrl, max: 3 });
-    for (const database of [source, target]) {
-      await database.query(
-        `CREATE TABLE IF NOT EXISTS __datafn_meta (
-           id text PRIMARY KEY,
-           namespace text NOT NULL,
-           next_server_seq integer NOT NULL
-         )`,
-      );
-    }
+    await source.query(
+      `CREATE TABLE IF NOT EXISTS __datafn_meta (
+         id text PRIMARY KEY,
+         namespace text NOT NULL,
+         next_server_seq integer NOT NULL
+       );
+       CREATE TABLE "${dynamicParentTable}" (
+         id bigint GENERATED ALWAYS AS IDENTITY (
+           SEQUENCE NAME "${dynamicIdentitySequence}"
+           START WITH 10 INCREMENT BY 2 CACHE 3
+         ) PRIMARY KEY,
+         __ns text NOT NULL,
+         value text NOT NULL
+       );
+       CREATE TABLE "${dynamicChildTable}" (
+         id bigserial PRIMARY KEY,
+         __ns text NOT NULL,
+         parent_id bigint NOT NULL REFERENCES "${dynamicParentTable}"(id)
+       )`,
+    );
     await source.query(
       `INSERT INTO __datafn_meta (id, namespace, next_server_seq)
        VALUES ($1, $2, 7)
@@ -67,6 +81,17 @@ describe("concrete workspace migration rollback", () => {
          SET namespace = EXCLUDED.namespace,
              next_server_seq = EXCLUDED.next_server_seq`,
       [`datafn-meta:${suffix}`, workspaceId],
+    );
+    await source.query(
+      `INSERT INTO "${dynamicParentTable}" (id, __ns, value)
+         OVERRIDING SYSTEM VALUE
+       VALUES (41, $1, 'parent')`,
+      [workspaceId],
+    );
+    await source.query(
+      `INSERT INTO "${dynamicChildTable}" (id, __ns, parent_id)
+       VALUES (77, $1, 41)`,
+      [workspaceId],
     );
     await source.query(
       `INSERT INTO workspaces (id, workspace_id, slug, name)
@@ -131,6 +156,8 @@ describe("concrete workspace migration rollback", () => {
         await client.query("DELETE FROM __datafn_meta WHERE namespace = $1", [
           workspaceId,
         ]);
+        await client.query(`DROP TABLE "${dynamicChildTable}"`);
+        await client.query(`DROP TABLE "${dynamicParentTable}"`);
         await client.query("DELETE FROM workspaces WHERE id = $1", [workspaceId]);
         await client.query("COMMIT");
       } catch (error) {
@@ -156,6 +183,11 @@ describe("concrete workspace migration rollback", () => {
 
   it("removes a copied published version and file only through the scoped drill", async () => {
     if (!source || !target) throw new Error("Migration fixture unavailable");
+    await expect(
+      target.query<{ relation: string | null }>(
+        "SELECT to_regclass('public.__datafn_meta')::text AS relation",
+      ),
+    ).resolves.toMatchObject({ rows: [{ relation: null }] });
     const sourceObjects = new MemoryObjects();
     const targetObjects = new MemoryObjects();
     sourceObjects.objects.set(bundleKey, new Uint8Array([0]));
@@ -182,6 +214,43 @@ describe("concrete workspace migration rollback", () => {
     try {
       await operations.drainOutboxes(context);
       await operations.copyDatabase(context);
+      // Leave unrelated target-cell rows on the source keys before retrying
+      // the copy. The retry must allocate fresh keys and rewrite the child FK.
+      const targetFixture = await target.connect();
+      try {
+        await targetFixture.query("BEGIN");
+        await targetFixture.query("SET LOCAL session_replication_role = replica");
+        await targetFixture.query(
+          `DELETE FROM "${dynamicChildTable}" WHERE __ns = $1`,
+          [workspaceId],
+        );
+        await targetFixture.query(
+          `DELETE FROM "${dynamicParentTable}" WHERE __ns = $1`,
+          [workspaceId],
+        );
+        await targetFixture.query(
+          `INSERT INTO "${dynamicParentTable}" (id, __ns, value)
+             OVERRIDING SYSTEM VALUE
+           VALUES (41, 'workspace:target-existing', 'existing target')`,
+        );
+        await targetFixture.query(
+          `INSERT INTO "${dynamicChildTable}" (id, __ns, parent_id)
+           VALUES (77, 'workspace:target-existing', 41)`,
+        );
+        await targetFixture.query("SELECT setval($1::regclass, 101, true)", [
+          `public.${dynamicIdentitySequence}`,
+        ]);
+        await targetFixture.query(
+          "SELECT setval(pg_get_serial_sequence($1, 'id'), 100, true)",
+          [`public.${dynamicChildTable}`],
+        );
+        await targetFixture.query("COMMIT");
+      } catch (error) {
+        await targetFixture.query("ROLLBACK");
+        throw error;
+      } finally {
+        targetFixture.release();
+      }
       await operations.copyDatabase(context);
       await operations.copyBundles(context);
       await expect(
@@ -192,6 +261,56 @@ describe("concrete workspace migration rollback", () => {
           [workspaceId],
         ),
       ).resolves.toMatchObject({ rows: [{ next_server_seq: 7 }] });
+      await expect(
+        target.query(
+          `SELECT child.id::text AS child_id, parent.id::text AS parent_id
+             FROM "${dynamicChildTable}" child
+             JOIN "${dynamicParentTable}" parent ON parent.id = child.parent_id
+            WHERE child.__ns = $1 AND parent.__ns = $1`,
+          [workspaceId],
+        ),
+      ).resolves.toMatchObject({
+        rows: [{ child_id: "101", parent_id: "103" }],
+      });
+      await expect(
+        target.query(
+          `SELECT child.id::text AS child_id, parent.id::text AS parent_id
+             FROM "${dynamicChildTable}" child
+             JOIN "${dynamicParentTable}" parent ON parent.id = child.parent_id
+            WHERE child.__ns = 'workspace:target-existing'
+              AND parent.__ns = 'workspace:target-existing'`,
+        ),
+      ).resolves.toMatchObject({
+        rows: [{ child_id: "77", parent_id: "41" }],
+      });
+      await expect(
+        target.query(
+          `SELECT nextval(pg_get_serial_sequence($1, 'id'))::text AS next_id`,
+          [`public.${dynamicChildTable}`],
+        ),
+      ).resolves.toMatchObject({ rows: [{ next_id: "102" }] });
+      const nextParent = await target.query<{ next_id: string }>(
+        `SELECT nextval(pg_get_serial_sequence($1, 'id'))::text AS next_id`,
+        [`public.${dynamicParentTable}`],
+      );
+      // A transactional restart may discard cached values; monotonicity and
+      // non-collision matter, not the exact size of that permitted gap.
+      const nextParentId = nextParent.rows[0]?.next_id;
+      if (!nextParentId) throw new Error("Parent sequence result missing");
+      expect(BigInt(nextParentId)).toBeGreaterThan(103n);
+      await expect(
+        target.query(
+          `SELECT sequence_definition.seqstart::text AS start,
+                  sequence_definition.seqincrement::text AS increment,
+                  sequence_definition.seqcache::text AS cache
+             FROM pg_catalog.pg_sequence sequence_definition
+            WHERE sequence_definition.seqrelid =
+                  pg_catalog.to_regclass($1)`,
+          [`public.${dynamicIdentitySequence}`],
+        ),
+      ).resolves.toMatchObject({
+        rows: [{ start: "10", increment: "2", cache: "3" }],
+      });
       await expect(
         target.query("DELETE FROM skill_version_files WHERE workspace_id = $1", [
           workspaceId,
@@ -256,6 +375,10 @@ describe("concrete workspace migration rollback", () => {
     const drainEventId = `event:drain-${suffix}`;
     let rolledBack = false;
     try {
+      await source.query(
+        "DELETE FROM regional_workspace_migration_fences WHERE workspace_id = $1",
+        [workspaceId],
+      );
       await source.query(
         `INSERT INTO regional_projection_outbox
            (id, workspace_id, event_type, payload, fencing_epoch, sequence)
@@ -334,6 +457,127 @@ describe("concrete workspace migration rollback", () => {
           .catch(() => undefined);
       }
     }
+  });
+
+  it("rejects a read-committed write admitted before a move away and back", async () => {
+    if (!source || !target) throw new Error("Migration fixture unavailable");
+    const sourceObjects = new MemoryObjects();
+    const targetObjects = new MemoryObjects();
+    sourceObjects.objects.set(bundleKey, new Uint8Array([0]));
+    const moveAway = new PostgresWorkspaceMigrationOperations(
+      source,
+      target,
+      source,
+      sourceObjects,
+      targetObjects,
+    );
+    const moveBack = new PostgresWorkspaceMigrationOperations(
+      target,
+      source,
+      source,
+      targetObjects,
+      sourceObjects,
+    );
+    const awayContext = {
+      namespace: workspaceId,
+      sourceRegionId: "legacy",
+      targetRegionId: "in-south",
+      sourceEpoch: 1,
+      movingEpoch: 2,
+      recoveryFence: 1,
+      recoveryOwnerId: `recovery:away-${suffix}`,
+      recoveryLeaseExpiresAt: Date.now() + 60_000,
+    };
+    const backContext = {
+      ...awayContext,
+      sourceRegionId: "in-south",
+      targetRegionId: "legacy",
+      sourceEpoch: 2,
+      movingEpoch: 3,
+      recoveryFence: 2,
+      recoveryOwnerId: `recovery:back-${suffix}`,
+    };
+    const delayed = await source.connect();
+    let awayResumed = false;
+    let backResumed = false;
+    try {
+      await delayed.query("BEGIN ISOLATION LEVEL READ COMMITTED");
+      await delayed.query("SELECT 1");
+
+      await moveAway.quiesceSource(awayContext);
+      await moveAway.drainOutboxes(awayContext);
+      await moveAway.resumeTarget(awayContext);
+      awayResumed = true;
+
+      await moveBack.quiesceSource(backContext);
+      await moveBack.drainOutboxes(backContext);
+      await moveBack.resumeTarget(backContext);
+      backResumed = true;
+
+      await expect(
+        delayed.query(
+          `INSERT INTO skills
+             (id, workspace_id, slug, name, description, tags)
+           VALUES ($1, $2, 'prior-generation', 'Prior generation', '', '{}')`,
+          [`skill:prior-generation-${suffix}`, workspaceId],
+        ),
+      ).rejects.toMatchObject({ code: "55000" });
+    } finally {
+      await delayed.query("ROLLBACK").catch(() => undefined);
+      delayed.release();
+      if (!backResumed) {
+        await moveBack
+          .rollbackSource({ ...backContext, cause: new Error("test cleanup") })
+          .catch(() => undefined);
+      }
+      if (!awayResumed) {
+        await moveAway
+          .rollbackSource({ ...awayContext, cause: new Error("test cleanup") })
+          .catch(() => undefined);
+      }
+    }
+  });
+
+  it("uses the current workspace slug after a projection cached an older slug", async () => {
+    if (!target) throw new Error("Migration fixture unavailable");
+    const publicWorkspace = `workspace:projection-slug-${suffix}`;
+    const oldSlug = `projection-old-${suffix}`;
+    const currentSlug = `projection-current-${suffix}`;
+    const projectedSkillId = `skill:projection-slug-${suffix}`;
+    await target.query(
+      `INSERT INTO workspaces (id, workspace_id, slug, name)
+       VALUES ($1, $1, $2, 'Projection slug fixture')`,
+      [publicWorkspace, oldSlug],
+    );
+    const cachedSlug = oldSlug;
+    await target.query("UPDATE workspaces SET slug = $2 WHERE id = $1", [
+      publicWorkspace,
+      currentSlug,
+    ]);
+
+    const directory = new PostgresPublicProjectionDirectory(target);
+    await directory.publish({
+      workspaceId: publicWorkspace,
+      workspaceSlug: cachedSlug,
+      skillId: projectedSkillId,
+      skillSlug: "projection-slug-fixture",
+      versionId: `version:projection-slug-${suffix}`,
+      currentVersionId: `version:projection-slug-${suffix}`,
+      semanticVersion: "1.0.0",
+      digest: `sha256:${"3".repeat(64)}`,
+      objectKey: `public/${suffix}/projection-slug.zip`,
+      projectionSequence: 1,
+    });
+
+    await expect(
+      target.query<{ workspace_slug: string }>(
+        `SELECT workspace_slug
+           FROM public_skill_projections
+          WHERE workspace_id = $1 AND skill_id = $2`,
+        [publicWorkspace, projectedSkillId],
+      ),
+    ).resolves.toMatchObject({ rows: [{ workspace_slug: currentSlug }] });
+    await target.query("DELETE FROM workspaces WHERE id = $1", [publicWorkspace]);
   });
 
   it("keeps newer public state when an older unpublish completes late", async () => {
@@ -436,6 +680,7 @@ describe("concrete workspace migration rollback", () => {
     await migrateDatabase(targetUrl, {
       role: "control",
       initialWorkspaceRegion: "in-south",
+      workspaceRegions: ["in-south"],
     });
 
     await expect(

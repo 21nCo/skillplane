@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   createCloudflareTopologyConfigs,
+  createTopologyParserLoader,
   readProductionTopology,
 } from "./lib/topology-deployment.mjs";
 
@@ -12,12 +13,32 @@ const ids = {
 };
 
 describe("multi-cell Cloudflare topology adapter", () => {
+  it("builds lazily before importing and caches the current parser", async () => {
+    const calls = [];
+    const expected = () => undefined;
+    const load = createTopologyParserLoader({
+      build: async () => {
+        calls.push("build");
+      },
+      importParser: async () => {
+        calls.push("import");
+        return expected;
+      },
+    });
+
+    assert.deepEqual(calls, []);
+    assert.equal(await load(), expected);
+    assert.equal(await load(), expected);
+    assert.deepEqual(calls, ["build", "import"]);
+  });
+
   it("generates canonical gateways and two private least-privilege cells", async () => {
-    const configs = createCloudflareTopologyConfigs({
+    const configs = await createCloudflareTopologyConfigs({
       manifest: await readProductionTopology(),
       publicTurnstileSiteKey: "0x4AAAAAAAAAA-production-site-key",
       controlHyperdriveId: ids.control,
       publicBucketName: "skillplane-public-bundles",
+      mcpVariables: { POSTHOG_HOST: "https://analytics.example.test" },
       cells: {
         "in-south": {
           hyperdriveId: ids.inSouth,
@@ -47,6 +68,12 @@ describe("multi-cell Cloudflare topology adapter", () => {
         }
       }
     }
+    for (const config of [
+      configs.gateway.mcp,
+      ...Object.values(configs.cells).map((cell) => cell.mcp),
+    ]) {
+      assert.equal(config.vars.POSTHOG_HOST, "https://analytics.example.test");
+    }
     assert.equal(configs.gateway.app.vars.AUTH_MODE, "otp");
     assert.equal(configs.gateway.app.vars.EMAIL_PROVIDER, "cloudflare-email");
     assert.equal(configs.gateway.app.send_email[0].name, "SEND_EMAIL");
@@ -67,8 +94,8 @@ describe("multi-cell Cloudflare topology adapter", () => {
 
   it("rejects bucket reuse across public and regional storage", async () => {
     const manifest = await readProductionTopology();
-    assert.throws(
-      () =>
+    await assert.rejects(
+      async () =>
         createCloudflareTopologyConfigs({
           manifest,
           publicTurnstileSiteKey: "0x4AAAAAAAAAA-production-site-key",
@@ -88,4 +115,44 @@ describe("multi-cell Cloudflare topology adapter", () => {
       /must be distinct/u,
     );
   });
+});
+
+it("reports bucket identities matching every generated Worker binding", async () => {
+  const { renderTopologyDeploymentConfigs } =
+    await import("./render-topology-config.mjs");
+  const manifest = await readProductionTopology();
+  const cells = Object.fromEntries(
+    manifest.cells.map((cell, index) => [
+      cell.regionId,
+      {
+        hyperdriveId: String(index + 2).repeat(32),
+        bucketName: `test-${cell.regionId}-bundles`,
+      },
+    ]),
+  );
+  const rendered = await renderTopologyDeploymentConfigs({
+    manifest,
+    cells,
+    controlHyperdriveId: ids.control,
+    publicBucketName: "test-public-bundles",
+    publicTurnstileSiteKey: "test-only-site-key",
+    postHogProjectToken: "test-only-analytics-token",
+    write: false,
+  });
+  assert.equal(rendered.buckets.public, "test-public-bundles");
+  assert.deepEqual(
+    rendered.buckets.cells,
+    Object.fromEntries(
+      Object.entries(cells).map(([region, cell]) => [region, cell.bucketName]),
+    ),
+  );
+  for (const output of rendered.outputs) {
+    const names = output.config.r2_buckets.map((binding) => binding.bucket_name).sort();
+    const expected = output.id.startsWith("gateway:")
+      ? [rendered.buckets.public]
+      : output.kind === "projection"
+        ? [rendered.buckets.public, rendered.buckets.cells[output.regionId]]
+        : [rendered.buckets.cells[output.regionId]];
+    assert.deepEqual(names, expected.sort());
+  }
 });

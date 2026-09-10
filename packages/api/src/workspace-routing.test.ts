@@ -243,6 +243,35 @@ describe("API scope classification", () => {
     ).resolves.toBe("regional");
   });
 
+  it("authenticates a headerless regional DataFn request before route lookup", async () => {
+    const routed = createRoutedApiApplication({
+      local: { fetch: async () => new Response("unexpected local response") },
+      services: async () =>
+        ({
+          auth: { provider: { authenticate: async () => null } },
+        }) as never,
+    });
+
+    const response = await routed.fetch(
+      new Request("http://localhost:5700/datafn/query", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          resource: "skills",
+          version: 1,
+          select: ["id"],
+          limit: 1,
+        }),
+      }),
+      gatewayBindings,
+    );
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: "AUTHENTICATION_REQUIRED" },
+    });
+  });
+
   it("terminates anonymous public-by-ID reads at the global projection", async () => {
     const local = { fetch: async () => new Response("global projection") };
     const services = async () =>
@@ -331,7 +360,7 @@ describe("API scope classification", () => {
     });
   });
 
-  it("reuses the gateway placement cache across requests", async () => {
+  it("refreshes placement and topology between requests even with a stable provider", async () => {
     let placementLookups = 0;
     const query = async (text: string) => {
       if (text.includes("FROM workspace_memberships")) {
@@ -343,8 +372,8 @@ describe("API scope classification", () => {
           rows: [
             {
               workspace_id: "workspace:one",
-              region_id: "in-south",
-              epoch: 1,
+              region_id: placementLookups === 1 ? "in-south" : "us-east",
+              epoch: placementLookups,
               state: "active",
               updated_at: new Date("2026-07-26T00:00:00.000Z"),
               cache_expires_at: null,
@@ -371,18 +400,29 @@ describe("API scope classification", () => {
     });
     const bindings = {
       ...gatewayBindings,
-      CELL_APP: { fetch: async () => new Response("regional response") },
+      CELL_APP: { fetch: async () => new Response("first region") },
     };
 
     for (let index = 0; index < 2; index += 1) {
       const response = await routed.fetch(
         new Request("http://localhost:5700/api/v1/workspaces/workspace%3Aone/skills"),
-        bindings,
+        index === 0
+          ? bindings
+          : {
+              ...bindings,
+              SKILLPLANE_TOPOLOGY: JSON.stringify({
+                ...topology,
+                mode: "single-cell",
+                cells: [{ ...topology.cells[1], appServiceBinding: "NEW_APP" }],
+              }),
+              NEW_APP: { fetch: async () => new Response("new region") },
+            },
       );
       expect(response.status).toBe(200);
+      expect(await response.text()).toBe(index === 0 ? "first region" : "new region");
     }
 
-    expect(placementLookups).toBe(1);
+    expect(placementLookups).toBe(2);
   });
 
   it("uses the public projection for authenticated non-members", async () => {

@@ -1,6 +1,12 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { assertDisposableDatabaseUrl } from "./database-url.js";
-import { loadMigrations, physicalOwnershipPlan } from "./migrate.js";
+import { assertDisposableDatabaseUrl, packageRoot } from "./database-url.js";
+import {
+  loadMigrations,
+  parseWorkspaceRegions,
+  physicalOwnershipPlan,
+} from "./migrate.js";
 
 describe("migration chain", () => {
   it("is ordered, hashed, and immutable by identity", async () => {
@@ -42,6 +48,17 @@ describe("migration chain", () => {
       "0034_control_public_stats_checkpoints.sql",
       "0035_control_cutover_workspace_creation_fence.sql",
       "0036_control_steady_state_workspace_placement.sql",
+      "0037_regional_workspace_generation_fence.sql",
+      "0038_multi_region_safety_hardening.sql",
+      "0039_regional_generation_safety_hardening.sql",
+      "0040_control_plane_safety_followup.sql",
+      "0041_regional_fence_lock_followup.sql",
+      "0042_control_outbox_cutover_fence_followup.sql",
+      "0043_control_placement_region_integrity_followup.sql",
+      "0044_regional_remove_control_seed.sql",
+      "0045_control_upgrade_fence_reconciliation.sql",
+      "0046_control_audit_read_retention.sql",
+      "0047_control_audit_retention_order.sql",
     ]);
     expect(new Set(migrations.map((migration) => migration.sha256)).size).toBe(
       migrations.length,
@@ -68,6 +85,32 @@ describe("migration chain", () => {
     expect(() =>
       assertDisposableDatabaseUrl("postgresql://user:pass@127.0.0.1:5432/skillplane"),
     ).toThrow(/Refusing destructive reset/);
+  });
+
+  it("parses the standalone control migration region list", () => {
+    expect(parseWorkspaceRegions("in-south, us-east,eu-west")).toEqual([
+      "in-south",
+      "us-east",
+      "eu-west",
+    ]);
+    expect(parseWorkspaceRegions(undefined)).toBeUndefined();
+    expect(parseWorkspaceRegions("")).toBeUndefined();
+    expect(parseWorkspaceRegions(" \t\n ")).toBeUndefined();
+  });
+
+  it("builds runtime dependencies before database entrypoints", () => {
+    const manifest = JSON.parse(
+      readFileSync(resolve(packageRoot, "package.json"), "utf8"),
+    ) as { scripts: Record<string, string> };
+    expect(manifest.scripts["migrate"]).toMatch(
+      /^pnpm run build:runtime-dependencies && pnpm run build && /u,
+    );
+    expect(manifest.scripts["verify"]).toMatch(
+      /^pnpm run build:runtime-dependencies && pnpm run build && /u,
+    );
+    expect(manifest.scripts["build:runtime-dependencies"]).toBe(
+      "pnpm --filter @skillplane/control-plane build",
+    );
   });
 
   it("assigns dynamic DataFn tables to regional databases", () => {

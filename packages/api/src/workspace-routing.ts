@@ -31,7 +31,7 @@ const PUBLIC_SKILL_READ_HEADER = "x-skillplane-public-skill-read";
 
 type ApiScope =
   | { readonly kind: "global" }
-  | { readonly kind: "workspace"; readonly workspaceId: string }
+  | { readonly kind: "workspace"; readonly workspaceId: string | undefined }
   | {
       readonly kind: "resource";
       readonly resourceType: RoutableResourceType;
@@ -127,11 +127,10 @@ export function classifyApiScope(request: Request): ApiScope {
   const url = new URL(request.url);
   const path = url.pathname;
   if (path.startsWith("/datafn/")) {
+    const workspaceId = request.headers.get("x-skillplane-workspace-id");
     return {
       kind: "workspace",
-      workspaceId: segment(
-        request.headers.get("x-skillplane-workspace-id") ?? undefined,
-      ),
+      workspaceId: workspaceId === null ? undefined : segment(workspaceId),
     };
   }
   let match = /^\/api\/v1\/workspaces\/([^/]+)\/skills(?:\/|$)/u.exec(path);
@@ -330,14 +329,6 @@ export function createRoutedApiApplication(input: {
   readonly local: FetchApplication;
   readonly services: ApiServiceProvider;
 }): FetchApplication {
-  let gatewayCache:
-    | {
-        readonly services: ApiServices;
-        readonly gateway: ReturnType<typeof createWorkspaceGateway>;
-        readonly setBindings: (bindings: RuntimeBindings) => void;
-      }
-    | undefined;
-
   return {
     async fetch(incoming, bindings) {
       const runtime = parseRuntimeConfig(
@@ -376,8 +367,15 @@ export function createRoutedApiApplication(input: {
           "A DataFn request cannot span control and regional resources",
         ).response();
       }
-      if (runtime.deployment.role === "gateway" && datafn === "control") {
+      if (runtime.deployment.role !== "cell" && datafn === "control") {
         return await input.local.fetch(request, bindings);
+      }
+      if (runtime.deployment.role === "cell" && datafn === "control") {
+        return new ApiRoutingError(
+          404,
+          "REGIONAL_ROUTE_NOT_FOUND",
+          "The regional route was not found",
+        ).response();
       }
       let scope: ApiScope;
       try {
@@ -411,73 +409,42 @@ export function createRoutedApiApplication(input: {
           const resolved = await resolveWorkspace(request, scope, services, {
             allowPublicRead: publicSkillVersionRead,
           });
-          const forwardedRequest = new Request(request, {
-            headers: new Headers(request.headers),
-          });
-          // Public callers cannot supply this header because cleanPublicRequest
-          // strips it. It carries the already-authorized workspace into the
-          // reusable gateway without closing over request-scoped identity.
-          forwardedRequest.headers.set(
-            "x-skillplane-routed-workspace-id",
-            resolved.workspaceId,
-          );
+          const forwardedRequest = resolved.publicRead
+            ? new Request(request, { headers: new Headers(request.headers) })
+            : request;
           if (resolved.publicRead) {
             forwardedRequest.headers.set(PUBLIC_SKILL_READ_HEADER, "1");
           }
-          if (gatewayCache?.services !== services) {
-            let activeBindings = bindings;
-            const assertions = createWorkspaceRoutingAssertions({
-              activeKeyId: runtime.routing.activeKeyId,
-              keys: runtime.routing.keys,
-            });
-            const gateway = createWorkspaceGateway({
-              directory: createPostgresWorkspacePlacementDirectory(
-                services.controlDatabase.pool,
-              ),
-              resolveAuthorizedWorkspace: (routedRequest) => {
-                const workspaceId = routedRequest.headers.get(
-                  "x-skillplane-routed-workspace-id",
+          const assertions = createWorkspaceRoutingAssertions({
+            activeKeyId: runtime.routing.activeKeyId,
+            keys: runtime.routing.keys,
+          });
+          const gateway = createWorkspaceGateway({
+            directory: createPostgresWorkspacePlacementDirectory(
+              services.controlDatabase.pool,
+            ),
+            resolveAuthorizedWorkspace: () => Promise.resolve(resolved.workspaceId),
+            cells: {
+              resolve: ({ regionId }) => {
+                const cell = runtime.deployment.topology.cells.find(
+                  (candidate) => candidate.regionId === regionId,
                 );
-                if (!workspaceId) {
-                  throw new ApiRoutingError(
-                    401,
-                    "WORKSPACE_ROUTING_ASSERTION_REQUIRED",
-                    "An authorized workspace route is required",
-                  );
-                }
-                return Promise.resolve(workspaceId);
+                const binding = cell
+                  ? serviceBinding(bindings[cell.appServiceBinding])
+                  : null;
+                if (!cell || !binding) throw new Error("regional app unavailable");
+                return {
+                  regionId,
+                  fetch: (forwarded) => Promise.resolve(binding.fetch(forwarded)),
+                };
               },
-              cells: {
-                resolve: ({ regionId }) => {
-                  const cell = runtime.deployment.topology.cells.find(
-                    (candidate) => candidate.regionId === regionId,
-                  );
-                  const binding = cell
-                    ? serviceBinding(activeBindings[cell.appServiceBinding])
-                    : null;
-                  if (!cell || !binding) throw new Error("regional app unavailable");
-                  return {
-                    regionId,
-                    fetch: (forwarded) => Promise.resolve(binding.fetch(forwarded)),
-                  };
-                },
-              },
-              signer: assertions,
-              assertionAudience: runtime.routing.audience,
-              assertionTtlMs: runtime.routing.ttlMs,
-              onEvent: (event) => logWorkspaceRoutingEvent("app", event),
-            });
-            gatewayCache = {
-              services,
-              gateway,
-              setBindings: (nextBindings) => {
-                activeBindings = nextBindings;
-              },
-            };
-          } else {
-            gatewayCache.setBindings(bindings);
-          }
-          return await gatewayCache.gateway.handle(forwardedRequest);
+            },
+            signer: assertions,
+            assertionAudience: runtime.routing.audience,
+            assertionTtlMs: runtime.routing.ttlMs,
+            onEvent: (event) => logWorkspaceRoutingEvent("app", event),
+          });
+          return await gateway.handle(forwardedRequest);
         } catch (error) {
           if (error instanceof ApiRoutingError) return error.response();
           if (error instanceof DatafnRoutingError) return error.toResponse();

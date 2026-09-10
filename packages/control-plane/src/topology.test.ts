@@ -62,9 +62,11 @@ describe("Skillplane topology manifest", () => {
     const parsed = createSingleCellTopology({
       appAuthority: "https://app-dev.skillplane.dev",
       mcpResource: "https://mcp-dev.skillplane.dev/mcp",
+      regionId: "legacy",
     });
     expect(parsed.mode).toBe("single-cell");
     expect(parsed.cells).toHaveLength(1);
+    expect(parsed.cells[0]?.regionId).toBe("legacy");
   });
 
   it("rejects issuer drift, public cells, and duplicate bindings", () => {
@@ -89,6 +91,26 @@ describe("Skillplane topology manifest", () => {
     secondDuplicateCell.databaseBinding = firstDuplicateCell.databaseBinding;
     expect(() => parseTopologyManifest(duplicate)).toThrow(
       expect.objectContaining({ code: "TOPOLOGY_DUPLICATE_BINDING" }),
+    );
+  });
+
+  it("rejects operationally invalid and reserved region IDs", () => {
+    for (const invalid of ["us--east", "us-east-", "a".repeat(64)]) {
+      const topology = productionTopology();
+      const firstCell = topology.cells[0];
+      if (!firstCell) throw new Error("topology fixture has no first cell");
+      firstCell.regionId = invalid;
+      expect(() => parseTopologyManifest(topology)).toThrow(
+        expect.objectContaining({ code: "TOPOLOGY_INVALID" }),
+      );
+    }
+
+    const reserved = productionTopology();
+    const firstCell = reserved.cells[0];
+    if (!firstCell) throw new Error("topology fixture has no first cell");
+    firstCell.regionId = "legacy";
+    expect(() => parseTopologyManifest(reserved)).toThrow(
+      expect.objectContaining({ code: "TOPOLOGY_RESERVED_REGION" }),
     );
   });
 });

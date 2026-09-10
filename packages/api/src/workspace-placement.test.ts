@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   clientLocationFromEdgeRequest,
   initialWorkspaceRegionForRequest,
+  recommendedWorkspaceRegionForRequest,
   recommendedWorkspaceRegionFromEdge,
   trustedWorkspaceRegion,
 } from "./workspace-placement.js";
@@ -111,5 +112,18 @@ describe("workspace placement request boundary", () => {
         status: 503,
       }),
     );
+  });
+
+  it("omits the UI recommendation when gateway geolocation is unavailable", () => {
+    expect(
+      recommendedWorkspaceRegionForRequest(
+        new Request("https://app.skillplane.dev/api/v1/workspaces"),
+        {
+          deploymentRole: "gateway",
+          workspaceRegions: ["in-south", "us-east"],
+        },
+        "user:one",
+      ),
+    ).toBeNull();
   });
 });

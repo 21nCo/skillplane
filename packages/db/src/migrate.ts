@@ -4,67 +4,39 @@ import { Pool, type PoolClient } from "pg";
 import { packageRoot } from "./database-url.js";
 
 import { resolve } from "node:path";
+import { physicalOwnershipPlan } from "@skillplane/control-plane/table-ownership";
+
+export { physicalOwnershipPlan } from "@skillplane/control-plane/table-ownership";
 
 const migrationsDirectory = resolve(packageRoot, "migrations");
 const migrationPattern = /^\d{4}_[a-z0-9_]+\.sql$/;
 const migrationRolesPattern =
   /^-- skillplane:roles=(combined|control|regional)(?:,(combined|control|regional))*$/mu;
 
+// 0043 was shipped with immediate validation before its NOT VALID repair.
+// Both versions install the same constraints; the reconciliation pass below
+// validates them. Preserve the original ledger hash and accept only this exact
+// historical/current pair, never an arbitrary change to an applied migration.
+const placementRegionMigrationHashes = {
+  id: "0043_control_placement_region_integrity_followup.sql",
+  original: "c98b92689d5e4ff9276c5c28bf414f6818209f387e97d22b58f5b1a950541ed2",
+  repaired: "e018ccc5c56eff432246686ea6a24b85cbda5c79bbe49fedb753159e1ce79979",
+} as const;
+
+export function migrationHashMatches(
+  id: string,
+  recorded: string | undefined,
+  current: string,
+): boolean {
+  return (
+    recorded === current ||
+    (id === placementRegionMigrationHashes.id &&
+      recorded === placementRegionMigrationHashes.original &&
+      current === placementRegionMigrationHashes.repaired)
+  );
+}
+
 export type MigrationRole = "combined" | "control" | "regional";
-
-const globalControlTables = [
-  "authfn_users",
-  "authfn_sessions",
-  "authfn_otp_challenges",
-  "authfn_api_keys",
-  "authfn_region_profiles",
-  "authfn_identity_placements",
-  "authfn_oauth_clients",
-  "authfn_oauth_client_redirect_uris",
-  "authfn_oauth_consents",
-  "authfn_oauth_authorization_requests",
-  "authfn_oauth_authorization_codes",
-  "authfn_oauth_access_tokens",
-  "authfn_oauth_refresh_tokens",
-  "workspaces",
-  "workspace_memberships",
-  "workspace_invitations",
-  "service_principals",
-  "workspace_placements",
-  "resource_routing_directory",
-  "permission_directory_records",
-  "workspace_routing_nonces",
-  "public_skill_projections",
-  "public_skill_projection_heads",
-  "workspace_migration_runs",
-  "topology_cutover_state",
-  "control_plane_audit_events",
-  "control_plane_outbox",
-  "public_stats_counters",
-  "public_stats_projection_events",
-  "public_stats_projection_checkpoints",
-  "api_rate_limits",
-] as const;
-
-const regionalWorkspaceTables = [
-  "skills",
-  "skill_versions",
-  "skill_version_files",
-  "skill_contexts",
-  "context_knowledge_revisions",
-  "context_notes",
-  "context_note_revisions",
-  "amendment_reviews",
-  "audit_events",
-  "analytics_daily",
-  "analytics_daily_summary",
-  "analytics_daily_dimensions",
-  "analytics_rollup_runs",
-  "idempotency_records",
-  "regional_projection_sequences",
-  "regional_projection_outbox",
-  "regional_workspace_migration_fences",
-] as const;
 
 export interface Migration {
   readonly id: string;
@@ -79,30 +51,12 @@ export interface MigrationResult {
   readonly alreadyApplied: readonly string[];
 }
 
-export function physicalOwnershipPlan(
-  role: Exclude<MigrationRole, "combined">,
-  datafnTables: readonly string[],
-): {
-  readonly unowned: readonly string[];
-  readonly expected: readonly string[];
-} {
-  const staticTables = new Set<string>([
-    ...globalControlTables,
-    ...regionalWorkspaceTables,
-    "skillplane_schema_migrations",
-  ]);
-  const dynamic = [...new Set(datafnTables)]
-    .filter((table) => !staticTables.has(table))
-    .sort();
-  return role === "control"
-    ? {
-        unowned: [...regionalWorkspaceTables, ...dynamic],
-        expected: [...globalControlTables],
-      }
-    : {
-        unowned: [...globalControlTables],
-        expected: [...regionalWorkspaceTables, ...dynamic],
-      };
+export function parseWorkspaceRegions(
+  value: string | undefined,
+): readonly string[] | undefined {
+  return value === undefined || value.trim() === ""
+    ? undefined
+    : value.split(",").map((region) => region.trim());
 }
 
 function quoteIdentifier(value: string): string {
@@ -148,14 +102,11 @@ async function ensureLedger(client: PoolClient): Promise<void> {
   `);
 }
 
-async function enforcePhysicalOwnership(
-  client: PoolClient,
-  role: Exclude<MigrationRole, "combined">,
-): Promise<void> {
-  await client.query("BEGIN");
-  try {
-    const datafnTables = await client.query<{ table_name: string }>(
-      `SELECT table_name
+export async function listDatafnTables(
+  client: Pool | PoolClient,
+): Promise<readonly string[]> {
+  const result = await client.query<{ table_name: string }>(
+    `SELECT table_name
          FROM information_schema.tables AS candidate
         WHERE table_schema = 'public'
           AND table_type = 'BASE TABLE'
@@ -170,45 +121,44 @@ async function enforcePhysicalOwnership(
             )
           )
         ORDER BY table_name`,
+  );
+  return result.rows.map((row) => row.table_name);
+}
+
+async function enforcePhysicalOwnership(
+  client: PoolClient,
+  role: Exclude<MigrationRole, "combined">,
+): Promise<void> {
+  const plan = physicalOwnershipPlan(role, await listDatafnTables(client));
+  if (role === "regional") {
+    await client.query(
+      "DROP TRIGGER IF EXISTS audit_events_public_stats_counter_insert ON audit_events",
     );
-    const plan = physicalOwnershipPlan(
-      role,
-      datafnTables.rows.map((row) => row.table_name),
+    await client.query(
+      "DROP FUNCTION IF EXISTS skillplane_increment_public_agent_skill_uses()",
     );
-    if (role === "regional") {
-      await client.query(
-        "DROP TRIGGER IF EXISTS audit_events_public_stats_counter_insert ON audit_events",
-      );
-      await client.query(
-        "DROP FUNCTION IF EXISTS skillplane_increment_public_agent_skill_uses()",
-      );
-    }
-    for (const table of plan.unowned) {
-      await client.query(`DROP TABLE IF EXISTS ${quoteIdentifier(table)} CASCADE`);
-    }
-    const expected = new Set<string>(plan.expected);
-    const actual = await client.query<{ table_name: string }>(
-      `SELECT table_name
+  }
+  for (const table of plan.unowned) {
+    await client.query(`DROP TABLE IF EXISTS ${quoteIdentifier(table)} CASCADE`);
+  }
+  const expected = new Set<string>(plan.expected);
+  const actual = await client.query<{ table_name: string }>(
+    `SELECT table_name
          FROM information_schema.tables
         WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
           AND table_name <> 'skillplane_schema_migrations'
         ORDER BY table_name`,
+  );
+  const unexpected = actual.rows
+    .map((row) => row.table_name)
+    .filter((table) => !expected.has(table));
+  const missing = [...expected].filter(
+    (table) => !actual.rows.some((row) => row.table_name === table),
+  );
+  if (unexpected.length > 0 || missing.length > 0) {
+    throw new Error(
+      `DATABASE_OWNERSHIP_INVALID:${role}:unexpected=${unexpected.join(",")}:missing=${missing.join(",")}`,
     );
-    const unexpected = actual.rows
-      .map((row) => row.table_name)
-      .filter((table) => !expected.has(table));
-    const missing = [...expected].filter(
-      (table) => !actual.rows.some((row) => row.table_name === table),
-    );
-    if (unexpected.length > 0 || missing.length > 0) {
-      throw new Error(
-        `DATABASE_OWNERSHIP_INVALID:${role}:unexpected=${unexpected.join(",")}:missing=${missing.join(",")}`,
-      );
-    }
-    await client.query("COMMIT");
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
   }
 }
 
@@ -217,7 +167,9 @@ export async function migrateDatabase(
   options: {
     readonly role?: MigrationRole;
     readonly initialWorkspaceRegion?: string;
+    readonly workspaceRegions?: readonly string[];
     readonly finalizePhysicalOwnership?: boolean;
+    readonly skipRegionalAfterCutover?: boolean;
   } = {},
 ): Promise<MigrationResult> {
   const role = options.role ?? "combined";
@@ -229,10 +181,34 @@ export async function migrateDatabase(
   ) {
     throw new Error("INITIAL_WORKSPACE_REGION_INVALID");
   }
+  if (
+    options.workspaceRegions !== undefined &&
+    (options.workspaceRegions.length === 0 ||
+      new Set(options.workspaceRegions).size !== options.workspaceRegions.length ||
+      options.workspaceRegions.some(
+        (region) => !/^[a-z0-9][a-z0-9-]{0,62}$/u.test(region),
+      ))
+  ) {
+    throw new Error("WORKSPACE_REGIONS_INVALID");
+  }
   if (role === "control" && initialWorkspaceRegion === undefined) {
     throw new Error("INITIAL_WORKSPACE_REGION_REQUIRED");
   }
-  const migrations = (await loadMigrations()).filter(
+  if (
+    role === "control" &&
+    initialWorkspaceRegion !== "legacy" &&
+    options.workspaceRegions === undefined
+  ) {
+    throw new Error("WORKSPACE_REGIONS_REQUIRED");
+  }
+  if (
+    initialWorkspaceRegion !== undefined &&
+    options.workspaceRegions !== undefined &&
+    !options.workspaceRegions.includes(initialWorkspaceRegion)
+  ) {
+    throw new Error("INITIAL_WORKSPACE_REGION_UNDECLARED");
+  }
+  let migrations = (await loadMigrations()).filter(
     (migration) => role === "combined" || migration.roles.includes(role),
   );
   const pool = new Pool({
@@ -253,27 +229,86 @@ export async function migrateDatabase(
     await client.query("SELECT pg_advisory_lock(hashtext($1))", [
       "skillplane-schema-migrations-v1",
     ]);
+    // Decide under the same lock used by physical ownership pruning. A caller
+    // waiting behind another cutover must observe its completed state here.
+    if (role === "combined" && options.skipRegionalAfterCutover) {
+      const relation = await client.query<{ relation: string | null }>(
+        "SELECT to_regclass('public.topology_cutover_state')::text AS relation",
+      );
+      if (relation.rows[0]?.relation) {
+        const cutover = await client.query<{ state: string }>(
+          "SELECT state FROM topology_cutover_state WHERE id = 'legacy-to-cells'",
+        );
+        if (cutover.rows[0]?.state === "complete") {
+          migrations = migrations.filter((migration) =>
+            migration.roles.includes("control"),
+          );
+        }
+      }
+    }
     await ensureLedger(client);
     const ledger = await client.query<{ id: string; sha256: string }>(
       "SELECT id, sha256 FROM skillplane_schema_migrations ORDER BY id",
     );
     const known = new Map(ledger.rows.map((row) => [row.id, row.sha256]));
 
-    for (const migration of migrations) {
-      const previousHash = known.get(migration.id);
-      if (previousHash !== undefined) {
-        if (previousHash !== migration.sha256) {
-          throw new Error(
-            `Applied migration ${migration.id} no longer matches its recorded hash`,
+    await client.query("BEGIN");
+    try {
+      // Historical projection backfills must not race a live projector. Take
+      // the same parent-before-projection lock order used by publication.
+      if (
+        migrations.some(
+          (migration) =>
+            !known.has(migration.id) &&
+            [
+              "0025_control_projection_ordering.sql",
+              "0032_control_public_skill_heads.sql",
+              "0038_multi_region_safety_hardening.sql",
+              "0040_control_plane_safety_followup.sql",
+            ].includes(migration.id),
+        )
+      ) {
+        for (const table of [
+          "public_skill_projection_heads",
+          "public_skill_projections",
+        ]) {
+          const present = await client.query<{ relation: string | null }>(
+            "SELECT to_regclass($1)::text AS relation",
+            [table],
           );
+          if (present.rows[0]?.relation)
+            await client.query(
+              `LOCK TABLE ${quoteIdentifier(table)} IN SHARE ROW EXCLUSIVE MODE`,
+            );
         }
-        alreadyApplied.push(migration.id);
-        continue;
       }
-      const startedAt = performance.now();
-      await client.query("BEGIN");
-      try {
-        await client.query(migration.sql);
+      for (const migration of migrations) {
+        const previousHash = known.get(migration.id);
+        if (previousHash !== undefined) {
+          if (!migrationHashMatches(migration.id, previousHash, migration.sha256)) {
+            throw new Error(
+              `Applied migration ${migration.id} no longer matches its recorded hash`,
+            );
+          }
+          alreadyApplied.push(migration.id);
+          continue;
+        }
+        const startedAt = performance.now();
+        // 0044 was published before accounting for regional databases whose
+        // physical-ownership pass had already dropped this control table.
+        // Preserve the immutable migration hash, but ledger its intended no-op
+        // instead of executing the now-inapplicable DELETE.
+        const skipMissingRegionalControlSeed =
+          role === "regional" &&
+          migration.id === "0044_regional_remove_control_seed.sql" &&
+          (
+            await client.query<{ relation: string | null }>(
+              "SELECT to_regclass('public.public_stats_counters')::text AS relation",
+            )
+          ).rows[0]?.relation === null;
+        if (!skipMissingRegionalControlSeed) {
+          await client.query(migration.sql);
+        }
         await client.query(
           `INSERT INTO skillplane_schema_migrations
              (id, sha256, execution_ms)
@@ -284,23 +319,68 @@ export async function migrateDatabase(
             Math.max(0, Math.round(performance.now() - startedAt)),
           ],
         );
-        await client.query("COMMIT");
         applied.push(migration.id);
-      } catch (error) {
-        await client.query("ROLLBACK");
-        throw error;
       }
-    }
-    if (role === "control" && initialWorkspaceRegion !== undefined) {
-      await client.query(
-        `UPDATE workspace_placements
-            SET region_id = $1, updated_at = now()
-          WHERE region_id = 'legacy'`,
-        [initialWorkspaceRegion],
-      );
-    }
-    if (role !== "combined" && options.finalizePhysicalOwnership !== false) {
-      await enforcePhysicalOwnership(client, role);
+      if (role === "control" && initialWorkspaceRegion !== undefined) {
+        const workspaceRegions = options.workspaceRegions ?? [initialWorkspaceRegion];
+        // Disable only regions absent from the configured set. Transiently
+        // disabling a retained region queues a deferred `enabled = false` row
+        // image that `workspace_regions_protect_placements` rejects at commit
+        // whenever that region still has placements, even though the final
+        // state re-enables it. Truly removed regions that still hold placements
+        // remain correctly rejected.
+        await client.query(
+          `UPDATE workspace_regions
+              SET enabled = false, updated_at = now()
+            WHERE region_id <> ALL($1::text[])`,
+          [workspaceRegions],
+        );
+        await client.query(
+          `INSERT INTO workspace_regions (region_id, enabled, updated_at)
+           SELECT region_id, true, now()
+             FROM unnest($1::text[]) AS region(region_id)
+           ON CONFLICT (region_id)
+           DO UPDATE SET enabled = true, updated_at = now()`,
+          [workspaceRegions],
+        );
+        await client.query(
+          `UPDATE workspace_placements
+              SET region_id = $1, updated_at = now()
+            WHERE region_id = 'legacy'`,
+          [initialWorkspaceRegion],
+        );
+      }
+      // Validate the placement region foreign keys (added NOT VALID in 0043)
+      // now that the declared regions are reconciled. On a populated
+      // pre-control-plane upgrade the constraint would otherwise abort mid-loop
+      // when 0043 scanned placements already remapped to a not-yet-seeded
+      // region. Only pending (unvalidated) constraints are scanned, so steady
+      // state reruns stay cheap.
+      if (role !== "regional") {
+        const pendingConstraints = await client.query<{ conname: string }>(
+          `SELECT conname
+             FROM pg_constraint
+            WHERE conrelid = to_regclass('public.workspace_placements')
+              AND conname IN (
+                'workspace_placements_region_id_fkey',
+                'workspace_placements_moving_to_region_id_fkey'
+              )
+              AND NOT convalidated
+            ORDER BY conname`,
+        );
+        for (const { conname } of pendingConstraints.rows) {
+          await client.query(
+            `ALTER TABLE workspace_placements VALIDATE CONSTRAINT ${quoteIdentifier(conname)}`,
+          );
+        }
+      }
+      if (role !== "combined" && options.finalizePhysicalOwnership !== false) {
+        await enforcePhysicalOwnership(client, role);
+      }
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
     }
     return { role, applied, alreadyApplied };
   } finally {

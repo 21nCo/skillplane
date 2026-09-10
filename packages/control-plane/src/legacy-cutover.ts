@@ -5,6 +5,7 @@ import {
 } from "./concrete-migration.js";
 import {
   migrateWorkspaceWithJournal,
+  canFinalizeWorkspaceMigrationCompletion,
   isWorkspaceMigrationRecoveryPending,
   PostgresWorkspaceMigrationJournal,
   runWorkspaceRollbackDrill,
@@ -153,6 +154,25 @@ export async function migrateLegacyWorkspaceBatch(input: {
       throw new Error(`TOPOLOGY_CUTOVER_PLACEMENT_NOT_ACTIVE:${row.workspace_id}`);
     }
     if (!recovering && current.regionId === input.targetRegionId) {
+      const pending = await journal.pendingCompletion(row.workspace_id);
+      if (
+        canFinalizeWorkspaceMigrationCompletion({
+          placement: current,
+          pending,
+          workspaceId: row.workspace_id,
+          targetRegionId: input.targetRegionId,
+        })
+      ) {
+        if (!pending?.proof.rollbackTested)
+          throw new Error("WORKSPACE_MIGRATION_ROLLBACK_PROOF_REQUIRED");
+        await migrateWorkspaceWithJournal({
+          directory,
+          journal,
+          workspaceId: row.workspace_id,
+          targetRegionId: input.targetRegionId,
+          operations,
+        });
+      }
       verifiedExisting.push({
         workspaceId: row.workspace_id,
         checks: await verifyExistingCopy(current, input.targetRegionId, operations),
@@ -162,14 +182,13 @@ export async function migrateLegacyWorkspaceBatch(input: {
     if (!recovering && current.regionId !== "legacy") {
       throw new Error(`TOPOLOGY_CUTOVER_SOURCE_REGION_INVALID:${row.workspace_id}`);
     }
-    if (!recovering) {
-      await runWorkspaceRollbackDrill({
-        directory,
-        workspaceId: row.workspace_id,
-        targetRegionId: input.targetRegionId,
-        operations,
-      });
-    }
+    await runWorkspaceRollbackDrill({
+      journal,
+      directory,
+      workspaceId: row.workspace_id,
+      targetRegionId: input.targetRegionId,
+      operations,
+    });
     const migrate = () =>
       migrateWorkspaceWithJournal({
         directory,
@@ -177,6 +196,7 @@ export async function migrateLegacyWorkspaceBatch(input: {
         workspaceId: row.workspace_id,
         targetRegionId: input.targetRegionId,
         operations,
+        // The drill completed or its exact source-epoch evidence was verified.
         rollbackTested: true,
       });
     let result;
@@ -196,6 +216,121 @@ export async function migrateLegacyWorkspaceBatch(input: {
   return { migrated, verifiedExisting };
 }
 
+/** Recounts active regional skills after every legacy workspace is fenced. */
+export async function reconcileLegacyPublicSkillTotals(input: {
+  readonly control: MigrationSqlPool;
+  readonly regional: MigrationSqlPool;
+  readonly regionId: string;
+}): Promise<{ readonly reconciledWorkspaces: number }> {
+  const control = await input.control.connect();
+  let regional: Awaited<ReturnType<MigrationSqlPool["connect"]>> | null = null;
+  let controlOpen = false;
+  let regionalOpen = false;
+  try {
+    await control.query("BEGIN");
+    controlOpen = true;
+    // Placement changes are the global ownership authority. Lock the selected
+    // rows before fencing their current cell so a concurrent move cannot
+    // publish a newer checkpoint and then be overwritten by this recount.
+    const placements = await control.query<{ workspace_id: string }>(
+      `SELECT workspace_id
+         FROM workspace_placements
+        WHERE region_id = $1 AND state = 'active'
+        ORDER BY workspace_id
+        FOR UPDATE`,
+      [input.regionId],
+    );
+    if (placements.rows.length === 0) {
+      await control.query("COMMIT");
+      controlOpen = false;
+      return { reconciledWorkspaces: 0 };
+    }
+    const workspaceIds = placements.rows.map((row) => row.workspace_id);
+    regional = await input.regional.connect();
+    await regional.query("BEGIN");
+    regionalOpen = true;
+    await regional.query(
+      `INSERT INTO regional_workspace_migration_fences
+         (workspace_id, source_epoch, active_epoch)
+       SELECT workspace_id, 0, 1
+         FROM unnest($1::text[]) AS workspace(workspace_id)
+       ON CONFLICT (workspace_id) DO NOTHING`,
+      [workspaceIds],
+    );
+    // Regional writes hold a shared lock on this row. Taking every row
+    // exclusively waits for in-flight writes and blocks new writes until the
+    // exact count has replaced every pre-fence projection delta.
+    await regional.query(
+      `SELECT workspace_id
+         FROM regional_workspace_migration_fences
+        WHERE workspace_id = ANY($1::text[])
+        ORDER BY workspace_id
+        FOR UPDATE`,
+      [workspaceIds],
+    );
+    const deadline = Date.now() + 75_000;
+    for (;;) {
+      const pending = await regional.query<{ count: string }>(
+        `SELECT count(*)::text AS count
+           FROM regional_projection_outbox
+          WHERE workspace_id = ANY($1::text[]) AND processed_at IS NULL`,
+        [workspaceIds],
+      );
+      if (pending.rows[0]?.count === "0") break;
+      if (Date.now() >= deadline) {
+        throw new Error("TOPOLOGY_PUBLIC_STATS_OUTBOX_NOT_DRAINED");
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+    }
+    const counts = await regional.query<{
+      workspace_id: string;
+      total_skills: string;
+    }>(
+      `SELECT workspace_id, count(*)::text AS total_skills
+         FROM skills
+        WHERE workspace_id = ANY($1::text[]) AND archived_at IS NULL
+        GROUP BY workspace_id`,
+      [workspaceIds],
+    );
+    const totalByWorkspace = new Map(
+      counts.rows.map((row) => [row.workspace_id, row.total_skills]),
+    );
+    const reconciled = await control.query<{ id: string }>(
+      `INSERT INTO public_stats_counters
+         (id, agent_skill_uses, total_skills, updated_at)
+       SELECT workspace_id, 0, total_skills, now()
+         FROM unnest($1::text[], $2::numeric[])
+              AS workspace_total(workspace_id, total_skills)
+       ON CONFLICT (id) DO UPDATE
+         SET total_skills = EXCLUDED.total_skills,
+             updated_at = now()
+       RETURNING id`,
+      [
+        workspaceIds,
+        workspaceIds.map((workspaceId) => totalByWorkspace.get(workspaceId) ?? "0"),
+      ],
+    );
+    // Publish the exact control count before releasing regional writers. Any
+    // later write then projects a delta on top of this committed baseline.
+    await control.query("COMMIT");
+    controlOpen = false;
+    await regional.query("COMMIT");
+    regionalOpen = false;
+    return { reconciledWorkspaces: reconciled.rows.length };
+  } catch (error) {
+    if (regionalOpen) {
+      await regional?.query("ROLLBACK").catch(() => undefined);
+    }
+    if (controlOpen) {
+      await control.query("ROLLBACK").catch(() => undefined);
+    }
+    throw error;
+  } finally {
+    regional?.release();
+    control.release();
+  }
+}
+
 /**
  * Copies every current public bundle into the private global bucket, verifies
  * both digests, and only then exposes its metadata projection.
@@ -206,7 +341,10 @@ export async function backfillLegacyPublicSkillProjections(input: {
   readonly regionalObjects: ImmutablePublicationStore;
   readonly publicObjects: ImmutablePublicationStore;
   readonly regionId: string;
-}): Promise<{ readonly projected: number }> {
+}): Promise<{
+  readonly projected: number;
+  readonly reconciledWorkspaces: number;
+}> {
   const workspaces = await input.control.query<{
     workspace_id: string;
     workspace_slug: string;
@@ -318,5 +456,6 @@ export async function backfillLegacyPublicSkillProjections(input: {
       projected += 1;
     }
   }
-  return { projected };
+  const totals = await reconcileLegacyPublicSkillTotals(input);
+  return { projected, ...totals };
 }

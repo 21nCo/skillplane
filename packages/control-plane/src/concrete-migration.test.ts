@@ -110,7 +110,7 @@ describe("concrete workspace migration", () => {
     expect(snapshot.release).not.toHaveBeenCalled();
   });
 
-  it("keeps the source fence and clears a stale target fence before activation", async () => {
+  it("keeps the source fence and opens a new target generation before activation", async () => {
     const snapshot = client();
     const source = {
       query: vi.fn(async () => ({ rows: [] })),
@@ -133,7 +133,11 @@ describe("concrete workspace migration", () => {
       unusedObjects,
     );
 
-    const context = { namespace: "workspace:a", sourceEpoch: 1 } as never;
+    const context = {
+      namespace: "workspace:a",
+      sourceEpoch: 1,
+      movingEpoch: 1,
+    } as never;
     await operations.quiesceSource(context);
     await operations.drainOutboxes(context);
     expect(source.query).not.toHaveBeenCalledWith(
@@ -149,7 +153,7 @@ describe("concrete workspace migration", () => {
     );
     expect(target.query).toHaveBeenCalledWith(
       expect.stringContaining("source_epoch = 0"),
-      ["workspace:a"],
+      ["workspace:a", 2],
     );
   });
 });

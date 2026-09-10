@@ -1,7 +1,9 @@
 import {
+  applyPublicStatsProjectionCheckpoint,
   backfillLegacyPublicSkillProjections,
   globalPublishedBundleKey,
   migrateLegacyWorkspaceBatch,
+  PostgresWorkspaceMigrationJournal,
   type CutoverObjectStore,
 } from "@skillplane/control-plane";
 import { Pool } from "pg";
@@ -45,12 +47,51 @@ async function sha256(bytes: Uint8Array): Promise<`sha256:${string}`> {
     .join("")}`;
 }
 
+async function waitForRegionalRecountFence(
+  database: Pool,
+  workspaceId: string,
+): Promise<void> {
+  const deadline = Date.now() + 10_000;
+  for (;;) {
+    const observer = await database.connect();
+    try {
+      await observer.query("BEGIN");
+      await observer.query(
+        `SELECT workspace_id
+           FROM regional_workspace_migration_fences
+          WHERE workspace_id = $1
+          FOR SHARE NOWAIT`,
+        [workspaceId],
+      );
+      await observer.query("ROLLBACK");
+    } catch (error) {
+      await observer.query("ROLLBACK").catch(() => undefined);
+      if (
+        error &&
+        typeof error === "object" &&
+        "code" in error &&
+        error.code === "55P03"
+      ) {
+        return;
+      }
+      throw error;
+    } finally {
+      observer.release();
+    }
+    if (Date.now() >= deadline) {
+      throw new Error("Timed out waiting for the regional recount fence");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+
 describe("combined database topology cutover", () => {
   const suffix = crypto.randomUUID().replaceAll("-", "").slice(0, 12);
   const legacyDatabase = `skillplane_cutover_source_${suffix}_test`;
   const cellDatabase = `skillplane_cutover_cell_${suffix}_test`;
   const workspaceId = `workspace:cutover-${suffix}`;
   const skillId = `skill:cutover-${suffix}`;
+  const lateSkillId = `skill:cutover-late-${suffix}`;
   const versionId = `skill-version:cutover-${suffix}`;
   let admin: Pool | null = null;
   let legacyUrl = "";
@@ -170,11 +211,19 @@ describe("combined database topology cutover", () => {
     await migrateDatabase(legacyUrl, {
       role: "control",
       initialWorkspaceRegion: "legacy",
+      workspaceRegions: ["legacy", "in-south", "us-east"],
       finalizePhysicalOwnership: false,
     });
     const control = new Pool({ connectionString: legacyUrl, max: 3 });
     const cell = new Pool({ connectionString: cellUrl, max: 3 });
     try {
+      // Simulate an old compatibility writer creating a skill after migration
+      // 0022 took its one-time snapshot but before this workspace is fenced.
+      await control.query(
+        `INSERT INTO skills (id, workspace_id, slug, name)
+         VALUES ($1, $2, 'late-private-fixture', 'Late private fixture')`,
+        [lateSkillId, workspaceId],
+      );
       const unplacedWorkspaceId = `workspace:cutover-unplaced-${suffix}`;
       await control.query(
         `INSERT INTO workspaces (id, workspace_id, slug, name)
@@ -249,6 +298,25 @@ describe("combined database topology cutover", () => {
         targetRegionId: "in-south",
       });
       expect(first.migrated).toHaveLength(2);
+      const recoveredProof = first.migrated.find(
+        (proof) => proof.workspaceId === workspaceId,
+      );
+      if (!recoveredProof) throw new Error("Missing recovered migration proof");
+      const journal = new PostgresWorkspaceMigrationJournal(control);
+      const drillLookup = {
+        workspaceId,
+        sourceRegionId: "legacy",
+        targetRegionId: "in-south",
+        sourceEpoch: recoveredProof.sourceEpoch,
+      };
+      expect(await journal.hasCompletedRollbackDrill(drillLookup)).toBe(true);
+      expect(
+        await journal.hasCompletedRollbackDrill({
+          ...drillLookup,
+          sourceEpoch: drillLookup.sourceEpoch + 1,
+        }),
+      ).toBe(false);
+
       expect(
         first.migrated.find((proof) => proof.workspaceId === workspaceId),
       ).toMatchObject({
@@ -257,6 +325,9 @@ describe("combined database topology cutover", () => {
         targetRegionId: "in-south",
         rollbackTested: true,
       });
+      expect(
+        first.migrated.find((proof) => proof.workspaceId === unplacedWorkspaceId),
+      ).toMatchObject({ rollbackTested: true });
       expect(
         first.migrated
           .find((proof) => proof.workspaceId === workspaceId)
@@ -275,14 +346,102 @@ describe("combined database topology cutover", () => {
         ]),
       ).rejects.toMatchObject({ code: "55000" });
 
-      const projection = await backfillLegacyPublicSkillProjections({
+      const placement = await control.query<{ epoch: string }>(
+        "SELECT epoch::text AS epoch FROM workspace_placements WHERE workspace_id = $1",
+        [workspaceId],
+      );
+      const statsEventId = `event:cutover-stats-${suffix}`;
+      const eventWriter = await cell.connect();
+      try {
+        await eventWriter.query("BEGIN");
+        await eventWriter.query(
+          "SELECT set_config('skillplane.workspace_routing_epoch', $1, true)",
+          [placement.rows[0]?.epoch],
+        );
+        await eventWriter.query(
+          `INSERT INTO regional_projection_outbox
+             (id, workspace_id, event_type, payload, fencing_epoch, sequence)
+           VALUES ($1, $2, 'public_stats.skill_count_changed', $3::jsonb, $4, 1)`,
+          [
+            statsEventId,
+            workspaceId,
+            JSON.stringify({ workspaceId, delta: 1 }),
+            placement.rows[0]?.epoch,
+          ],
+        );
+        await eventWriter.query("COMMIT");
+      } catch (error) {
+        await eventWriter.query("ROLLBACK");
+        throw error;
+      } finally {
+        eventWriter.release();
+      }
+      const projectionPromise = backfillLegacyPublicSkillProjections({
         control,
         regional: cell,
         regionalObjects: cellObjects,
         publicObjects,
         regionId: "in-south",
       });
+      // Observe both locks deterministically while the recount waits for this
+      // pre-fence projection delta.
+      await waitForRegionalRecountFence(cell, workspaceId);
+      await expect(
+        control.query(
+          `SELECT workspace_id
+             FROM workspace_placements
+            WHERE workspace_id = $1
+            FOR SHARE NOWAIT`,
+          [workspaceId],
+        ),
+      ).rejects.toMatchObject({ code: "55P03" });
+      const event = await cell.query<{
+        id: string;
+        workspace_id: string;
+        event_type: "public_stats.skill_count_changed";
+        payload: { workspaceId: string; delta: number };
+        fencing_epoch: string;
+        sequence: string;
+      }>(
+        `SELECT id, workspace_id, event_type, payload,
+                fencing_epoch::text, sequence::text
+           FROM regional_projection_outbox
+          WHERE id = $1`,
+        [statsEventId],
+      );
+      const pendingEvent = event.rows[0];
+      if (!pendingEvent) throw new Error("Stats projection fixture is missing");
+      await applyPublicStatsProjectionCheckpoint({
+        database: control,
+        eventId: pendingEvent.id,
+        workspaceId: pendingEvent.workspace_id,
+        eventType: pendingEvent.event_type,
+        fencingEpoch: Number(pendingEvent.fencing_epoch),
+        sequence: Number(pendingEvent.sequence),
+        agentSkillUses: 0,
+        totalSkills: pendingEvent.payload.delta,
+      });
+      await cell.query(
+        `UPDATE regional_projection_outbox
+            SET processed_at = now()
+          WHERE id = $1`,
+        [statsEventId],
+      );
+      const projection = await projectionPromise;
       expect(projection.projected).toBe(1);
+      expect(projection.reconciledWorkspaces).toBe(3);
+      await expect(
+        control.query<{ total_skills: string }>(
+          `SELECT total_skills::text AS total_skills
+             FROM public_stats_counters
+            WHERE id = $1`,
+          [workspaceId],
+        ),
+      ).resolves.toMatchObject({ rows: [{ total_skills: "2" }] });
+      await cell.query(
+        "DELETE FROM regional_projection_outbox WHERE id = $1 AND processed_at IS NOT NULL",
+        [statsEventId],
+      );
       const publicKey = globalPublishedBundleKey({
         workspaceId,
         skillId,
@@ -378,6 +537,7 @@ describe("combined database topology cutover", () => {
     await migrateDatabase(legacyUrl, {
       role: "control",
       initialWorkspaceRegion: "in-south",
+      workspaceRegions: ["in-south", "us-east"],
     });
     const finalControl = new Pool({ connectionString: legacyUrl, max: 1 });
     const finalCell = new Pool({ connectionString: cellUrl, max: 1 });

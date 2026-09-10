@@ -309,14 +309,7 @@ export function createApiServiceProvider(
   options: BuildApiServicesOptions = {},
   build: typeof buildApiServices = buildApiServices,
 ): ApiServiceProvider {
-  return Object.assign(
-    (bindings: RuntimeBindings) => build(bindings, options),
-    {
-      // Database clients must remain request-scoped in Cloudflare Workers.
-      // Hyperdrive owns the reusable origin pool and the runtime discards the
-      // request-side connections when the invocation ends, so explicitly ending
-      // each pg pool here only adds teardown latency.
-      release: () => Promise.resolve(),
-    },
-  );
+  return Object.assign((bindings: RuntimeBindings) => build(bindings, options), {
+    release: closeApiServices,
+  });
 }

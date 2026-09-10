@@ -263,6 +263,7 @@ export class AmendmentPolicyService {
     readonly expectedUpdatedAt?: string;
     readonly idempotencyKey: string;
     readonly requestId: string;
+    readonly fencingEpoch?: number;
     readonly auditContext?: MutationAuditContext;
   }): Promise<AmendmentPolicy> {
     authorize(options.principal, "skills:publish");
@@ -297,6 +298,7 @@ export class AmendmentPolicyService {
       operation: `skill.amendment-policy.update:${options.skillId}`,
       key: options.idempotencyKey,
       requestHash,
+      fencingEpoch: options.fencingEpoch,
     });
     if (claim.state === "replay") return claim.responseBody.policy;
     try {
@@ -355,9 +357,12 @@ export class AmendmentPolicyService {
           await this.idempotency.complete(client, claim.identity, 200, { policy });
           return policy;
         },
+        { fencingEpoch: options.fencingEpoch },
       );
     } catch (error) {
-      await this.idempotency.release(claim.identity).catch(() => undefined);
+      await this.idempotency
+        .release(claim.identity, options.fencingEpoch)
+        .catch(() => undefined);
       throw error;
     }
   }

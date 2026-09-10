@@ -315,6 +315,7 @@ export function contextUpdate(runtime: McpToolRuntime, input: ContextUpdateInput
         expectedUpdatedAt: input.expectedUpdatedAt,
         idempotencyKey: input.idempotencyKey,
         requestId: execution.requestId,
+        fencingEpoch: runtime.fencingEpoch,
         auditContext: mutationAuditContext(runtime, input.caller),
       });
       const output: ContextLifecycleMutationOutput = {
@@ -350,6 +351,7 @@ function contextStateMutation(
       expectedUpdatedAt: input.expectedUpdatedAt,
       idempotencyKey: input.idempotencyKey,
       requestId: execution.requestId,
+      fencingEpoch: runtime.fencingEpoch,
       auditContext: mutationAuditContext(runtime, input.caller),
     });
     const output: ContextLifecycleMutationOutput = {

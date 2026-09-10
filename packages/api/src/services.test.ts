@@ -40,8 +40,10 @@ describe("createApiServiceProvider", () => {
     expect(left).toBe(first.services);
     expect(right).toBe(second.services);
     expect(build).toHaveBeenCalledTimes(2);
-    expect(first.datafnClose).not.toHaveBeenCalled();
-    expect(first.controlDatabaseClose).not.toHaveBeenCalled();
+    expect(first.datafnClose).toHaveBeenCalledOnce();
+    expect(first.emailClose).toHaveBeenCalledOnce();
+    expect(first.databaseClose).toHaveBeenCalledOnce();
+    expect(first.controlDatabaseClose).toHaveBeenCalledOnce();
     expect(second.datafnClose).not.toHaveBeenCalled();
     expect(second.controlDatabaseClose).not.toHaveBeenCalled();
   });

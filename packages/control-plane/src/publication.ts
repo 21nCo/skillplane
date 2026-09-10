@@ -113,11 +113,16 @@ export class PostgresPublicProjectionDirectory implements PublicProjectionDirect
 
   async publish(input: Parameters<PublicProjectionDirectory["publish"]>[0]) {
     await this.database.query(
-      `WITH accepted_head AS (
+      `WITH current_workspace AS MATERIALIZED (
+         SELECT id, slug
+           FROM workspaces
+          WHERE id = $1
+          FOR SHARE
+       ), accepted_head AS (
          INSERT INTO public_skill_projection_heads
            (workspace_id, skill_id, current_version_id, state,
             projection_sequence, updated_at)
-         VALUES ($1, $3, $6, 'published', $10, now())
+         VALUES ($1, $2, $3, 'published', $4, now())
          ON CONFLICT (workspace_id, skill_id)
          DO UPDATE SET current_version_id = EXCLUDED.current_version_id,
                        state = 'published',
@@ -131,9 +136,11 @@ export class PostgresPublicProjectionDirectory implements PublicProjectionDirect
          (workspace_id, workspace_slug, skill_id, skill_slug, version_id,
           semantic_version, digest, object_key, projection_sequence, document,
           search_text, state, published_at, unpublished_at, updated_at)
-       SELECT $1, $2, $3, $4, $5, $7, $8, $9, $10, $11::jsonb, $12,
-              'published', COALESCE($13::timestamptz, now()), NULL, now()
+       SELECT $1, workspace.slug, $2, $5, $6, $7, $8, $9, $4, $10::jsonb, $11,
+              'published', COALESCE($12::timestamptz, now()), NULL, now()
          FROM accepted_head
+         JOIN current_workspace workspace
+           ON workspace.id = accepted_head.workspace_id
        ON CONFLICT (workspace_id, skill_id, version_id)
        DO UPDATE SET workspace_slug = EXCLUDED.workspace_slug,
                      skill_slug = EXCLUDED.skill_slug,
@@ -150,15 +157,14 @@ export class PostgresPublicProjectionDirectory implements PublicProjectionDirect
              EXCLUDED.projection_sequence`,
       [
         input.workspaceId,
-        input.workspaceSlug,
         input.skillId,
+        input.currentVersionId,
+        input.projectionSequence,
         input.skillSlug,
         input.versionId,
-        input.currentVersionId,
         input.semanticVersion,
         input.digest,
         input.objectKey,
-        input.projectionSequence,
         JSON.stringify(input.document ?? {}),
         input.searchText ?? "",
         input.publishedAt ?? null,

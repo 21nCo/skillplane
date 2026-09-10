@@ -1,4 +1,4 @@
-import { SkillplaneApiError } from "$lib/api/client.js";
+import { apiRequest, SkillplaneApiError } from "$lib/api/client.js";
 import { withWorkspaceDatafnClient } from "$lib/datafn/client.js";
 import type {
   AmendmentPolicyDecision,
@@ -135,57 +135,64 @@ function archiveFilters(archive: SkillArchiveFilter): Record<string, unknown> {
   return {};
 }
 
-function encodeCursor(cursor: unknown): string | null {
-  if (!cursor || typeof cursor !== "object") return null;
-  const bytes = new TextEncoder().encode(JSON.stringify(cursor));
+function encodeCursor(cursor: unknown, scope: string): string | null {
+  if (!cursor) return null;
+  const bytes = new TextEncoder().encode(
+    JSON.stringify({ version: 1, scope, boundary: cursor }),
+  );
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
   return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/u, "");
 }
 
-function decodeCursor(cursor: string): {
-  readonly after?: Record<string, unknown>;
-  readonly before?: Record<string, unknown>;
-} {
+function cursorError(code = "CURSOR_INVALID"): SkillplaneApiError {
+  return new SkillplaneApiError(400, {
+    code,
+    message:
+      code === "CURSOR_FILTER_MISMATCH"
+        ? "Skill cursor filters do not match"
+        : "Skill cursor is invalid",
+    requestId: "",
+  });
+}
+
+function decodeCursor(cursor: string, scope: string): unknown {
+  let value: unknown;
   try {
     const base64 = cursor.replaceAll("-", "+").replaceAll("_", "/");
-    const padded = base64.padEnd(Math.ceil(base64.length / 4) * 4, "=");
-    const binary = atob(padded);
-    const value = JSON.parse(
+    const binary = atob(base64.padEnd(Math.ceil(base64.length / 4) * 4, "="));
+    value = JSON.parse(
       new TextDecoder().decode(
         Uint8Array.from(binary, (character) => character.codePointAt(0) ?? 0),
       ),
-    ) as unknown;
-    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error();
-    const record = value as Record<string, unknown>;
-    if (
-      (record.after === undefined ||
-        (record.after !== null &&
-          typeof record.after === "object" &&
-          !Array.isArray(record.after))) &&
-      (record.before === undefined ||
-        (record.before !== null &&
-          typeof record.before === "object" &&
-          !Array.isArray(record.before))) &&
-      (record.after !== undefined || record.before !== undefined)
-    ) {
-      return {
-        ...(record.after === undefined
-          ? {}
-          : { after: record.after as Record<string, unknown> }),
-        ...(record.before === undefined
-          ? {}
-          : { before: record.before as Record<string, unknown> }),
-      };
-    }
+    );
   } catch {
-    // Fall through to the stable public error below.
+    throw cursorError();
   }
-  throw new SkillplaneApiError(400, {
-    code: "CURSOR_INVALID",
-    message: "Skill cursor is invalid",
-    requestId: "",
-  });
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw cursorError();
+  const record = value as Record<string, unknown>;
+  if (record.version !== 1 || typeof record.scope !== "string" || !record.boundary)
+    throw cursorError();
+  if (record.scope !== scope) throw cursorError("CURSOR_FILTER_MISMATCH");
+  return record.boundary;
+}
+
+function datafnBoundary(value: unknown): {
+  readonly after?: Record<string, unknown>;
+  readonly before?: Record<string, unknown>;
+} {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw cursorError();
+  const record = value as Record<string, unknown>;
+  const key = record.after !== undefined ? "after" : "before";
+  const boundary = record[key];
+  if (
+    !boundary ||
+    typeof boundary !== "object" ||
+    Array.isArray(boundary) ||
+    (record.after !== undefined && record.before !== undefined)
+  )
+    throw cursorError();
+  return { [key]: boundary as Record<string, unknown> };
 }
 
 function notFound(): SkillplaneApiError {
@@ -204,26 +211,47 @@ export async function listSkillsWithDatafn(options: {
   readonly cursor?: string | null;
   readonly limit?: number;
 }): Promise<SkillPage> {
-  return withWorkspaceDatafnClient(options.workspaceId, async (client) => {
-    const filters: Record<string, unknown> = archiveFilters(
-      options.archive ?? "active",
+  const query = options.query?.trim() ?? "";
+  const archive = options.archive ?? "active";
+  const visibility = [...new Set(options.visibility ?? [])].sort();
+  const scope = JSON.stringify({
+    workspaceId: options.workspaceId,
+    query,
+    archive,
+    visibility,
+  });
+  const boundary = options.cursor ? decodeCursor(options.cursor, scope) : undefined;
+  if (query) {
+    // Preserve the domain search index and ranking until DataFn has parity for
+    // tags, published instructions, and context text.
+    if (boundary !== undefined && typeof boundary !== "string") throw cursorError();
+    const params = new URLSearchParams({
+      q: query,
+      state: archive,
+      limit: String(options.limit ?? 20),
+    });
+    for (const value of visibility) params.append("visibility", value);
+    if (typeof boundary === "string") params.set("cursor", boundary);
+    const page = await apiRequest<SkillPage>(
+      `/api/v1/workspaces/${encodeURIComponent(options.workspaceId)}/skills?${params}`,
+      { headers: { "x-skillplane-workspace-id": options.workspaceId } },
     );
-    if (options.visibility?.length) {
-      filters.visibility = { in: [...options.visibility] };
-    }
+    return { ...page, nextCursor: encodeCursor(page.nextCursor, scope) };
+  }
+  const cursor = boundary === undefined ? undefined : datafnBoundary(boundary);
+  return withWorkspaceDatafnClient(options.workspaceId, async (client) => {
+    const filters: Record<string, unknown> = archiveFilters(archive);
+    if (visibility.length) filters.visibility = { in: visibility };
     const result = await client.skills.query({
       select: ["*", "currentVersion.*"],
       filters,
-      ...(options.query?.trim()
-        ? { search: { query: options.query.trim(), prefix: true } }
-        : {}),
       sort: ["-updatedAt", "id"],
       limit: options.limit ?? 20,
-      ...(options.cursor ? { cursor: decodeCursor(options.cursor) } : {}),
+      ...(cursor ? { cursor } : {}),
     });
     return {
       skills: result.data.map((skill) => skillFromDatafn(skill, options.workspaceId)),
-      nextCursor: encodeCursor(result.nextCursor),
+      nextCursor: encodeCursor(result.nextCursor, scope),
     };
   });
 }
@@ -283,7 +311,12 @@ export async function getSkillVersionWithDatafn(
       limit: 1,
     });
     const version = result.data.shift();
-    if (!version) throw notFound();
+    if (!version)
+      throw new SkillplaneApiError(404, {
+        code: "SKILL_VERSION_NOT_FOUND",
+        message: "Skill version was not found",
+        requestId: "",
+      });
     return skillVersionFromDatafn(version, workspaceId);
   });
 }

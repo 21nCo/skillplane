@@ -104,12 +104,14 @@ function auditInput(event: McpAuditRecord): AuditWriteInput {
     ...(event.contextId ? { contextId: event.contextId } : {}),
     ...(event.errorCode ? { errorCode: event.errorCode } : {}),
     latencyMs: event.latencyMs,
+    fencingEpoch: event.fencingEpoch,
   };
 }
 
 function controlPlaneAuditInput(event: McpAuditRecord): ControlPlaneAuditWriteInput {
   const input = auditInput(event);
   return {
+    retentionClass: input.retentionClass ?? "permanent",
     workspaceId: input.workspaceId,
     eventType: input.eventType,
     action: input.action,
@@ -191,6 +193,10 @@ export class PostgresMcpAuditWriter implements McpAuditWriter {
       });
       try {
         await client.query("BEGIN");
+        await client.query(
+          "SELECT set_config('skillplane.workspace_routing_epoch', $1, true)",
+          [String(event.fencingEpoch ?? 1)],
+        );
         await writeAuditEvent(client, auditInput(event));
         await enqueueAgentSkillUseProjection(client, {
           workspaceId: event.workspaceId,
@@ -226,6 +232,10 @@ export class PostgresMcpAuditWriter implements McpAuditWriter {
     try {
       await client.query("BEGIN");
       for (const event of events) {
+        await client.query(
+          "SELECT set_config('skillplane.workspace_routing_epoch', $1, true)",
+          [String(event.fencingEpoch ?? 1)],
+        );
         await writeAuditEvent(client, auditInput(event));
         if (
           this.projectionEnabled &&

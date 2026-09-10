@@ -214,6 +214,7 @@ export function registerSkillVersionRoutes(app: Hono<ApiEnvironment>): void {
       reason: parseStringField(body.reason, "reason", { maxLength: 2_000 }),
       idempotencyKey: requireIdempotencyKey(context),
       requestId: context.get("requestId"),
+      fencingEpoch: routingEpoch(context),
     });
     context.header("Cache-Control", "private, no-store");
     return context.json(success(context, { version: publicSkillVersion(version) }));

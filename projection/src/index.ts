@@ -1,9 +1,8 @@
+import { cleanupProjectionRetention } from "./retention.js";
 import {
   PostgresPublicProjectionDirectory,
   applyPublicStatsProjectionCheckpoint,
   applyRegionalPublicProjection,
-  cleanupProcessedRegionalProjectionOutbox,
-  cleanupPublicStatsProjectionEvents,
   createImmutableObjectPublicationStore,
   createPostgresResourceRoutingDirectory,
   createPostgresWorkspacePlacementDirectory,
@@ -55,7 +54,9 @@ export async function drainProjectionCell(
     const result = await drainRegionalProjectionOutbox({
       regionId,
       database: regional.pool,
-      limit: 100,
+      limit: 50_000,
+      // Stop starting work after 45s; an in-flight operation may finish later.
+      maxDurationMs: 45_000,
       process: (event) =>
         applyRegionalPublicProjection({
           event,
@@ -103,10 +104,10 @@ export async function drainProjectionCell(
         );
       },
     });
-    await Promise.all([
-      cleanupProcessedRegionalProjectionOutbox({ database: regional.pool }),
-      cleanupPublicStatsProjectionEvents({ database: control.pool }),
-    ]);
+    await cleanupProjectionRetention({
+      regionalDatabase: regional.pool,
+      controlDatabase: control.pool,
+    });
     return result;
   } finally {
     await Promise.allSettled([regional.close(), control.close()]);

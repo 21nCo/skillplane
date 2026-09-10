@@ -17,6 +17,7 @@ export const GLOBAL_CONTROL_TABLES = [
   "workspace_invitations",
   "service_principals",
   "workspace_placements",
+  "workspace_regions",
   "resource_routing_directory",
   "permission_directory_records",
   "workspace_routing_nonces",
@@ -51,6 +52,32 @@ export const REGIONAL_WORKSPACE_TABLES = [
   "regional_projection_outbox",
   "regional_workspace_migration_fences",
 ] as const;
+
+export function physicalOwnershipPlan(
+  role: "control" | "regional",
+  datafnTables: readonly string[],
+): {
+  readonly unowned: readonly string[];
+  readonly expected: readonly string[];
+} {
+  const staticTables = new Set<string>([
+    ...GLOBAL_CONTROL_TABLES,
+    ...REGIONAL_WORKSPACE_TABLES,
+    "skillplane_schema_migrations",
+  ]);
+  const dynamic = [...new Set(datafnTables)]
+    .filter((table) => !staticTables.has(table))
+    .sort();
+  return role === "control"
+    ? {
+        unowned: [...REGIONAL_WORKSPACE_TABLES, ...dynamic],
+        expected: [...GLOBAL_CONTROL_TABLES],
+      }
+    : {
+        unowned: [...GLOBAL_CONTROL_TABLES],
+        expected: [...REGIONAL_WORKSPACE_TABLES, ...dynamic],
+      };
+}
 
 export function assertDisjointTableOwnership(): void {
   const global = new Set<string>(GLOBAL_CONTROL_TABLES);

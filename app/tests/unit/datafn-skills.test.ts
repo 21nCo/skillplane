@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createSkill, listSkills } from "../../src/lib/skills/api.js";
+import {
+  createSkill,
+  listSkills,
+  getSkill,
+  getSkillBySlug,
+  getSkillVersion,
+} from "../../src/lib/skills/api.js";
 
 const skill = {
   id: "skill:one",
@@ -80,7 +86,6 @@ describe("first-party DataFn skill reads", () => {
 
     const page = await listSkills({
       workspaceId: "workspace:india",
-      query: "latency",
       visibility: ["workspace"],
       archive: "active",
       limit: 20,
@@ -107,7 +112,6 @@ describe("first-party DataFn skill reads", () => {
         archivedAt: { is_null: true },
         visibility: { in: ["workspace"] },
       },
-      search: { query: "latency", prefix: true },
       sort: ["-updatedAt", "id"],
       limit: 20,
     });
@@ -116,11 +120,134 @@ describe("first-party DataFn skill reads", () => {
       workspaceId: "workspace:india",
       archive: "active",
       cursor: page.nextCursor,
+      visibility: ["workspace"],
       limit: 20,
     });
     const nextQuery = await requestDetails(fetchMock.mock.calls[1] ?? []);
     expect(nextQuery.body.cursor).toEqual({
       after: { updatedAt: skill.updatedAt, id: skill.id },
+    });
+  });
+
+  it("retains domain search ranking and forwards its cursor unchanged", async () => {
+    const page = {
+      skills: [{ ...skill, workspaceId: "workspace:india" }],
+      nextCursor: "signed-domain-cursor",
+    };
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockImplementation(
+        async () =>
+          new Response(
+            JSON.stringify({ ok: true, data: page, meta: { requestId: "r" } }),
+            { headers: { "content-type": "application/json" } },
+          ),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const options = {
+      workspaceId: "workspace:india",
+      query: "published-only-term",
+      visibility: ["workspace"] as const,
+      archive: "active" as const,
+    };
+    const first = await listSkills(options);
+    expect(first.skills).toEqual(page.skills);
+    await listSkills({ ...options, cursor: first.nextCursor });
+    const url = new URL(
+      String(fetchMock.mock.calls[1]?.[0]),
+      "https://app.skillplane.dev",
+    );
+    expect(url.pathname).toBe("/api/v1/workspaces/workspace%3Aindia/skills");
+    expect(url.searchParams.get("q")).toBe("published-only-term");
+    expect(url.searchParams.get("cursor")).toBe("signed-domain-cursor");
+    expect(url.searchParams.getAll("visibility")).toEqual(["workspace"]);
+    expect(
+      new Headers(fetchMock.mock.calls[1]?.[1]?.headers).get(
+        "x-skillplane-workspace-id",
+      ),
+    ).toBe("workspace:india");
+    await expect(
+      listSkills({ ...options, query: "another", cursor: first.nextCursor }),
+    ).rejects.toMatchObject({ code: "CURSOR_FILTER_MISMATCH" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    { workspaceId: "workspace:other" },
+    { query: "new search" },
+    { archive: "archived" as const },
+    { visibility: ["private"] as const },
+  ])("rejects cursor reuse with changed scope %j before transport", async (changed) => {
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async () =>
+      datafnResponse([skill], {
+        after: { updatedAt: skill.updatedAt, id: skill.id },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const options = {
+      workspaceId: "workspace:india",
+      visibility: ["workspace"] as const,
+    };
+    const first = await listSkills(options);
+    await expect(
+      listSkills({ ...options, ...changed, cursor: first.nextCursor }),
+    ).rejects.toMatchObject({ code: "CURSOR_FILTER_MISMATCH", status: 400 });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("normalizes visibility order and allows page-size changes", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async () =>
+      datafnResponse([skill], {
+        after: { updatedAt: skill.updatedAt, id: skill.id },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const first = await listSkills({
+      workspaceId: "workspace:india",
+      visibility: ["workspace", "private"],
+    });
+    await listSkills({
+      workspaceId: "workspace:india",
+      visibility: ["private", "workspace", "private"],
+      limit: 10,
+      cursor: first.nextCursor,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves authenticated archived detail reads by ID and slug", async () => {
+    const archivedAt = "2026-09-01T00:00:00.000Z";
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockImplementation(async () => datafnResponse([{ ...skill, archivedAt }]));
+    vi.stubGlobal("fetch", fetchMock);
+    expect((await getSkill("workspace:india", skill.id)).archivedAt).toBe(archivedAt);
+    expect((await getSkillBySlug("workspace:india", skill.slug)).archivedAt).toBe(
+      archivedAt,
+    );
+    expect((await requestDetails(fetchMock.mock.calls[0] ?? [])).body.filters).toEqual({
+      id: skill.id,
+    });
+    expect((await requestDetails(fetchMock.mock.calls[1] ?? [])).body.filters).toEqual({
+      slug: skill.slug,
+    });
+  });
+
+  it("distinguishes missing versions from missing skills", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockImplementation(async () => datafnResponse([])),
+    );
+    await expect(
+      getSkillVersion("workspace:india", skill.id, "version:missing"),
+    ).rejects.toMatchObject({
+      status: 404,
+      code: "SKILL_VERSION_NOT_FOUND",
+      message: "Skill version was not found",
+    });
+    await expect(getSkill("workspace:india", "skill:missing")).rejects.toMatchObject({
+      status: 404,
+      code: "SKILL_NOT_FOUND",
     });
   });
 
