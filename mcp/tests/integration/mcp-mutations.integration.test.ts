@@ -335,6 +335,27 @@ describe("MCP context mutations", () => {
         },
       },
     });
+    await expect(
+      environment.services.controlDatabase.pool.query(
+        `SELECT 1
+           FROM resource_routing_directory
+          WHERE resource_type = 'context' AND resource_id = $1
+            AND workspace_id = $2 AND state = 'active'`,
+        [created.context.id, environment.owner.workspaceId],
+      ),
+    ).resolves.toMatchObject({ rowCount: 1 });
+    await expect(
+      environment.services.database.pool.query(
+        `SELECT 1
+           FROM regional_projection_outbox
+          WHERE workspace_id = $1 AND event_type = 'resource_route.upsert'
+            AND payload->'resources' @> $2::jsonb`,
+        [
+          environment.owner.workspaceId,
+          JSON.stringify([{ resourceType: "context", resourceId: created.context.id }]),
+        ],
+      ),
+    ).resolves.toMatchObject({ rowCount: 1 });
     const changedReplay = await service.client.callTool({
       name: "context_create",
       arguments: {
@@ -652,6 +673,29 @@ describe("MCP context mutations", () => {
       revision: 1,
       baseRevisionId: null,
     });
+    await expect(
+      environment.services.controlDatabase.pool.query(
+        `SELECT 1
+           FROM resource_routing_directory
+          WHERE resource_type = 'context_note' AND resource_id = $1
+            AND workspace_id = $2 AND state = 'active'`,
+        [created.note.id, environment.owner.workspaceId],
+      ),
+    ).resolves.toMatchObject({ rowCount: 1 });
+    await expect(
+      environment.services.database.pool.query(
+        `SELECT 1
+           FROM regional_projection_outbox
+          WHERE workspace_id = $1 AND event_type = 'resource_route.upsert'
+            AND payload->'resources' @> $2::jsonb`,
+        [
+          environment.owner.workspaceId,
+          JSON.stringify([
+            { resourceType: "context_note", resourceId: created.note.id },
+          ]),
+        ],
+      ),
+    ).resolves.toMatchObject({ rowCount: 1 });
     const updates = await Promise.all([
       service.client.callTool({
         name: "context_note_upsert",

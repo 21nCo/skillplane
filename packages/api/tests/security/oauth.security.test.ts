@@ -304,7 +304,7 @@ describe("OAuth attack and leakage defenses", () => {
       metadata: Record<string, unknown>;
     }>(
       `SELECT event_type, outcome, metadata
-         FROM audit_events
+         FROM control_plane_audit_events
         WHERE user_id = $1 AND event_type = 'oauth.refresh.reuse_detected'`,
       [environment.fixture.userId],
     );

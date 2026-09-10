@@ -22,18 +22,23 @@
   ],
   "scripts": {
     "build": "tsc --project tsconfig.json",
+    "build:runtime-dependencies": "pnpm --filter @skillplane/control-plane build",
     "typecheck": "tsc --project tsconfig.json --noEmit",
     "test:unit": "vitest run --exclude 'dist/**' src",
     "test:integration": "vitest run --exclude 'dist/**' tests/integration",
     "test:security": "vitest run --passWithNoTests",
-    "migrate": "pnpm run build && node --enable-source-maps dist/src/migrate-cli.js",
-    "verify": "pnpm run build && node --enable-source-maps dist/src/verify-cli.js"
+    "migrate": "pnpm run build:runtime-dependencies && pnpm run build && node --enable-source-maps dist/src/migrate-cli.js",
+    "verify": "pnpm run build:runtime-dependencies && pnpm run build && node --enable-source-maps dist/src/verify-cli.js"
   },
   "dependencies": {
-    "@authfn/core": "catalog:",
+    "@authfn/api-keys": "catalog:",
+    "@authfn/email-otp": "catalog:",
+    "@authfn/multi-region": "catalog:",
     "@skillplane/config": "workspace:*",
+    "@skillplane/control-plane": "workspace:*",
     "@skillplane/domain": "workspace:*",
     "@superfunctions/db": "catalog:",
+    "authfn": "catalog:",
     "drizzle-orm": "catalog:",
     "pg": "catalog:"
   },

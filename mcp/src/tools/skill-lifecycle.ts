@@ -25,6 +25,7 @@ import type {
   SkillVersionRecord,
 } from "@skillplane/domain";
 import { canonicalizeBundleFiles } from "@skillplane/storage";
+import { registerResourceRoutes } from "@skillplane/api";
 import { principalForWorkspace } from "../auth.js";
 import { resolveSkill, type ResolvedSkill } from "./resolve.js";
 import {
@@ -194,7 +195,7 @@ async function resolveWorkspaceForWrite(
   selector: SkillCreateInput["workspace"],
 ): Promise<{ readonly workspace: WorkspaceRow; readonly principal: Principal }> {
   const byId = "id" in selector;
-  const result = await runtime.services.database.pool.query<WorkspaceRow>(
+  const result = await runtime.services.controlDatabase.pool.query<WorkspaceRow>(
     `SELECT id, slug
        FROM workspaces
       WHERE ${byId ? "id = $1" : "slug = $1"}
@@ -266,8 +267,13 @@ export function skillCreate(runtime: McpToolRuntime, input: SkillCreateInput) {
         visibility: input.visibility,
         idempotencyKey: input.idempotencyKey,
         requestId: execution.requestId,
+        fencingEpoch: runtime.fencingEpoch,
         auditContext: mutationAuditContext(runtime, input.caller),
       });
+      await registerResourceRoutes(runtime.services, resolved.workspace.id, [
+        { resourceType: "skill", resourceId: created.skill.id },
+        { resourceType: "skill_version", resourceId: created.version.id },
+      ]);
       execution.setScope({
         resourceType: "skill",
         resourceId: created.skill.id,
@@ -306,6 +312,7 @@ export function skillVisibilityUpdate(
         expectedUpdatedAt: input.expectedUpdatedAt,
         idempotencyKey: input.idempotencyKey,
         requestId: execution.requestId,
+        fencingEpoch: runtime.fencingEpoch,
         auditContext: mutationAuditContext(runtime, input.caller),
       });
       const output: SkillLifecycleMutationOutput = {
@@ -336,6 +343,7 @@ function skillStateMutation(
       expectedUpdatedAt: input.expectedUpdatedAt,
       idempotencyKey: input.idempotencyKey,
       requestId: execution.requestId,
+      fencingEpoch: runtime.fencingEpoch,
       auditContext: mutationAuditContext(runtime, input.caller),
     });
     const output: SkillLifecycleMutationOutput = {
@@ -478,6 +486,7 @@ function skillCandidateDecision(
       expectedUpdatedAt: input.expectedUpdatedAt,
       idempotencyKey: input.idempotencyKey,
       requestId: execution.requestId,
+      fencingEpoch: runtime.fencingEpoch,
       auditContext: mutationAuditContext(runtime, input.caller),
     });
     execution.setScope({
@@ -566,6 +575,7 @@ export function skillAmendmentPolicyUpdate(
         expectedUpdatedAt: input.expectedUpdatedAt,
         idempotencyKey: input.idempotencyKey,
         requestId: execution.requestId,
+        fencingEpoch: runtime.fencingEpoch,
         auditContext: mutationAuditContext(runtime, input.caller),
       });
       const updated = await runtime.services.skillService.get({

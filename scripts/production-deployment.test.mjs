@@ -114,6 +114,19 @@ describe("provider-neutral production database configuration", () => {
     );
   });
 
+  it("uses libpq TLS compatibility for every controlled regional alias", () => {
+    for (const host of [
+      "insouth.db.21n.dev",
+      "useast.db.21n.dev",
+      "euwest.db.21n.dev",
+    ]) {
+      const database = parseDirectPostgresUrl(
+        `postgresql://skillplane:secret@${host}:5432/live?sslmode=require`,
+      );
+      assert.equal(new URL(database.url).searchParams.get("uselibpqcompat"), "true");
+    }
+  });
+
   it("prefers the canonical URL and rejects a conflicting legacy value", () => {
     const canonical = "postgresql://skillplane:new-secret@new.provider.example/live";
     withEnvironment(

@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { topologySecrets } from "./lib/development-topology-secrets.mjs";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
@@ -281,4 +283,37 @@ describe("development deployment isolation", () => {
       );
     }
   });
+});
+
+it("provisions the development token for all MCP outputs without leaking it to other cells", () => {
+  withEnvironment(
+    {
+      ...developmentSecretEnvironment,
+      POSTHOG_PROJECT_TOKEN: `phc_${"p".repeat(32)}`,
+      SKILLPLANE_DEV_WORKSPACE_ROUTING_SECRET:
+        "test-only-development-routing-material-000000",
+    },
+    () => {
+      const topology = JSON.parse(
+        readFileSync(
+          new URL("../deployment/topology.development.json", import.meta.url),
+          "utf8",
+        ),
+      );
+      for (const id of [
+        "gateway:mcp",
+        ...topology.cells.map((cell) => `${cell.regionId}:mcp`),
+      ]) {
+        assert.equal(
+          topologySecrets({ id, kind: "mcp" }).POSTHOG_PROJECT_TOKEN,
+          developmentSecretEnvironment.PUBLIC_POSTHOG_KEY,
+        );
+      }
+      assert.equal(
+        topologySecrets({ id: "in-south:app", kind: "app" }).POSTHOG_PROJECT_TOKEN,
+        undefined,
+      );
+      assert.equal(topologySecrets({ kind: "projection" }), null);
+    },
+  );
 });

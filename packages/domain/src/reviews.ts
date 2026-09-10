@@ -5,13 +5,18 @@ import type { AmendmentPolicyDecision } from "./amendment-policy.js";
 import { DomainError } from "./errors.js";
 import { hashIdempotentRequest, type IdempotencyStore } from "./idempotency.js";
 import { principalAuditActor, type Principal } from "./principal.js";
+import { enqueueCurrentSkillProjection } from "./projection-events.js";
 import { nextSemanticVersion } from "./publication.js";
 import {
   parseSemanticBump,
   toSkillVersionRecord,
   type SemanticBump,
 } from "./skill-versions.js";
-import { mapSkillInfrastructureError, type SkillVersionRecord } from "./skills.js";
+import {
+  mapSkillInfrastructureError,
+  type SkillRecord,
+  type SkillVersionRecord,
+} from "./skills.js";
 import { withDomainTransaction } from "./transactions.js";
 import { insertMutationAudit, type MutationAuditContext } from "./mutation-audit.js";
 
@@ -85,6 +90,21 @@ interface ReviewRow {
   readonly created_for_user_id: string | null;
   readonly published_at: Date | null;
   readonly created_at: Date;
+}
+
+interface ReviewSkillRow {
+  readonly id: string;
+  readonly workspace_id: string;
+  readonly slug: string;
+  readonly name: string;
+  readonly description: string;
+  readonly tags: string[];
+  readonly visibility: SkillRecord["visibility"];
+  readonly current_published_version_id: string | null;
+  readonly semantic_version: string | null;
+  readonly archived_at: Date | null;
+  readonly created_at: Date;
+  readonly updated_at: Date;
 }
 
 const REVIEW_SELECT = `
@@ -233,6 +253,7 @@ export class AmendmentReviewService {
     readonly expectedUpdatedAt?: string;
     readonly idempotencyKey: string;
     readonly requestId: string;
+    readonly fencingEpoch?: number;
     readonly auditContext?: MutationAuditContext;
   }): Promise<AmendmentReviewDetail> {
     authorize(options.principal, "skills:publish");
@@ -248,6 +269,7 @@ export class AmendmentReviewService {
     readonly expectedUpdatedAt?: string;
     readonly idempotencyKey: string;
     readonly requestId: string;
+    readonly fencingEpoch?: number;
     readonly auditContext?: MutationAuditContext;
   }): Promise<AmendmentReviewDetail> {
     authorize(options.principal, "skills:publish");
@@ -264,6 +286,7 @@ export class AmendmentReviewService {
     readonly expectedUpdatedAt?: string;
     readonly idempotencyKey: string;
     readonly requestId: string;
+    readonly fencingEpoch?: number;
     readonly auditContext?: MutationAuditContext;
   }): Promise<AmendmentReviewDetail> {
     const expectedUpdatedAt = (() => {
@@ -292,6 +315,7 @@ export class AmendmentReviewService {
       operation: `amendment.review.${options.decision}:${options.reviewId}`,
       key: options.idempotencyKey,
       requestHash,
+      fencingEpoch: options.fencingEpoch,
     });
     if (claim.state === "replay") return claim.responseBody.detail;
     try {
@@ -472,12 +496,51 @@ export class AmendmentReviewService {
             );
           }
           const detail = toDetail(finalRow);
+          if (options.decision === "approved") {
+            const skillResult = await client.query<ReviewSkillRow>(
+              `SELECT skill.id, skill.workspace_id, skill.slug, skill.name,
+                      skill.description, skill.tags, skill.visibility,
+                      skill.current_published_version_id,
+                      version.semantic_version, skill.archived_at,
+                      skill.created_at, skill.updated_at
+                 FROM skills skill
+                 LEFT JOIN skill_versions version
+                   ON version.id = skill.current_published_version_id
+                WHERE skill.id = $1 AND skill.workspace_id = $2
+                LIMIT 1`,
+              [options.skillId, options.principal.workspaceId],
+            );
+            const projected = skillResult.rows[0];
+            if (!projected) {
+              throw new DomainError("SKILL_NOT_FOUND", "Skill was not found", 404);
+            }
+            await enqueueCurrentSkillProjection(client, {
+              skill: {
+                id: projected.id,
+                workspaceId: projected.workspace_id,
+                slug: projected.slug,
+                name: projected.name,
+                description: projected.description,
+                tags: projected.tags,
+                visibility: projected.visibility,
+                currentPublishedVersionId: projected.current_published_version_id,
+                currentSemanticVersion: projected.semantic_version,
+                archivedAt: projected.archived_at?.toISOString() ?? null,
+                createdAt: projected.created_at.toISOString(),
+                updatedAt: projected.updated_at.toISOString(),
+              },
+              fencingEpoch: options.fencingEpoch,
+            });
+          }
           await this.idempotency.complete(client, claim.identity, 200, { detail });
           return detail;
         },
+        { fencingEpoch: options.fencingEpoch },
       );
     } catch (error) {
-      await this.idempotency.release(claim.identity).catch(() => undefined);
+      await this.idempotency
+        .release(claim.identity, options.fencingEpoch)
+        .catch(() => undefined);
       if (semverConflict(error)) {
         throw new DomainError(
           "SKILL_PUBLISH_CONFLICT",

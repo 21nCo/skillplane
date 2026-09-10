@@ -1,4 +1,4 @@
-import type { AuthFnCookieConfig } from "@authfn/core";
+import type { AuthFnCookieConfig } from "authfn";
 
 export const AUTH_COOKIE_PREFIX = "skillplane";
 export const AUTH_SESSION_COOKIE = `__Secure-${AUTH_COOKIE_PREFIX}.session`;

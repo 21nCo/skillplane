@@ -8,12 +8,22 @@ export function migrateDevelopment(options = {}) {
   const execute = options.run ?? run;
   execute("pnpm", ["--filter", "@skillplane/db", "migrate"], {
     cwd: root,
-    env: { ...process.env, MIGRATION_DATABASE_URL: database.url, DATABASE_URL: "" },
+    env: {
+      ...process.env,
+      MIGRATION_DATABASE_URL: database.url,
+      DATABASE_URL: "",
+      SKILLPLANE_DATABASE_ROLE: "combined",
+    },
     failureMessage: "Development database migration failed",
   });
   execute("pnpm", ["--filter", "@skillplane/db", "verify"], {
     cwd: root,
-    env: { ...process.env, MIGRATION_DATABASE_URL: database.url, DATABASE_URL: "" },
+    env: {
+      ...process.env,
+      MIGRATION_DATABASE_URL: database.url,
+      DATABASE_URL: "",
+      SKILLPLANE_DATABASE_ROLE: "combined",
+    },
     failureMessage: "Development database verification failed",
   });
   return {

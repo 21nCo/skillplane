@@ -1,4 +1,4 @@
-import type { AuthFnPluginRuntimeContext } from "@authfn/core";
+import type { AuthFnPluginRuntimeContext } from "authfn";
 import type { Pool } from "pg";
 import { describe, expect, it, vi } from "vitest";
 import { normalizeMcpClientRegistration } from "@mcpfn/auth";

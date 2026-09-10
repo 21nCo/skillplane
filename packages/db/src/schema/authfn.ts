@@ -120,9 +120,29 @@ export const authfnApiKeys = pgTable(
   ],
 );
 
+export const authfnRegionProfiles = pgTable(
+  "authfn_region_profiles",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => authfnUsers.id, { onDelete: "cascade" }),
+    regionId: text("region_id").notNull(),
+    authority: text("authority").notNull(),
+    domain: text("domain"),
+    createdAt: utcTimestamp("created_at").notNull(),
+    updatedAt: utcTimestamp("updated_at").notNull(),
+  },
+  (table) => [
+    index("idx_authfn_region_profiles_region_id").on(table.regionId),
+    uniqueIndex("idx_authfn_region_profiles_user_id").on(table.userId),
+  ],
+);
+
 export const authfnSchema = {
   authfn_users: authfnUsers,
   authfn_sessions: authfnSessions,
   authfn_otp_challenges: authfnOtpChallenges,
   authfn_api_keys: authfnApiKeys,
+  authfn_region_profiles: authfnRegionProfiles,
 };

@@ -3,7 +3,7 @@
   "name": "skillplane-mcp-dev",
   "main": "src/index.ts",
   "compatibility_date": "2026-05-03",
-  "compatibility_flags": ["nodejs_compat"],
+  "compatibility_flags": ["nodejs_compat", "allow_eval_during_startup"],
   "rules": [
     {
       "type": "Data",

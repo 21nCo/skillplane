@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "mode": "multi-cell",
+  "public": {
+    "appAuthority": "https://app-dev.skillplane.dev",
+    "mcpResource": "https://mcp-dev.skillplane.dev/mcp"
+  },
+  "controlPlane": {
+    "regionId": "global",
+    "databaseBinding": "CONTROL_HYPERDRIVE",
+    "publicObjectStorageBinding": "PUBLIC_SKILL_BUNDLES",
+    "issuer": "https://app-dev.skillplane.dev",
+    "oauthResource": "https://mcp-dev.skillplane.dev/mcp"
+  },
+  "cells": [
+    {
+      "regionId": "in-south",
+      "placement": {
+        "displayName": "India South",
+        "latitude": 19.076,
+        "longitude": 72.8777
+      },
+      "databaseBinding": "CELL_IN_SOUTH_HYPERDRIVE",
+      "objectStorageBinding": "CELL_IN_SOUTH_BUNDLES",
+      "appServiceBinding": "CELL_IN_SOUTH_APP",
+      "mcpServiceBinding": "CELL_IN_SOUTH_MCP",
+      "publiclyRoutable": false
+    },
+    {
+      "regionId": "us-east",
+      "placement": {
+        "displayName": "US East",
+        "latitude": 39.0438,
+        "longitude": -77.4874
+      },
+      "databaseBinding": "CELL_US_EAST_HYPERDRIVE",
+      "objectStorageBinding": "CELL_US_EAST_BUNDLES",
+      "appServiceBinding": "CELL_US_EAST_APP",
+      "mcpServiceBinding": "CELL_US_EAST_MCP",
+      "publiclyRoutable": false
+    },
+    {
+      "regionId": "eu-west",
+      "placement": {
+        "displayName": "Europe West",
+        "latitude": 53.3498,
+        "longitude": -6.2603
+      },
+      "databaseBinding": "CELL_EU_WEST_HYPERDRIVE",
+      "objectStorageBinding": "CELL_EU_WEST_BUNDLES",
+      "appServiceBinding": "CELL_EU_WEST_APP",
+      "mcpServiceBinding": "CELL_EU_WEST_MCP",
+      "publiclyRoutable": false
+    }
+  ],
+  "routing": {
+    "activeKeyId": "current",
+    "verificationKeyIds": ["current"],
+    "assertionAudience": "skillplane-cell-dev",
+    "assertionTtlSeconds": 20
+  }
+}

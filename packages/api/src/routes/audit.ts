@@ -128,6 +128,7 @@ async function list(context: Context<ApiEnvironment>) {
       workspaceId,
       filters: filters(context, skillId),
       cursorSecret: services.tenancySecret,
+      controlPool: services.controlDatabase.pool,
       ...(cursor ? { cursor } : {}),
       ...(limit !== undefined ? { limit } : {}),
     });
@@ -147,6 +148,7 @@ async function exportCsv(context: Context<ApiEnvironment>): Promise<Response> {
   const csv = await exportAuditEventsCsv(services.database.pool, {
     workspaceId,
     filters: filters(context, skillId),
+    controlPool: services.controlDatabase.pool,
   });
   context.header("content-type", "text/csv; charset=utf-8");
   context.header(

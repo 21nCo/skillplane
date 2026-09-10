@@ -24,7 +24,7 @@
     "db:backup:verify": "pnpm --filter @skillplane/testing... build && node --enable-source-maps dist/backup-restore.js"
   },
   "dependencies": {
-    "@authfn/core": "catalog:",
+    "authfn": "catalog:",
     "@skillplane/auth": "workspace:*",
     "@skillplane/config": "workspace:*",
     "@skillplane/db": "workspace:*",

@@ -34,7 +34,6 @@ export interface ResolvedSkill {
 interface SkillRow {
   readonly id: string;
   readonly workspace_id: string;
-  readonly workspace_slug: string;
   readonly slug: string;
   readonly name: string;
   readonly description: string;
@@ -141,23 +140,43 @@ export async function resolveSkill(
   },
 ): Promise<ResolvedSkill> {
   const byId = "id" in selector;
-  const values = byId ? [selector.id] : [selector.workspaceSlug, selector.skillSlug];
+  let selectedWorkspaceId: string | null = null;
+  if (!byId) {
+    const workspace = await runtime.services.controlDatabase.pool.query<{
+      id: string;
+    }>("SELECT id FROM workspaces WHERE slug = $1 LIMIT 1", [selector.workspaceSlug]);
+    selectedWorkspaceId = workspace.rows[0]?.id ?? null;
+    if (!selectedWorkspaceId) {
+      throw new McpToolError("SKILL_NOT_FOUND", "The skill was not found", {
+        status: 404,
+      });
+    }
+  }
+  const values = byId ? [selector.id] : [selectedWorkspaceId, selector.skillSlug];
   const result = await runtime.services.database.pool.query<SkillRow>(
-    `SELECT skill.id, skill.workspace_id, workspace.slug AS workspace_slug,
+    `SELECT skill.id, skill.workspace_id,
             skill.slug, skill.name, skill.description, skill.tags,
             skill.visibility, skill.current_published_version_id,
             version.semantic_version, skill.archived_at, skill.created_at,
             skill.updated_at
        FROM skills skill
-       JOIN workspaces workspace ON workspace.id = skill.workspace_id
        LEFT JOIN skill_versions version
          ON version.id = skill.current_published_version_id
-      WHERE ${byId ? "skill.id = $1" : "workspace.slug = $1 AND skill.slug = $2"}
+      WHERE ${byId ? "skill.id = $1" : "skill.workspace_id = $1 AND skill.slug = $2"}
       LIMIT 1`,
     values,
   );
   const row = result.rows[0];
   if (!row || (row.archived_at && !options.includeArchived)) {
+    throw new McpToolError("SKILL_NOT_FOUND", "The skill was not found", {
+      status: 404,
+    });
+  }
+  const workspace = await runtime.services.controlDatabase.pool.query<{
+    slug: string;
+  }>("SELECT slug FROM workspaces WHERE id = $1 LIMIT 1", [row.workspace_id]);
+  const workspaceSlug = workspace.rows[0]?.slug;
+  if (!workspaceSlug) {
     throw new McpToolError("SKILL_NOT_FOUND", "The skill was not found", {
       status: 404,
     });
@@ -191,7 +210,7 @@ export async function resolveSkill(
   return {
     id: row.id,
     workspaceId: row.workspace_id,
-    workspaceSlug: row.workspace_slug,
+    workspaceSlug,
     slug: row.slug,
     name: row.name,
     description: row.description,

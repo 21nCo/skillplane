@@ -25,6 +25,7 @@
     "@skillplane/db": "workspace:*",
     "@skillplane/observability": "workspace:*",
     "@superfunctions/db": "catalog:",
+    "authfn": "catalog:",
     "pg": "catalog:"
   },
   "devDependencies": {

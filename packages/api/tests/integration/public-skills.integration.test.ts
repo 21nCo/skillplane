@@ -268,7 +268,16 @@ describe("public skill discovery API", () => {
     );
     expect(afterCurrent.headers.get("etag")).toContain(candidate.version.digest);
     expect(afterCurrent.headers.get("etag")).not.toContain(review.version.digest);
-    expect(await afterCurrent.text()).toContain('"semanticVersion":"1.0.1"');
+    const currentProjection = await data<{
+      skill: {
+        currentSemanticVersion: string;
+        archivedAt: string | null;
+        updatedAt: string;
+      };
+    }>(afterCurrent);
+    expect(currentProjection.skill.currentSemanticVersion).toBe("1.0.1");
+    expect(currentProjection.skill.archivedAt).toBeNull();
+    expect(Number.isFinite(Date.parse(currentProjection.skill.updatedAt))).toBe(true);
 
     const afterHistory = await app.request(
       `/api/v1/skills/public/${workspaceSlug}/${skillSlug}/versions`,

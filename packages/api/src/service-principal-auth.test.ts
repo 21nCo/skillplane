@@ -1,4 +1,4 @@
-import { AuthFnApiKeyRevokedError } from "@authfn/core";
+import { AuthFnApiKeyRevokedError } from "authfn";
 import { describe, expect, it, vi } from "vitest";
 import { authenticateServicePrincipalRequest } from "./service-principal-auth.js";
 
@@ -39,7 +39,7 @@ describe("service-principal authentication", () => {
     const failure = new Error("database unavailable");
     const services = {
       auth: { apiKeys: { authenticate: vi.fn().mockRejectedValue(failure) } },
-      database: { pool: { query: vi.fn() } },
+      controlDatabase: { pool: { query: vi.fn() } },
     };
 
     await expect(
@@ -54,7 +54,7 @@ describe("service-principal authentication", () => {
           authenticate: vi.fn().mockRejectedValue(new AuthFnApiKeyRevokedError()),
         },
       },
-      database: { pool: { query: vi.fn() } },
+      controlDatabase: { pool: { query: vi.fn() } },
     };
 
     await expect(
@@ -104,7 +104,7 @@ describe("service-principal authentication", () => {
   ])("rejects %s", async (_case, identity, row) => {
     const services = {
       auth: { apiKeys: { authenticate: vi.fn().mockResolvedValue(identity) } },
-      database: {
+      controlDatabase: {
         pool: {
           query: vi.fn().mockResolvedValue({ rows: row ? [row] : [] }),
         },
@@ -142,7 +142,7 @@ describe("service-principal authentication", () => {
           authenticate: vi.fn().mockResolvedValue(validIdentity),
         },
       },
-      database: { pool: { query } },
+      controlDatabase: { pool: { query } },
     };
 
     await expect(

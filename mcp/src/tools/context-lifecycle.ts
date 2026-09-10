@@ -13,6 +13,7 @@ import {
   type ContextUpdateInput,
 } from "@skillplane/mcp-schema";
 import type { ContextKnowledgeRevisionRecord, ContextRecord } from "@skillplane/domain";
+import { registerResourceRoutes } from "@skillplane/api";
 import { resolveContext, resolveSkill } from "./resolve.js";
 import {
   executeMutationTool,
@@ -261,8 +262,12 @@ export function contextCreate(runtime: McpToolRuntime, input: ContextCreateInput
         learningMetadata: input.learningMetadata,
         idempotencyKey: input.idempotencyKey,
         requestId: execution.requestId,
+        fencingEpoch: runtime.fencingEpoch,
         auditContext: mutationAuditContext(runtime, input.caller),
       });
+      await registerResourceRoutes(runtime.services, skill.workspaceId, [
+        { resourceType: "context", resourceId: created.context.id },
+      ]);
       execution.setScope({
         resourceType: "context",
         resourceId: created.context.id,
@@ -310,6 +315,7 @@ export function contextUpdate(runtime: McpToolRuntime, input: ContextUpdateInput
         expectedUpdatedAt: input.expectedUpdatedAt,
         idempotencyKey: input.idempotencyKey,
         requestId: execution.requestId,
+        fencingEpoch: runtime.fencingEpoch,
         auditContext: mutationAuditContext(runtime, input.caller),
       });
       const output: ContextLifecycleMutationOutput = {
@@ -345,6 +351,7 @@ function contextStateMutation(
       expectedUpdatedAt: input.expectedUpdatedAt,
       idempotencyKey: input.idempotencyKey,
       requestId: execution.requestId,
+      fencingEpoch: runtime.fencingEpoch,
       auditContext: mutationAuditContext(runtime, input.caller),
     });
     const output: ContextLifecycleMutationOutput = {

@@ -3,6 +3,7 @@ import { skillFileResponse } from "@skillplane/storage";
 import type { Hono } from "hono";
 import type { ApiEnvironment } from "../context.js";
 import { success } from "../envelopes.js";
+import { registerResourceRoutes } from "../resource-routing.js";
 import {
   parseStringField,
   publicSkillVersion,
@@ -10,6 +11,7 @@ import {
   readJsonObject,
   requireIdempotencyKey,
   requirePrincipal,
+  routingEpoch,
 } from "./shared.js";
 
 function parseLimit(value: string | undefined): number | undefined {
@@ -49,7 +51,11 @@ export function registerSkillVersionRoutes(app: Hono<ApiEnvironment>): void {
       archiveBytes: upload.archiveBytes,
       idempotencyKey: requireIdempotencyKey(context),
       requestId: context.get("requestId"),
+      fencingEpoch: routingEpoch(context),
     });
+    await registerResourceRoutes(services, principal.workspaceId, [
+      { resourceType: "skill_version", resourceId: version.id },
+    ]);
     context.header("Cache-Control", "private, no-store");
     return context.json(
       success(context, { version: publicSkillVersion(version) }),
@@ -185,6 +191,7 @@ export function registerSkillVersionRoutes(app: Hono<ApiEnvironment>): void {
       principal: requirePrincipal(context),
       idempotencyKey: requireIdempotencyKey(context),
       requestId: context.get("requestId"),
+      fencingEpoch: routingEpoch(context),
     });
     context.header("Cache-Control", "private, no-store");
     return context.json(success(context, { version: publicSkillVersion(version) }));
@@ -207,6 +214,7 @@ export function registerSkillVersionRoutes(app: Hono<ApiEnvironment>): void {
       reason: parseStringField(body.reason, "reason", { maxLength: 2_000 }),
       idempotencyKey: requireIdempotencyKey(context),
       requestId: context.get("requestId"),
+      fencingEpoch: routingEpoch(context),
     });
     context.header("Cache-Control", "private, no-store");
     return context.json(success(context, { version: publicSkillVersion(version) }));

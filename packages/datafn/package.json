@@ -22,13 +22,13 @@
     "test:security": "vitest run --exclude 'dist/**' tests/security"
   },
   "dependencies": {
-    "@authfn/core": "catalog:",
     "@datafn/client": "catalog:",
     "@datafn/core": "catalog:",
     "@datafn/server": "catalog:",
     "@skillplane/db": "workspace:*",
     "@skillplane/domain": "workspace:*",
     "@superfunctions/db": "catalog:",
+    "authfn": "catalog:",
     "pg": "catalog:"
   },
   "devDependencies": {

@@ -11,6 +11,7 @@ export * from "./learning-metadata.js";
 export * from "./memberships.js";
 export * from "./mutation-audit.js";
 export * from "./principal.js";
+export * from "./projection-events.js";
 export * from "./publication.js";
 export * from "./reviews.js";
 export * from "./search.js";

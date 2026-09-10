@@ -71,7 +71,7 @@ async function listWorkspaceRows(
   limit: number,
 ): Promise<readonly WorkspaceRow[]> {
   if (runtime.identity.kind === "service") {
-    const result = await runtime.services.database.pool.query<WorkspaceRow>(
+    const result = await runtime.services.controlDatabase.pool.query<WorkspaceRow>(
       `SELECT workspace.id, workspace.slug, workspace.name, workspace.kind,
               $2::text AS role, workspace.updated_at
          FROM workspaces workspace
@@ -93,7 +93,7 @@ async function listWorkspaceRows(
     );
     return result.rows;
   }
-  const result = await runtime.services.database.pool.query<WorkspaceRow>(
+  const result = await runtime.services.controlDatabase.pool.query<WorkspaceRow>(
     `SELECT workspace.id, workspace.slug, workspace.name, workspace.kind,
             membership.role, workspace.updated_at
        FROM workspace_memberships membership
@@ -163,7 +163,7 @@ async function resolveWorkspace(
   selector: WorkspaceSelector,
 ): Promise<WorkspaceRow> {
   const byId = "id" in selector;
-  const result = await runtime.services.database.pool.query<WorkspaceRow>(
+  const result = await runtime.services.controlDatabase.pool.query<WorkspaceRow>(
     `SELECT id, slug, name, kind, 'viewer'::text AS role, updated_at
        FROM workspaces
       WHERE ${byId ? "id = $1" : "slug = $1"}

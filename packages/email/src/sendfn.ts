@@ -1,4 +1,4 @@
-import { type AuthFnDeliveryProvider, type AuthFnDeliveryRequest } from "@authfn/core";
+import { type AuthFnDeliveryProvider, type AuthFnDeliveryRequest } from "authfn";
 import { createSendFn, type SendFnEdgeClient } from "sendfn/edge";
 import {
   CloudflareEmailProviderError,

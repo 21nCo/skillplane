@@ -2,8 +2,8 @@ import {
   assertValidCsrf,
   getCookieSessionState,
   requireCookieSession,
-} from "@authfn/core";
-import type { AuthFnPluginRuntimeContext } from "@authfn/core";
+} from "authfn/core/sessions";
+import type { AuthFnPluginRuntimeContext } from "authfn";
 import type { McpFnValidatedAuthorizationRequest } from "@mcpfn/auth";
 import type { PoolClient } from "pg";
 import { writeOAuthAudit, oauthRequestId } from "./audit.js";

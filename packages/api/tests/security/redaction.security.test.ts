@@ -5,7 +5,11 @@ import {
   TestObjectStorage,
   type TenantFixture,
 } from "@skillplane/testing";
-import { rollupUtcDay, writeAuditEvent } from "@skillplane/observability";
+import {
+  rollupUtcDay,
+  writeAuditEvent,
+  writeControlPlaneAuditEvent,
+} from "@skillplane/observability";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildApiServices, createApiApp, type ApiServices } from "../../src/index.js";
 
@@ -94,6 +98,37 @@ beforeAll(async () => {
       safeDiagnostic: "retrieval-redaction-verified",
     },
   });
+  await writeAuditEvent(services.database.pool, {
+    id: `audit:regional-membership:${suffix}`,
+    workspaceId: owner.workspaceId,
+    eventType: "workspace.membership.compatibility_recorded",
+    action: "members:write",
+    outcome: "success",
+    actorType: "user",
+    actorId: owner.userId,
+    userId: owner.userId,
+    requestId: `request:regional-membership:${suffix}`,
+    resourceType: "workspace_membership",
+    resourceId: viewer.userId,
+    channel: "app",
+    retentionClass: "permanent",
+    occurredAt: new Date(Date.now() - 1_000),
+  });
+  await writeControlPlaneAuditEvent(services.controlDatabase.pool, {
+    id: `control-audit:redaction:${suffix}`,
+    workspaceId: owner.workspaceId,
+    eventType: "workspace.membership.role_changed",
+    action: "members:write",
+    outcome: "success",
+    actorType: "user",
+    actorId: owner.userId,
+    userId: owner.userId,
+    requestId: `request:control-redaction:${suffix}`,
+    resourceType: "workspace_membership",
+    resourceId: viewer.userId,
+    channel: "app",
+    metadata: { nextRole: "viewer" },
+  });
   await rollupUtcDay(services.database.pool, {
     day: new Date().toISOString().slice(0, 10),
     workspaceId: owner.workspaceId,
@@ -101,6 +136,10 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  await services.controlDatabase.pool.query(
+    "DELETE FROM control_plane_audit_events WHERE id = $1",
+    [`control-audit:redaction:${suffix}`],
+  );
   await services.datafn.close();
   await services.email?.close();
   await services.database.close();
@@ -187,6 +226,49 @@ describe("audit redaction and role isolation", () => {
     expect(csv).toContain("declared_caller");
     expect(csv).toContain(`request:redaction:${suffix}`);
     expect(csv).not.toContain("private@example.test");
+
+    const controlList = await app.request(
+      `/api/v1/audit/workspaces/${owner.workspaceId}?from=${today}&to=${today}&tool=members%3Awrite&limit=1`,
+      { headers: headers(owner) },
+    );
+    expect(controlList.status).toBe(200);
+    const firstCombined = (await controlList.json()) as {
+      data: {
+        audit: {
+          events: { requestId: string }[];
+          nextCursor: string | null;
+        };
+      };
+    };
+    expect(firstCombined.data.audit.events).toHaveLength(1);
+    expect(firstCombined.data.audit.nextCursor).toEqual(expect.any(String));
+    const secondCombinedResponse = await app.request(
+      `/api/v1/audit/workspaces/${owner.workspaceId}?from=${today}&to=${today}&tool=members%3Awrite&limit=1&cursor=${encodeURIComponent(firstCombined.data.audit.nextCursor ?? "")}`,
+      { headers: headers(owner) },
+    );
+    expect(secondCombinedResponse.status).toBe(200);
+    const secondCombined = (await secondCombinedResponse.json()) as {
+      data: { audit: { events: { requestId: string }[] } };
+    };
+    expect(
+      [...firstCombined.data.audit.events, ...secondCombined.data.audit.events].map(
+        (event) => event.requestId,
+      ),
+    ).toEqual(
+      expect.arrayContaining([
+        `request:control-redaction:${suffix}`,
+        `request:regional-membership:${suffix}`,
+      ]),
+    );
+
+    const controlExport = await app.request(
+      `/api/v1/audit/workspaces/${owner.workspaceId}/export?from=${today}&to=${today}&tool=members%3Awrite`,
+      { headers: { ...headers(owner), accept: "text/csv" } },
+    );
+    expect(controlExport.status).toBe(200);
+    const controlCsv = await controlExport.text();
+    expect(controlCsv).toContain(`request:control-redaction:${suffix}`);
+    expect(controlCsv).toContain(`request:regional-membership:${suffix}`);
 
     const viewerAudit = await app.request(
       `/api/v1/audit/workspaces/${owner.workspaceId}?${filter}`,

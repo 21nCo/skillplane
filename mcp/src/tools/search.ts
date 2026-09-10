@@ -4,7 +4,7 @@ import { executeReadTool, type McpToolRuntime } from "./shared.js";
 
 export function skillsSearch(runtime: McpToolRuntime, input: SkillsSearchInput) {
   return executeReadTool(runtime, "skills_search", input.caller, async (execution) => {
-    const workspace = await runtime.services.database.pool.query(
+    const workspace = await runtime.services.controlDatabase.pool.query(
       "SELECT 1 FROM workspaces WHERE id = $1",
       [input.workspaceId],
     );

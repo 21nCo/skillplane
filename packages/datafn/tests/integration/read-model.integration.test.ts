@@ -1,4 +1,4 @@
-import { createAuthFn } from "@authfn/core";
+import { authfn } from "authfn";
 import {
   createDatabaseClient,
   migrateDatabase,
@@ -26,12 +26,11 @@ beforeAll(async () => {
   tenantA = await seedTenantFixture(databaseUrl, "datafn-a");
   tenantB = await seedTenantFixture(databaseUrl, "datafn-b");
   const database = createDatabaseClient({ connectionString: databaseUrl });
-  const auth = createAuthFn({
-    database: database.adapter,
+  const auth = authfn({
     plugins: [],
     namespace: "authfn",
     basePath: "/auth",
-  });
+  }).createServer({ database: database.adapter });
   const server = await createSkillplaneDatafnServer({
     database,
     auth: auth.provider,

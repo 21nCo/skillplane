@@ -1,16 +1,23 @@
+import { authFnApiKeyPlugin } from "@authfn/api-keys";
+import { authFnEmailOtpPlugin } from "@authfn/email-otp";
 import {
-  authenticateApiKey,
-  authFnApiKeyPlugin,
-  authFnEmailOtpPlugin,
-  createApiKey,
-  createAuthFn,
-  revokeApiKeyById,
-  type AuthFnConfig,
+  authFnMultiRegionEnvironment,
+  authFnMultiRegionPlugin,
+  type MultiRegionPluginRuntimeConfig,
+} from "@authfn/multi-region";
+import {
+  authfn,
+  authFnPlugins,
   type AuthFnDeliveryProvider,
   type AuthFnEvent,
-  type AuthFnInstance,
+  type AuthFnServer,
   type AuthFnSession,
-} from "@authfn/core";
+} from "authfn";
+import {
+  authenticateApiKey,
+  createApiKey,
+  revokeApiKeyById,
+} from "authfn/core/api-keys";
 import type { DatabaseClient } from "@skillplane/db";
 import { createAuthApplication } from "./app.js";
 import type { OtpRateLimiter } from "./rate-limit.js";
@@ -41,11 +48,17 @@ export interface CreateSkillplaneAuthServerInput {
   readonly now?: () => Date;
   readonly emit?: (event: SafeAuthEvent) => Promise<void> | void;
   readonly oauth: Omit<AuthFnMcpOAuthConfig, "pool">;
+  /**
+   * AuthFn routing stays provider-neutral. Skillplane's default is one global
+   * identity authority; a canonical gateway can supply the same contract when
+   * the control plane is deployed separately from its public edge.
+   */
+  readonly multiRegion?: MultiRegionPluginRuntimeConfig;
 }
 
 export interface SkillplaneAuthServer {
-  readonly authfn: AuthFnInstance;
-  readonly provider: AuthFnInstance["provider"];
+  readonly authfn: AuthFnServer;
+  readonly provider: AuthFnServer["provider"];
   readonly oauth: OAuthRuntime;
   readonly apiKeys: {
     create(input: {
@@ -64,7 +77,7 @@ export interface SkillplaneAuthServer {
     }): Promise<void>;
   };
   handle(request: Request): Promise<Response>;
-  getSchema(): ReturnType<AuthFnInstance["getSchema"]>;
+  getSchema(): ReturnType<AuthFnServer["getSchema"]>;
 }
 
 function safeEvent(event: AuthFnEvent): SafeAuthEvent {
@@ -106,22 +119,15 @@ export function createSkillplaneAuthServer(
       });
     },
   });
-  const plugins: AuthFnConfig["plugins"] = [
-    authFnEmailOtpPlugin({
-      ...(input.delivery ? { delivery: input.delivery } : {}),
-      ...(input.codeGenerator ? { codeGenerator: input.codeGenerator } : {}),
-      ...(input.now ? { now: input.now } : {}),
-      challengeTtlSeconds: 10 * 60,
-      maxAttempts: 5,
-    }),
+  const plugins = authFnPlugins(
+    authFnEmailOtpPlugin(),
     authFnApiKeyPlugin({
       secretPrefix: SERVICE_PRINCIPAL_API_KEY_PREFIX,
-      ...(input.now ? { now: input.now } : {}),
     }),
     oauth.plugin,
-  ];
-  const authfn = createAuthFn({
-    database: input.database.adapter,
+    authFnMultiRegionPlugin(),
+  );
+  const declaration = authfn({
     namespace: "authfn",
     basePath: "/auth",
     plugins,
@@ -129,22 +135,63 @@ export function createSkillplaneAuthServer(
     accountLinking: {
       otpSignUpExistingUser: true,
     },
-    observability: {
-      emit: (event) => emit(safeEvent(event)),
-    },
     openApi: {
       title: "Skillplane Auth API",
       version: "1.0.0",
     },
   });
+  const multiRegion =
+    input.multiRegion ??
+    ({
+      regions: [
+        {
+          regionId: "global",
+          authority: input.oauth.issuer,
+          issuer: input.oauth.issuer,
+          baseUrl: input.oauth.issuer,
+        },
+      ],
+      defaultRegionId: "global",
+      routing: {
+        mode: "direct",
+        publicAuthority: input.oauth.issuer,
+        canonicalCookie: AUTH_COOKIE_CONFIG,
+        canonicalOAuth: { resource: input.oauth.resource },
+      },
+    } satisfies MultiRegionPluginRuntimeConfig);
+  const authfnServer = declaration.createServer({
+    database: input.database.adapter,
+    environment: authFnMultiRegionEnvironment(multiRegion),
+    pluginRuntime: {
+      emailOtp: {
+        delivery:
+          input.delivery ??
+          ({
+            send() {
+              return Promise.reject(new Error("AUTHFN_EMAIL_DELIVERY_UNAVAILABLE"));
+            },
+          } satisfies AuthFnDeliveryProvider),
+        ...(input.codeGenerator ? { codeGenerator: input.codeGenerator } : {}),
+        ...(input.now ? { now: input.now } : {}),
+        challengeTtlSeconds: 10 * 60,
+        maxAttempts: 5,
+      },
+      apiKey: {
+        ...(input.now ? { now: input.now } : {}),
+      },
+    },
+    observability: {
+      events: (event) => emit(safeEvent(event)),
+    },
+  });
   const app = createAuthApplication({
-    authfn,
+    authfn: authfnServer,
     ...(input.rateLimiter ? { rateLimiter: input.rateLimiter } : {}),
     ...(input.turnstile ? { turnstile: input.turnstile } : {}),
   });
   return {
-    authfn,
-    provider: authfn.provider,
+    authfn: authfnServer,
+    provider: authfnServer.provider,
     oauth: oauth.runtime,
     apiKeys: {
       async create(options) {
@@ -201,6 +248,6 @@ export function createSkillplaneAuthServer(
       },
     },
     handle: async (request) => app.fetch(request),
-    getSchema: () => authfn.getSchema(),
+    getSchema: () => authfnServer.getSchema(),
   };
 }
