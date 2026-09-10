@@ -1,4 +1,4 @@
-import type { Pool, PoolClient, QueryResultRow } from "pg";
+import type { Pool, QueryResultRow } from "pg";
 import { redactAuditMetadata } from "./redaction.js";
 
 export type AuditOutcome = "success" | "denied" | "error";
@@ -228,10 +228,6 @@ export class PostgresAuditWriter {
       client.release();
     }
   }
-}
-
-export function auditClient(client: PoolClient): AuditQueryable {
-  return client;
 }
 
 export interface AuditFilters {

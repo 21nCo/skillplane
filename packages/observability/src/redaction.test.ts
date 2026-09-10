@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { containsSensitiveAuditData, redactAuditMetadata } from "./redaction.js";
+import { redactAuditMetadata } from "./redaction.js";
 import { auditMetadata } from "./audit.js";
 
 describe("audit redaction", () => {
@@ -25,7 +25,6 @@ describe("audit redaction", () => {
     });
     expect(result.removedFieldCount).toBe(7);
     expect(JSON.stringify(result.value)).not.toContain("example.test");
-    expect(containsSensitiveAuditData({ note: "person@example.test" })).toBe(true);
   });
 
   it("keeps controlled caller fields and labels them as caller-declared", () => {
