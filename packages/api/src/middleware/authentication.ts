@@ -8,16 +8,8 @@ import { initialWorkspaceRegionForRequest } from "../workspace-placement.js";
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
-export function requiresPersonalWorkspace(
-  request: Request,
-  deploymentRole: "single" | "gateway" | "control" | "cell",
-): boolean {
-  const url = new URL(request.url);
-  return (
-    (deploymentRole === "single" || deploymentRole === "gateway") &&
-    request.method === "GET" &&
-    url.pathname === "/api/v1/workspaces"
-  );
+export function requiresPersonalWorkspace(path: string): boolean {
+  return path.startsWith("/api/v1/") || path.startsWith("/datafn/");
 }
 
 export function enforceCookieCsrf(
@@ -76,10 +68,7 @@ export function authenticationMiddleware(
         ? null
         : await services.auth.provider.authenticate(context.req.raw);
       context.set("session", session);
-      if (
-        session &&
-        requiresPersonalWorkspace(context.req.raw, services.deploymentRole)
-      ) {
+      if (session && requiresPersonalWorkspace(context.req.path)) {
         await ensurePersonalWorkspace(services.controlDatabase.pool, session, () =>
           initialWorkspaceRegionForRequest(context.req.raw, services, session.actorId),
         );

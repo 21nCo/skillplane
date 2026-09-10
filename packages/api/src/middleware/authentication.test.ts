@@ -23,25 +23,14 @@ function requestScopedProvider() {
 
 describe("authenticationMiddleware service lifetime", () => {
   it("provisions personal workspaces only for workspace-backed APIs", () => {
-    const request = (path: string, method = "GET") =>
-      new Request(`https://app.skillplane.dev${path}`, { method });
-
-    expect(requiresPersonalWorkspace(request("/api/v1/workspaces"), "gateway")).toBe(
-      true,
-    );
-    expect(
-      requiresPersonalWorkspace(request("/api/v1/workspaces", "POST"), "gateway"),
-    ).toBe(false);
-    expect(requiresPersonalWorkspace(request("/datafn/query", "POST"), "gateway")).toBe(
-      false,
-    );
-    expect(requiresPersonalWorkspace(request("/api/v1/skills/search"), "gateway")).toBe(
-      false,
-    );
-    expect(requiresPersonalWorkspace(request("/api/v1/workspaces"), "cell")).toBe(
-      false,
-    );
-    expect(requiresPersonalWorkspace(request("/auth/session"), "gateway")).toBe(false);
+    for (const path of [
+      "/api/v1/workspaces",
+      "/api/v1/skills/search",
+      "/datafn/query",
+    ]) {
+      expect(requiresPersonalWorkspace(path)).toBe(true);
+    }
+    expect(requiresPersonalWorkspace("/auth/session")).toBe(false);
   });
 
   it("releases request-scoped services after a successful response", async () => {
