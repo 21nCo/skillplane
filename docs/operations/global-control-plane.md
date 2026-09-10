@@ -228,3 +228,8 @@ that exact epoch and source/target pair; otherwise it completes a pre-activation
 drill before the real move. A recovered post-activation move without proof fails
 closed. Topology completion rejects legacy moves without certified final-epoch
 migration evidence; an old successful-looking placement is not enough.
+
+Topology safety evidence also binds the Cloudflare account ID and the public and
+per-region R2 bucket names used by migration. Deployment compares these with its
+rendered bindings and rejects changed resources or older evidence without bucket
+identities. Generate fresh evidence for the intended resource set before deployment.

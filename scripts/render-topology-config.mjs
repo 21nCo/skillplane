@@ -109,6 +109,12 @@ export async function renderTopologyDeploymentConfigs(options = {}) {
   return {
     ok: true,
     manifest,
+    buckets: {
+      public: publicBucketName,
+      cells: Object.fromEntries(
+        Object.entries(cells).map(([regionId, cell]) => [regionId, cell.bucketName]),
+      ),
+    },
     outputs: outputs.map((output) => ({
       ...output,
       path: portablePath(output.path),

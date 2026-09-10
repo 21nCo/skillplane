@@ -209,6 +209,10 @@ export async function deployTopology(options = {}) {
   const safety = await readAndAssertTopologySafety({
     manifest: rendered.manifest,
     databases,
+    buckets: {
+      accountId: requireEnvironment("CLOUDFLARE_ACCOUNT_ID"),
+      ...rendered.buckets,
+    },
     sourceRevision,
   });
   const hyperdrives = verifyTopologyHyperdrives(rendered, databases);

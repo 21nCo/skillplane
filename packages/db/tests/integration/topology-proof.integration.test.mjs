@@ -96,6 +96,44 @@ it("applies only control migrations when refreshing a completed pruned cutover",
       "legacy",
       "in-south",
     ]);
+    // Another executor finishes cutover while this one waits for the schema
+    // lock. The role decision must be made after that wait, not before it.
+    const blocker = await control.connect();
+    let retry;
+    try {
+      await blocker.query(
+        "SELECT pg_advisory_lock(hashtext('skillplane-schema-migrations-v1'))",
+      );
+      await blocker.query(
+        "UPDATE topology_cutover_state SET state = 'copying' WHERE id = 'legacy-to-cells'",
+      );
+      retry = prepareLegacyControlDatabase(url.href, migrateDatabase, [
+        "legacy",
+        "in-south",
+      ]);
+      // Attach immediately so an unexpected early failure is not unhandled.
+      retry.catch(() => undefined);
+      const deadline = Date.now() + 5000;
+      for (;;) {
+        const waiting = await admin.query(
+          "SELECT 1 FROM pg_stat_activity WHERE datname = $1 AND application_name = 'skillplane-migrator' AND wait_event_type = 'Lock'",
+          [name],
+        );
+        if (waiting.rows.length) break;
+        if (Date.now() >= deadline)
+          throw new Error("Migration did not wait for schema lock");
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      await blocker.query(
+        "UPDATE topology_cutover_state SET state = 'complete' WHERE id = 'legacy-to-cells'",
+      );
+    } finally {
+      await blocker.query(
+        "SELECT pg_advisory_unlock(hashtext('skillplane-schema-migrations-v1'))",
+      );
+      blocker.release();
+    }
+    await retry;
     const pending = await control.query(
       "SELECT id FROM skillplane_schema_migrations WHERE id = '0039_regional_generation_safety_hardening.sql'",
     );

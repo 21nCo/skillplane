@@ -116,3 +116,43 @@ describe("multi-cell Cloudflare topology adapter", () => {
     );
   });
 });
+
+it("reports bucket identities matching every generated Worker binding", async () => {
+  const { renderTopologyDeploymentConfigs } =
+    await import("./render-topology-config.mjs");
+  const manifest = await readProductionTopology();
+  const cells = Object.fromEntries(
+    manifest.cells.map((cell, index) => [
+      cell.regionId,
+      {
+        hyperdriveId: String(index + 2).repeat(32),
+        bucketName: `test-${cell.regionId}-bundles`,
+      },
+    ]),
+  );
+  const rendered = await renderTopologyDeploymentConfigs({
+    manifest,
+    cells,
+    controlHyperdriveId: ids.control,
+    publicBucketName: "test-public-bundles",
+    publicTurnstileSiteKey: "test-only-site-key",
+    postHogProjectToken: "test-only-analytics-token",
+    write: false,
+  });
+  assert.equal(rendered.buckets.public, "test-public-bundles");
+  assert.deepEqual(
+    rendered.buckets.cells,
+    Object.fromEntries(
+      Object.entries(cells).map(([region, cell]) => [region, cell.bucketName]),
+    ),
+  );
+  for (const output of rendered.outputs) {
+    const names = output.config.r2_buckets.map((binding) => binding.bucket_name).sort();
+    const expected = output.id.startsWith("gateway:")
+      ? [rendered.buckets.public]
+      : output.kind === "projection"
+        ? [rendered.buckets.public, rendered.buckets.cells[output.regionId]]
+        : [rendered.buckets.cells[output.regionId]];
+    assert.deepEqual(names, expected.sort());
+  }
+});

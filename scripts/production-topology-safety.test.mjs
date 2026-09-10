@@ -19,6 +19,11 @@ const databases = {
     "us-east": { fingerprint: "us-east" },
   },
 };
+const buckets = {
+  accountId: "a".repeat(32),
+  public: "public-bundles",
+  cells: { "in-south": "in-south-bundles", "us-east": "us-east-bundles" },
+};
 const sourceRevision = { commit: "a".repeat(40) };
 const backup = (databaseFingerprint) => ({
   ok: true,
@@ -42,6 +47,7 @@ function state(overrides = {}) {
       sourceRevision,
       manifest,
       databases,
+      buckets,
       backups,
       control: { role: "control" },
       cells: {
@@ -63,6 +69,7 @@ describe("production topology safety evidence", () => {
         backups,
         manifest,
         databases,
+        buckets,
         sourceRevision,
         now,
       }).applicationCommit,
@@ -78,6 +85,7 @@ describe("production topology safety evidence", () => {
           backups,
           manifest,
           databases,
+          buckets,
           sourceRevision,
           now,
         }),
@@ -93,6 +101,7 @@ describe("production topology safety evidence", () => {
           backups,
           manifest,
           databases,
+          buckets,
           sourceRevision,
           now,
         }),
@@ -114,4 +123,42 @@ describe("production topology safety evidence", () => {
       /every topology database/u,
     );
   });
+});
+
+it("rejects changed public, regional, or account bucket identities and old evidence", () => {
+  for (const changed of [
+    { ...buckets, public: "other-public" },
+    ...Object.keys(buckets.cells).map((region) => ({
+      ...buckets,
+      cells: { ...buckets.cells, [region]: "other-cell" },
+    })),
+    { ...buckets, accountId: "b".repeat(32) },
+  ]) {
+    assert.throws(
+      () =>
+        assertRecentTopologyMigrationState({
+          state: state(),
+          manifest,
+          databases,
+          backups,
+          sourceRevision,
+          buckets: changed,
+          now,
+        }),
+      /resource set/,
+    );
+  }
+  assert.throws(
+    () =>
+      assertRecentTopologyMigrationState({
+        state: state({ schemaVersion: 2 }),
+        manifest,
+        databases,
+        backups,
+        sourceRevision,
+        buckets,
+        now,
+      }),
+    /resource set/,
+  );
 });

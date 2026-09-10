@@ -169,6 +169,7 @@ export async function migrateDatabase(
     readonly initialWorkspaceRegion?: string;
     readonly workspaceRegions?: readonly string[];
     readonly finalizePhysicalOwnership?: boolean;
+    readonly skipRegionalAfterCutover?: boolean;
   } = {},
 ): Promise<MigrationResult> {
   const role = options.role ?? "combined";
@@ -207,7 +208,7 @@ export async function migrateDatabase(
   ) {
     throw new Error("INITIAL_WORKSPACE_REGION_UNDECLARED");
   }
-  const migrations = (await loadMigrations()).filter(
+  let migrations = (await loadMigrations()).filter(
     (migration) => role === "combined" || migration.roles.includes(role),
   );
   const pool = new Pool({
@@ -228,6 +229,23 @@ export async function migrateDatabase(
     await client.query("SELECT pg_advisory_lock(hashtext($1))", [
       "skillplane-schema-migrations-v1",
     ]);
+    // Decide under the same lock used by physical ownership pruning. A caller
+    // waiting behind another cutover must observe its completed state here.
+    if (role === "combined" && options.skipRegionalAfterCutover) {
+      const relation = await client.query<{ relation: string | null }>(
+        "SELECT to_regclass('public.topology_cutover_state')::text AS relation",
+      );
+      if (relation.rows[0]?.relation) {
+        const cutover = await client.query<{ state: string }>(
+          "SELECT state FROM topology_cutover_state WHERE id = 'legacy-to-cells'",
+        );
+        if (cutover.rows[0]?.state === "complete") {
+          migrations = migrations.filter((migration) =>
+            migration.roles.includes("control"),
+          );
+        }
+      }
+    }
     await ensureLedger(client);
     const ledger = await client.query<{ id: string; sha256: string }>(
       "SELECT id, sha256 FROM skillplane_schema_migrations ORDER BY id",
