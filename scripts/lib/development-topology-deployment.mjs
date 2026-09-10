@@ -1,3 +1,4 @@
+import { topologySecrets } from "./development-topology-secrets.mjs";
 import { randomUUID } from "node:crypto";
 import { mkdir, unlink } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -10,8 +11,6 @@ import { renderDevelopmentTopologyConfigs } from "../render-development-topology
 import {
   developmentCloudflareEnvironment,
   developmentDatabase,
-  developmentPostHogProjectToken,
-  developmentSecrets,
   ensurePrivateDevelopmentBucket,
   verifyDevelopmentHyperdrive,
 } from "./development-deployment.mjs";
@@ -20,7 +19,6 @@ import {
   captureWrangler,
   parseDirectPostgresUrl,
   requireEnvironment,
-  requireSecretEnvironment,
   root,
   run,
   writeJsonAtomic,
@@ -134,31 +132,6 @@ async function withSecretFile(secrets, operation) {
   } finally {
     await unlink(path).catch(() => undefined);
   }
-}
-
-export function topologySecrets(output) {
-  if (output.kind === "projection") return null;
-  const development = developmentSecrets();
-  const shared = {
-    OAUTH_TOKEN_PEPPER: development.OAUTH_TOKEN_PEPPER,
-    WORKSPACE_ROUTING_KEYS: JSON.stringify({
-      current: requireSecretEnvironment("SKILLPLANE_DEV_WORKSPACE_ROUTING_SECRET"),
-    }),
-  };
-  if (output.id === "gateway:app") {
-    return {
-      AUTHFN_SECRET: development.AUTHFN_SECRET,
-      TURNSTILE_SECRET_KEY: development.TURNSTILE_SECRET_KEY,
-      ...shared,
-    };
-  }
-  if (output.kind === "mcp") {
-    return {
-      ...shared,
-      POSTHOG_PROJECT_TOKEN: developmentPostHogProjectToken(),
-    };
-  }
-  return shared;
 }
 
 export async function deployDevelopmentTopology() {

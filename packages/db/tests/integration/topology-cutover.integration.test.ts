@@ -3,6 +3,7 @@ import {
   backfillLegacyPublicSkillProjections,
   globalPublishedBundleKey,
   migrateLegacyWorkspaceBatch,
+  PostgresWorkspaceMigrationJournal,
   type CutoverObjectStore,
 } from "@skillplane/control-plane";
 import { Pool } from "pg";
@@ -297,13 +298,32 @@ describe("combined database topology cutover", () => {
         targetRegionId: "in-south",
       });
       expect(first.migrated).toHaveLength(2);
+      const recoveredProof = first.migrated.find(
+        (proof) => proof.workspaceId === workspaceId,
+      );
+      if (!recoveredProof) throw new Error("Missing recovered migration proof");
+      const journal = new PostgresWorkspaceMigrationJournal(control);
+      const drillLookup = {
+        workspaceId,
+        sourceRegionId: "legacy",
+        targetRegionId: "in-south",
+        sourceEpoch: recoveredProof.sourceEpoch,
+      };
+      expect(await journal.hasCompletedRollbackDrill(drillLookup)).toBe(true);
+      expect(
+        await journal.hasCompletedRollbackDrill({
+          ...drillLookup,
+          sourceEpoch: drillLookup.sourceEpoch + 1,
+        }),
+      ).toBe(false);
+
       expect(
         first.migrated.find((proof) => proof.workspaceId === workspaceId),
       ).toMatchObject({
         workspaceId,
         sourceRegionId: "legacy",
         targetRegionId: "in-south",
-        rollbackTested: false,
+        rollbackTested: true,
       });
       expect(
         first.migrated.find((proof) => proof.workspaceId === unplacedWorkspaceId),

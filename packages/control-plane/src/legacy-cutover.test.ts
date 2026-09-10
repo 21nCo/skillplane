@@ -58,9 +58,9 @@ it.each(["active", "moving"] as const)(
       targetObjects: objects,
       targetRegionId: "in-south",
     });
-    expect(runWorkspaceRollbackDrill).toHaveBeenCalledTimes(state === "active" ? 1 : 0);
+    expect(runWorkspaceRollbackDrill).toHaveBeenCalledTimes(1);
     expect(migrateWorkspaceWithJournal).toHaveBeenCalledWith(
-      expect.objectContaining({ rollbackTested: state === "active" }),
+      expect.objectContaining({ rollbackTested: true }),
     );
   },
 );

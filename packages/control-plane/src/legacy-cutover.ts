@@ -5,6 +5,7 @@ import {
 } from "./concrete-migration.js";
 import {
   migrateWorkspaceWithJournal,
+  canFinalizeWorkspaceMigrationCompletion,
   isWorkspaceMigrationRecoveryPending,
   PostgresWorkspaceMigrationJournal,
   runWorkspaceRollbackDrill,
@@ -153,6 +154,25 @@ export async function migrateLegacyWorkspaceBatch(input: {
       throw new Error(`TOPOLOGY_CUTOVER_PLACEMENT_NOT_ACTIVE:${row.workspace_id}`);
     }
     if (!recovering && current.regionId === input.targetRegionId) {
+      const pending = await journal.pendingCompletion(row.workspace_id);
+      if (
+        canFinalizeWorkspaceMigrationCompletion({
+          placement: current,
+          pending,
+          workspaceId: row.workspace_id,
+          targetRegionId: input.targetRegionId,
+        })
+      ) {
+        if (!pending?.proof.rollbackTested)
+          throw new Error("WORKSPACE_MIGRATION_ROLLBACK_PROOF_REQUIRED");
+        await migrateWorkspaceWithJournal({
+          directory,
+          journal,
+          workspaceId: row.workspace_id,
+          targetRegionId: input.targetRegionId,
+          operations,
+        });
+      }
       verifiedExisting.push({
         workspaceId: row.workspace_id,
         checks: await verifyExistingCopy(current, input.targetRegionId, operations),
@@ -162,14 +182,13 @@ export async function migrateLegacyWorkspaceBatch(input: {
     if (!recovering && current.regionId !== "legacy") {
       throw new Error(`TOPOLOGY_CUTOVER_SOURCE_REGION_INVALID:${row.workspace_id}`);
     }
-    if (!recovering) {
-      await runWorkspaceRollbackDrill({
-        directory,
-        workspaceId: row.workspace_id,
-        targetRegionId: input.targetRegionId,
-        operations,
-      });
-    }
+    await runWorkspaceRollbackDrill({
+      journal,
+      directory,
+      workspaceId: row.workspace_id,
+      targetRegionId: input.targetRegionId,
+      operations,
+    });
     const migrate = () =>
       migrateWorkspaceWithJournal({
         directory,
@@ -177,8 +196,8 @@ export async function migrateLegacyWorkspaceBatch(input: {
         workspaceId: row.workspace_id,
         targetRegionId: input.targetRegionId,
         operations,
-        // Recovery alone is not evidence that the preflight drill completed.
-        rollbackTested: !recovering,
+        // The drill completed or its exact source-epoch evidence was verified.
+        rollbackTested: true,
       });
     let result;
     try {

@@ -1,4 +1,5 @@
-import { topologySecrets } from "./lib/development-topology-deployment.mjs";
+import { readFileSync } from "node:fs";
+import { topologySecrets } from "./lib/development-topology-secrets.mjs";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
@@ -293,7 +294,16 @@ it("provisions the development token for all MCP outputs without leaking it to o
         "test-only-development-routing-material-000000",
     },
     () => {
-      for (const id of ["gateway:mcp", "in-south:mcp", "us-east:mcp", "eu-west:mcp"]) {
+      const topology = JSON.parse(
+        readFileSync(
+          new URL("../deployment/topology.development.json", import.meta.url),
+          "utf8",
+        ),
+      );
+      for (const id of [
+        "gateway:mcp",
+        ...topology.cells.map((cell) => `${cell.regionId}:mcp`),
+      ]) {
         assert.equal(
           topologySecrets({ id, kind: "mcp" }).POSTHOG_PROJECT_TOKEN,
           developmentSecretEnvironment.PUBLIC_POSTHOG_KEY,

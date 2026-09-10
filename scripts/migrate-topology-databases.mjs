@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createR2ConditionalWriter } from "./lib/r2-conditional-create.mjs";
 
 import { dirname } from "node:path";
 import {
@@ -113,6 +114,20 @@ export async function backupTopologyDatabases(databases, options = {}) {
   return assertRecentTopologyBackups({ control, cells }, databases);
 }
 
+export async function assertTopologyRollbackProof(control) {
+  const unverified = await control.query(
+    `SELECT placement.workspace_id FROM workspace_placements placement
+     WHERE placement.previous_region_id = 'legacy'
+     AND NOT EXISTS (SELECT 1 FROM workspace_migration_runs run
+       WHERE run.workspace_id = placement.workspace_id
+       AND run.source_region_id = 'legacy' AND run.target_region_id = placement.region_id
+       AND run.final_epoch = placement.epoch AND run.status = 'completed'
+       AND run.evidence->>'rollbackTested' = 'true') LIMIT 1`,
+  );
+  if (unverified.rows.length > 0)
+    throw new Error("TOPOLOGY_CUTOVER_ROLLBACK_PROOF_REQUIRED");
+}
+
 export async function completeTopologyCutover(controlPool, targetRegionId) {
   const client = await controlPool.connect();
   try {
@@ -139,6 +154,7 @@ export async function completeTopologyCutover(controlPool, targetRegionId) {
     if (incomplete.rows[0]?.count !== "0") {
       throw new Error("TOPOLOGY_CUTOVER_PLACEMENTS_INCOMPLETE");
     }
+    await assertTopologyRollbackProof(client);
     const completed = await client.query(
       `UPDATE topology_cutover_state
           SET state = 'complete', target_region_id = $1,
@@ -210,6 +226,12 @@ export async function migrateTopologyDatabases(options = {}) {
         .map(([, name]) => name),
     ],
   );
+  // Validate atomic publication credentials before any schema/data mutation.
+  const publicObjects =
+    options.publicObjects ??
+    new WranglerR2MigrationStore(topologyBuckets.public, {
+      conditionalWriter: createR2ConditionalWriter(),
+    });
   // Capture and verify every database before the first schema or data mutation.
   // The resulting digests are bound into the exact-commit migration evidence.
   const backups = await backupTopologyDatabases(databases, {
@@ -254,6 +276,7 @@ export async function migrateTopologyDatabases(options = {}) {
         WHERE id = 'legacy-to-cells'`,
     );
     const current = state.rows[0];
+    if (current?.state === "complete") await assertTopologyRollbackProof(controlPool);
     if (current?.state === "complete" && current.regional_table === null) {
       alreadyComplete = true;
     } else if (current?.state === "complete") {
@@ -279,8 +302,6 @@ export async function migrateTopologyDatabases(options = {}) {
       const regionalObjects =
         options.regionalObjects ??
         new WranglerR2MigrationStore(cutoverBuckets.initialCellBucketName);
-      const publicObjects =
-        options.publicObjects ?? new WranglerR2MigrationStore(topologyBuckets.public);
       cutover = await migrateLegacyWorkspaceBatch({
         control: controlPool,
         source: controlPool,

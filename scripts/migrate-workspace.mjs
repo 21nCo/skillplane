@@ -33,24 +33,15 @@ export function assertDistinctMigrationBuckets(sourceBucket, targetBucket) {
   return { sourceBucket, targetBucket };
 }
 
-export async function withVerifiedRollback({
-  placement,
-  finalizingCompletion,
-  drill,
-  migrate,
-}) {
+export async function withVerifiedRollback({ finalizingCompletion, drill, migrate }) {
   let rollbackTested = false;
-  if (!finalizingCompletion && requiresWorkspaceRollbackDrill(placement)) {
+  if (!finalizingCompletion) {
     await drill();
     rollbackTested = true;
   }
-  // Resuming a move cannot certify an unjournaled interrupted drill. A pending
-  // completion instead preserves the exact proof already stored by the journal.
+  // The drill helper either verifies persisted evidence or completes rollback.
+  // Completion-only retries preserve the exact stored migration proof.
   return migrate(rollbackTested);
-}
-
-export function requiresWorkspaceRollbackDrill(placement) {
-  return placement === null || !isWorkspaceMigrationRecoveryPending(placement);
 }
 
 export function assertDistinctMigrationDatabases(databases) {
@@ -230,6 +221,7 @@ export async function migrateConfiguredWorkspace() {
       finalizingCompletion,
       drill: () =>
         runWorkspaceRollbackDrill({
+          journal,
           directory,
           workspaceId,
           targetRegionId,

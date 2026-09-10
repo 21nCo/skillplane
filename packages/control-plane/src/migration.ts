@@ -49,7 +49,18 @@ export interface WorkspaceMigrationOperations {
   ): Promise<void>;
 }
 
+interface RollbackDrillEvidence {
+  readonly workspaceId: string;
+  readonly sourceRegionId: string;
+  readonly targetRegionId: string;
+  readonly sourceEpoch: number;
+}
+
 export interface WorkspaceMigrationJournal {
+  hasCompletedRollbackDrill?(input: RollbackDrillEvidence): Promise<boolean>;
+  recordRollbackDrill?(
+    input: RollbackDrillEvidence & { readonly restoredEpoch: number },
+  ): Promise<void>;
   started(input: {
     readonly id: string;
     readonly workspaceId: string;
@@ -96,6 +107,42 @@ export function canFinalizeWorkspaceMigrationCompletion(input: {
 
 export class PostgresWorkspaceMigrationJournal implements WorkspaceMigrationJournal {
   constructor(private readonly database: PlacementSqlClient) {}
+
+  async hasCompletedRollbackDrill(input: RollbackDrillEvidence): Promise<boolean> {
+    const result = await this.database.query(
+      `SELECT id FROM workspace_migration_runs WHERE workspace_id = $1
+       AND source_region_id = $2 AND target_region_id = $3 AND final_epoch = $4
+       AND status = 'rolled_back' AND phase = 'rollback-drill'
+       AND evidence->>'rollbackTested' = 'true' LIMIT 1`,
+      [
+        input.workspaceId,
+        input.sourceRegionId,
+        input.targetRegionId,
+        input.sourceEpoch,
+      ],
+    );
+    return result.rows.length === 1;
+  }
+
+  async recordRollbackDrill(
+    input: RollbackDrillEvidence & { readonly restoredEpoch: number },
+  ): Promise<void> {
+    await this.database.query(
+      `INSERT INTO workspace_migration_runs
+       (id, workspace_id, source_region_id, target_region_id, source_epoch, final_epoch,
+        status, phase, recovery_fence, evidence, completed_at)
+       VALUES ($1, $2, $3, $4, $5, $6, 'rolled_back', 'rollback-drill', $6,
+               '{"rollbackTested":true}'::jsonb, now())`,
+      [
+        `rollback-drill:${crypto.randomUUID()}`,
+        input.workspaceId,
+        input.sourceRegionId,
+        input.targetRegionId,
+        input.sourceEpoch,
+        input.restoredEpoch,
+      ],
+    );
+  }
 
   async started(input: Parameters<WorkspaceMigrationJournal["started"]>[0]) {
     await this.database.query(
@@ -278,6 +325,7 @@ export async function migrateWorkspace(input: {
 /** Exercises the real fenced rollback path before a production cutover. */
 export async function runWorkspaceRollbackDrill(input: {
   readonly directory: WorkspacePlacementDirectory;
+  readonly journal?: WorkspaceMigrationJournal;
   readonly workspaceId: string;
   readonly targetRegionId: string;
   readonly targetDestinationRef?: string;
@@ -286,8 +334,23 @@ export async function runWorkspaceRollbackDrill(input: {
   readonly onEvent?: (event: DatafnRoutingEvent) => void | Promise<void>;
 }): Promise<void> {
   const source = await input.directory.get(input.workspaceId);
-  if (source?.state !== "active") {
+  if (
+    !source ||
+    (source.state !== "active" && !isWorkspaceMigrationRecoveryPending(source))
+  ) {
     throw new Error("WORKSPACE_MIGRATION_SOURCE_NOT_ACTIVE");
+  }
+  const origin = migrationSource(source);
+  const evidence = {
+    workspaceId: input.workspaceId,
+    sourceRegionId: origin.regionId,
+    targetRegionId: input.targetRegionId,
+    sourceEpoch: origin.epoch,
+  };
+  if (await input.journal?.hasCompletedRollbackDrill?.(evidence)) return;
+  // Past activation an unproven rollback cannot safely be invented or replayed.
+  if (source.migration?.phase === "resume-target") {
+    throw new Error("WORKSPACE_MIGRATION_ROLLBACK_PROOF_REQUIRED");
   }
   const operations: WorkspaceMigrationOperations = {
     prepareSource: (workspaceId) => input.operations.prepareSource(workspaceId),
@@ -312,7 +375,11 @@ export async function runWorkspaceRollbackDrill(input: {
   } catch (error) {
     if (
       !(error instanceof Error) ||
-      error.message !== "WORKSPACE_MIGRATION_ROLLBACK_DRILL"
+      (error.message !== "WORKSPACE_MIGRATION_ROLLBACK_DRILL" &&
+        !(
+          isWorkspaceMigrationRecoveryPending(source) &&
+          error.message === "DATAFN_MIGRATION_ROLLED_BACK"
+        ))
     ) {
       throw error;
     }
@@ -320,11 +387,16 @@ export async function runWorkspaceRollbackDrill(input: {
   const restored = await input.directory.get(input.workspaceId);
   if (
     restored?.state !== "active" ||
-    restored.regionId !== source.regionId ||
-    restored.epoch <= source.epoch
+    restored.regionId !== origin.regionId ||
+    restored.epoch <= origin.epoch ||
+    isWorkspaceMigrationRecoveryPending(restored)
   ) {
     throw new Error("WORKSPACE_MIGRATION_ROLLBACK_DRILL_FAILED");
   }
+  await input.journal?.recordRollbackDrill?.({
+    ...evidence,
+    restoredEpoch: restored.epoch,
+  });
 }
 
 /** Runs the fenced move while persisting operator-visible evidence. */

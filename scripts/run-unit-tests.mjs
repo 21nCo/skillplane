@@ -26,6 +26,7 @@ const localRuntimeTests = spawnSync(
     "scripts/migrate-production-origin.test.mjs",
     "scripts/migrate-topology-databases.test.mjs",
     "scripts/migrate-workspace.test.mjs",
+    "scripts/r2-conditional-create.test.mjs",
     "scripts/development-entrypoints.test.mjs",
     "scripts/migrate-development.test.mjs",
     "scripts/configure-local-oauth.test.mjs",

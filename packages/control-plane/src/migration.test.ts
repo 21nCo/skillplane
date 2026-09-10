@@ -410,3 +410,48 @@ describe("fenced workspace migration", () => {
     expect(rolledBack?.migration).toBeUndefined();
   });
 });
+
+it("requires persisted source-epoch drill evidence when resuming an activated target", async () => {
+  const directory = createMemoryWorkspacePlacementDirectory();
+  const workspaceId = "workspace:drill-resume";
+  await claimWorkspacePlacement({ directory, workspaceId, regionId: "in-south" });
+  let certifiedEpoch = 0;
+  let crash = true;
+  let clock = 1000;
+  const journal = {
+    started: async () => undefined,
+    completed: async () => undefined,
+    completionPending: async () => undefined,
+    failed: async () => undefined,
+    hasCompletedRollbackDrill: async ({ sourceEpoch }: { sourceEpoch: number }) =>
+      sourceEpoch === certifiedEpoch,
+    recordRollbackDrill: async ({ restoredEpoch }: { restoredEpoch: number }) => {
+      certifiedEpoch = restoredEpoch;
+    },
+  };
+  const hooks = operations({
+    resumeTarget: async () => {
+      if (crash) throw new Error("target interrupted");
+    },
+  });
+  const input = {
+    directory,
+    workspaceId,
+    targetRegionId: "us-east",
+    operations: hooks,
+    now: () => clock,
+  };
+  await runWorkspaceRollbackDrill({ ...input, journal });
+  expect(certifiedEpoch).toBeGreaterThan(1);
+  await expect(migrateWorkspace({ ...input, rollbackTested: true })).rejects.toThrow(
+    "target interrupted",
+  );
+  await expect(runWorkspaceRollbackDrill(input)).rejects.toThrow(
+    "WORKSPACE_MIGRATION_ROLLBACK_PROOF_REQUIRED",
+  );
+  clock += 120000;
+  crash = false;
+  await runWorkspaceRollbackDrill({ ...input, journal });
+  const result = await migrateWorkspace({ ...input, rollbackTested: true });
+  expect(result.placement).toMatchObject({ state: "active", regionId: "us-east" });
+});

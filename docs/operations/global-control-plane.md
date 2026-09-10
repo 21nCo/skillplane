@@ -210,3 +210,21 @@ Without `SKILLPLANE_TOPOLOGY`, runtime configuration creates an explicit
 single-cell compatibility topology over the legacy `HYPERDRIVE` and
 `SKILL_BUNDLES` bindings. It preserves local development and rollback behavior
 but does not make multi-region or residency claims.
+
+### Atomic publication during topology migration
+
+The operator migration adapter uses R2 S3 `PutObject` with `If-None-Match: *`
+for immutable public bundles. An existing object is verified byte-for-byte;
+a conflict or provider error fails closed, with no unconditional-write fallback.
+Before starting `db:migrate:topology`, configure `CLOUDFLARE_ACCOUNT_ID`,
+`SKILLPLANE_R2_ACCESS_KEY_ID`, and `SKILLPLANE_R2_SECRET_ACCESS_KEY` for an R2
+S3 credential scoped to the public bucket. Wrangler credentials remain necessary
+for the adapter's other operations. The command validates S3 configuration before
+schema or data mutation. Never commit these credentials.
+
+Rollback drills are recorded in `workspace_migration_runs` with phase
+`rollback-drill` and the restored source epoch. Recovery reuses proof only for
+that exact epoch and source/target pair; otherwise it completes a pre-activation
+drill before the real move. A recovered post-activation move without proof fails
+closed. Topology completion rejects legacy moves without certified final-epoch
+migration evidence; an old successful-looking placement is not enough.

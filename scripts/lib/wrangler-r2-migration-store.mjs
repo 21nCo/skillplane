@@ -1,3 +1,4 @@
+import { createR2ConditionalWriter } from "./r2-conditional-create.mjs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
@@ -10,6 +11,8 @@ function objectKey(value) {
   if (!/^(?:workspaces|public)\/[A-Za-z0-9:_./-]{1,1000}$/u.test(value)) {
     throw new Error("Workspace bundle object key is invalid");
   }
+  if (value.split("/").some((segment) => segment === "." || segment === ".."))
+    throw new Error("Workspace bundle object key is invalid");
   return value;
 }
 
@@ -22,7 +25,8 @@ export function requireBucketName(value, label) {
 
 /** Provider adapter used only by the operator-controlled copy/verify workflow. */
 export class WranglerR2MigrationStore {
-  constructor(bucket) {
+  constructor(bucket, { conditionalWriter } = {}) {
+    this.conditionalWriter = conditionalWriter;
     this.bucket = requireBucketName(bucket, "R2 bucket name");
   }
 
@@ -100,18 +104,19 @@ export class WranglerR2MigrationStore {
   }
 
   async putIfAbsent(input) {
-    const existing = await this.readIfPresent(input.key);
-    if (existing) {
+    const key = objectKey(input.key);
+    const write = (this.conditionalWriter ??= createR2ConditionalWriter());
+    const result = await write(this.bucket, key, input.bytes);
+    if (result === "exists") {
+      const existing = await this.read(key);
       if (
         existing.byteLength !== input.bytes.byteLength ||
         existing.some((byte, index) => byte !== input.bytes[index])
       ) {
-        throw new Error(`R2_MIGRATION_OBJECT_CONFLICT:${input.key}`);
+        throw new Error(`R2_MIGRATION_OBJECT_CONFLICT:${key}`);
       }
-      return "exists";
     }
-    await this.put(input.key, input.bytes);
-    return "created";
+    return result;
   }
 
   async delete(key) {
