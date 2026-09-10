@@ -35,7 +35,7 @@ export async function workspaceUser(context: Context<ApiEnvironment>) {
   const workspaceId = context.req.param("workspaceId");
   if (!workspaceId) throw new WorkspaceAccessError();
   return requireUserPrincipal(
-    services.database.pool,
+    services.controlDatabase.pool,
     context.get("session"),
     workspaceId,
   );
@@ -73,6 +73,18 @@ export function requireIdempotencyKey(context: Context<ApiEnvironment>): string 
     throw new DomainError(
       "IDEMPOTENCY_KEY_REQUIRED",
       "An Idempotency-Key header is required",
+      400,
+    );
+  }
+  return value;
+}
+
+export function routingEpoch(context: Context<ApiEnvironment>): number {
+  const value = Number(context.req.header("x-skillplane-routing-epoch") ?? "1");
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new DomainError(
+      "VALIDATION_FAILED",
+      "The workspace routing epoch is invalid",
       400,
     );
   }

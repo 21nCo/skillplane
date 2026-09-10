@@ -21,10 +21,12 @@ coverage/
 .dev.vars.*
 wrangler.generated.json
 wrangler.generated.jsonc
+wrangler.*.generated.json
 wrangler.production-self-test.json
 wrangler.development-self-test.json
 wrangler.development-self-test-*.json
 wrangler.development.generated.json
+dist-topology-*/
 
 # Environment secrets
 .env

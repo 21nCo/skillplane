@@ -1,0 +1,141 @@
+import { describe, expect, it, vi } from "vitest";
+import {
+  enqueueCurrentSkillProjection,
+  enqueueResourceRoutingProjection,
+  type SkillRecord,
+  type SkillVersionRecord,
+} from "./index.js";
+
+const skill: SkillRecord = {
+  id: "skill:one",
+  workspaceId: "workspace:one",
+  slug: "one",
+  name: "One",
+  description: "Public history",
+  tags: [],
+  visibility: "public",
+  currentPublishedVersionId: "version:two",
+  currentSemanticVersion: "2.0.0",
+  archivedAt: null,
+  createdAt: "2026-08-01T00:00:00.000Z",
+  updatedAt: "2026-08-02T00:00:00.000Z",
+};
+
+function version(id: string, semanticVersion: string): SkillVersionRecord {
+  const digest = `sha256:${(semanticVersion === "1.0.0" ? "1" : "2").repeat(
+    64,
+  )}` as `sha256:${string}`;
+  return {
+    id,
+    workspaceId: skill.workspaceId,
+    skillId: skill.id,
+    revision: semanticVersion === "1.0.0" ? 1 : 2,
+    semanticVersion,
+    status: "published",
+    baseVersionId: null,
+    proposedBump: null,
+    source: "human",
+    digest,
+    objectKey: `bundles/${id}.zip`,
+    byteSize: 1,
+    manifest: {
+      formatVersion: 1,
+      digest,
+      byteSize: 1,
+      expandedByteSize: 1,
+      fileCount: 0,
+      files: [],
+    },
+    learningMetadata: {},
+    amendmentOperations: [],
+    callerDeclaration: {},
+    policyDecision: {},
+    changeSummary: "Published",
+    createdByActorType: "user",
+    createdByActorId: "user:one",
+    createdByAgent: null,
+    createdByModel: null,
+    createdForUserId: null,
+    publishedAt: "2026-08-01T00:00:00.000Z",
+    createdAt: "2026-08-01T00:00:00.000Z",
+  };
+}
+
+describe("public projection events", () => {
+  it("reprojects every published version when a skill becomes public again", async () => {
+    const first = version("version:one", "1.0.0");
+    const current = version("version:two", "2.0.0");
+    const payloads: Record<string, unknown>[] = [];
+    const query = vi.fn(async (text: string, values?: readonly unknown[]) => {
+      if (text.includes("jsonb_build_object")) {
+        expect(text).toContain(
+          "(version.id = skill.current_published_version_id) DESC",
+        );
+        return {
+          rows: [current, first].map((versionDocument) => ({
+            search_text: "public history",
+            version_document: versionDocument,
+          })),
+        };
+      }
+      if (text.includes("INSERT INTO regional_projection_outbox")) {
+        payloads.push(JSON.parse(String(values?.[3])) as Record<string, unknown>);
+      }
+      return { rows: [] };
+    });
+
+    await enqueueCurrentSkillProjection(
+      { query },
+      { skill, includePublishedHistory: true },
+    );
+
+    expect(payloads.map((payload) => payload.versionId)).toEqual([
+      "version:two",
+      "version:one",
+    ]);
+    expect(payloads.map((payload) => payload.publishedAt)).toEqual([
+      current.publishedAt,
+      first.publishedAt,
+    ]);
+  });
+
+  it("enqueues resource routing changes with the regional fencing epoch", async () => {
+    const inserts: unknown[][] = [];
+    const statements: string[] = [];
+    const query = vi.fn(async (text: string, values?: readonly unknown[]) => {
+      statements.push(text);
+      if (text.includes("INSERT INTO regional_projection_outbox") && values) {
+        inserts.push([...values]);
+      }
+      return { rows: [] };
+    });
+
+    await enqueueResourceRoutingProjection(
+      { query },
+      {
+        workspaceId: "workspace:one",
+        resources: [
+          { resourceType: "context", resourceId: "context:one" },
+          { resourceType: "context_note", resourceId: "note:one" },
+        ],
+        fencingEpoch: 7,
+      },
+    );
+
+    expect(inserts).toHaveLength(1);
+    expect(inserts[0]?.[2]).toBe("resource_route.upsert");
+    expect(inserts[0]?.[4]).toBe(7);
+    expect(statements).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("regional_projection_sequences"),
+      ]),
+    );
+    expect(JSON.parse(String(inserts[0]?.[3]))).toEqual({
+      workspaceId: "workspace:one",
+      resources: [
+        { resourceType: "context", resourceId: "context:one" },
+        { resourceType: "context_note", resourceId: "note:one" },
+      ],
+    });
+  });
+});

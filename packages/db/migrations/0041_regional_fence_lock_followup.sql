@@ -1,0 +1,81 @@
+-- skillplane:roles=combined,regional
+-- Ordinary regional writes share-lock the ownership-generation fence. Only
+-- migration transitions take an exclusive row lock.
+
+CREATE OR REPLACE FUNCTION skillplane_fence_workspace_migration_write()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  old_workspace_id text;
+  new_workspace_id text;
+  affected_workspace_id text;
+  fence_epoch bigint;
+  minimum_active_epoch bigint;
+  routed_epoch bigint;
+BEGIN
+  old_workspace_id := COALESCE(
+    to_jsonb(OLD) ->> 'workspace_id',
+    to_jsonb(OLD) ->> '__ns',
+    to_jsonb(OLD) ->> 'namespace'
+  );
+  new_workspace_id := COALESCE(
+    to_jsonb(NEW) ->> 'workspace_id',
+    to_jsonb(NEW) ->> '__ns',
+    to_jsonb(NEW) ->> 'namespace'
+  );
+
+  IF TG_TABLE_NAME = 'regional_projection_outbox' AND TG_OP = 'UPDATE' THEN
+    IF to_jsonb(OLD) - ARRAY['claim_token', 'claimed_at', 'attempts', 'last_error', 'processed_at']
+       IS DISTINCT FROM
+       to_jsonb(NEW) - ARRAY['claim_token', 'claimed_at', 'attempts', 'last_error', 'processed_at'] THEN
+      RAISE EXCEPTION 'regional projection outbox payload is immutable during migration'
+        USING ERRCODE = '55000';
+    END IF;
+    RETURN NEW;
+  END IF;
+  IF TG_TABLE_NAME = 'regional_projection_outbox' AND TG_OP = 'DELETE' THEN
+    IF OLD.processed_at IS NULL THEN
+      RAISE EXCEPTION 'unprocessed regional projection events cannot be deleted'
+        USING ERRCODE = '55000';
+    END IF;
+    RETURN OLD;
+  END IF;
+  IF TG_TABLE_NAME = '__datafn_permission_directory_outbox' AND TG_OP = 'UPDATE' THEN
+    IF to_jsonb(OLD) - ARRAY['attempts', 'last_error', 'next_attempt_at']
+       IS DISTINCT FROM
+       to_jsonb(NEW) - ARRAY['attempts', 'last_error', 'next_attempt_at'] THEN
+      RAISE EXCEPTION 'DataFn permission outbox payload is immutable during migration'
+        USING ERRCODE = '55000';
+    END IF;
+    RETURN NEW;
+  END IF;
+  IF TG_TABLE_NAME = '__datafn_permission_directory_outbox' AND TG_OP = 'DELETE' THEN
+    RETURN OLD;
+  END IF;
+
+  routed_epoch := COALESCE(
+    NULLIF(current_setting('skillplane.workspace_routing_epoch', true), '')::bigint,
+    1
+  );
+  FOREACH affected_workspace_id IN ARRAY ARRAY[old_workspace_id, new_workspace_id]
+  LOOP
+    CONTINUE WHEN affected_workspace_id IS NULL;
+    INSERT INTO regional_workspace_migration_fences
+      (workspace_id, source_epoch, active_epoch)
+    VALUES (affected_workspace_id, 0, 1)
+    ON CONFLICT (workspace_id) DO NOTHING;
+    SELECT source_epoch, active_epoch
+      INTO fence_epoch, minimum_active_epoch
+      FROM regional_workspace_migration_fences
+     WHERE workspace_id = affected_workspace_id
+     FOR SHARE;
+    IF fence_epoch > 0 OR routed_epoch < minimum_active_epoch THEN
+      RAISE EXCEPTION 'workspace writes are fenced during regional migration'
+        USING ERRCODE = '55000';
+    END IF;
+  END LOOP;
+  IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+  RETURN NEW;
+END;
+$$;

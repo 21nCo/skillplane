@@ -1,0 +1,36 @@
+{
+  "name": "@skillplane/control-plane",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "development": "./src/index.ts",
+      "default": "./dist/index.js"
+    },
+    "./table-ownership": {
+      "types": "./src/table-ownership.ts",
+      "development": "./src/table-ownership.ts",
+      "default": "./dist/table-ownership.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc --project tsconfig.json",
+    "typecheck": "tsc --project tsconfig.json --noEmit",
+    "test:unit": "vitest run src"
+  },
+  "dependencies": {
+    "@datafn/server": "catalog:",
+    "@superfunctions/db": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

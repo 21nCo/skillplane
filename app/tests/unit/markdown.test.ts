@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { markdownDiagnostics } from "../../src/lib/markdown/diagnostics.js";
+import {
+  markdownConstraintMessage,
+  markdownDiagnostics,
+} from "../../src/lib/markdown/diagnostics.js";
 import {
   MARKDOWN_EDITOR_FLAG_NAMES,
   isMarkdownEditorEnabled,
@@ -22,10 +25,12 @@ const originalFlags = Object.fromEntries(
 );
 
 function restoreEditorFlags() {
-  for (const name of Object.keys(publicEnv.env)) delete publicEnv.env[name];
+  for (const name of Object.keys(publicEnv.env)) {
+    Reflect.deleteProperty(publicEnv.env, name);
+  }
   for (const name of FLAG_KEYS) {
     const previous = originalFlags[name];
-    if (previous === undefined) delete process.env[name];
+    if (previous === undefined) Reflect.deleteProperty(process.env, name);
     else process.env[name] = previous;
   }
 }
@@ -71,5 +76,22 @@ describe("shared Markdown editor flags and diagnostics", () => {
       true,
     );
     expect(source).toContain("<div>keep</div>");
+  });
+
+  it("blocks empty, character-heavy, and byte-heavy Markdown", () => {
+    expect(markdownConstraintMessage("", { required: true })).toBe(
+      "Markdown is required.",
+    );
+    expect(markdownConstraintMessage("abcd", { maxCharacters: 3 })).toContain(
+      "character limit",
+    );
+    expect(markdownConstraintMessage("😀", { maxBytes: 3 })).toContain("byte limit");
+    expect(
+      markdownConstraintMessage("ready", {
+        required: true,
+        maxBytes: 10,
+        maxCharacters: 10,
+      }),
+    ).toBe("");
   });
 });

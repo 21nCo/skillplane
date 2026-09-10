@@ -28,3 +28,27 @@ export function markdownDiagnostics(source: string): readonly MarkdownDiagnostic
 export function encodedByteLength(value: string): number {
   return new TextEncoder().encode(value).byteLength;
 }
+
+export function markdownConstraintMessage(
+  value: string,
+  options: {
+    readonly required?: boolean;
+    readonly maxBytes?: number;
+    readonly maxCharacters?: number;
+  },
+): string {
+  if (options.required && value.length === 0) return "Markdown is required.";
+  if (
+    typeof options.maxCharacters === "number" &&
+    value.length > options.maxCharacters
+  ) {
+    return `Markdown exceeds the ${options.maxCharacters.toLocaleString()} character limit.`;
+  }
+  if (
+    typeof options.maxBytes === "number" &&
+    encodedByteLength(value) > options.maxBytes
+  ) {
+    return `Markdown exceeds the ${options.maxBytes.toLocaleString()} byte limit.`;
+  }
+  return "";
+}

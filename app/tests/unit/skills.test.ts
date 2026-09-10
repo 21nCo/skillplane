@@ -26,7 +26,7 @@ function restoreRendererFlags() {
   resetMarkdownRendererEnv();
   for (const name of RENDERER_FLAGS) {
     const previous = originalFlags[name];
-    if (previous === undefined) delete process.env[name];
+    if (previous === undefined) Reflect.deleteProperty(process.env, name);
     else process.env[name] = previous;
   }
 }

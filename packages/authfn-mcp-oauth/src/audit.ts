@@ -1,5 +1,8 @@
 import type { PoolClient } from "pg";
-import { redactAuditMetadata, writeAuditEvent } from "@skillplane/observability";
+import {
+  redactAuditMetadata,
+  writeControlPlaneAuditEvent,
+} from "@skillplane/observability";
 import type { OAuthRuntime } from "./config.js";
 import { id } from "./tokens.js";
 
@@ -36,7 +39,7 @@ export async function writeOAuthAudit(
   );
   const workspaceId = workspace.rows[0]?.workspace_id;
   if (workspaceId) {
-    await writeAuditEvent(client, {
+    await writeControlPlaneAuditEvent(client, {
       id: id("audit:", runtime.randomBytes),
       workspaceId,
       eventType: input.eventType,
@@ -52,7 +55,6 @@ export async function writeOAuthAudit(
       resourceType: "oauth_client",
       resourceId: input.clientId,
       channel: "oauth",
-      retentionClass: "permanent",
       ...(input.metadata ? { metadata: input.metadata } : {}),
     });
   }

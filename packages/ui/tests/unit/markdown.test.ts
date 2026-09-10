@@ -50,7 +50,7 @@ function restoreRendererFlags() {
   resetMarkdownRendererEnv();
   for (const name of RENDERER_FLAGS) {
     const previous = originalFlags[name];
-    if (previous === undefined) delete process.env[name];
+    if (previous === undefined) Reflect.deleteProperty(process.env, name);
     else process.env[name] = previous;
   }
 }
@@ -134,6 +134,14 @@ describe("Skillplane Markdown profile", () => {
     expect(html).not.toContain("example.com/secret");
   });
 
+  it("rejects whitespace and control characters inside legacy hrefs", () => {
+    const html = renderLegacyMarkdown(
+      "[tab](<java\tscript:alert(1)>) [space](<java script:alert(1)>)",
+    );
+    expect(html).not.toContain("href=");
+    expect(html).not.toContain("javascript:");
+  });
+
   it("rolls back to the legacy renderer when the flag is disabled", () => {
     delete process.env.SKILLPLANE_MDFN_RENDERER;
     process.env.PUBLIC_SKILLPLANE_MDFN_RENDERER = "0";
@@ -147,6 +155,13 @@ describe("Skillplane Markdown profile", () => {
   it("honors runtime Worker bindings over process env", () => {
     process.env.SKILLPLANE_MDFN_RENDERER = "1";
     applyMarkdownRendererEnv({ PUBLIC_SKILLPLANE_MDFN_RENDERER: "legacy" });
+    expect(isMdfnRendererEnabled()).toBe(false);
+    expect(markdownRendererId()).toBe("legacy");
+  });
+
+  it("keeps deployment-scoped renderer configuration stable", () => {
+    applyMarkdownRendererEnv({ PUBLIC_SKILLPLANE_MDFN_RENDERER: "legacy" });
+    applyMarkdownRendererEnv({ PUBLIC_SKILLPLANE_MDFN_RENDERER: "1" });
     expect(isMdfnRendererEnabled()).toBe(false);
     expect(markdownRendererId()).toBe("legacy");
   });

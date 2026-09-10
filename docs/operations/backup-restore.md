@@ -1,9 +1,12 @@
 # Production backup and restore
 
 Provider-managed backups and point-in-time recovery are the first recovery
-layer. Skillplane also creates an encrypted logical backup before every
+layer. Skillplane also creates encrypted logical backups before every
 production migration so database metadata can be reconciled with immutable R2
-objects.
+objects. `db:migrate:topology` creates and verifies a distinct backup for the
+control database and every declared cell before its first mutation; the
+standalone command below remains available for an operator-requested control
+database backup.
 
 ## Create and verify a backup
 
@@ -28,6 +31,11 @@ The backup process:
 - runs `pg_restore --list` against the decrypted bytes; and
 - writes only a mode-`0600` `.dump.enc`, manifest, and sanitized safety state
   below ignored `.data/production/backups/`.
+
+Topology migration backups use the same format and verification beneath
+`.data/production/topology-backups/control/` and
+`.data/production/topology-backups/cells/<region>/`. Their exact ciphertext
+digests and creation times are bound into `topology-migration.json`.
 
 The manifest contains encryption parameters, authentication tag, ciphertext
 and plaintext digests, migration hashes, and only the count and digest of the

@@ -43,6 +43,7 @@ export function skillAmend(runtime: McpToolRuntime, input: SkillAmendInput) {
         },
         idempotencyKey: input.idempotencyKey,
         requestId: execution.requestId,
+        fencingEpoch: runtime.fencingEpoch,
         auditContext: mutationAuditContext(runtime, input.caller),
       });
       execution.setScope({

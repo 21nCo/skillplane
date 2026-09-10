@@ -314,7 +314,7 @@ export async function principalForWorkspace(
     authorize(principal, action);
     return principal;
   }
-  const membership = await services.database.pool.query<MembershipRow>(
+  const membership = await services.controlDatabase.pool.query<MembershipRow>(
     `SELECT role
        FROM workspace_memberships
       WHERE workspace_id = $1 AND user_id = $2

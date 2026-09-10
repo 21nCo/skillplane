@@ -37,7 +37,11 @@ export const workers = Object.freeze({
   },
 });
 
-const libpqCompatHosts = new Set(["insouth.db.21n.dev"]);
+const libpqCompatHosts = new Set([
+  "insouth.db.21n.dev",
+  "useast.db.21n.dev",
+  "euwest.db.21n.dev",
+]);
 const hyperdriveIdPattern = /^[a-f0-9]{32}$/u;
 const postHogProjectTokenPattern = /^phc_[A-Za-z0-9_-]{20,}$/u;
 const versionIdPattern =
@@ -90,11 +94,10 @@ export function requirePostHogProjectToken(value = process.env.POSTHOG_PROJECT_T
 
 const turnstileTestKeyPattern = /^[123]x0{10,}/iu;
 
-export function requireSecretEnvironment(name) {
-  const value = requireEnvironment(name, {
-    minimumLength: 32,
-    trim: false,
-  });
+export function validateSecretValue(name, value) {
+  if (typeof value !== "string" || !value.trim() || value.length < 32) {
+    throw new Error(`${name} is required and must contain at least 32 characters`);
+  }
   if (
     new Set(value).size < 10 ||
     /(?:change[-_ ]?me|placeholder|not[-_ ]?for[-_ ]?production)/iu.test(value)
@@ -102,6 +105,13 @@ export function requireSecretEnvironment(name) {
     throw new Error(`${name} does not meet the production secret quality policy`);
   }
   return value;
+}
+
+export function requireSecretEnvironment(name) {
+  return validateSecretValue(
+    name,
+    requireEnvironment(name, { minimumLength: 32, trim: false }),
+  );
 }
 
 export function productionSecrets() {

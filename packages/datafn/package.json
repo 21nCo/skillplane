@@ -9,6 +9,11 @@
       "types": "./src/index.ts",
       "development": "./src/index.ts",
       "default": "./dist/src/index.js"
+    },
+    "./client": {
+      "types": "./src/client.ts",
+      "development": "./src/client.ts",
+      "default": "./dist/src/client.js"
     }
   },
   "files": [
@@ -22,13 +27,13 @@
     "test:security": "vitest run --exclude 'dist/**' tests/security"
   },
   "dependencies": {
-    "@authfn/core": "catalog:",
     "@datafn/client": "catalog:",
     "@datafn/core": "catalog:",
     "@datafn/server": "catalog:",
     "@skillplane/db": "workspace:*",
     "@skillplane/domain": "workspace:*",
     "@superfunctions/db": "catalog:",
+    "authfn": "catalog:",
     "pg": "catalog:"
   },
   "devDependencies": {

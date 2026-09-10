@@ -17,6 +17,13 @@ import type {
   SkillVersionDiff,
   SkillVisibility,
 } from "./types.js";
+import {
+  getSkillBySlugWithDatafn,
+  getSkillVersionWithDatafn,
+  getSkillWithDatafn,
+  listSkillsWithDatafn,
+  listSkillVersionsWithDatafn,
+} from "./datafn.js";
 
 interface CreateSkillResult {
   readonly skill: Skill;
@@ -33,14 +40,6 @@ function encodePath(path: string): string {
   return path.split("/").map(encodeURIComponent).join("/");
 }
 
-function appendValues(
-  query: URLSearchParams,
-  name: string,
-  values: readonly string[],
-): void {
-  for (const value of values) query.append(name, value);
-}
-
 export async function listSkills(options: {
   readonly workspaceId: string;
   readonly query?: string;
@@ -49,30 +48,14 @@ export async function listSkills(options: {
   readonly cursor?: string | null;
   readonly limit?: number;
 }): Promise<SkillPage> {
-  const query = new URLSearchParams({
-    state: options.archive ?? "active",
-    limit: String(options.limit ?? 20),
-  });
-  if (options.query?.trim()) query.set("q", options.query.trim());
-  if (options.cursor) query.set("cursor", options.cursor);
-  appendValues(query, "visibility", options.visibility ?? []);
-  return apiRequest<SkillPage>(
-    `/api/v1/workspaces/${encodeURIComponent(options.workspaceId)}/skills?${query.toString()}`,
-    { headers: workspaceHeaders(options.workspaceId) },
-  );
+  return listSkillsWithDatafn(options);
 }
 
 export async function getSkillBySlug(
   workspaceId: string,
   skillSlug: string,
 ): Promise<Skill> {
-  const data = await apiRequest<{ skill: Skill }>(
-    `/api/v1/workspaces/${encodeURIComponent(
-      workspaceId,
-    )}/skills/by-slug/${encodeURIComponent(skillSlug)}`,
-    { headers: workspaceHeaders(workspaceId) },
-  );
-  return data.skill;
+  return getSkillBySlugWithDatafn(workspaceId, skillSlug);
 }
 
 export async function getPublicSkill(
@@ -106,22 +89,14 @@ export async function createSkill(options: {
 }
 
 export async function getSkill(workspaceId: string, skillId: string): Promise<Skill> {
-  const data = await apiRequest<{ skill: Skill }>(
-    `/api/v1/skills/${encodeURIComponent(skillId)}`,
-    { headers: workspaceHeaders(workspaceId) },
-  );
-  return data.skill;
+  return getSkillWithDatafn(workspaceId, skillId);
 }
 
 export async function listSkillVersions(
   workspaceId: string,
   skillId: string,
 ): Promise<readonly SkillVersion[]> {
-  const data = await apiRequest<{ versions: readonly SkillVersion[] }>(
-    `/api/v1/skills/${encodeURIComponent(skillId)}/versions?limit=100`,
-    { headers: workspaceHeaders(workspaceId) },
-  );
-  return data.versions;
+  return listSkillVersionsWithDatafn(workspaceId, skillId);
 }
 
 export async function getSkillVersion(
@@ -129,13 +104,7 @@ export async function getSkillVersion(
   skillId: string,
   versionId: string,
 ): Promise<SkillVersion> {
-  const data = await apiRequest<{ version: SkillVersion }>(
-    `/api/v1/skills/${encodeURIComponent(
-      skillId,
-    )}/versions/${encodeURIComponent(versionId)}`,
-    { headers: workspaceHeaders(workspaceId) },
-  );
-  return data.version;
+  return getSkillVersionWithDatafn(workspaceId, skillId, versionId);
 }
 
 export async function getSkillDiff(options: {

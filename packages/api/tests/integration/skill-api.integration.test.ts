@@ -332,6 +332,21 @@ describe("skill management API", () => {
     expect(originalBundle.headers.get("etag")).toContain(created.version.digest);
     expect((await originalBundle.arrayBuffer()).byteLength).toBeGreaterThan(100);
 
+    const invalidEpochPublish = await app.request(
+      `/api/v1/skills/${created.skill.id}/candidates/${candidate.version.id}/approve`,
+      {
+        method: "POST",
+        headers: headers(owner, {
+          "idempotency-key": `publish-invalid-epoch-${suffix}`,
+          "x-skillplane-routing-epoch": "invalid",
+        }),
+      },
+    );
+    expect(invalidEpochPublish.status).toBe(400);
+    await expect(invalidEpochPublish.json()).resolves.toMatchObject({
+      error: { code: "VALIDATION_FAILED" },
+    });
+
     const publishResponse = await app.request(
       `/api/v1/skills/${created.skill.id}/candidates/${candidate.version.id}/approve`,
       {

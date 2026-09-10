@@ -15,6 +15,12 @@ import {
   type IdempotencyIdentity,
 } from "./idempotency.js";
 import { principalAuditActor, type Principal } from "./principal.js";
+import {
+  enqueueCurrentSkillProjection,
+  enqueuePublishedSkillProjection,
+  enqueueResourceRoutingProjection,
+  enqueueSkillCountProjection,
+} from "./projection-events.js";
 import { withDomainTransaction as withTransaction } from "./transactions.js";
 import {
   insertMutationAudit,
@@ -287,8 +293,9 @@ export function mapSkillInfrastructureError(error: unknown): never {
 async function releaseFailedClaim(
   idempotency: IdempotencyStore,
   identity: IdempotencyIdentity,
+  fencingEpoch?: number,
 ): Promise<void> {
-  await idempotency.release(identity).catch(() => undefined);
+  await idempotency.release(identity, fencingEpoch).catch(() => undefined);
 }
 
 export class SkillService {
@@ -297,6 +304,7 @@ export class SkillService {
   constructor(
     readonly pool: Pool,
     readonly storage: R2BundleRepository,
+    private readonly controlPool: Pool = pool,
   ) {
     this.idempotency = new IdempotencyStore(pool);
   }
@@ -308,6 +316,7 @@ export class SkillService {
     readonly visibility: SkillVisibility;
     readonly idempotencyKey: string;
     readonly requestId: string;
+    readonly fencingEpoch?: number;
     readonly auditContext?: MutationAuditContext;
   }): Promise<{ readonly skill: SkillRecord; readonly version: SkillVersionRecord }> {
     if (options.principal.workspaceId !== options.workspaceId) {
@@ -337,6 +346,7 @@ export class SkillService {
       operation: "skill.create",
       key: options.idempotencyKey,
       requestHash,
+      fencingEpoch: options.fencingEpoch,
     });
     if (claim.state === "replay") return claim.responseBody;
 
@@ -532,13 +542,40 @@ export class SkillService {
               createdAt: persisted.version_created_at.toISOString(),
             } satisfies SkillVersionRecord,
           };
+          if (responseBody.skill.visibility === "public") {
+            await enqueuePublishedSkillProjection(client, {
+              skill: responseBody.skill,
+              version: responseBody.version,
+              searchText: new TextDecoder("utf-8", { fatal: true }).decode(
+                skillMarkdown,
+              ),
+              fencingEpoch: options.fencingEpoch,
+            });
+          }
+          await enqueueResourceRoutingProjection(client, {
+            workspaceId: options.workspaceId,
+            resources: [
+              { resourceType: "skill", resourceId: responseBody.skill.id },
+              {
+                resourceType: "skill_version",
+                resourceId: responseBody.version.id,
+              },
+            ],
+            fencingEpoch: options.fencingEpoch,
+          });
+          await enqueueSkillCountProjection(client, {
+            workspaceId: options.workspaceId,
+            delta: 1,
+            fencingEpoch: options.fencingEpoch,
+          });
           await this.idempotency.complete(client, claim.identity, 201, responseBody);
           return responseBody;
         },
+        { fencingEpoch: options.fencingEpoch },
       );
       return response;
     } catch (error) {
-      await releaseFailedClaim(this.idempotency, claim.identity);
+      await releaseFailedClaim(this.idempotency, claim.identity, options.fencingEpoch);
       if (stored) {
         await this.storage
           .deleteIfUnreferenced(stored.key, async (key) => {
@@ -676,20 +713,27 @@ export class SkillService {
     readonly workspaceSlug: string;
     readonly skillSlug: string;
   }): Promise<SkillRecord> {
+    const workspace = await this.controlPool.query<{ id: string }>(
+      "SELECT id FROM workspaces WHERE slug = $1 LIMIT 1",
+      [options.workspaceSlug],
+    );
+    const workspaceId = workspace.rows[0]?.id;
+    if (!workspaceId) {
+      throw new DomainError("SKILL_NOT_FOUND", "Skill was not found", 404);
+    }
     const result = await this.pool.query<SkillRow>(
       `SELECT s.id, s.workspace_id, s.slug, s.name, s.description, s.tags,
               s.visibility, s.current_published_version_id,
               version.semantic_version, s.archived_at, s.created_at, s.updated_at
          FROM skills s
-         JOIN workspaces workspace ON workspace.id = s.workspace_id
          JOIN skill_versions version
            ON version.id = s.current_published_version_id
-        WHERE workspace.slug = $1 AND s.slug = $2
+        WHERE s.workspace_id = $1 AND s.slug = $2
           AND s.visibility = 'public'
           AND s.archived_at IS NULL
           AND version.status = 'published'
         LIMIT 1`,
-      [options.workspaceSlug, options.skillSlug],
+      [workspaceId, options.skillSlug],
     );
     const row = result.rows[0];
     if (!row) throw new DomainError("SKILL_NOT_FOUND", "Skill was not found", 404);
@@ -741,6 +785,7 @@ export class SkillService {
     readonly expectedUpdatedAt?: string;
     readonly idempotencyKey: string;
     readonly requestId: string;
+    readonly fencingEpoch?: number;
     readonly auditContext?: MutationAuditContext;
   }): Promise<SkillRecord> {
     authorize(options.principal, "skills:write");
@@ -758,12 +803,16 @@ export class SkillService {
       operation: `skill.visibility:${options.skillId}`,
       key: options.idempotencyKey,
       requestHash,
+      fencingEpoch: options.fencingEpoch,
     });
     if (claim.state === "replay") return claim.responseBody.skill;
     try {
-      return await withTransaction(this.pool, options.requestId, async ({ client }) => {
-        const current = await client.query<SkillRow>(
-          `SELECT s.id, s.workspace_id, s.slug, s.name, s.description, s.tags,
+      return await withTransaction(
+        this.pool,
+        options.requestId,
+        async ({ client }) => {
+          const current = await client.query<SkillRow>(
+            `SELECT s.id, s.workspace_id, s.slug, s.name, s.description, s.tags,
                   s.visibility, s.current_published_version_id,
                   version.semantic_version, s.archived_at, s.created_at,
                   s.updated_at
@@ -772,15 +821,15 @@ export class SkillService {
                ON version.id = s.current_published_version_id
             WHERE s.id = $1 AND s.workspace_id = $2
             FOR UPDATE OF s`,
-          [options.skillId, options.principal.workspaceId],
-        );
-        const previous = current.rows[0];
-        if (!previous) {
-          throw new DomainError("SKILL_NOT_FOUND", "Skill was not found", 404);
-        }
-        assertExpectedUpdatedAt(previous, expectedUpdatedAt);
-        const result = await client.query<SkillRow>(
-          `UPDATE skills s
+            [options.skillId, options.principal.workspaceId],
+          );
+          const previous = current.rows[0];
+          if (!previous) {
+            throw new DomainError("SKILL_NOT_FOUND", "Skill was not found", 404);
+          }
+          assertExpectedUpdatedAt(previous, expectedUpdatedAt);
+          const result = await client.query<SkillRow>(
+            `UPDATE skills s
               SET visibility = $3,
                   updated_at = GREATEST(
                     clock_timestamp(),
@@ -793,29 +842,40 @@ export class SkillService {
                       s.visibility, s.current_published_version_id,
                       version.semantic_version, s.archived_at, s.created_at,
                       s.updated_at`,
-          [options.skillId, options.principal.workspaceId, visibility],
-        );
-        const row = result.rows[0];
-        if (!row) throw new DomainError("SKILL_NOT_FOUND", "Skill was not found", 404);
-        await insertMutationAudit(client, options.principal, options.auditContext, {
-          eventType: "skill.visibility_changed",
-          action: "skills:write",
-          requestId: options.requestId,
-          resourceType: "skill",
-          resourceId: options.skillId,
-          skillId: options.skillId,
-          metadata: {
-            visibility,
-            previousUpdatedAt: previous.updated_at.toISOString(),
-            updatedAt: row.updated_at.toISOString(),
-          },
-        });
-        const skill = safeSkill(row);
-        await this.idempotency.complete(client, claim.identity, 200, { skill });
-        return skill;
-      });
+            [options.skillId, options.principal.workspaceId, visibility],
+          );
+          const row = result.rows[0];
+          if (!row)
+            throw new DomainError("SKILL_NOT_FOUND", "Skill was not found", 404);
+          await insertMutationAudit(client, options.principal, options.auditContext, {
+            eventType: "skill.visibility_changed",
+            action: "skills:write",
+            requestId: options.requestId,
+            resourceType: "skill",
+            resourceId: options.skillId,
+            skillId: options.skillId,
+            metadata: {
+              visibility,
+              previousUpdatedAt: previous.updated_at.toISOString(),
+              updatedAt: row.updated_at.toISOString(),
+            },
+          });
+          const skill = safeSkill(row);
+          await enqueueCurrentSkillProjection(client, {
+            skill,
+            fencingEpoch: options.fencingEpoch,
+            includePublishedHistory:
+              visibility === "public" && previous.visibility !== "public",
+          });
+          await this.idempotency.complete(client, claim.identity, 200, { skill });
+          return skill;
+        },
+        { fencingEpoch: options.fencingEpoch },
+      );
     } catch (error) {
-      await this.idempotency.release(claim.identity).catch(() => undefined);
+      await this.idempotency
+        .release(claim.identity, options.fencingEpoch)
+        .catch(() => undefined);
       throw error;
     }
   }
@@ -827,6 +887,7 @@ export class SkillService {
     readonly expectedUpdatedAt?: string;
     readonly idempotencyKey: string;
     readonly requestId: string;
+    readonly fencingEpoch?: number;
     readonly auditContext?: MutationAuditContext;
   }): Promise<SkillRecord> {
     authorize(options.principal, "skills:write");
@@ -844,12 +905,16 @@ export class SkillService {
       }`,
       key: options.idempotencyKey,
       requestHash,
+      fencingEpoch: options.fencingEpoch,
     });
     if (claim.state === "replay") return claim.responseBody.skill;
     try {
-      return await withTransaction(this.pool, options.requestId, async ({ client }) => {
-        const current = await client.query<SkillRow>(
-          `SELECT s.id, s.workspace_id, s.slug, s.name, s.description, s.tags,
+      return await withTransaction(
+        this.pool,
+        options.requestId,
+        async ({ client }) => {
+          const current = await client.query<SkillRow>(
+            `SELECT s.id, s.workspace_id, s.slug, s.name, s.description, s.tags,
                   s.visibility, s.current_published_version_id,
                   version.semantic_version, s.archived_at, s.created_at,
                   s.updated_at
@@ -858,15 +923,15 @@ export class SkillService {
                ON version.id = s.current_published_version_id
             WHERE s.id = $1 AND s.workspace_id = $2
             FOR UPDATE OF s`,
-          [options.skillId, options.principal.workspaceId],
-        );
-        const previous = current.rows[0];
-        if (!previous) {
-          throw new DomainError("SKILL_NOT_FOUND", "Skill was not found", 404);
-        }
-        assertExpectedUpdatedAt(previous, expectedUpdatedAt);
-        const result = await client.query<SkillRow>(
-          `UPDATE skills s
+            [options.skillId, options.principal.workspaceId],
+          );
+          const previous = current.rows[0];
+          if (!previous) {
+            throw new DomainError("SKILL_NOT_FOUND", "Skill was not found", 404);
+          }
+          assertExpectedUpdatedAt(previous, expectedUpdatedAt);
+          const result = await client.query<SkillRow>(
+            `UPDATE skills s
             SET archived_at = CASE WHEN $3 THEN COALESCE(archived_at, now())
                                    ELSE NULL END,
                 updated_at = GREATEST(
@@ -880,29 +945,46 @@ export class SkillService {
                     s.visibility, s.current_published_version_id,
                     version.semantic_version, s.archived_at, s.created_at,
                     s.updated_at`,
-          [options.skillId, options.principal.workspaceId, options.archived],
-        );
-        const row = result.rows[0];
-        if (!row) throw new DomainError("SKILL_NOT_FOUND", "Skill was not found", 404);
-        await insertMutationAudit(client, options.principal, options.auditContext, {
-          eventType: options.archived ? "skill.archived" : "skill.restored",
-          action: "skills:write",
-          requestId: options.requestId,
-          resourceType: "skill",
-          resourceId: options.skillId,
-          skillId: options.skillId,
-          metadata: {
-            archived: options.archived,
-            previousUpdatedAt: previous.updated_at.toISOString(),
-            updatedAt: row.updated_at.toISOString(),
-          },
-        });
-        const skill = safeSkill(row);
-        await this.idempotency.complete(client, claim.identity, 200, { skill });
-        return skill;
-      });
+            [options.skillId, options.principal.workspaceId, options.archived],
+          );
+          const row = result.rows[0];
+          if (!row)
+            throw new DomainError("SKILL_NOT_FOUND", "Skill was not found", 404);
+          await insertMutationAudit(client, options.principal, options.auditContext, {
+            eventType: options.archived ? "skill.archived" : "skill.restored",
+            action: "skills:write",
+            requestId: options.requestId,
+            resourceType: "skill",
+            resourceId: options.skillId,
+            skillId: options.skillId,
+            metadata: {
+              archived: options.archived,
+              previousUpdatedAt: previous.updated_at.toISOString(),
+              updatedAt: row.updated_at.toISOString(),
+            },
+          });
+          const skill = safeSkill(row);
+          await enqueueCurrentSkillProjection(client, {
+            skill,
+            fencingEpoch: options.fencingEpoch,
+            includePublishedHistory: !options.archived && Boolean(previous.archived_at),
+          });
+          if (Boolean(previous.archived_at) !== options.archived) {
+            await enqueueSkillCountProjection(client, {
+              workspaceId: options.principal.workspaceId,
+              delta: options.archived ? -1 : 1,
+              fencingEpoch: options.fencingEpoch,
+            });
+          }
+          await this.idempotency.complete(client, claim.identity, 200, { skill });
+          return skill;
+        },
+        { fencingEpoch: options.fencingEpoch },
+      );
     } catch (error) {
-      await this.idempotency.release(claim.identity).catch(() => undefined);
+      await this.idempotency
+        .release(claim.identity, options.fencingEpoch)
+        .catch(() => undefined);
       throw error;
     }
   }

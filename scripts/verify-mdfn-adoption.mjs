@@ -36,13 +36,17 @@ async function sourceFiles(directory) {
 function moduleSpecifiers(content) {
   const specifiers = [];
   const patterns = [
-    /\bfrom\s*["']([^"']+)["']/gu,
-    /\bimport\s*\(\s*["']([^"']+)["']\s*\)/gu,
-    /\bimport\s*["']([^"']+)["']/gu,
-    /\bexport\s+\*\s+from\s*["']([^"']+)["']/gu,
+    { kind: "static", pattern: /\bfrom\s*["']([^"']+)["']/gu },
+    {
+      kind: "dynamic",
+      pattern: /\bimport\s*\(\s*["']([^"']+)["']\s*\)/gu,
+    },
+    { kind: "static", pattern: /\bimport\s*["']([^"']+)["']/gu },
   ];
-  for (const pattern of patterns) {
-    for (const match of content.matchAll(pattern)) specifiers.push(match[1]);
+  for (const { kind, pattern } of patterns) {
+    for (const match of content.matchAll(pattern)) {
+      specifiers.push({ kind, specifier: match[1] });
+    }
   }
   return specifiers;
 }
@@ -83,7 +87,7 @@ const uiSources = await sourceFiles(resolve(repoRoot, "packages/ui/src"));
 for (const path of uiSources) {
   if (![".ts", ".svelte", ".js"].includes(extname(path))) continue;
   const content = await readFile(path, "utf8");
-  for (const specifier of moduleSpecifiers(content)) {
+  for (const { specifier } of moduleSpecifiers(content)) {
     if (browserOnlyPackages.includes(specifier)) {
       fail(
         `${relative(repoRoot, path)} imports ${specifier}; read-only rendering must stay SSR-safe`,
@@ -98,12 +102,19 @@ for (const path of appSources) {
   if (![".ts", ".svelte", ".js"].includes(extname(path))) continue;
   const portable = relative(repoRoot, path).replaceAll("\\", "/");
   const content = await readFile(path, "utf8");
-  const browserImports = moduleSpecifiers(content).filter((specifier) =>
+  const browserImports = moduleSpecifiers(content).filter(({ specifier }) =>
     browserOnlyPackages.includes(specifier),
   );
-  if (browserImports.length > 0 && portable !== approvedEditorLoader) {
+  const invalidBrowserImports = browserImports.filter(
+    ({ kind }) => portable !== approvedEditorLoader || kind !== "dynamic",
+  );
+  if (invalidBrowserImports.length > 0) {
     fail(
-      `${portable} imports ${browserImports.join(", ")}; browser mdfn editing packages may load only from ${approvedEditorLoader}`,
+      `${portable} imports ${invalidBrowserImports
+        .map(({ kind, specifier }) => `${specifier} (${kind})`)
+        .join(
+          ", ",
+        )}; browser mdfn editing packages must use dynamic imports only in ${approvedEditorLoader}`,
     );
   }
   if (portable.endsWith("app/src/lib/markdown/MarkdownEditor.svelte")) {

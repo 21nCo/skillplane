@@ -20,6 +20,7 @@
     "@mdfn/svelte": "0.1.0",
     "@skillplane/api": "workspace:*",
     "@skillplane/config": "workspace:*",
+    "@skillplane/datafn": "workspace:*",
     "@skillplane/ui": "workspace:*",
     "fflate": "catalog:",
     "phosphor-svelte": "catalog:",

@@ -17,9 +17,16 @@ function count(value: string): string {
   return value;
 }
 
-export async function readPublicStats(pool: Pool): Promise<PublicStats> {
+export async function readPublicStats(
+  pool: Pool,
+  options: { readonly projected?: boolean } = {},
+): Promise<PublicStats> {
   const result = await pool.query<PublicStatsRow>(
-    `WITH active_skills AS (
+    options.projected
+      ? `SELECT COALESCE(sum(counters.total_skills), 0)::text AS total_skills,
+                COALESCE(sum(counters.agent_skill_uses), 0)::text AS agent_skill_uses
+           FROM public_stats_counters counters`
+      : `WITH active_skills AS (
        SELECT count(*)::bigint AS total
          FROM skills
         WHERE archived_at IS NULL

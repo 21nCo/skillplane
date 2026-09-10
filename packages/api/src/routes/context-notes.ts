@@ -2,7 +2,12 @@ import { DomainError } from "@skillplane/domain";
 import type { Hono } from "hono";
 import type { ApiEnvironment } from "../context.js";
 import { success } from "../envelopes.js";
-import { readJsonObject, requireIdempotencyKey, requirePrincipal } from "./shared.js";
+import {
+  readJsonObject,
+  requireIdempotencyKey,
+  requirePrincipal,
+  routingEpoch,
+} from "./shared.js";
 
 function objectField(
   value: unknown,
@@ -78,6 +83,7 @@ export function registerContextNoteRoutes(app: Hono<ApiEnvironment>): void {
       ...(learningMetadata !== undefined ? { learningMetadata } : {}),
       idempotencyKey: requireIdempotencyKey(context),
       requestId: context.get("requestId"),
+      fencingEpoch: routingEpoch(context),
     });
     context.header("Cache-Control", "private, no-store");
     return context.json(success(context, { note }));
@@ -97,6 +103,7 @@ export function registerContextNoteRoutes(app: Hono<ApiEnvironment>): void {
       principal: requirePrincipal(context),
       idempotencyKey: requireIdempotencyKey(context),
       requestId: context.get("requestId"),
+      fencingEpoch: routingEpoch(context),
     });
     context.header("Cache-Control", "private, no-store");
     return context.json(success(context, { note }));

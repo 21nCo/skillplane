@@ -1,8 +1,4 @@
-import {
-  DiscordLogoIcon,
-  GithubLogoIcon,
-  XLogoIcon,
-} from "@phosphor-icons/react/ssr";
+import { DiscordLogoIcon, GithubLogoIcon, XLogoIcon } from "@phosphor-icons/react/ssr";
 import type { BaseLayoutProps } from "fumadocs-ui/layouts/shared";
 
 export function baseOptions(): BaseLayoutProps {

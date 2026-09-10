@@ -2,6 +2,7 @@ import { stableJson } from "@skillplane/storage";
 import type { Pool, PoolClient } from "pg";
 import { DomainError } from "./errors.js";
 import type { Principal } from "./principal.js";
+import { withDomainTransaction } from "./transactions.js";
 
 const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,254}$/;
 
@@ -63,6 +64,7 @@ export class IdempotencyStore {
     readonly operation: string;
     readonly key: string;
     readonly requestHash: string;
+    readonly fencingEpoch?: number | undefined;
     readonly now?: Date;
   }): Promise<IdempotencyClaim<T>> {
     const key = validateIdempotencyKey(options.key);
@@ -77,93 +79,103 @@ export class IdempotencyStore {
       key,
       requestHash: options.requestHash,
     };
-    const inserted = await this.pool.query(
-      `INSERT INTO idempotency_records
+    return withDomainTransaction(
+      this.pool,
+      `idempotency:${options.operation}`,
+      async ({ client }) => {
+        const inserted = await client.query(
+          `INSERT INTO idempotency_records
          (workspace_id, principal_key, key, operation, request_hash,
           locked_until, expires_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7)
        ON CONFLICT (workspace_id, principal_key, key, operation) DO NOTHING
        RETURNING key`,
-      [
-        options.workspaceId,
-        principalKey,
-        key,
-        options.operation,
-        options.requestHash,
-        lockedUntil,
-        expiresAt,
-      ],
-    );
-    if (inserted.rowCount === 1) return { state: "claimed", identity };
+          [
+            options.workspaceId,
+            principalKey,
+            key,
+            options.operation,
+            options.requestHash,
+            lockedUntil,
+            expiresAt,
+          ],
+        );
+        if (inserted.rowCount === 1) return { state: "claimed", identity };
 
-    const current = await this.pool.query<{
-      request_hash: string;
-      response_status: number | null;
-      response_body: T | null;
-      locked_until: Date;
-    }>(
-      `SELECT request_hash, response_status, response_body, locked_until
+        const current = await client.query<{
+          request_hash: string;
+          response_status: number | null;
+          response_body: T | null;
+          locked_until: Date;
+        }>(
+          `SELECT request_hash, response_status, response_body, locked_until
          FROM idempotency_records
         WHERE workspace_id = $1 AND principal_key = $2
           AND key = $3 AND operation = $4`,
-      [options.workspaceId, principalKey, key, options.operation],
-    );
-    const record = current.rows[0];
-    if (!record) {
-      throw new DomainError(
-        "IDEMPOTENCY_IN_PROGRESS",
-        "The idempotent operation could not be claimed",
-        409,
-      );
-    }
-    if (record.request_hash !== options.requestHash) {
-      throw new DomainError(
-        "IDEMPOTENCY_KEY_REUSED",
-        "The idempotency key was already used with different input",
-        409,
-      );
-    }
-    if (record.response_status !== null && record.response_body !== null) {
-      return {
-        state: "replay",
-        responseStatus: record.response_status,
-        responseBody: record.response_body,
-      };
-    }
-    if (record.locked_until > now) {
-      throw new DomainError(
-        "IDEMPOTENCY_IN_PROGRESS",
-        "An identical operation is still in progress",
-        409,
-      );
-    }
-    const reclaimed = await this.pool.query(
-      `UPDATE idempotency_records
+          [options.workspaceId, principalKey, key, options.operation],
+        );
+        const record = current.rows[0];
+        if (!record) {
+          throw new DomainError(
+            "IDEMPOTENCY_IN_PROGRESS",
+            "The idempotent operation could not be claimed",
+            409,
+          );
+        }
+        if (record.request_hash !== options.requestHash) {
+          throw new DomainError(
+            "IDEMPOTENCY_KEY_REUSED",
+            "The idempotency key was already used with different input",
+            409,
+          );
+        }
+        if (record.response_status !== null && record.response_body !== null) {
+          return {
+            state: "replay",
+            responseStatus: record.response_status,
+            responseBody: record.response_body,
+          };
+        }
+        if (record.locked_until > now) {
+          throw new DomainError(
+            "IDEMPOTENCY_IN_PROGRESS",
+            "An identical operation is still in progress",
+            409,
+          );
+        }
+        const reclaimed = await client.query(
+          `UPDATE idempotency_records
           SET locked_until = $5, expires_at = $6, updated_at = now()
         WHERE workspace_id = $1 AND principal_key = $2
           AND key = $3 AND operation = $4
           AND request_hash = $7 AND response_status IS NULL
           AND locked_until <= $8
         RETURNING key`,
-      [
-        options.workspaceId,
-        principalKey,
-        key,
-        options.operation,
-        lockedUntil,
-        expiresAt,
-        options.requestHash,
-        now,
-      ],
+          [
+            options.workspaceId,
+            principalKey,
+            key,
+            options.operation,
+            lockedUntil,
+            expiresAt,
+            options.requestHash,
+            now,
+          ],
+        );
+        if (reclaimed.rowCount !== 1) {
+          throw new DomainError(
+            "IDEMPOTENCY_IN_PROGRESS",
+            "An identical operation is still in progress",
+            409,
+          );
+        }
+        return { state: "claimed", identity };
+      },
+      {
+        isolation: "read committed",
+        fencingEpoch: options.fencingEpoch,
+      },
     );
-    if (reclaimed.rowCount !== 1) {
-      throw new DomainError(
-        "IDEMPOTENCY_IN_PROGRESS",
-        "An identical operation is still in progress",
-        409,
-      );
-    }
-    return { state: "claimed", identity };
   }
 
   async complete(
@@ -198,19 +210,25 @@ export class IdempotencyStore {
     }
   }
 
-  async release(identity: IdempotencyIdentity): Promise<void> {
-    await this.pool.query(
-      `DELETE FROM idempotency_records
+  async release(identity: IdempotencyIdentity, fencingEpoch?: number): Promise<void> {
+    await withDomainTransaction(
+      this.pool,
+      `idempotency-release:${identity.operation}`,
+      async ({ client }) =>
+        client.query(
+          `DELETE FROM idempotency_records
         WHERE workspace_id = $1 AND principal_key = $2
           AND key = $3 AND operation = $4 AND request_hash = $5
           AND response_status IS NULL`,
-      [
-        identity.workspaceId,
-        identity.principalKey,
-        identity.key,
-        identity.operation,
-        identity.requestHash,
-      ],
+          [
+            identity.workspaceId,
+            identity.principalKey,
+            identity.key,
+            identity.operation,
+            identity.requestHash,
+          ],
+        ),
+      { isolation: "read committed", fencingEpoch },
     );
   }
 }

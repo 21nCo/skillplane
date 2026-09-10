@@ -20,6 +20,7 @@
     "@skillplane/api": "workspace:*",
     "@skillplane/auth": "workspace:*",
     "@skillplane/config": "workspace:*",
+    "@skillplane/control-plane": "workspace:*",
     "@skillplane/domain": "workspace:*",
     "@skillplane/mcp-schema": "workspace:*",
     "@skillplane/observability": "workspace:*",

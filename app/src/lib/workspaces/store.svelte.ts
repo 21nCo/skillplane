@@ -13,11 +13,18 @@ export interface Workspace {
   readonly updatedAt: string;
 }
 
+export interface WorkspaceRegion {
+  readonly id: string;
+  readonly name: string;
+}
+
 const CONTEXT_KEY = Symbol("skillplane-workspaces");
 const STORAGE_KEY = "skillplane.active-workspace";
 
 export class WorkspaceStore {
   workspaces = $state<Workspace[]>([]);
+  regions = $state<WorkspaceRegion[]>([]);
+  recommendedRegionId = $state<string | null>(null);
   activeId = $state<string | null>(null);
   loading = $state(true);
   error = $state<string | null>(null);
@@ -30,8 +37,14 @@ export class WorkspaceStore {
     this.loading = true;
     this.error = null;
     try {
-      const data = await apiRequest<{ workspaces: Workspace[] }>("/api/v1/workspaces");
+      const data = await apiRequest<{
+        workspaces: Workspace[];
+        regions: WorkspaceRegion[];
+        recommendedRegionId: string;
+      }>("/api/v1/workspaces");
       this.workspaces = data.workspaces;
+      this.regions = data.regions;
+      this.recommendedRegionId = data.recommendedRegionId;
       const remembered = browser ? localStorage.getItem(STORAGE_KEY) : null;
       const rememberedWorkspace = remembered
         ? data.workspaces.find((workspace) => workspace.id === remembered)

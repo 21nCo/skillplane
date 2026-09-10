@@ -27,10 +27,11 @@
     "test:security": "vitest run --exclude 'dist/**' tests/security"
   },
   "dependencies": {
-    "@authfn/core": "catalog:",
+    "authfn": "catalog:",
     "@datafn/server": "catalog:",
     "@skillplane/auth": "workspace:*",
     "@skillplane/config": "workspace:*",
+    "@skillplane/control-plane": "workspace:*",
     "@skillplane/datafn": "workspace:*",
     "@skillplane/db": "workspace:*",
     "@skillplane/domain": "workspace:*",

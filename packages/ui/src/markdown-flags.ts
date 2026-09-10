@@ -3,7 +3,8 @@ export type MarkdownRendererId = "mdfn" | "legacy";
 const DISABLED = new Set(["0", "false", "off", "legacy"]);
 const RENDERER_FLAG = "SKILLPLANE_MDFN_RENDERER";
 
-let runtimeEnv: Readonly<Record<string, string | undefined>> = {};
+let runtimeRendererFlag: string | undefined;
+let runtimeRendererConfigured = false;
 
 function stringRecord(source: unknown): Record<string, string | undefined> {
   const values: Record<string, string | undefined> = {};
@@ -15,11 +16,19 @@ function stringRecord(source: unknown): Record<string, string | undefined> {
 }
 
 export function applyMarkdownRendererEnv(next: unknown): void {
-  runtimeEnv = stringRecord(next);
+  if (runtimeRendererConfigured) return;
+  const values = stringRecord(next);
+  const value = values[`PUBLIC_${RENDERER_FLAG}`] ?? values[RENDERER_FLAG];
+  if (value === undefined) return;
+  // Worker bindings are deployment-scoped. Capture the public flag once so
+  // concurrent requests cannot overwrite renderer selection for one another.
+  runtimeRendererFlag = value;
+  runtimeRendererConfigured = true;
 }
 
 export function resetMarkdownRendererEnv(): void {
-  runtimeEnv = {};
+  runtimeRendererFlag = undefined;
+  runtimeRendererConfigured = false;
 }
 
 function envRecord(): Readonly<Record<string, string | undefined>> {
@@ -27,13 +36,15 @@ function envRecord(): Readonly<Record<string, string | undefined>> {
   if (typeof process !== "undefined") {
     Object.assign(values, stringRecord(process.env));
   }
-  Object.assign(values, runtimeEnv);
   return values;
 }
 
 function flagValue(name: string): string | undefined {
   const env = envRecord();
-  const value = env[`PUBLIC_${name}`] ?? env[name];
+  const value =
+    name === RENDERER_FLAG && runtimeRendererConfigured
+      ? runtimeRendererFlag
+      : (env[`PUBLIC_${name}`] ?? env[name]);
   return typeof value === "string" ? value.trim().toLocaleLowerCase() : undefined;
 }
 

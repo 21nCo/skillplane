@@ -29,6 +29,12 @@ function safeHref(value: string): string | null {
       return null;
     }
   }
+  for (const character of trimmed) {
+    const codePoint = character.codePointAt(0);
+    if (codePoint !== undefined && (codePoint <= 0x20 || codePoint === 0x7f)) {
+      return null;
+    }
+  }
   return trimmed;
 }
 

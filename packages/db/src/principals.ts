@@ -4,7 +4,7 @@ import {
   WorkspaceAccessError,
   type Principal,
 } from "@skillplane/domain";
-import type { AuthFnSession } from "@authfn/core";
+import type { AuthFnSession } from "authfn";
 import type { Pool } from "pg";
 
 interface MembershipRow {

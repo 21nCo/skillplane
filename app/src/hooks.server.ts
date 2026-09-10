@@ -1,14 +1,18 @@
 import { env as publicEnv } from "$env/dynamic/public";
 import { applyMarkdownRendererEnv } from "@skillplane/ui";
 import { api, runtimeBindings } from "$lib/server/api.js";
+import { withBrowserSecurityHeaders } from "$lib/server/security-headers.js";
 import type { Handle } from "@sveltejs/kit";
 
-function stringBindings(
+const RENDERER_FLAGS = ["PUBLIC_SKILLPLANE_MDFN_RENDERER"] as const;
+
+function rendererBindings(
   source: object | undefined,
 ): Record<string, string | undefined> {
   const values: Record<string, string | undefined> = {};
   if (!source) return values;
-  for (const [key, value] of Object.entries(source)) {
+  for (const key of RENDERER_FLAGS) {
+    const value = Reflect.get(source, key) as unknown;
     if (typeof value === "string") values[key] = value;
   }
   return values;
@@ -16,8 +20,8 @@ function stringBindings(
 
 export const handle: Handle = async ({ event, resolve }) => {
   applyMarkdownRendererEnv({
-    ...publicEnv,
-    ...stringBindings(event.platform?.env),
+    ...rendererBindings(publicEnv),
+    ...rendererBindings(event.platform?.env),
   });
 
   const pathname = event.url.pathname;
@@ -29,13 +33,5 @@ export const handle: Handle = async ({ event, resolve }) => {
     return api.fetch(event.request, runtimeBindings(event.platform));
   }
 
-  const response = await resolve(event);
-  response.headers.set("referrer-policy", "strict-origin-when-cross-origin");
-  response.headers.set("x-content-type-options", "nosniff");
-  response.headers.set("x-frame-options", "DENY");
-  response.headers.set(
-    "permissions-policy",
-    "camera=(), microphone=(), geolocation=(), payment=()",
-  );
-  return response;
+  return withBrowserSecurityHeaders(await resolve(event));
 };

@@ -2,7 +2,11 @@
   import { browser } from "$app/environment";
   import { SafeMarkdown, Textarea } from "@skillplane/ui";
   import { WarningCircleIcon } from "phosphor-svelte";
-  import { encodedByteLength, markdownDiagnostics } from "./diagnostics.js";
+  import {
+    encodedByteLength,
+    markdownConstraintMessage,
+    markdownDiagnostics,
+  } from "./diagnostics.js";
   import { isMarkdownEditorEnabled } from "./flags.js";
   import {
     loadMarkdownEditor,
@@ -58,6 +62,7 @@
   let VisualEditor = $state<Component<SkillplaneVisualEditorProps> | null>(null);
   let controller = $state<SkillplaneEditorController | null>(null);
   let diagnostics = $state<readonly MarkdownDiagnostic[]>([]);
+  let constraintControl = $state<HTMLTextAreaElement>();
 
   const dirty = $derived(value !== initialValue);
   const byteLength = $derived(encodedByteLength(value));
@@ -80,6 +85,9 @@
   );
   const showsPreview = $derived(mode === "preview" || mode === "split");
   const visualReadOnly = $derived(readOnly || disabled);
+  const constraintMessage = $derived(
+    markdownConstraintMessage(value, { required, maxBytes, maxCharacters }),
+  );
 
   function emit(next: string) {
     if (next === value) return;
@@ -109,6 +117,10 @@
       diagnostics = markdownDiagnostics(source);
     }, DIAGNOSTICS_DEBOUNCE_MS);
     return () => clearTimeout(timer);
+  });
+
+  $effect(() => {
+    constraintControl?.setCustomValidity(visualReadOnly ? "" : constraintMessage);
   });
 
   $effect(() => {
@@ -209,17 +221,20 @@
         oninput={sourceInput}
         data-testid="markdown-editor-source"
       />
-    {:else if required}
+    {/if}
+
+    {#if required || maxBytes !== undefined || maxCharacters !== undefined}
       <div class="constraint-control">
-        <Textarea
-          {label}
-          hideLabel
+        <label for={`${surface}-markdown-constraint`}>{label} validation</label>
+        <textarea
+          id={`${surface}-markdown-constraint`}
+          {value}
           {required}
-          maxlength={maxCharacters}
+          {disabled}
+          readonly={readOnly}
           tabindex={-1}
-          bind:value
-          data-testid="markdown-editor-constraint"
-        />
+          bind:this={constraintControl}
+          data-testid="markdown-editor-constraint"></textarea>
       </div>
     {/if}
 
@@ -262,14 +277,14 @@
   {/if}
 
   {#if overBytes || overCharacters}
-    <p class="notice warning" role="status">
+    <p class="notice warning" role="alert">
       <WarningCircleIcon weight="fill" aria-hidden="true" />
       {#if overBytes}
         This source exceeds the {maxBytes?.toLocaleString()} byte limit.
       {:else}
         This source exceeds the {maxCharacters?.toLocaleString()} character limit.
       {/if}
-      The server remains the authority for accepted size.
+      Shorten this source before saving.
     </p>
   {/if}
 

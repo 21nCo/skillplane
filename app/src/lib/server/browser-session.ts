@@ -15,6 +15,15 @@ interface BrowserSessionRequest {
   readonly url: URL;
 }
 
+export function hasWorkerDatabaseBinding(
+  bindings: App.Platform["env"] | undefined,
+): boolean {
+  return Boolean(
+    bindings &&
+    (bindings.HYPERDRIVE ?? bindings.CONTROL_HYPERDRIVE ?? bindings.DATABASE_URL),
+  );
+}
+
 export async function loadBrowserSession({
   platform,
   request,
@@ -29,11 +38,9 @@ export async function loadBrowserSession({
     headers,
   });
   const workerBindings = platform?.env;
-  const hasWorkerDatabaseBinding = Boolean(
-    workerBindings && (workerBindings.HYPERDRIVE ?? workerBindings.DATABASE_URL),
-  );
+  const hasDatabaseBinding = hasWorkerDatabaseBinding(workerBindings);
   const response =
-    hasWorkerDatabaseBinding && platform
+    hasDatabaseBinding && platform
       ? await api.fetch(authRequest, runtimeBindings(platform))
       : await globalThis.fetch(authRequest);
 

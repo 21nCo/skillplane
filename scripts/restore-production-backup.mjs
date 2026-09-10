@@ -274,7 +274,11 @@ export async function restoreProductionBackup(
   ) {
     throw new Error("The restored database inventory differs from the backup");
   }
-  const environment = { ...process.env, MIGRATION_DATABASE_URL: database.url };
+  const environment = {
+    ...process.env,
+    MIGRATION_DATABASE_URL: database.url,
+    SKILLPLANE_DATABASE_ROLE: "combined",
+  };
   delete environment.DATABASE_URL;
   const upgraded = parseCommandJson(
     capture("pnpm", ["--filter", "@skillplane/db", "migrate"], {

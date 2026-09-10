@@ -1,4 +1,4 @@
-import { AuthFnApiKeyRevokedError } from "@authfn/core";
+import { AuthFnApiKeyRevokedError } from "authfn";
 import {
   InvalidAuthenticationError,
   SERVICE_PRINCIPAL_SCOPES,
@@ -78,7 +78,7 @@ async function authenticateServiceCredential(
   if (identity?.type !== "api-key" || identity.actorType !== "api-key") {
     throw new InvalidAuthenticationError();
   }
-  const result = await services.database.pool.query<ServicePrincipalRow>(
+  const result = await services.controlDatabase.pool.query<ServicePrincipalRow>(
     `SELECT id, workspace_id, name, role, scopes, delegated_user_id,
             expires_at, revoked_at, credential_version, authfn_api_key_id
        FROM service_principals
@@ -96,7 +96,7 @@ async function authenticateServiceCredential(
     throw new InvalidAuthenticationError();
   }
   const principal = servicePrincipal(row);
-  await services.database.pool.query(
+  await services.controlDatabase.pool.query(
     `UPDATE service_principals
         SET last_used_at = now()
       WHERE id = $1

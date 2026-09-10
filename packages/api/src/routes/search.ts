@@ -47,11 +47,38 @@ export function registerSkillSearchRoutes(app: Hono<ApiEnvironment>): void {
         .map((value) => value.trim())
         .filter(Boolean) ?? []),
     ].map(parseSkillVisibility);
+    const archive = parseSkillArchiveFilter(context.req.query("state") ?? "active");
+    if (services.publicProjectionService && !context.req.query("workspaceId")) {
+      if (visibility.some((value) => value !== "public")) {
+        throw new DomainError(
+          "VALIDATION_FAILED",
+          "Global skill search supports only public visibility",
+          400,
+          { field: "visibility" },
+        );
+      }
+      if (archive !== "active") {
+        throw new DomainError(
+          "VALIDATION_FAILED",
+          "Global skill search supports only active skills",
+          400,
+          { field: "state" },
+        );
+      }
+      const page = await services.publicProjectionService.discover({
+        query: context.req.query("q") ?? "",
+        tags: [...repeatedTags, ...commaTags],
+        ...(limit !== undefined ? { limit } : {}),
+        cursor: context.req.query("cursor") ?? null,
+      });
+      context.header("Cache-Control", "private, no-store");
+      return context.json(success(context, page));
+    }
     const page = await services.skillSearchService.search({
       query: context.req.query("q") ?? "",
       tags: [...repeatedTags, ...commaTags],
       visibility,
-      archive: parseSkillArchiveFilter(context.req.query("state") ?? "active"),
+      archive,
       ...(limit !== undefined ? { limit } : {}),
       cursor: context.req.query("cursor") ?? null,
       principal: context.get("principal"),

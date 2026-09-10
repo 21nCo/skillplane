@@ -22,7 +22,7 @@
     "test:security": "vitest run --exclude 'dist/**' tests/security"
   },
   "dependencies": {
-    "@authfn/core": "catalog:",
+    "authfn": "catalog:",
     "sendfn": "catalog:"
   },
   "devDependencies": {

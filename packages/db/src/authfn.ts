@@ -1,11 +1,12 @@
+import { authFnApiKeyPlugin } from "@authfn/api-keys";
+import { authFnEmailOtpPlugin } from "@authfn/email-otp";
+import { authFnMultiRegionPlugin } from "@authfn/multi-region";
 import {
-  authFnApiKeyPlugin,
-  authFnEmailOtpPlugin,
   createCoreTables,
   type AuthFnPlugin,
   type AuthFnSchemaDefinition,
   getSchema,
-} from "@authfn/core";
+} from "authfn";
 import type { Adapter } from "@superfunctions/db";
 
 export interface AuthfnSchemaInput {
@@ -15,7 +16,7 @@ export interface AuthfnSchemaInput {
 
 export function createAuthfnSchema(input: AuthfnSchemaInput): AuthFnSchemaDefinition {
   return getSchema({
-    database: input.database,
+    namespace: "authfn",
     plugins: [...(input.plugins ?? [])],
   });
 }
@@ -65,11 +66,14 @@ export function assertAuthfnCoreSchemaContract(): void {
 }
 
 export function assertAuthfnPluginSchemaContract(): void {
-  const plugins = [authFnEmailOtpPlugin(), authFnApiKeyPlugin()];
+  const plugins = [
+    authFnEmailOtpPlugin(),
+    authFnApiKeyPlugin(),
+    authFnMultiRegionPlugin(),
+  ];
   const tables = plugins.flatMap(
     (plugin) =>
       plugin.schema?.({
-        database: {} as Adapter,
         namespace: "authfn",
         plugins,
       }) ?? [],
@@ -98,6 +102,15 @@ export function assertAuthfnPluginSchemaContract(): void {
       "revokedAt",
       "scopes",
       "secretHash",
+      "updatedAt",
+      "userId",
+    ],
+    region_profiles: [
+      "authority",
+      "createdAt",
+      "domain",
+      "id",
+      "regionId",
       "updatedAt",
       "userId",
     ],

@@ -238,7 +238,7 @@ describe("OAuth 2.1 authorization server integration", () => {
       metadata: Record<string, unknown>;
     }>(
       `SELECT event_type, metadata
-         FROM audit_events
+         FROM control_plane_audit_events
         WHERE user_id = $1
           AND event_type = 'oauth.refresh.rotated'
         ORDER BY occurred_at DESC
@@ -299,7 +299,7 @@ describe("OAuth 2.1 authorization server integration", () => {
       metadata: Record<string, unknown>;
     }>(
       `SELECT event_type, metadata
-         FROM audit_events
+         FROM control_plane_audit_events
         WHERE user_id = $1 AND event_type LIKE 'oauth.%'
         ORDER BY occurred_at, id`,
       [environment.fixture.userId],
