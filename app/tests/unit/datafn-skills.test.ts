@@ -5,6 +5,7 @@ import {
   getSkill,
   getSkillBySlug,
   getSkillVersion,
+  listSkillVersions,
 } from "../../src/lib/skills/api.js";
 
 const skill = {
@@ -231,6 +232,62 @@ describe("first-party DataFn skill reads", () => {
     expect((await requestDetails(fetchMock.mock.calls[1] ?? [])).body.filters).toEqual({
       slug: skill.slug,
     });
+  });
+
+  it.each([false, true])(
+    "checks the parent of an empty version history (exists: %s)",
+    async (exists) => {
+      const fetchMock = vi
+        .fn<typeof fetch>()
+        .mockResolvedValueOnce(datafnResponse([]))
+        .mockResolvedValueOnce(datafnResponse(exists ? [{ id: skill.id }] : []));
+      vi.stubGlobal("fetch", fetchMock);
+      const result = listSkillVersions("workspace:india", skill.id);
+      if (exists) await expect(result).resolves.toEqual([]);
+      else
+        await expect(result).rejects.toMatchObject({
+          code: "SKILL_NOT_FOUND",
+          status: 404,
+        });
+      const parent = await requestDetails(fetchMock.mock.calls[1] ?? []);
+      expect(parent.headers.get("x-skillplane-workspace-id")).toBe("workspace:india");
+      expect(parent.body).toMatchObject({
+        resource: "skills",
+        filters: { id: skill.id },
+        limit: 1,
+      });
+    },
+  );
+
+  it("reuses search cursors across equivalent whitespace", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockImplementation(
+        async () =>
+          new Response(
+            JSON.stringify({
+              ok: true,
+              data: { skills: [], nextCursor: "domain-cursor" },
+            }),
+            { headers: { "content-type": "application/json" } },
+          ),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const first = await listSkills({
+      workspaceId: "workspace:india",
+      query: "  foo  \t bar  ",
+    });
+    await listSkills({
+      workspaceId: "workspace:india",
+      query: "foo bar",
+      cursor: first.nextCursor,
+    });
+    const url = new URL(
+      String(fetchMock.mock.calls[1]?.[0]),
+      "https://app.skillplane.dev",
+    );
+    expect(url.searchParams.get("q")).toBe("foo bar");
+    expect(url.searchParams.get("cursor")).toBe("domain-cursor");
   });
 
   it("distinguishes missing versions from missing skills", async () => {

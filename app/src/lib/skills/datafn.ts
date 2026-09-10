@@ -211,9 +211,11 @@ export async function listSkillsWithDatafn(options: {
   readonly cursor?: string | null;
   readonly limit?: number;
 }): Promise<SkillPage> {
-  const query = options.query?.trim() ?? "";
+  const query = options.query?.trim().replace(/\s+/g, " ") ?? "";
   const archive = options.archive ?? "active";
-  const visibility = [...new Set(options.visibility ?? [])].sort();
+  const visibility = [...new Set(options.visibility ?? [])].sort((left, right) =>
+    left.localeCompare(right),
+  );
   const scope = JSON.stringify({
     workspaceId: options.workspaceId,
     query,
@@ -296,6 +298,14 @@ export async function listSkillVersionsWithDatafn(
       sort: ["-revision"],
       limit: 100,
     });
+    if (result.data.length === 0) {
+      const parent = await client.skills.query({
+        select: ["id"],
+        filters: { id: skillId },
+        limit: 1,
+      });
+      if (parent.data.length === 0) throw notFound();
+    }
     return result.data.map((version) => skillVersionFromDatafn(version, workspaceId));
   });
 }
