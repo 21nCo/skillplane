@@ -76,8 +76,9 @@ test("@skills exposes an actionable server-error and retry state", async ({
 }) => {
   await authenticate(context);
   let fail = true;
-  await page.route("**/api/v1/workspaces/*/skills*", async (route) => {
-    if (!fail) {
+  await page.route("**/datafn/query", async (route) => {
+    const payload = route.request().postDataJSON() as { readonly resource?: string };
+    if (!fail || payload.resource !== "skills") {
       await route.continue();
       return;
     }
@@ -87,9 +88,9 @@ test("@skills exposes an actionable server-error and retry state", async ({
       body: JSON.stringify({
         ok: false,
         error: {
-          code: "R2_READ_FAILED",
-          message: "Skill storage is temporarily unavailable.",
-          requestId: "req_skills_network",
+          code: "TRANSPORT_ERROR",
+          message: "Skill data is temporarily unavailable.",
+          path: "/datafn/query",
         },
       }),
     });
@@ -115,6 +116,12 @@ test("@skills creates, versions, publishes, diffs, shares, archives, restores, a
 }) => {
   test.setTimeout(180_000);
   await authenticate(context);
+  const datafnSkillQueries: string[] = [];
+  page.on("request", (request) => {
+    if (!request.url().endsWith("/datafn/query")) return;
+    const payload = request.postDataJSON() as { readonly resource?: string } | null;
+    if (payload?.resource === "skills") datafnSkillQueries.push(request.url());
+  });
   const skillName = "Browser PR review";
   const skillSlug = "browser-pr-review";
   const initialMarkdown =
@@ -123,6 +130,7 @@ test("@skills creates, versions, publishes, diffs, shares, archives, restores, a
     "# Browser PR review\n\n## Instructions\n\n1. Confirm authorization boundaries.\n2. Verify durable state after reload and direct navigation.\n3. Report persistence evidence before style notes.\n";
 
   await page.goto(`${harness.origin}/${harness.workspaceSlug}/skills`);
+  await expect.poll(() => datafnSkillQueries.length).toBeGreaterThan(0);
   await page.getByRole("link", { name: "New skill" }).click();
   await expect(
     page.getByRole("heading", { name: "Create durable agent guidance" }),

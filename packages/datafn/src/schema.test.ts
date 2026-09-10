@@ -38,4 +38,21 @@ describe("Skillplane DataFn schema", () => {
     expect(workspaces?.fields.map((field) => field.name)).toContain("kind");
     expect(workspaces?.permissions?.read?.fields).toContain("kind");
   });
+
+  it("exposes the complete first-party skill version read contract", () => {
+    const versions = skillplaneDatafnSchema.resources.find(
+      (resource) => resource.name === "skillVersions",
+    );
+    for (const field of ["baseVersionId", "proposedBump", "bundleByteSize"]) {
+      expect(versions?.fields.map((candidate) => candidate.name)).toContain(field);
+      expect(versions?.permissions?.read?.fields).toContain(field);
+    }
+    expect(skillplaneDatafnSchema.relations).toContainEqual({
+      from: "skills",
+      to: "skillVersions",
+      type: "many-one",
+      relation: "currentVersion",
+      fkField: "currentPublishedVersionId",
+    });
+  });
 });

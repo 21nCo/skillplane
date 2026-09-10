@@ -154,7 +154,12 @@ export async function purgeTenantFixture(
         WHERE id = $1 OR personal_owner_user_id = $2 OR created_by_user_id = $2`,
       [`workspace:${suffix}`, userId],
     );
-    const workspaceIds = workspaces.rows.map((row) => row.id);
+    // Regional domain tables intentionally have no foreign key to the global
+    // workspace row. Keep the deterministic fixture ID even when a previous
+    // partial cleanup already removed the control-plane record.
+    const workspaceIds = [
+      ...new Set([`workspace:${suffix}`, ...workspaces.rows.map((row) => row.id)]),
+    ];
     // Production immutability triggers correctly reject fixture deletion.
     // Disable triggers only for this session while removing the immutable
     // leaves. ALTER TABLE would take relation-wide locks and can deadlock with
@@ -169,13 +174,28 @@ export async function purgeTenantFixture(
       [workspaceIds],
     );
     await client.query(
+      "DELETE FROM context_notes WHERE workspace_id = ANY($1::text[])",
+      [workspaceIds],
+    );
+    await client.query(
       "DELETE FROM context_knowledge_revisions WHERE workspace_id = ANY($1::text[])",
+      [workspaceIds],
+    );
+    await client.query(
+      "DELETE FROM skill_contexts WHERE workspace_id = ANY($1::text[])",
+      [workspaceIds],
+    );
+    await client.query(
+      "DELETE FROM amendment_reviews WHERE workspace_id = ANY($1::text[])",
       [workspaceIds],
     );
     await client.query(
       "DELETE FROM skill_versions WHERE workspace_id = ANY($1::text[])",
       [workspaceIds],
     );
+    await client.query("DELETE FROM skills WHERE workspace_id = ANY($1::text[])", [
+      workspaceIds,
+    ]);
     await client.query(
       `DELETE FROM audit_events
         WHERE workspace_id = ANY($1::text[])`,

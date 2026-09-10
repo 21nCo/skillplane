@@ -844,7 +844,7 @@ The UI MUST meet WCAG 2.2 AA for color contrast, keyboard access, focus order, l
 
 DataFn MUST expose typed, tenant-filtered resources for workspace, membership, skill metadata, version metadata, contexts, notes, reviews, and analytics reads. Sensitive OAuth token tables and raw credential material MUST not be exposed through DataFn.
 
-The Hono domain service MUST own workflows that span R2 and Postgres, publication concurrency, OAuth token issuance, invitation delivery, and other multi-step transactions. DataFn MUST not bypass those invariants. The SvelteKit app MAY use DataFn live queries for authorized reads and safe mutations whose invariants are fully captured by DataFn policy.
+The Hono domain service MUST own workflows that span R2 and Postgres, publication concurrency, OAuth token issuance, invitation delivery, and other multi-step transactions. DataFn MUST not bypass those invariants. The SvelteKit app MUST use DataFn for every authenticated read approved in the repository's data-operation ownership matrix. DataFn mutations MAY be adopted only when that matrix explicitly approves them and their complete invariants are captured by DataFn policy; otherwise the app MUST use Hono domain commands.
 
 # SendFn integration
 
