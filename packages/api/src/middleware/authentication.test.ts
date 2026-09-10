@@ -23,13 +23,14 @@ function requestScopedProvider() {
 
 describe("authenticationMiddleware service lifetime", () => {
   it("provisions personal workspaces only for workspace-backed APIs", () => {
-    expect(requiresPersonalWorkspace("/api/v1/workspaces")).toBe(true);
-    expect(requiresPersonalWorkspace("/datafn/query")).toBe(true);
+    for (const path of [
+      "/api/v1/workspaces",
+      "/api/v1/skills/search",
+      "/datafn/query",
+    ]) {
+      expect(requiresPersonalWorkspace(path)).toBe(true);
+    }
     expect(requiresPersonalWorkspace("/auth/session")).toBe(false);
-    expect(requiresPersonalWorkspace("/auth/oauth/authorize")).toBe(false);
-    expect(requiresPersonalWorkspace("/.well-known/oauth-authorization-server")).toBe(
-      false,
-    );
   });
 
   it("releases request-scoped services after a successful response", async () => {

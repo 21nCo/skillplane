@@ -307,9 +307,9 @@ export async function closeApiServices(services: ApiServices): Promise<void> {
 
 export function createApiServiceProvider(
   options: BuildApiServicesOptions = {},
+  build: typeof buildApiServices = buildApiServices,
 ): ApiServiceProvider {
-  return Object.assign(
-    (bindings: RuntimeBindings) => buildApiServices(bindings, options),
-    { release: closeApiServices },
-  );
+  return Object.assign((bindings: RuntimeBindings) => build(bindings, options), {
+    release: closeApiServices,
+  });
 }

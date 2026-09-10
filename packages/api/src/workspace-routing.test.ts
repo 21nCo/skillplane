@@ -360,6 +360,71 @@ describe("API scope classification", () => {
     });
   });
 
+  it("refreshes placement and topology between requests even with a stable provider", async () => {
+    let placementLookups = 0;
+    const query = async (text: string) => {
+      if (text.includes("FROM workspace_memberships")) {
+        return { rows: [{ present: 1 }] };
+      }
+      if (text.includes("FROM workspace_placements")) {
+        placementLookups += 1;
+        return {
+          rows: [
+            {
+              workspace_id: "workspace:one",
+              region_id: placementLookups === 1 ? "in-south" : "us-east",
+              epoch: placementLookups,
+              state: "active",
+              updated_at: new Date("2026-07-26T00:00:00.000Z"),
+              cache_expires_at: null,
+              destination_ref: null,
+              moving_to_region_id: null,
+              previous_region_id: null,
+              migration: null,
+            },
+          ],
+        };
+      }
+      throw new Error(`Unexpected SQL in routing test: ${text}`);
+    };
+    const serviceGraph = {
+      auth: {
+        provider: { authenticate: async () => ({ actorId: "user:one" }) },
+      },
+      controlDatabase: { pool: { query } },
+    } as never;
+    const services = async () => serviceGraph;
+    const routed = createRoutedApiApplication({
+      local: { fetch: async () => new Response("unexpected global response") },
+      services,
+    });
+    const bindings = {
+      ...gatewayBindings,
+      CELL_APP: { fetch: async () => new Response("first region") },
+    };
+
+    for (let index = 0; index < 2; index += 1) {
+      const response = await routed.fetch(
+        new Request("http://localhost:5700/api/v1/workspaces/workspace%3Aone/skills"),
+        index === 0
+          ? bindings
+          : {
+              ...bindings,
+              SKILLPLANE_TOPOLOGY: JSON.stringify({
+                ...topology,
+                mode: "single-cell",
+                cells: [{ ...topology.cells[1], appServiceBinding: "NEW_APP" }],
+              }),
+              NEW_APP: { fetch: async () => new Response("new region") },
+            },
+      );
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe(index === 0 ? "first region" : "new region");
+    }
+
+    expect(placementLookups).toBe(2);
+  });
+
   it("uses the public projection for authenticated non-members", async () => {
     const query = async (text: string) => {
       if (text.includes("FROM resource_routing_directory")) {
