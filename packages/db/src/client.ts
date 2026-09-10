@@ -4,10 +4,20 @@ import type { Adapter } from "@superfunctions/db";
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import { Pool, type PoolConfig } from "pg";
 import {
+  domainSchema,
   globalControlSchema,
   regionalWorkspaceSchema,
   schema,
 } from "./schema/index.js";
+
+// Physical ownership schemas use SQL table names; DataFn uses domain model names.
+// Add aliases only for tables already owned by this database role.
+function domainModelAliases(ownedSchema: Record<string, unknown>) {
+  const ownedTables = new Set(Object.values(ownedSchema));
+  return Object.fromEntries(
+    Object.entries(domainSchema).filter(([, table]) => ownedTables.has(table)),
+  );
+}
 
 const adapterSchema = {
   ...schema,
@@ -20,6 +30,7 @@ const adapterSchema = {
 
 const controlAdapterSchema = {
   ...globalControlSchema,
+  ...domainModelAliases(globalControlSchema),
   users: globalControlSchema.authfn_users,
   sessions: globalControlSchema.authfn_sessions,
   otp_challenges: globalControlSchema.authfn_otp_challenges,
@@ -27,7 +38,10 @@ const controlAdapterSchema = {
   region_profiles: globalControlSchema.authfn_region_profiles,
 };
 
-const regionalAdapterSchema = { ...regionalWorkspaceSchema };
+const regionalAdapterSchema = {
+  ...regionalWorkspaceSchema,
+  ...domainModelAliases(regionalWorkspaceSchema),
+};
 
 export type DatabaseRole = "combined" | "control" | "regional";
 
