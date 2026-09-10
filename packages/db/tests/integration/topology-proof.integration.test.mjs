@@ -112,13 +112,17 @@ it("applies only control migrations when refreshing a completed pruned cutover",
         "in-south",
       ]);
       // Attach immediately so an unexpected early failure is not unhandled.
-      retry.catch(() => undefined);
+      let retryFailure;
+      retry.catch((error) => {
+        retryFailure = { error };
+      });
       const deadline = Date.now() + 5000;
       for (;;) {
         const waiting = await admin.query(
           "SELECT 1 FROM pg_stat_activity WHERE datname = $1 AND application_name = 'skillplane-migrator' AND wait_event_type = 'Lock'",
           [name],
         );
+        if (retryFailure) throw retryFailure.error;
         if (waiting.rows.length) break;
         if (Date.now() >= deadline)
           throw new Error("Migration did not wait for schema lock");

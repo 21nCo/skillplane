@@ -1,10 +1,8 @@
+import { cleanupProjectionRetention } from "./retention.js";
 import {
   PostgresPublicProjectionDirectory,
   applyPublicStatsProjectionCheckpoint,
   applyRegionalPublicProjection,
-  cleanupProcessedRegionalProjectionOutbox,
-  cleanupPublicStatsProjectionEvents,
-  cleanupControlPlaneAuditReads,
   createImmutableObjectPublicationStore,
   createPostgresResourceRoutingDirectory,
   createPostgresWorkspacePlacementDirectory,
@@ -106,11 +104,10 @@ export async function drainProjectionCell(
         );
       },
     });
-    await Promise.all([
-      cleanupProcessedRegionalProjectionOutbox({ database: regional.pool }),
-      cleanupPublicStatsProjectionEvents({ database: control.pool }),
-      cleanupControlPlaneAuditReads({ database: control.pool }),
-    ]);
+    await cleanupProjectionRetention({
+      regionalDatabase: regional.pool,
+      controlDatabase: control.pool,
+    });
     return result;
   } finally {
     await Promise.allSettled([regional.close(), control.close()]);
