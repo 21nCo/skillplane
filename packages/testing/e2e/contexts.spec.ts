@@ -153,6 +153,10 @@ test("@contexts creates, amends, detects stale revisions, persists notes, archiv
   await page
     .getByLabel("Context metadata (JSON)")
     .fill('{"repository":"21dotco/btnextjs","runtime":"node-22"}');
+  await expect(page.getByTestId("markdown-editor")).toHaveAttribute(
+    "data-surface",
+    "context-create",
+  );
   await page.getByLabel("Initial shared knowledge").fill(initialKnowledge);
   await page
     .getByLabel("Learning summary")
@@ -200,6 +204,14 @@ test("@contexts creates, amends, detects stale revisions, persists notes, archiv
     name: "Amend context knowledge",
   });
   await expect(knowledgeDialog).toBeVisible();
+  await expect(knowledgeDialog.getByTestId("markdown-editor")).toHaveAttribute(
+    "data-surface",
+    "knowledge-revise",
+  );
+  await expect(knowledgeDialog.getByTestId("markdown-editor")).toHaveAttribute(
+    "data-mode",
+    "split",
+  );
   await knowledgeDialog.getByLabel("Shared knowledge Markdown").fill(finalKnowledge);
   await knowledgeDialog
     .getByLabel("Learning summary")
@@ -253,6 +265,10 @@ test("@contexts creates, amends, detects stale revisions, persists notes, archiv
   await page.getByRole("button", { name: "New note" }).click();
   const noteDialog = page.getByRole("dialog", { name: "Create shared note" });
   await noteDialog.getByLabel("Note title").fill(noteTitle);
+  await expect(noteDialog.getByTestId("markdown-editor")).toHaveAttribute(
+    "data-surface",
+    "note",
+  );
   await noteDialog
     .getByLabel("Note Markdown")
     .fill("Check `reviewThreads` before calling a review complete.");

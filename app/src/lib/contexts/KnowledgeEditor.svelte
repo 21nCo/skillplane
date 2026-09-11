@@ -1,8 +1,8 @@
 <script lang="ts">
   import { capturePostHog } from "$lib/analytics/posthog.client.js";
   import { SkillplaneApiError } from "$lib/api/client.js";
-  import { SafeMarkdown } from "@skillplane/ui";
   import { Button, Input, Textarea } from "@skillplane/ui";
+  import MarkdownEditor from "$lib/markdown/MarkdownEditor.svelte";
   import { ArrowsClockwiseIcon, WarningCircleIcon } from "phosphor-svelte";
   import { updateContextKnowledge } from "./api.js";
   import {
@@ -111,20 +111,17 @@
     <code>{current.bodyDigest.slice(0, 19)}…</code>
   </header>
 
-  <div class="editor-grid">
-    <Textarea
-      label="Shared knowledge Markdown"
-      rows={18}
-      maxlength={524_288}
-      required
-      bind:value={body}
-      oninput={changed}
-    />
-    <section class="preview" aria-label="Knowledge preview">
-      <span>Sanitized preview</span>
-      <SafeMarkdown source={body} />
-    </section>
-  </div>
+  <MarkdownEditor
+    surface="knowledge-revise"
+    label="Shared knowledge Markdown"
+    mode="split"
+    rows={18}
+    required
+    maxBytes={524_288}
+    maxCharacters={524_288}
+    bind:value={body}
+    oninput={changed}
+  />
 
   <div class="learning">
     <Input
@@ -194,8 +191,7 @@
     margin: 0;
   }
 
-  header p,
-  .preview > span {
+  header p {
     color: var(--sp-color-text-subtle);
     font-size: var(--sp-font-size-1);
     font-weight: var(--sp-weight-bold);
@@ -213,30 +209,11 @@
     font-size: var(--sp-font-size-1);
   }
 
-  .editor-grid,
   .learning {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: var(--sp-space-4);
     align-items: start;
-  }
-
-  .preview {
-    overflow: auto;
-    min-height: 27rem;
-    max-height: 42rem;
-    border: 1px solid var(--sp-color-border);
-    border-radius: var(--sp-radius-md);
-    padding: var(--sp-space-4);
-    background: var(--sp-color-canvas);
-  }
-
-  .preview > span {
-    display: block;
-    margin-bottom: var(--sp-space-3);
-  }
-
-  .learning {
     border: 1px solid var(--sp-color-border);
     border-radius: var(--sp-radius-lg);
     padding: var(--sp-space-4);
@@ -278,13 +255,8 @@
   }
 
   @media (max-width: 56rem) {
-    .editor-grid,
     .learning {
       grid-template-columns: 1fr;
-    }
-
-    .preview {
-      min-height: 16rem;
     }
 
     .conflict {
