@@ -27,7 +27,6 @@
     "test:security": "vitest run --exclude 'dist/**' tests/security"
   },
   "dependencies": {
-    "authfn": "catalog:",
     "@datafn/server": "catalog:",
     "@skillplane/auth": "workspace:*",
     "@skillplane/config": "workspace:*",
@@ -36,8 +35,10 @@
     "@skillplane/db": "workspace:*",
     "@skillplane/domain": "workspace:*",
     "@skillplane/email": "workspace:*",
+    "@skillplane/mcp-schema": "workspace:*",
     "@skillplane/observability": "workspace:*",
     "@skillplane/storage": "workspace:*",
+    "authfn": "catalog:",
     "hono": "catalog:",
     "pg": "catalog:"
   },

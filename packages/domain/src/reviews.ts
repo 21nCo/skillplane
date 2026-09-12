@@ -1,3 +1,4 @@
+import { CompositionService } from "./composition-service.js";
 import { validateBundleArchive, type R2BundleRepository } from "@skillplane/storage";
 import type { Pool } from "pg";
 import { authorize } from "./authorization.js";
@@ -190,6 +191,7 @@ export class AmendmentReviewService {
     private readonly pool: Pool,
     private readonly storage: R2BundleRepository,
     private readonly idempotency: IdempotencyStore,
+    private readonly composition = new CompositionService(pool, storage),
   ) {}
 
   async list(options: {
@@ -320,6 +322,7 @@ export class AmendmentReviewService {
     if (claim.state === "replay") return claim.responseBody.detail;
     try {
       let instructions: string | null = null;
+      let composite = false;
       if (options.decision === "approved") {
         const existing = await this.get({
           skillId: options.skillId,
@@ -338,6 +341,7 @@ export class AmendmentReviewService {
           existing.candidate.digest,
         );
         const bundle = await validateBundleArchive(stored.bytes);
+        composite = bundle.skill.formatVersion === 2;
         const markdown = bundle.files.get("SKILL.md");
         if (!markdown) {
           throw new DomainError(
@@ -426,6 +430,18 @@ export class AmendmentReviewService {
                 "The published version changed after this candidate was created",
                 409,
                 { currentVersionId: current?.current_published_version_id ?? null },
+              );
+            }
+            if (composite) {
+              const visibility = await client.query<{ visibility: string }>(
+                "SELECT visibility FROM skills WHERE id=$1",
+                [options.skillId],
+              );
+              await this.composition.validatePublication(
+                row.id,
+                options.principal,
+                visibility.rows[0]?.visibility ?? "private",
+                client,
               );
             }
             semanticVersion = nextSemanticVersion(

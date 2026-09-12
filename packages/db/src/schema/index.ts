@@ -1,3 +1,11 @@
+import {
+  skillVersionCompositions,
+  skillVersionDependencies,
+  skillVersionLifecycle,
+  skillVerificationRuns,
+  skillVerificationClaimResults,
+  publicSkillVersionLifecycle,
+} from "./composition.js";
 import { authfnSchema } from "./authfn.js";
 import { controlPlaneSchema, regionalInfrastructureSchema } from "./control-plane.js";
 import {
@@ -30,7 +38,17 @@ export * from "./authfn.js";
 export * from "./control-plane.js";
 export * from "./domain.js";
 
+const regionalCompositionSchema = {
+  skill_version_compositions: skillVersionCompositions,
+  skill_version_dependencies: skillVersionDependencies,
+  skill_version_lifecycle: skillVersionLifecycle,
+  skill_verification_runs: skillVerificationRuns,
+  skill_verification_claim_results: skillVerificationClaimResults,
+};
+
 export const schema = {
+  ...regionalCompositionSchema,
+  public_skill_version_lifecycle: publicSkillVersionLifecycle,
   ...authfnSchema,
   ...domainSchema,
   ...controlPlaneSchema,
@@ -38,6 +56,7 @@ export const schema = {
 };
 
 export const globalControlSchema = {
+  public_skill_version_lifecycle: publicSkillVersionLifecycle,
   ...authfnSchema,
   workspaces,
   workspace_memberships: workspaceMemberships,
@@ -51,6 +70,7 @@ export const globalControlSchema = {
 };
 
 export const regionalWorkspaceSchema = {
+  ...regionalCompositionSchema,
   skills,
   skill_versions: skillVersions,
   skill_version_files: skillVersionFiles,
@@ -71,3 +91,5 @@ export const regionalWorkspaceSchema = {
 export type SkillplaneSchema = typeof schema;
 export type GlobalControlSchema = typeof globalControlSchema;
 export type RegionalWorkspaceSchema = typeof regionalWorkspaceSchema;
+
+export * from "./composition.js";

@@ -1,4 +1,27 @@
 import {
+  compositionCandidate,
+  dependencyUpgradePreview,
+  versionLifecycle,
+  skillResolve,
+  verificationStart,
+  verificationGet,
+  verificationEvidence,
+  verificationComplete,
+  dependencyUpgrade,
+} from "./tools/composition.js";
+import {
+  compositionCandidateInputSchema,
+  versionLifecycleInputSchema,
+  skillResolveInputSchema,
+  skillResolveOutputSchema,
+  verificationStartInputSchema,
+  verificationRunInputSchema,
+  verificationEvidenceInputSchema,
+  verificationCompleteInputSchema,
+  compositionMutationOutputSchema,
+  dependencyUpgradeInputSchema,
+} from "@skillplane/mcp-schema";
+import {
   defineMcpFnServer,
   type McpFnObjectSchema,
   type McpFnServerInfo,
@@ -190,6 +213,106 @@ export const skillplaneMcpDeclaration = defineMcpFnServer<McpToolRuntime>({
       output: skillsSearchOutputSchema,
       annotations: READ_ONLY_ANNOTATIONS,
       run: skillsSearch,
+    }),
+    tool({
+      name: "skill_composition_candidate_create",
+      title: "Compose a skill candidate",
+      description:
+        "Declare dependency aliases, version constraints, include/invoke modes and optional verification modules in a reviewable parent candidate.",
+      input: compositionCandidateInputSchema,
+      output: compositionMutationOutputSchema,
+      annotations: MUTATION_ANNOTATIONS,
+      run: compositionCandidate,
+    }),
+    tool({
+      name: "skill_dependency_upgrades_get",
+      title: "Dependency upgrades",
+      description:
+        "Preview compatible upgrades and the exact closure diff without changing published versions.",
+      input: skillResolveInputSchema,
+      output: compositionMutationOutputSchema,
+      annotations: READ_ONLY_ANNOTATIONS,
+      run: dependencyUpgradePreview,
+    }),
+    tool({
+      name: "skill_version_lifecycle_update",
+      title: "Version lifecycle",
+      description:
+        "Deprecate or permanently revoke a published version. Revocation fails dependent retrieval closed.",
+      input: versionLifecycleInputSchema,
+      output: compositionMutationOutputSchema,
+      annotations: MUTATION_ANNOTATIONS,
+      run: versionLifecycle,
+    }),
+    tool({
+      name: "skill_resolve",
+      title: "Resolve a skill",
+      description:
+        "Return the exact locked DAG, namespaced execution modules, invocation boundaries and inherited verification obligations. Version selectors never float published child pins.",
+      input: skillResolveInputSchema,
+      output: skillResolveOutputSchema,
+      annotations: READ_ONLY_ANNOTATIONS,
+      run: skillResolve,
+    }),
+    tool({
+      name: "skill_verification_plan_get",
+      title: "Retrieve verification obligations",
+      description:
+        "Retrieve verifier instructions and inherited blocking/advisory claims for an exact closure without returning execution instructions.",
+      input: skillResolveInputSchema,
+      output: skillResolveOutputSchema,
+      annotations: READ_ONLY_ANNOTATIONS,
+      run: (runtime, input) => skillResolve(runtime, { ...input, purpose: "verify" }),
+    }),
+    tool({
+      name: "skill_verification_run_start",
+      title: "Start independent verification",
+      description:
+        "Record a verifier run tied to the locked closure, repository commit and environment. The declared executor must differ from the authenticated verifier.",
+      input: verificationStartInputSchema,
+      output: compositionMutationOutputSchema,
+      annotations: MUTATION_ANNOTATIONS,
+      run: verificationStart,
+    }),
+    tool({
+      name: "skill_verification_run_get",
+      title: "Read verification results",
+      description:
+        "Read workspace-private claim results and hashed evidence references for an unexpired attestation.",
+      input: verificationRunInputSchema,
+      output: compositionMutationOutputSchema,
+      annotations: READ_ONLY_ANNOTATIONS,
+      run: verificationGet,
+    }),
+    tool({
+      name: "skill_verification_evidence_add",
+      title: "Attach claim evidence",
+      description:
+        "Attach redacted evidence references and SHA-256 digests to a claim in the locked plan. Passing claims require every declared evidence type; only the original verifier can update a running run.",
+      input: verificationEvidenceInputSchema,
+      output: compositionMutationOutputSchema,
+      annotations: MUTATION_ANNOTATIONS,
+      run: verificationEvidence,
+    }),
+    tool({
+      name: "skill_verification_run_complete",
+      title: "Complete verification",
+      description:
+        "Freeze the attestation and evidence manifest. Missing blocking claims become unknown; blocking fail or unknown prevents a passing result. Safe to retry with the same idempotency key.",
+      input: verificationCompleteInputSchema,
+      output: compositionMutationOutputSchema,
+      annotations: MUTATION_ANNOTATIONS,
+      run: verificationComplete,
+    }),
+    tool({
+      name: "skill_dependency_upgrade",
+      title: "Create dependency upgrade",
+      description:
+        "Resolve newer compatible dependencies into a reviewable parent candidate and return closure changes. Published bundles are never modified.",
+      input: dependencyUpgradeInputSchema,
+      output: compositionMutationOutputSchema,
+      annotations: MUTATION_ANNOTATIONS,
+      run: dependencyUpgrade,
     }),
     tool({
       name: "skill_retrieve",

@@ -11,3 +11,5 @@ export * from "./retrieve.js";
 export * from "./search.js";
 export * from "./skill-lifecycle.js";
 export * from "./versions.js";
+
+export * from "./composition.js";

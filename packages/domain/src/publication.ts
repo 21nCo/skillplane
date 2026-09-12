@@ -1,3 +1,4 @@
+import { CompositionService } from "./composition-service.js";
 import { validateBundleArchive } from "@skillplane/storage";
 import type { R2BundleRepository } from "@skillplane/storage";
 import type { Pool } from "pg";
@@ -90,6 +91,7 @@ export class PublicationService {
     private readonly pool: Pool,
     private readonly storage: R2BundleRepository,
     private readonly idempotency: IdempotencyStore,
+    private readonly composition = new CompositionService(pool, storage),
   ) {}
 
   async publish(options: {
@@ -218,6 +220,13 @@ export class PublicationService {
               { currentVersionId: row.current_published_version_id },
             );
           }
+          if (bundle.skill.formatVersion === 2)
+            await this.composition.validatePublication(
+              options.candidateVersionId,
+              options.principal,
+              row.skill_visibility ?? "private",
+              client,
+            );
           const bump = parseSemanticBump(row.proposed_bump);
           const semanticVersion = nextSemanticVersion(
             row.current_semantic_version,

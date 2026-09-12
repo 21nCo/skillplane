@@ -118,7 +118,7 @@ export const fileDescriptorSchema = z
 
 export const manifestSchema = z
   .object({
-    formatVersion: z.literal(1),
+    formatVersion: z.union([z.literal(1), z.literal(2)]),
     digest: digestSchema,
     byteSize: z.number().int().nonnegative(),
     expandedByteSize: z.number().int().nonnegative(),

@@ -59,6 +59,10 @@ describe("migration chain", () => {
       "0045_control_upgrade_fence_reconciliation.sql",
       "0046_control_audit_read_retention.sql",
       "0047_control_audit_retention_order.sql",
+      "0048_regional_skill_composition.sql",
+      "0049_control_public_skill_lifecycle.sql",
+      "0050_regional_verification_immutability.sql",
+      "0051_control_composition_visibility.sql",
     ]);
     expect(new Set(migrations.map((migration) => migration.sha256)).size).toBe(
       migrations.length,

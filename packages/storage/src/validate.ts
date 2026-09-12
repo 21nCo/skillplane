@@ -1,4 +1,5 @@
 import { Unzip, UnzipInflate } from "fflate";
+import { verificationClaimsSchema } from "./composition.js";
 import {
   canonicalSkillJson,
   fileManifestEntrySchema,
@@ -418,7 +419,7 @@ function parseSkillJson(bytes: Uint8Array): SkillJson {
   }
   const parsed = skillJsonSchema.safeParse(raw);
   if (!parsed.success) {
-    return fail("SKILL_BUNDLE_INVALID", "skill.json does not match format version 1");
+    return fail("SKILL_BUNDLE_INVALID", "skill.json does not match a supported format");
   }
   if (new TextEncoder().encode(parsed.data.description).byteLength > 20_000) {
     return fail("SKILL_BUNDLE_INVALID", "Skill description is too large");
@@ -464,6 +465,42 @@ export async function validateBundleArchive(
   }
   assertUtf8Markdown(skillMarkdown);
   const skill = parseSkillJson(skillJsonBytes);
+  if (
+    skill.formatVersion === 1 &&
+    [...files.keys()].some(
+      (path) => path === "skill.lock.json" || path.startsWith("verification/"),
+    )
+  ) {
+    return fail("SKILL_BUNDLE_INVALID", "Composition files require format version 2");
+  }
+  if (skill.formatVersion === 2 && skill.verification) {
+    const verifier = skill.entrypoints.verify
+      ? files.get(skill.entrypoints.verify)
+      : undefined;
+    if (!verifier)
+      return fail("SKILL_BUNDLE_INVALID", "Verification entrypoint is missing");
+    assertUtf8Markdown(verifier);
+    try {
+      const claims = verificationClaimsSchema.parse(
+        JSON.parse(
+          new TextDecoder("utf-8", { fatal: true }).decode(
+            files.get(skill.verification.claims),
+          ),
+        ),
+      );
+      for (const claim of claims) {
+        if (claim.procedure && !files.has(claim.procedure))
+          return fail("SKILL_BUNDLE_INVALID", "Claim procedure is missing");
+        if (skill.verification.blocking && claim.severity !== "blocking")
+          return fail(
+            "SKILL_BUNDLE_INVALID",
+            "Blocking verification cannot declare advisory claims",
+          );
+      }
+    } catch {
+      return fail("SKILL_BUNDLE_INVALID", "Invalid verification claims");
+    }
+  }
   const actualManifest: SkillFileManifestEntry[] = [];
   for (const [path, content] of files) {
     if (path === "skill.json") continue;

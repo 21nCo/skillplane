@@ -25,10 +25,12 @@
     "@skillplane/observability": "workspace:*",
     "@skillplane/storage": "workspace:*",
     "diff": "catalog:",
-    "pg": "catalog:"
+    "pg": "catalog:",
+    "semver": "7.7.4"
   },
   "devDependencies": {
     "@types/pg": "catalog:",
+    "@types/semver": "7.7.1",
     "typescript": "catalog:",
     "vitest": "catalog:"
   }

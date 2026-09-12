@@ -13,7 +13,7 @@ export interface EditableSkillMetadata {
 }
 
 export interface InspectedSkillBundle extends EditableSkillMetadata {
-  readonly formatVersion: 1;
+  readonly formatVersion: 1 | 2;
   readonly fileCount: number;
 }
 
@@ -106,6 +106,11 @@ function normalizeMetadata(metadata: EditableSkillMetadata): EditableSkillMetada
 export async function buildSkillBundle(options: {
   readonly metadata: EditableSkillMetadata;
   readonly files: ReadonlyMap<string, Uint8Array>;
+  readonly composition?: {
+    dependencies: readonly unknown[];
+    verify: boolean;
+    blocking: boolean;
+  };
 }): Promise<Uint8Array> {
   const metadata = normalizeMetadata(options.metadata);
   const files = new Map([...options.files].filter(([path]) => path !== "skill.json"));
@@ -124,10 +129,44 @@ export async function buildSkillBundle(options: {
       mediaType: mediaTypeForPath(path),
     });
   }
+  const originalBytes = options.files.get("skill.json");
+  const original = originalBytes
+    ? (JSON.parse(new TextDecoder().decode(originalBytes)) as {
+        formatVersion?: number;
+        dependencies?: unknown[];
+        entrypoints?: { verify?: string };
+        verification?: { blocking?: boolean };
+      })
+    : null;
+  const composition =
+    options.composition ??
+    (original?.formatVersion === 2
+      ? {
+          dependencies: original.dependencies ?? [],
+          verify: Boolean(original.entrypoints?.verify),
+          blocking: original.verification?.blocking ?? false,
+        }
+      : undefined);
   const skillJson = {
-    formatVersion: 1,
+    ...(composition
+      ? {
+          formatVersion: 2,
+          entrypoints: {
+            execute: "SKILL.md",
+            ...(composition.verify ? { verify: "verification/VERIFY.md" } : {}),
+          },
+          dependencies: composition.dependencies,
+          ...(composition.verify
+            ? {
+                verification: {
+                  claims: "verification/claims.json",
+                  blocking: composition.blocking,
+                },
+              }
+            : {}),
+        }
+      : { formatVersion: 1, entrypoint: "SKILL.md" }),
     ...metadata,
-    entrypoint: "SKILL.md",
     files: manifest,
   };
   files.set("skill.json", strToU8(`${stableJson(skillJson)}\n`));
@@ -189,14 +228,17 @@ export function inspectSkillBundle(bytes: Uint8Array): InspectedSkillBundle {
     throw new Error("skill.json must contain an object.");
   }
   const record = value as Record<string, unknown>;
-  if (record.formatVersion !== 1 || !Array.isArray(record.files)) {
-    throw new Error("skill.json must use Skillplane bundle format version 1.");
+  if (
+    (record.formatVersion !== 1 && record.formatVersion !== 2) ||
+    !Array.isArray(record.files)
+  ) {
+    throw new Error("skill.json must use Skillplane bundle format version 1 or 2.");
   }
   const tags = Array.isArray(record.tags)
     ? record.tags.filter((tag): tag is string => typeof tag === "string")
     : [];
   return {
-    formatVersion: 1,
+    formatVersion: record.formatVersion,
     name: requiredString(record.name, "Skill name", 160),
     slug: requiredString(record.slug, "Skill slug", 120),
     description: typeof record.description === "string" ? record.description : "",

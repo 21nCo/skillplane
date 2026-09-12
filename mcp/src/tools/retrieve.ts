@@ -1,5 +1,5 @@
 import type { SkillRetrieveInput, SkillRetrieveOutput } from "@skillplane/mcp-schema";
-import { McpToolError } from "@skillplane/mcp-schema";
+import { compositionPlanSchema, McpToolError } from "@skillplane/mcp-schema";
 import {
   canonicalizeBundle,
   stableJson,
@@ -89,6 +89,16 @@ export function skillRetrieve(runtime: McpToolRuntime, input: SkillRetrieveInput
     }
     const bundle = await loadExactCanonicalBundle(runtime, version);
     const output: SkillRetrieveOutput = {
+      ...(bundle.skill.formatVersion === 2
+        ? {
+            composition: compositionPlanSchema.parse(
+              await runtime.services.compositionService.resolve(
+                version.id,
+                skill.principal,
+              ),
+            ),
+          }
+        : {}),
       requestId: execution.requestId,
       skill: {
         id: skill.id,

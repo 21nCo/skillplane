@@ -1,3 +1,4 @@
+import { registerCompositionRoutes } from "./routes/composition.js";
 import type { MiddlewareHandler } from "hono";
 import { Hono } from "hono";
 import type { ApiEnvironment, ApiServiceProvider } from "./context.js";
@@ -132,6 +133,7 @@ export function createApiApp(options: ApiOptions = {}) {
   registerSkillSearchRoutes(app);
   registerSkillRoutes(app);
   registerSkillVersionRoutes(app);
+  registerCompositionRoutes(app);
   registerAmendmentRoutes(app);
   registerReviewRoutes(app);
   registerContextRoutes(app);

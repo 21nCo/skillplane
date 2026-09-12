@@ -16,7 +16,11 @@ const row = (id: string, score: string) => ({
   object_key: `public/${id}.zip`,
   document: {
     skill: { name: id, description: "description", tags: ["search"] },
-    version: { revision: 1, publishedAt: "2026-08-01T00:00:00.000Z" },
+    version: {
+      manifest: { formatVersion: 1 },
+      revision: 1,
+      publishedAt: "2026-08-01T00:00:00.000Z",
+    },
   },
   published_at: new Date("2026-08-29T00:00:00.000Z"),
   score,
@@ -135,7 +139,7 @@ describe("global public projection search", () => {
     await service.listVersions("one", "tied");
 
     expect(calls[0]).toContain("head.current_version_id = projection.version_id");
-    expect(calls[1]).toContain(
+    expect(calls.find((text) => text.includes("(document"))).toContain(
       "(document->'version'->>'revision')::bigint DESC NULLS LAST",
     );
   });
