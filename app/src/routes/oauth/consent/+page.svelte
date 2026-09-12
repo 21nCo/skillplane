@@ -1,6 +1,7 @@
 <script lang="ts">
   import { page } from "$app/state";
   import { resolve } from "$app/paths";
+  import { ACTIVE_WORKSPACE_STORAGE_KEY } from "$lib/workspaces/storage.js";
   import { BrandMark } from "@skillplane/ui";
   import {
     ArrowSquareOutIcon as ArrowSquareOut,
@@ -48,7 +49,7 @@
     const remembered =
       typeof localStorage === "undefined"
         ? null
-        : localStorage.getItem("skillplane.active-workspace");
+        : localStorage.getItem(ACTIVE_WORKSPACE_STORAGE_KEY);
     return (
       consentState.details.workspaceAccess.workspaces.find(
         (workspace) => workspace.id === remembered,

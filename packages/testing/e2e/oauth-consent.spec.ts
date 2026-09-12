@@ -97,7 +97,9 @@ test("@oauth-consent shows explicit permissions and approves a loopback client",
       ),
     ).toBeVisible();
     await expect(
-      page.getByText("Approve or reject reviews and publish approved skill versions"),
+      page.getByText(
+        "Approve or reject reviews, publish approved skill versions, and manage skill amendment policies",
+      ),
     ).toBeVisible();
     await expect(
       page.getByRole("note").getByText("localhost:9876", { exact: true }),

@@ -16,12 +16,15 @@ export const OAUTH_SCOPES = [
 export type OAuthScope = (typeof OAUTH_SCOPES)[number];
 
 export const OAUTH_SCOPE_DESCRIPTIONS = {
-  "skills:read": "Read skill records and published versions you can access",
+  "skills:read":
+    "Read skill records, published versions, unpublished proposals, and review information you can access",
   "skills:write": "Create skills and manage skill records, visibility, and lifecycle",
   "skills:amend": "Propose improvements and new versions for review",
-  "skills:publish": "Approve or reject reviews and publish approved skill versions",
+  "skills:publish":
+    "Approve or reject reviews, publish approved skill versions, and manage skill amendment policies",
   "contexts:read": "Read context knowledge and shared agent notes",
-  "contexts:write": "Create and update context knowledge and shared notes",
+  "contexts:write":
+    "Create and update context knowledge and shared notes, and archive or restore contexts",
   "audit:read": "Read audit history for resources you can access",
 } as const satisfies Readonly<Record<OAuthScope, string>>;
 

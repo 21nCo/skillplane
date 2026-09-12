@@ -7,8 +7,13 @@ describe("OAuth consent presentation", () => {
     expect(Object.keys(OAUTH_SCOPE_DESCRIPTIONS)).toEqual([...OAUTH_SCOPES]);
     expect(OAUTH_SCOPE_DESCRIPTIONS["skills:write"]).toContain("Create skills");
     expect(OAUTH_SCOPE_DESCRIPTIONS["skills:write"]).toContain("skill records");
+    expect(OAUTH_SCOPE_DESCRIPTIONS["skills:read"]).toContain("unpublished proposals");
     expect(OAUTH_SCOPE_DESCRIPTIONS["skills:publish"]).toContain("Approve");
     expect(OAUTH_SCOPE_DESCRIPTIONS["skills:publish"]).toContain("publish");
+    expect(OAUTH_SCOPE_DESCRIPTIONS["skills:publish"]).toContain("amendment policies");
+    expect(OAUTH_SCOPE_DESCRIPTIONS["contexts:write"]).toContain(
+      "archive or restore contexts",
+    );
   });
 
   it("identifies an account without disclosing its full email address", () => {
