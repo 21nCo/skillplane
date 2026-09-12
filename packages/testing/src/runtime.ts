@@ -1,4 +1,4 @@
-import type { ObjectStorageBinding, RuntimeBindings } from "@skillplane/config";
+import type { ObjectStorageBinding } from "@skillplane/config";
 
 interface TestStoredObject {
   readonly bytes: Uint8Array;
@@ -140,17 +140,4 @@ export class TestObjectStorage implements ObjectStorageBinding {
       ...(nextOffset < values.length ? { cursor: String(nextOffset) } : {}),
     });
   }
-}
-
-export function createTestRuntimeBindings(
-  overrides: Partial<RuntimeBindings> = {},
-): RuntimeBindings {
-  return {
-    RUNTIME_ENV: "local",
-    DATABASE_ADAPTER: "postgres",
-    AUTH_MODE: "disabled",
-    DATABASE_URL: "postgresql://skillplane:fixture@127.0.0.1:5432/skillplane_test",
-    SKILL_BUNDLES: new TestObjectStorage(),
-    ...overrides,
-  };
 }

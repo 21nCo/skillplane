@@ -5,6 +5,4 @@ export * from "./migrate.js";
 export * from "./principals.js";
 export * from "./rate-limit.js";
 export * from "./schema/index.js";
-export * from "./search.js";
-export * from "./transactions.js";
 export * from "./verify.js";
