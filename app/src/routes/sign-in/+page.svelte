@@ -41,12 +41,12 @@
   }
 
   function messageFor(error: AuthClientError): string {
-    if (error.code === "AUTH_RATE_LIMITED") {
+    if (error.code === "AUTHFN_RATE_LIMITED") {
       return "Too many attempts. Wait a moment before requesting another code.";
     }
     if (
       error.code === "AUTH_RISK_SERVICE_UNAVAILABLE" ||
-      error.code === "AUTH_EMAIL_DELIVERY_FAILED"
+      error.code === "AUTHFN_DELIVERY_FAILED"
     ) {
       return "We could not send a code right now. Please try again shortly.";
     }

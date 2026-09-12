@@ -1,5 +1,5 @@
 import { Buffer } from "node:buffer";
-import type { EmailProvider } from "sendfn";
+import { EmailProviderError, type EmailProvider } from "sendfn";
 
 type SendEmailRequest = Parameters<EmailProvider["sendEmail"]>[0];
 type SendEmailResponse = Awaited<ReturnType<EmailProvider["sendEmail"]>>;
@@ -36,20 +36,6 @@ export interface CloudflareEmailBinding {
   send(message: CloudflareEmailMessage): Promise<CloudflareEmailSendResult>;
 }
 
-export class CloudflareEmailProviderError extends Error {
-  readonly code = "EMAIL_DELIVERY_FAILED";
-  readonly provider = "cloudflare-email";
-  readonly providerCode: string;
-  readonly retryable: boolean;
-
-  constructor(providerCode: string, retryable: boolean) {
-    super("Email delivery failed");
-    this.name = "CloudflareEmailProviderError";
-    this.providerCode = providerCode;
-    this.retryable = retryable;
-  }
-}
-
 const MAX_MESSAGE_BYTES = 5 * 1024 * 1024;
 const MAX_RECIPIENTS = 50;
 const MAX_ATTACHMENTS = 32;
@@ -77,7 +63,10 @@ function parseSender(value: string): string | CloudflareEmailAddress {
   const name = match?.[1]?.trim().replace(/^"|"$/g, "");
   const email = match?.[2]?.trim();
   if (!name || !email || !isEmail(email)) {
-    throw new CloudflareEmailProviderError("E_INVALID_SENDER", false);
+    throw new EmailProviderError("Email delivery failed", {
+      code: "E_INVALID_SENDER",
+      retryable: false,
+    });
   }
   return { email, name };
 }
@@ -151,7 +140,10 @@ export class CloudflareEmailProvider implements EmailProvider {
 
   initialize(): Promise<void> {
     if (typeof this.#binding.send !== "function") {
-      throw new CloudflareEmailProviderError("E_BINDING_UNAVAILABLE", true);
+      throw new EmailProviderError("Email delivery failed", {
+        code: "E_BINDING_UNAVAILABLE",
+        retryable: true,
+      });
     }
     this.#initialized = true;
     return Promise.resolve();
@@ -166,20 +158,32 @@ export class CloudflareEmailProvider implements EmailProvider {
       recipients.some((recipient) => !this.validateEmail(recipient)) ||
       /[\r\n]/.test(request.subject)
     ) {
-      throw new CloudflareEmailProviderError("E_INVALID_MESSAGE", false);
+      throw new EmailProviderError("Email delivery failed", {
+        code: "E_INVALID_MESSAGE",
+        retryable: false,
+      });
     }
     const attachments = mapAttachments(request.attachments);
     if ((attachments?.length ?? 0) > MAX_ATTACHMENTS) {
-      throw new CloudflareEmailProviderError("E_TOO_MANY_ATTACHMENTS", false);
+      throw new EmailProviderError("Email delivery failed", {
+        code: "E_TOO_MANY_ATTACHMENTS",
+        retryable: false,
+      });
     }
     if (requestBytes(request, attachments) > MAX_MESSAGE_BYTES) {
-      throw new CloudflareEmailProviderError("E_MESSAGE_TOO_BIG", false);
+      throw new EmailProviderError("Email delivery failed", {
+        code: "E_MESSAGE_TOO_BIG",
+        retryable: false,
+      });
     }
 
     try {
       const primaryRecipients = request.to.length === 1 ? request.to[0] : request.to;
       if (!primaryRecipients) {
-        throw new CloudflareEmailProviderError("E_INVALID_MESSAGE", false);
+        throw new EmailProviderError("Email delivery failed", {
+          code: "E_INVALID_MESSAGE",
+          retryable: false,
+        });
       }
       const result = await this.#binding.send({
         to: primaryRecipients,
@@ -193,7 +197,10 @@ export class CloudflareEmailProvider implements EmailProvider {
         ...(attachments?.length ? { attachments } : {}),
       });
       if (!result.messageId.trim()) {
-        throw new CloudflareEmailProviderError("E_MESSAGE_ID_MISSING", true);
+        throw new EmailProviderError("Email delivery failed", {
+          code: "E_MESSAGE_ID_MISSING",
+          retryable: true,
+        });
       }
       return {
         success: true,
@@ -202,9 +209,13 @@ export class CloudflareEmailProvider implements EmailProvider {
         timestamp: new Date(),
       };
     } catch (error) {
-      if (error instanceof CloudflareEmailProviderError) throw error;
+      if (error instanceof EmailProviderError) throw error;
       const code = providerCode(error);
-      throw new CloudflareEmailProviderError(code, RETRYABLE_PROVIDER_CODES.has(code));
+      throw new EmailProviderError("Email delivery failed", {
+        code,
+        retryable: RETRYABLE_PROVIDER_CODES.has(code),
+        cause: error,
+      });
     }
   }
 

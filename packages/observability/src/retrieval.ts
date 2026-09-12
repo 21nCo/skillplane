@@ -2,6 +2,7 @@ import type {
   AuditCallerDeclaration,
   AuditCredential,
   AuditOutcome,
+  AuditWriteInput,
   PostgresAuditWriter,
 } from "./audit.js";
 
@@ -25,11 +26,8 @@ export interface RetrievalAuditInput {
   readonly latencyMs: number;
 }
 
-export async function recordRetrievalAudit(
-  writer: PostgresAuditWriter,
-  input: RetrievalAuditInput,
-): Promise<string> {
-  return writer.record({
+export function retrievalAuditEvent(input: RetrievalAuditInput): AuditWriteInput {
+  return {
     workspaceId: input.workspaceId,
     eventType: `mcp.${input.tool}.${input.outcome}`,
     action: input.tool,
@@ -50,5 +48,12 @@ export async function recordRetrievalAudit(
     latencyMs: input.latencyMs,
     channel: "mcp",
     retentionClass: "detailed_read_90d",
-  });
+  };
+}
+
+export async function recordRetrievalAudit(
+  writer: PostgresAuditWriter,
+  input: RetrievalAuditInput,
+): Promise<string> {
+  return writer.record(retrievalAuditEvent(input));
 }

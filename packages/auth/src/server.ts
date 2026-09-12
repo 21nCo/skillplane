@@ -23,6 +23,7 @@ import { createAuthApplication } from "./app.js";
 import type { OtpRateLimiter } from "./rate-limit.js";
 import { AUTH_COOKIE_CONFIG } from "./session.js";
 import type { TurnstileVerifier } from "./turnstile.js";
+import { createOtpPolicyHook } from "./otp-policy.js";
 import {
   createSkillplaneOAuth,
   type AuthFnMcpOAuthConfig,
@@ -180,15 +181,14 @@ export function createSkillplaneAuthServer(
         ...(input.now ? { now: input.now } : {}),
       },
     },
+    hooks: {
+      beforeChallengeSend: createOtpPolicyHook(input),
+    },
     observability: {
       events: (event) => emit(safeEvent(event)),
     },
   });
-  const app = createAuthApplication({
-    authfn: authfnServer,
-    ...(input.rateLimiter ? { rateLimiter: input.rateLimiter } : {}),
-    ...(input.turnstile ? { turnstile: input.turnstile } : {}),
-  });
+  const app = createAuthApplication({ authfn: authfnServer });
   return {
     authfn: authfnServer,
     provider: authfnServer.provider,

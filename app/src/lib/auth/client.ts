@@ -1,197 +1,109 @@
-export type OtpPurpose = "sign-up";
+import {
+  createAuthFnClient,
+  type AuthFnErrorEnvelope,
+  type AuthFnSession,
+} from "@authfn/client";
 
+export type OtpPurpose = "sign-up";
 export interface OtpContext {
   readonly email: string;
   readonly purpose: OtpPurpose;
   readonly expiresAt: number;
 }
-
-export interface BrowserSession {
-  readonly id: string;
-  readonly actorType: "user";
-  readonly actorId: string;
-  readonly methods: readonly string[];
-  readonly subject: {
-    readonly actorId: string;
-    readonly actorType: "user";
-    readonly email?: string;
-  };
-}
-
-interface ErrorEnvelope {
-  readonly ok: false;
-  readonly error?: {
-    readonly code?: string;
-    readonly message?: string;
-    readonly retryable?: boolean;
-  };
-  readonly requestId?: string;
-}
-
-interface SuccessEnvelope<T> {
-  readonly ok: true;
-  readonly data: T;
-  readonly requestId: string;
-}
+export type BrowserSession = AuthFnSession;
 
 export class AuthClientError extends Error {
   readonly code: string;
   readonly requestId?: string;
   readonly retryable: boolean;
-  readonly status: number;
-
-  constructor(
-    status: number,
-    code: string,
-    message: string,
-    retryable: boolean,
-    requestId?: string,
-  ) {
-    super(message);
+  readonly status = 0;
+  constructor(error: AuthFnErrorEnvelope) {
+    super(error.error.message);
     this.name = "AuthClientError";
-    this.status = status;
-    this.code = code;
-    this.retryable = retryable;
-    if (requestId) this.requestId = requestId;
+    this.code = error.error.code;
+    this.retryable = error.error.retryable;
+    this.requestId = error.requestId;
   }
 }
 
+const client = createAuthFnClient({ baseUrl: "/auth", credentials: "include" });
 const OTP_CONTEXT_KEY = "skillplane.auth.otp";
 const RETURN_TO_KEY = "skillplane.auth.return-to";
 
-async function authRequest<T>(
-  path: string,
-  init: RequestInit = {},
-): Promise<SuccessEnvelope<T>> {
-  let response: Response;
-  try {
-    const headers = new Headers(init.headers);
-    headers.set("accept", "application/json");
-    if (init.body) headers.set("content-type", "application/json");
-    response = await fetch(path, {
-      ...init,
-      credentials: "include",
-      headers,
-    });
-  } catch {
-    throw new AuthClientError(
-      0,
-      "AUTH_NETWORK_ERROR",
-      "We could not reach Skillplane. Check your connection and try again.",
-      true,
-    );
-  }
+function isErrorEnvelope(result: unknown): result is AuthFnErrorEnvelope {
+  return (
+    typeof result === "object" &&
+    result !== null &&
+    "ok" in result &&
+    result.ok === false
+  );
+}
 
-  let body: SuccessEnvelope<T> | ErrorEnvelope;
-  try {
-    body = (await response.json()) as SuccessEnvelope<T> | ErrorEnvelope;
-  } catch {
-    throw new AuthClientError(
-      response.status,
-      "AUTH_RESPONSE_INVALID",
-      "Authentication is temporarily unavailable.",
-      true,
-    );
+function unwrap<T>(result: T | AuthFnErrorEnvelope): T {
+  if (isErrorEnvelope(result)) {
+    throw new AuthClientError(result);
   }
-  if (!response.ok || !body.ok) {
-    const error = body.ok ? undefined : body.error;
-    throw new AuthClientError(
-      response.status,
-      error?.code ?? "AUTH_REQUEST_FAILED",
-      error?.message ?? "Authentication is temporarily unavailable.",
-      error?.retryable ?? response.status >= 500,
-      body.requestId,
-    );
-  }
-  return body;
+  return result;
 }
 
 export async function sendOtp(input: {
   readonly email: string;
   readonly turnstileToken: string;
 }): Promise<{ readonly expiresInSeconds: number }> {
-  const response = await authRequest<{
-    readonly accepted: true;
-    readonly expiresInSeconds: number;
-  }>("/auth/otp/send", {
-    method: "POST",
-    body: JSON.stringify({
+  unwrap(
+    await client.sendOtp({
       email: input.email,
       purpose: "sign-up",
-      turnstileToken: input.turnstileToken,
+      metadata: { turnstileToken: input.turnstileToken },
     }),
-  });
-  return { expiresInSeconds: response.data.expiresInSeconds };
+  );
+  return { expiresInSeconds: 600 };
 }
 
 export async function verifyOtp(input: {
   readonly email: string;
   readonly code: string;
 }): Promise<void> {
-  await authRequest("/auth/otp/verify", {
-    method: "POST",
-    body: JSON.stringify({
+  unwrap(
+    await client.verifyOtp({
       email: input.email,
       code: input.code,
       purpose: "sign-up",
+      sessionMode: "cookie",
     }),
-  });
+  );
 }
 
 export async function getSession(): Promise<BrowserSession | null> {
-  const response = await authRequest<{
-    readonly session: BrowserSession | null;
-  }>("/auth/session");
-  return response.data.session;
+  return unwrap(await client.getSession()).data.session;
 }
 
 export async function signOut(): Promise<void> {
-  const csrf = document.cookie
-    .split(";")
-    .map((entry) => entry.trim())
-    .find((entry) => entry.startsWith("skillplane.csrf="))
-    ?.slice("skillplane.csrf=".length);
-  await authRequest("/auth/sign-out", {
-    method: "POST",
-    headers: csrf ? { "x-authfn-csrf": decodeURIComponent(csrf) } : undefined,
-    body: "{}",
-  });
+  unwrap(await client.signOut());
 }
 
 export function saveOtpContext(context: OtpContext): void {
   sessionStorage.setItem(OTP_CONTEXT_KEY, JSON.stringify(context));
 }
-
 export function loadOtpContext(): OtpContext | null {
   const raw = sessionStorage.getItem(OTP_CONTEXT_KEY);
   if (!raw) return null;
   try {
-    const value: unknown = JSON.parse(raw);
-    if (!value || typeof value !== "object") return null;
-    const context = value as Partial<OtpContext>;
-    if (
-      typeof context.email !== "string" ||
-      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(context.email) ||
-      context.purpose !== "sign-up" ||
-      typeof context.expiresAt !== "number" ||
-      !Number.isFinite(context.expiresAt)
-    ) {
-      return null;
-    }
-    return {
-      email: context.email,
-      purpose: context.purpose,
-      expiresAt: context.expiresAt,
-    };
+    const value = JSON.parse(raw) as Partial<OtpContext>;
+    return typeof value.email === "string" &&
+      /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.email) &&
+      value.purpose === "sign-up" &&
+      typeof value.expiresAt === "number" &&
+      Number.isFinite(value.expiresAt)
+      ? { email: value.email, purpose: value.purpose, expiresAt: value.expiresAt }
+      : null;
   } catch {
     return null;
   }
 }
-
 export function clearOtpContext(): void {
   sessionStorage.removeItem(OTP_CONTEXT_KEY);
 }
-
 export function saveReturnTo(value: string | null): void {
   if (!value || !value.startsWith("/") || value.startsWith("//")) {
     sessionStorage.removeItem(RETURN_TO_KEY);
@@ -199,7 +111,6 @@ export function saveReturnTo(value: string | null): void {
   }
   sessionStorage.setItem(RETURN_TO_KEY, value);
 }
-
 export function takeReturnTo(): string | null {
   const value = sessionStorage.getItem(RETURN_TO_KEY);
   sessionStorage.removeItem(RETURN_TO_KEY);

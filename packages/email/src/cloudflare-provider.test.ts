@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { EmailProviderError } from "sendfn";
 import {
-  CloudflareEmailProviderError,
   cloudflareEmailProvider,
   type CloudflareEmailMessage,
 } from "./cloudflare-provider.js";
@@ -58,11 +58,9 @@ describe("CloudflareEmailProvider", () => {
         html: "<p>Use your code.</p>",
       })
       .catch((error: unknown) => error);
-    expect(failure).toBeInstanceOf(CloudflareEmailProviderError);
+    expect(failure).toBeInstanceOf(EmailProviderError);
     expect(failure).toMatchObject({
-      code: "EMAIL_DELIVERY_FAILED",
-      provider: "cloudflare-email",
-      providerCode: "E_SENDER_DOMAIN_NOT_AVAILABLE",
+      code: "E_SENDER_DOMAIN_NOT_AVAILABLE",
       retryable: false,
       message: "Email delivery failed",
     });

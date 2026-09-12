@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
-import {
-  CloudflareEmailProviderError,
-  cloudflareEmailProvider,
-} from "../../src/index.js";
+import { EmailProviderError } from "sendfn";
+import { cloudflareEmailProvider } from "../../src/index.js";
 
 describe("auth email redaction", () => {
   it("does not retain provider messages, recipients, or bodies in typed failures", async () => {
@@ -23,7 +21,7 @@ describe("auth email redaction", () => {
         html: "<p>123456</p>",
       })
       .catch((caught: unknown) => caught);
-    expect(error).toBeInstanceOf(CloudflareEmailProviderError);
+    expect(error).toBeInstanceOf(EmailProviderError);
     expect(JSON.stringify(error)).not.toMatch(/alice|123456|body/i);
   });
 });
