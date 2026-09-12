@@ -1,3 +1,4 @@
+import { skillUsageReport } from "./tools/usage.js";
 import {
   defineMcpFnServer,
   type McpFnObjectSchema,
@@ -28,6 +29,8 @@ import {
   skillAmendOutputSchema,
   skillAssetRetrieveInputSchema,
   skillAssetRetrieveOutputSchema,
+  skillUsageReportInputSchema,
+  skillUsageReportOutputSchema,
   skillRetrieveInputSchema,
   skillRetrieveOutputSchema,
   skillsSearchInputSchema,
@@ -190,6 +193,16 @@ export const skillplaneMcpDeclaration = defineMcpFnServer<McpToolRuntime>({
       output: skillsSearchOutputSchema,
       annotations: READ_ONLY_ANNOTATIONS,
       run: skillsSearch,
+    }),
+    tool({
+      name: "skill_usage_report",
+      title: "Report observed skill activity",
+      description:
+        "Report a client event for an authorized exact skill version. Deduplicated by event ID. Client claims remain reported; verified success and unobservable embedded usage cannot be claimed.",
+      input: skillUsageReportInputSchema,
+      output: skillUsageReportOutputSchema,
+      annotations: MUTATION_ANNOTATIONS,
+      run: skillUsageReport,
     }),
     tool({
       name: "skill_retrieve",
