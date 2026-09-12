@@ -20,7 +20,7 @@ async function sendOtp(environment: AuthTestEnvironment): Promise<Response> {
     body: {
       email: environment.email,
       purpose: "sign-up",
-      turnstileToken: "turnstile-pass",
+      metadata: { turnstileToken: "turnstile-pass" },
     },
   });
 }
@@ -60,9 +60,9 @@ describe("Skillplane email OTP integration", () => {
     active = await createAuthTestEnvironment();
     const sent = await sendOtp(active);
     expect(sent.status).toBe(200);
-    expect(await sent.json()).toEqual({
+    expect(await sent.json()).toMatchObject({
       ok: true,
-      data: { accepted: true, expiresInSeconds: 600 },
+      data: { challengeId: expect.any(String), sent: true },
       requestId: "req_auth_test",
     });
     expect(active.messages).toHaveLength(1);
@@ -163,7 +163,14 @@ describe("Skillplane email OTP integration", () => {
       },
     });
     const known = await sendOtp(active);
-    expect(await known.json()).toEqual(unknownBody);
+    const knownBody = await known.json();
+    expect({
+      ...knownBody,
+      data: { ...knownBody.data, challengeId: undefined },
+    }).toEqual({
+      ...unknownBody,
+      data: { ...unknownBody.data, challengeId: undefined },
+    });
   });
 
   it("expires challenges and returns a safe, non-enumerating error", async () => {
@@ -182,8 +189,8 @@ describe("Skillplane email OTP integration", () => {
     expect(await expired.json()).toEqual({
       ok: false,
       error: {
-        code: "AUTH_OTP_EXPIRED",
-        message: "The verification code has expired",
+        code: "AUTHFN_OTP_EXPIRED",
+        message: "OTP code has expired",
         retryable: false,
       },
       requestId: "req_auth_test",

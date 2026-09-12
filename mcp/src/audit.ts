@@ -126,6 +126,7 @@ function auditInput(event: McpAuditRecord): AuditWriteInput {
     ...(event.contextId ? { contextId: event.contextId } : {}),
     ...(event.errorCode ? { errorCode: event.errorCode } : {}),
     latencyMs: event.latencyMs,
+    ...(event.fencingEpoch !== undefined ? { fencingEpoch: event.fencingEpoch } : {}),
   });
 }
 

@@ -177,46 +177,46 @@ export class CloudflareEmailProvider implements EmailProvider {
       });
     }
 
-    try {
-      const primaryRecipients = request.to.length === 1 ? request.to[0] : request.to;
-      if (!primaryRecipients) {
-        throw new EmailProviderError("Email delivery failed", {
-          code: "E_INVALID_MESSAGE",
-          retryable: false,
-        });
-      }
-      const result = await this.#binding.send({
-        to: primaryRecipients,
-        from: parseSender(request.from),
-        ...(request.cc?.length ? { cc: request.cc } : {}),
-        ...(request.bcc?.length ? { bcc: request.bcc } : {}),
-        subject: request.subject,
-        ...(request.html ? { html: request.html } : {}),
-        ...(request.text ? { text: request.text } : {}),
-        ...(request.replyTo ? { replyTo: request.replyTo } : {}),
-        ...(attachments?.length ? { attachments } : {}),
+    const primaryRecipients = request.to.length === 1 ? request.to[0] : request.to;
+    if (!primaryRecipients) {
+      throw new EmailProviderError("Email delivery failed", {
+        code: "E_INVALID_MESSAGE",
+        retryable: false,
       });
-      if (!result.messageId.trim()) {
-        throw new EmailProviderError("Email delivery failed", {
-          code: "E_MESSAGE_ID_MISSING",
-          retryable: true,
-        });
-      }
-      return {
-        success: true,
-        messageId: result.messageId,
-        providerMessageId: result.messageId,
-        timestamp: new Date(),
-      };
+    }
+    const message: CloudflareEmailMessage = {
+      to: primaryRecipients,
+      from: parseSender(request.from),
+      ...(request.cc?.length ? { cc: request.cc } : {}),
+      ...(request.bcc?.length ? { bcc: request.bcc } : {}),
+      subject: request.subject,
+      ...(request.html ? { html: request.html } : {}),
+      ...(request.text ? { text: request.text } : {}),
+      ...(request.replyTo ? { replyTo: request.replyTo } : {}),
+      ...(attachments?.length ? { attachments } : {}),
+    };
+    let result: CloudflareEmailSendResult;
+    try {
+      result = await this.#binding.send(message);
     } catch (error) {
-      if (error instanceof EmailProviderError) throw error;
       const code = providerCode(error);
       throw new EmailProviderError("Email delivery failed", {
         code,
         retryable: RETRYABLE_PROVIDER_CODES.has(code),
-        cause: error,
       });
     }
+    if (!result.messageId.trim()) {
+      throw new EmailProviderError("Email delivery failed", {
+        code: "E_MESSAGE_ID_MISSING",
+        retryable: true,
+      });
+    }
+    return {
+      success: true,
+      messageId: result.messageId,
+      providerMessageId: result.messageId,
+      timestamp: new Date(),
+    };
   }
 
   sendBulkEmail(requests: SendEmailRequest[]): Promise<SendEmailResponse[]> {

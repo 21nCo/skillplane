@@ -1,4 +1,5 @@
 import { AuthFnConfigError, AuthFnRateLimitedError, type AuthFnHooks } from "authfn";
+import { AuthFnDeliveryFailedError } from "authfn/core/errors";
 import type { OtpRateLimiter } from "./rate-limit.js";
 import type { TurnstileVerifier } from "./turnstile.js";
 
@@ -20,16 +21,19 @@ export function createOtpPolicyHook(input: {
     }
     const incomingIp = request.headers.get("cf-connecting-ip")?.trim();
     const remoteIp = incomingIp?.length ? incomingIp : "unknown";
-    const incomingRequestId = request.headers.get("x-request-id")?.trim();
-    const idempotencyKey = incomingRequestId?.length
-      ? incomingRequestId
-      : `req_${crypto.randomUUID()}`;
+    const idempotencyKey = `turnstile_${crypto.randomUUID()}`;
     const verification = await input.turnstile.verify({
       token,
       remoteIp,
       idempotencyKey,
     });
     if (!verification.success) {
+      if (verification.reason === "unavailable") {
+        throw new AuthFnDeliveryFailedError(
+          "Authentication is temporarily unavailable",
+          { reason: verification.reason },
+        );
+      }
       throw new AuthFnRateLimitedError("Please wait before trying again", {
         reason: verification.reason,
       });

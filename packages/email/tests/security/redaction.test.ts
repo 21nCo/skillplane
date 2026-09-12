@@ -22,6 +22,14 @@ describe("auth email redaction", () => {
       })
       .catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(EmailProviderError);
-    expect(JSON.stringify(error)).not.toMatch(/alice|123456|body/i);
+    expect((error as Error).cause).toBeUndefined();
+    expect(
+      [
+        JSON.stringify(error),
+        (error as Error).message,
+        (error as Error).stack ?? "",
+        String((error as Error).cause ?? ""),
+      ].join("\n"),
+    ).not.toMatch(/alice|123456|body/i);
   });
 });

@@ -17,7 +17,7 @@ async function establishSession(environment: AuthTestEnvironment): Promise<strin
     body: {
       email: environment.email,
       purpose: "sign-up",
-      turnstileToken: "turnstile-pass",
+      metadata: { turnstileToken: "turnstile-pass" },
     },
   });
   const verified = await environment.request("/auth/otp/verify", {
@@ -38,13 +38,13 @@ describe("Skillplane authentication security", () => {
       body: {
         email: active.email,
         purpose: "sign-up",
-        turnstileToken: "invalid-token",
+        metadata: { turnstileToken: "invalid-token" },
       },
     });
     expect(denied.status).toBe(429);
     expect(await denied.json()).toMatchObject({
       ok: false,
-      error: { code: "AUTH_RATE_LIMITED" },
+      error: { code: "AUTHFN_RATE_LIMITED" },
     });
     expect(active.messages).toHaveLength(0);
     const challenges = await active.pool.query<{ count: string }>(
@@ -60,7 +60,7 @@ describe("Skillplane authentication security", () => {
       body: {
         email: active.email,
         purpose: "sign-up",
-        turnstileToken: "turnstile-pass",
+        metadata: { turnstileToken: "turnstile-pass" },
       },
     });
     const known = await active.request("/auth/otp/verify", {
@@ -116,7 +116,7 @@ describe("Skillplane authentication security", () => {
       body: {
         email: active.email,
         purpose: "sign-up",
-        turnstileToken: "turnstile-pass",
+        metadata: { turnstileToken: "turnstile-pass" },
       },
     });
     expect(first.status).toBe(200);
@@ -124,13 +124,13 @@ describe("Skillplane authentication security", () => {
       body: {
         email: active.email,
         purpose: "sign-up",
-        turnstileToken: "turnstile-pass",
+        metadata: { turnstileToken: "turnstile-pass" },
       },
     });
     expect(limited.status).toBe(429);
     expect(limited.headers.get("retry-after")).toMatch(/^\d+$/);
     const serialized = JSON.stringify(await limited.json());
-    expect(serialized).toContain("AUTH_RATE_LIMITED");
+    expect(serialized).toContain("AUTHFN_RATE_LIMITED");
     expect(serialized).not.toContain(active.email);
     expect(active.messages).toHaveLength(1);
   });

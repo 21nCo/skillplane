@@ -24,6 +24,7 @@ export interface RetrievalAuditInput {
   readonly contextId?: string;
   readonly errorCode?: string;
   readonly latencyMs: number;
+  readonly fencingEpoch?: number;
 }
 
 export function retrievalAuditEvent(input: RetrievalAuditInput): AuditWriteInput {
@@ -46,6 +47,7 @@ export function retrievalAuditEvent(input: RetrievalAuditInput): AuditWriteInput
     ...(input.contextId ? { contextId: input.contextId } : {}),
     ...(input.errorCode ? { errorCode: input.errorCode } : {}),
     latencyMs: input.latencyMs,
+    ...(input.fencingEpoch !== undefined ? { fencingEpoch: input.fencingEpoch } : {}),
     channel: "mcp",
     retentionClass: "detailed_read_90d",
   };

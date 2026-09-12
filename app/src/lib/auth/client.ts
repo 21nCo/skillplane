@@ -16,7 +16,6 @@ export class AuthClientError extends Error {
   readonly code: string;
   readonly requestId?: string;
   readonly retryable: boolean;
-  readonly status = 0;
   constructor(error: AuthFnErrorEnvelope) {
     super(error.error.message);
     this.name = "AuthClientError";
