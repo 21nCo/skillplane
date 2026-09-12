@@ -1,5 +1,6 @@
 import { browser } from "$app/environment";
 import { apiRequest } from "$lib/api/client.js";
+import { ACTIVE_WORKSPACE_STORAGE_KEY } from "$lib/workspaces/storage.js";
 import { getContext, setContext } from "svelte";
 
 export type WorkspaceRole = "viewer" | "editor" | "admin" | "owner";
@@ -19,7 +20,6 @@ export interface WorkspaceRegion {
 }
 
 const CONTEXT_KEY = Symbol("skillplane-workspaces");
-const STORAGE_KEY = "skillplane.active-workspace";
 
 export class WorkspaceStore {
   workspaces = $state<Workspace[]>([]);
@@ -45,14 +45,16 @@ export class WorkspaceStore {
       this.workspaces = data.workspaces;
       this.regions = data.regions;
       this.recommendedRegionId = data.recommendedRegionId;
-      const remembered = browser ? localStorage.getItem(STORAGE_KEY) : null;
+      const remembered = browser
+        ? localStorage.getItem(ACTIVE_WORKSPACE_STORAGE_KEY)
+        : null;
       const rememberedWorkspace = remembered
         ? data.workspaces.find((workspace) => workspace.id === remembered)
         : undefined;
       const next = rememberedWorkspace ?? data.workspaces.at(0);
       this.activeId = next ? next.id : null;
       if (next && browser) {
-        localStorage.setItem(STORAGE_KEY, next.id);
+        localStorage.setItem(ACTIVE_WORKSPACE_STORAGE_KEY, next.id);
       }
     } catch (error) {
       this.error =
@@ -65,11 +67,11 @@ export class WorkspaceStore {
   select(workspaceId: string): void {
     if (!this.workspaces.some((workspace) => workspace.id === workspaceId)) return;
     this.activeId = workspaceId;
-    localStorage.setItem(STORAGE_KEY, workspaceId);
+    localStorage.setItem(ACTIVE_WORKSPACE_STORAGE_KEY, workspaceId);
   }
 
   async refresh(preferredId?: string): Promise<void> {
-    if (preferredId) localStorage.setItem(STORAGE_KEY, preferredId);
+    if (preferredId) localStorage.setItem(ACTIVE_WORKSPACE_STORAGE_KEY, preferredId);
     await this.load();
   }
 }
