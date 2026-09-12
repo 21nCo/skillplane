@@ -392,6 +392,42 @@ describe("skill management API", () => {
       { headers: headers(owner) },
     );
     expect(await archivedSearch.text()).not.toContain(created.skill.id);
+
+    const legacyArchivedListResponse = await app.request(
+      `/api/v1/workspaces/${owner.workspaceId}/skills?includeArchived=true`,
+      { headers: headers(owner) },
+    );
+    expect(legacyArchivedListResponse.status).toBe(200);
+    const legacyArchivedList = await data<{ skills: readonly { id: string }[] }>(
+      legacyArchivedListResponse,
+    );
+    expect(legacyArchivedList.skills.map((skill) => skill.id)).toContain(
+      created.skill.id,
+    );
+
+    const legacyArchivedSearchResponse = await app.request(
+      `/api/v1/workspaces/${owner.workspaceId}/skills?q=${encodeURIComponent(
+        "authorization boundaries",
+      )}&includeArchived=true`,
+      { headers: headers(owner) },
+    );
+    expect(legacyArchivedSearchResponse.status).toBe(200);
+    const legacyArchivedSearch = await data<{
+      skills: readonly { id: string }[];
+    }>(legacyArchivedSearchResponse);
+    expect(legacyArchivedSearch.skills.map((skill) => skill.id)).toContain(
+      created.skill.id,
+    );
+
+    const invalidLegacyArchiveFilter = await app.request(
+      `/api/v1/workspaces/${owner.workspaceId}/skills?includeArchived=invalid`,
+      { headers: headers(owner) },
+    );
+    expect(invalidLegacyArchiveFilter.status).toBe(400);
+    expect(await invalidLegacyArchiveFilter.text()).toContain(
+      "includeArchived must be true or false",
+    );
+
     const archivedHistory = await app.request(
       `/api/v1/skills/${created.skill.id}/versions/${created.version.id}/files/SKILL.md`,
       { headers: headers(owner) },
