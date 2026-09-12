@@ -12,6 +12,9 @@ catalogs:
     '@authfn/api-keys':
       specifier: 0.1.1
       version: 0.1.1
+    '@authfn/client':
+      specifier: 0.2.0
+      version: 0.2.0
     '@authfn/core':
       specifier: 0.1.1
       version: 0.1.1
@@ -235,6 +238,9 @@ importers:
 
   app:
     dependencies:
+      '@authfn/client':
+        specifier: 'catalog:'
+        version: 0.2.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
       '@mdfn/core':
         specifier: 0.1.0
         version: 0.1.0
@@ -970,6 +976,9 @@ packages:
 
   '@authfn/api-keys@0.1.1':
     resolution: {integrity: sha512-jElGOelDr1Qjj3NwfOZ1PH9r9plwZiltTC4dhIc2Ob4OrSTVR2WN58tAThcIBLlKsgbRGP/boiXJWqROQZYPgA==}
+
+  '@authfn/client@0.2.0':
+    resolution: {integrity: sha512-fPBpWDJ4cWljE8PguT4qLUFxmosPHpXMj4sou/RZ7i5X5l491hpb+T0DTP5QpqDDa5WKKmRfthxqJKDt5kcE3A==}
 
   '@authfn/core@0.1.1':
     resolution: {integrity: sha512-xWl7a2n9nmIQ6vpXyLqNp2nPVvYr1xza12xz3W/+q3HeLMi4dab5XNuv+ERJpQ0oQO0j8EPy6qbAP5mqgr+Pfw==}
@@ -6895,6 +6904,16 @@ snapshots:
       '@ast-grep/napi-win32-x64-msvc': 0.40.5
 
   '@authfn/api-keys@0.1.1(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))':
+    dependencies:
+      '@superfunctions/http': 0.2.0
+      authfn: 0.2.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
+    transitivePeerDependencies:
+      - '@prisma/client'
+      - drizzle-orm
+      - kysely
+      - mongodb
+
+  '@authfn/client@0.2.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))':
     dependencies:
       '@superfunctions/http': 0.2.0
       authfn: 0.2.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))

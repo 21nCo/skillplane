@@ -1,0 +1,17 @@
+{
+  "authfn": "0.2.0",
+  "plugins": {
+    "@authfn/api-keys": "0.1.1",
+    "@authfn/email-otp": "0.1.1",
+    "@authfn/multi-region": "0.1.1",
+    "@skillplane/authfn-mcp-oauth": "0.0.0"
+  },
+  "pluginNames": [
+    "emailOtp",
+    "apiKey",
+    "skillplaneMcpOAuth",
+    "multiRegion"
+  ],
+  "schemaVersion": 1,
+  "sha256": "a5ed5974b391902117abdfbd7d0492b98cad6a1fcda2f1f1c6da6d8cbd5ada17"
+}

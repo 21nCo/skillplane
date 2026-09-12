@@ -30,6 +30,7 @@ catalog:
   "@types/mdx": 2.0.13
   "@axe-core/playwright": 4.12.1
   "@authfn/core": 0.1.1
+  "@authfn/client": 0.2.0
   authfn: 0.2.0
   "@authfn/api-keys": 0.1.1
   "@authfn/email-otp": 0.1.1

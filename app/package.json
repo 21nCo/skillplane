@@ -14,6 +14,7 @@
     "deploy:check": "wrangler deploy --config wrangler.jsonc --dry-run --outdir dist-worker/local && wrangler deploy --config wrangler.auth.jsonc --dry-run --outdir dist-worker/auth"
   },
   "dependencies": {
+    "@authfn/client": "catalog:",
     "@mdfn/core": "0.1.0",
     "@mdfn/extensions": "0.1.0",
     "@mdfn/markdown": "0.1.0",

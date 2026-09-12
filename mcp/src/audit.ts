@@ -4,6 +4,7 @@ import {
   auditMetadata,
   AuditWriteError,
   PostgresAuditWriter,
+  retrievalAuditEvent,
   writeAuditEvent,
   writeControlPlaneAuditEvent,
   type AuditWriteInput,
@@ -77,7 +78,7 @@ function auditInput(event: McpAuditRecord): AuditWriteInput {
     "context_knowledge_update",
     "context_note_upsert",
   ].includes(event.tool);
-  return {
+  const input = {
     workspaceId: event.workspaceId,
     eventType: `mcp.${event.tool}.${event.outcome}`,
     action: event.tool,
@@ -105,7 +106,28 @@ function auditInput(event: McpAuditRecord): AuditWriteInput {
     ...(event.errorCode ? { errorCode: event.errorCode } : {}),
     latencyMs: event.latencyMs,
     fencingEpoch: event.fencingEpoch,
-  };
+  } satisfies AuditWriteInput;
+  if (event.tool !== "skill_retrieve") return input;
+  return retrievalAuditEvent({
+    workspaceId: event.workspaceId,
+    requestId: event.requestId,
+    tool: event.tool,
+    outcome: event.outcome,
+    actorType: event.identity.actorType,
+    actorId: event.identity.actorId,
+    userId: event.identity.userId,
+    credential: input.credential,
+    caller: event.caller,
+    ...(event.resourceType ? { resourceType: event.resourceType } : {}),
+    ...(event.resourceId ? { resourceId: event.resourceId } : {}),
+    ...(event.skillId ? { skillId: event.skillId } : {}),
+    ...(event.versionId ? { versionId: event.versionId } : {}),
+    ...(event.versionDigest ? { versionDigest: event.versionDigest } : {}),
+    ...(event.contextId ? { contextId: event.contextId } : {}),
+    ...(event.errorCode ? { errorCode: event.errorCode } : {}),
+    latencyMs: event.latencyMs,
+    ...(event.fencingEpoch !== undefined ? { fencingEpoch: event.fencingEpoch } : {}),
+  });
 }
 
 function controlPlaneAuditInput(event: McpAuditRecord): ControlPlaneAuditWriteInput {

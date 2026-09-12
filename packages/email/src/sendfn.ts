@@ -1,7 +1,6 @@
 import { type AuthFnDeliveryProvider, type AuthFnDeliveryRequest } from "authfn";
 import { createSendFn, type SendFnEdgeClient } from "sendfn/edge";
 import {
-  CloudflareEmailProviderError,
   type CloudflareEmailBinding,
   cloudflareEmailProvider,
 } from "./cloudflare-provider.js";
@@ -20,27 +19,6 @@ export interface SkillplaneSendFn {
   close(): Promise<void>;
 }
 
-export class SkillplaneEmailDeliveryError extends Error {
-  readonly code = "EMAIL_DELIVERY_FAILED";
-  readonly provider = "cloudflare-email";
-  readonly providerCode: string;
-  readonly retryable: boolean;
-
-  constructor(providerCode: string, retryable: boolean) {
-    super("Email delivery failed");
-    this.name = "SkillplaneEmailDeliveryError";
-    this.providerCode = providerCode;
-    this.retryable = retryable;
-  }
-}
-
-function toDeliveryFailure(error: unknown): SkillplaneEmailDeliveryError {
-  if (error instanceof CloudflareEmailProviderError) {
-    return new SkillplaneEmailDeliveryError(error.providerCode, error.retryable);
-  }
-  return new SkillplaneEmailDeliveryError("E_UNKNOWN", true);
-}
-
 function createDelivery(
   client: SendFnEdgeClient,
   context: Pick<CreateSkillplaneSendFnInput, "environment" | "signInUrl">,
@@ -54,31 +32,27 @@ function createDelivery(
         environment: context.environment,
         signInUrl: context.signInUrl,
       });
-      try {
-        const transaction = await client.email({
-          userId: "authfn",
-          to: input.email,
-          subject: rendered.subject,
-          html: rendered.html,
-          text: rendered.text,
-          metadata: {
-            challengeId: input.challengeId,
-            purpose: input.purpose,
-          },
-          tags: ["authentication", "otp"],
-        });
-        return {
-          sent: true,
-          metadata: {
-            provider: transaction.provider,
-            providerMessageId: transaction.providerMessageId,
-            transactionId: transaction.id,
-            sentAt: transaction.sentAt?.toISOString(),
-          },
-        };
-      } catch (error) {
-        throw toDeliveryFailure(error);
-      }
+      const transaction = await client.email({
+        userId: "authfn",
+        to: input.email,
+        subject: rendered.subject,
+        html: rendered.html,
+        text: rendered.text,
+        metadata: {
+          challengeId: input.challengeId,
+          purpose: input.purpose,
+        },
+        tags: ["authentication", "otp"],
+      });
+      return {
+        sent: true,
+        metadata: {
+          provider: transaction.provider,
+          providerMessageId: transaction.providerMessageId,
+          transactionId: transaction.id,
+          sentAt: transaction.sentAt?.toISOString(),
+        },
+      };
     },
   };
 }

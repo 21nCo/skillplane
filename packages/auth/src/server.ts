@@ -1,13 +1,9 @@
-import { authFnApiKeyPlugin } from "@authfn/api-keys";
-import { authFnEmailOtpPlugin } from "@authfn/email-otp";
 import {
   authFnMultiRegionEnvironment,
-  authFnMultiRegionPlugin,
   type MultiRegionPluginRuntimeConfig,
 } from "@authfn/multi-region";
 import {
   authfn,
-  authFnPlugins,
   type AuthFnDeliveryProvider,
   type AuthFnEvent,
   type AuthFnServer,
@@ -23,6 +19,11 @@ import { createAuthApplication } from "./app.js";
 import type { OtpRateLimiter } from "./rate-limit.js";
 import { AUTH_COOKIE_CONFIG } from "./session.js";
 import type { TurnstileVerifier } from "./turnstile.js";
+import { createOtpPolicyHook } from "./otp-policy.js";
+import {
+  SERVICE_PRINCIPAL_API_KEY_PREFIX,
+  skillplaneAuthPlugins,
+} from "./plugin-composition.js";
 import {
   createSkillplaneOAuth,
   type AuthFnMcpOAuthConfig,
@@ -94,8 +95,6 @@ function defaultEmit(event: SafeAuthEvent): void {
   console.info(JSON.stringify({ component: "auth", ...event }));
 }
 
-const SERVICE_PRINCIPAL_API_KEY_PREFIX = "spk";
-
 export function createSkillplaneAuthServer(
   input: CreateSkillplaneAuthServerInput,
 ): SkillplaneAuthServer {
@@ -119,14 +118,7 @@ export function createSkillplaneAuthServer(
       });
     },
   });
-  const plugins = authFnPlugins(
-    authFnEmailOtpPlugin(),
-    authFnApiKeyPlugin({
-      secretPrefix: SERVICE_PRINCIPAL_API_KEY_PREFIX,
-    }),
-    oauth.plugin,
-    authFnMultiRegionPlugin(),
-  );
+  const plugins = skillplaneAuthPlugins(oauth.plugin);
   const declaration = authfn({
     namespace: "authfn",
     basePath: "/auth",
@@ -180,15 +172,14 @@ export function createSkillplaneAuthServer(
         ...(input.now ? { now: input.now } : {}),
       },
     },
+    hooks: {
+      beforeChallengeSend: createOtpPolicyHook(input),
+    },
     observability: {
       events: (event) => emit(safeEvent(event)),
     },
   });
-  const app = createAuthApplication({
-    authfn: authfnServer,
-    ...(input.rateLimiter ? { rateLimiter: input.rateLimiter } : {}),
-    ...(input.turnstile ? { turnstile: input.turnstile } : {}),
-  });
+  const app = createAuthApplication({ authfn: authfnServer });
   return {
     authfn: authfnServer,
     provider: authfnServer.provider,

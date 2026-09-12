@@ -52,11 +52,17 @@ async function responseBody(response, label) {
   }
 }
 
-async function sendChallenge(email) {
+export async function sendChallenge(
+  email,
+  {
+    fetcher = fetch,
+    persistState = (state) => writeJsonAtomic(statePath, state, { mode: 0o600 }),
+  } = {},
+) {
   const turnstileToken = requireEnvironment("SKILLPLANE_PRODUCTION_TURNSTILE_TOKEN", {
     minimumLength: 20,
   });
-  const response = await fetch(`${productionIssuer}/auth/otp/send`, {
+  const response = await fetcher(`${productionIssuer}/auth/otp/send`, {
     method: "POST",
     headers: {
       accept: "application/json",
@@ -65,7 +71,7 @@ async function sendChallenge(email) {
     body: JSON.stringify({
       email,
       purpose: "sign-up",
-      turnstileToken,
+      metadata: { turnstileToken },
     }),
     signal: AbortSignal.timeout(15_000),
   });
@@ -74,8 +80,9 @@ async function sendChallenge(email) {
   if (
     response.status !== 200 ||
     body.ok !== true ||
-    body.data?.accepted !== true ||
-    body.data?.expiresInSeconds !== 600
+    body.data?.sent !== true ||
+    typeof body.data?.challengeId !== "string" ||
+    !body.data.challengeId.trim()
   ) {
     throw new Error(
       `Cloudflare Email Service did not accept the OTP request (${body.error?.code ?? response.status})`,
@@ -92,7 +99,7 @@ async function sendChallenge(email) {
     requestId: body.requestId ?? body.meta?.requestId ?? null,
     deliveryAccepted: true,
   };
-  await writeJsonAtomic(statePath, state, { mode: 0o600 });
+  await persistState(state);
   return {
     ...state,
     next: "Set SKILLPLANE_PRODUCTION_OTP_CODE to the received six-digit code and run pnpm verify:email:production again before expiry.",
@@ -119,7 +126,7 @@ async function verifyChallenge(email, code) {
       accept: "application/json",
       "content-type": "application/json",
     },
-    body: JSON.stringify({ email, code, purpose: "sign-up" }),
+    body: JSON.stringify({ email, code, purpose: "sign-up", sessionMode: "cookie" }),
     signal: AbortSignal.timeout(15_000),
   });
   assertPrivateResponse(response, "OTP verify response");

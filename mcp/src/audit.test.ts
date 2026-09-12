@@ -103,6 +103,33 @@ describe("ControlPlaneMcpAuditWriter", () => {
 });
 
 describe("PostgresMcpAuditWriter", () => {
+  it("applies the retrieval event routing epoch on single-record writes", async () => {
+    const query = vi.fn(async (sql: string, values?: readonly unknown[]) => {
+      void sql;
+      void values;
+      return { rows: [], rowCount: 1 };
+    });
+    const release = vi.fn();
+    const pool = {
+      connect: vi.fn(async () => ({ query, release })),
+    } as unknown as Pool;
+
+    await new PostgresMcpAuditWriter(pool).record(
+      record({
+        tool: "skill_retrieve",
+        outcome: "denied",
+        fencingEpoch: 7,
+      }),
+    );
+
+    expect(
+      query.mock.calls.find(([sql]) =>
+        String(sql).includes("workspace_routing_epoch"),
+      )?.[1],
+    ).toEqual(["7"]);
+    expect(release).toHaveBeenCalledOnce();
+  });
+
   it("resets the routing epoch for every event in a batch", async () => {
     const query = vi.fn(async (sql: string, values?: readonly unknown[]) => {
       void sql;

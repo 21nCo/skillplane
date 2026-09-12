@@ -23,6 +23,7 @@ const localRuntimeTests = spawnSync(
     "scripts/development-topology-deployment.test.mjs",
     "scripts/deploy-topology.test.mjs",
     "scripts/production-deployment.test.mjs",
+    "scripts/verify-email-production.test.mjs",
     "scripts/migrate-production-origin.test.mjs",
     "scripts/migrate-topology-databases.test.mjs",
     "scripts/migrate-workspace.test.mjs",

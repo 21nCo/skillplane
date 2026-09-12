@@ -18,7 +18,8 @@
     "packages/*"
   ],
   "scripts": {
-    "preflight": "node scripts/preflight.mjs --mode spec-safe",
+    "preflight": "node scripts/preflight.mjs --mode spec-safe && node --experimental-strip-types scripts/check-authfn-schema.mjs",
+    "authfn-schema:check": "node --experimental-strip-types scripts/check-authfn-schema.mjs",
     "conduct:verify": "node scripts/verify-conduct.mjs",
     "boundaries:verify": "node scripts/verify-boundaries.mjs",
     "mcpfn:verify": "node scripts/verify-mcpfn-adoption.mjs",

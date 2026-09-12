@@ -90,9 +90,9 @@
       window.location.assign(takeReturnTo() ?? resolve("/workspaces"));
     } catch (error) {
       if (error instanceof AuthClientError) {
-        if (error.code === "AUTH_OTP_EXPIRED") {
+        if (error.code === "AUTHFN_OTP_EXPIRED") {
           verifyState = { kind: "expired", message: error.message };
-        } else if (error.code === "AUTH_OTP_INVALID") {
+        } else if (error.code === "AUTHFN_OTP_INVALID") {
           verifyState = {
             kind: "invalid",
             message: "That code is not valid. Check the email and try again.",
@@ -132,7 +132,7 @@
       resetTurnstile?.();
       updateCountdown();
     } catch (error) {
-      if (error instanceof AuthClientError && error.code === "AUTH_RATE_LIMITED") {
+      if (error instanceof AuthClientError && error.code === "AUTHFN_RATE_LIMITED") {
         verifyState = {
           kind: "rate",
           message: "Too many requests. Wait a moment before sending another code.",

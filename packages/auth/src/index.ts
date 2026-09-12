@@ -5,3 +5,5 @@ export * from "./oauth.js";
 export * from "./session.js";
 export * from "./turnstile.js";
 export * from "./multi-region.js";
+export * from "./otp-policy.js";
+export * from "./plugin-composition.js";
