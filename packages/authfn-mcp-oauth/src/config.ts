@@ -15,6 +15,16 @@ export const OAUTH_SCOPES = [
 ] as const;
 export type OAuthScope = (typeof OAUTH_SCOPES)[number];
 
+export const OAUTH_SCOPE_DESCRIPTIONS = {
+  "skills:read": "Read skill records and published versions you can access",
+  "skills:write": "Create skills and manage skill records, visibility, and lifecycle",
+  "skills:amend": "Propose improvements and new versions for review",
+  "skills:publish": "Approve or reject reviews and publish approved skill versions",
+  "contexts:read": "Read context knowledge and shared agent notes",
+  "contexts:write": "Create and update context knowledge and shared notes",
+  "audit:read": "Read audit history for resources you can access",
+} as const satisfies Readonly<Record<OAuthScope, string>>;
+
 export interface OAuthSecurityEvent {
   readonly type: string;
   readonly requestId: string;

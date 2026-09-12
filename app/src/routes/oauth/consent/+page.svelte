@@ -17,7 +17,15 @@
   interface ConsentDetails {
     readonly client: { readonly id: string; readonly name: string };
     readonly resource: string;
-    readonly scopes: readonly string[];
+    readonly permissions: readonly {
+      readonly scope: string;
+      readonly description: string;
+    }[];
+    readonly identity: { readonly label: string };
+    readonly workspaceAccess: {
+      readonly mode: "all-current-memberships";
+      readonly workspaces: readonly { readonly id: string; readonly name: string }[];
+    };
     readonly redirect: {
       readonly uri: string;
       readonly host: string;
@@ -31,17 +39,22 @@
     | { kind: "submitting"; details: ConsentDetails; decision: "approve" | "deny" }
     | { kind: "error"; message: string };
 
-  const scopeCopy: Readonly<Record<string, string>> = {
-    "skills:read": "Read the skills and published versions you can access",
-    "skills:amend": "Propose improvements and new versions of skills",
-    "contexts:read": "Read context knowledge and agent notes",
-    "contexts:write": "Create or update context knowledge and notes",
-    "audit:read": "Read audit history for resources you can access",
-  };
-
   let consentState = $state<ConsentState>({ kind: "loading" });
   let theme = $state<"dark" | "light">("dark");
   const requestToken = $derived(page.url.searchParams.get("request") ?? "");
+  const currentWorkspace = $derived.by(() => {
+    if (consentState.kind !== "ready" && consentState.kind !== "submitting")
+      return null;
+    const remembered =
+      typeof localStorage === "undefined"
+        ? null
+        : localStorage.getItem("skillplane.active-workspace");
+    return (
+      consentState.details.workspaceAccess.workspaces.find(
+        (workspace) => workspace.id === remembered,
+      ) ?? null
+    );
+  });
 
   function applyTheme(nextTheme: "dark" | "light") {
     theme = nextTheme;
@@ -223,18 +236,49 @@
         </div>
       </div>
 
+      <div class="authorization-context" aria-label="Authorization context">
+        <div>
+          <span>Signed in as</span>
+          <strong>{consentState.details.identity.label}</strong>
+        </div>
+        <div>
+          <span>Workspace access</span>
+          <strong>
+            {#if consentState.details.workspaceAccess.workspaces.length === 0}
+              No accessible workspaces
+            {:else if consentState.details.workspaceAccess.workspaces.length === 1}
+              {consentState.details.workspaceAccess.workspaces[0]?.name ??
+                "One workspace"}
+            {:else}
+              All {consentState.details.workspaceAccess.workspaces.length} workspaces
+            {/if}
+          </strong>
+        </div>
+        {#if currentWorkspace}
+          <p>Current app workspace: <strong>{currentWorkspace.name}</strong></p>
+        {/if}
+        <p>
+          This authorization follows this account’s live workspace memberships. Access
+          is removed when a membership is removed; new memberships become available to
+          this connection.
+        </p>
+        <a class="text-link manage-link" href={resolve("/workspaces")}>
+          Manage account and workspaces
+        </a>
+      </div>
+
       <div class="permission-panel">
         <div class="panel-heading">
           <LockKey size={16} weight="duotone" aria-hidden="true" />
           <strong>Requested permissions</strong>
         </div>
         <ul>
-          {#each consentState.details.scopes as scope (scope)}
+          {#each consentState.details.permissions as permission (permission.scope)}
             <li>
               <CheckCircle size={17} weight="fill" aria-hidden="true" />
               <div>
-                <strong>{scope}</strong>
-                <span>{scopeCopy[scope] ?? "Use this Skillplane permission"}</span>
+                <strong>{permission.scope}</strong>
+                <span>{permission.description}</span>
               </div>
             </li>
           {/each}
@@ -454,6 +498,50 @@
     overflow: hidden;
   }
 
+  .authorization-context {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.7rem 1rem;
+    margin-top: 0.85rem;
+    padding: 0.9rem;
+    border: 1px solid var(--sp-color-border);
+    border-radius: var(--sp-radius-lg);
+    background: var(--sp-color-surface-raised);
+  }
+
+  .authorization-context div span,
+  .authorization-context div strong {
+    display: block;
+  }
+
+  .authorization-context div span {
+    color: var(--sp-color-text-subtle);
+    font-size: var(--sp-font-size-1);
+  }
+
+  .authorization-context div strong {
+    margin-top: 0.2rem;
+    overflow-wrap: anywhere;
+    font-size: var(--sp-font-size-2);
+  }
+
+  .authorization-context p {
+    grid-column: 1 / -1;
+    margin: 0;
+    color: var(--sp-color-text-muted);
+    font-size: var(--sp-font-size-2);
+    line-height: 1.5;
+  }
+
+  .authorization-context .manage-link {
+    grid-column: 1 / -1;
+    min-height: auto;
+    padding: 0;
+    justify-self: start;
+    color: var(--sp-color-accent-text);
+    font-size: var(--sp-font-size-2);
+  }
+
   .panel-heading {
     display: flex;
     gap: 0.55rem;
@@ -660,6 +748,10 @@
 
     .connection-details div {
       grid-template-columns: 1rem 3.7rem minmax(0, 1fr);
+    }
+
+    .authorization-context {
+      grid-template-columns: 1fr;
     }
   }
 </style>

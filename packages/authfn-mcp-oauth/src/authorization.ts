@@ -7,7 +7,11 @@ import type { AuthFnPluginRuntimeContext } from "authfn";
 import type { McpFnValidatedAuthorizationRequest } from "@mcpfn/auth";
 import type { PoolClient } from "pg";
 import { writeOAuthAudit, oauthRequestId } from "./audit.js";
-import type { OAuthRuntime, OAuthScope } from "./config.js";
+import {
+  OAUTH_SCOPE_DESCRIPTIONS,
+  type OAuthRuntime,
+  type OAuthScope,
+} from "./config.js";
 import { OAuthError, noStoreHeaders } from "./errors.js";
 import { issueAuthorizationCode } from "./codes.js";
 import { id, keyedHash, signPayload, verifySignedPayload } from "./tokens.js";
@@ -36,6 +40,27 @@ interface StoredAuthorizationRequest {
   readonly user_id: string | null;
   readonly expires_at: Date;
   readonly consumed_at: Date | null;
+}
+
+interface ConsentIdentityRow {
+  readonly primary_email: string | null;
+}
+
+interface ConsentWorkspaceRow {
+  readonly id: string;
+  readonly name: string;
+}
+
+export function maskedEmail(email: string | null): string {
+  if (!email) return "Signed-in Skillplane account";
+  const separator = email.lastIndexOf("@");
+  if (separator <= 0 || separator === email.length - 1) {
+    return "Signed-in Skillplane account";
+  }
+  const local = email.slice(0, separator);
+  const domain = email.slice(separator + 1);
+  const visible = local.slice(0, Math.min(2, local.length));
+  return `${visible}${"•".repeat(Math.max(3, Math.min(6, local.length - visible.length)))}@${domain}`;
 }
 
 function storedAuthorizationRequest(
@@ -181,6 +206,20 @@ export async function consentDetails(
   const token = new URL(request.url).searchParams.get("request");
   if (!token) throw new OAuthError("invalid_request", "request is required");
   const stored = await loadStoredRequest(runtime, token, session.user.id);
+  const [identity, workspaces] = await Promise.all([
+    runtime.pool.query<ConsentIdentityRow>(
+      `SELECT primary_email FROM authfn_users WHERE id = $1`,
+      [session.user.id],
+    ),
+    runtime.pool.query<ConsentWorkspaceRow>(
+      `SELECT w.id, w.name
+         FROM workspace_memberships m
+         JOIN workspaces w ON w.id = m.workspace_id
+        WHERE m.user_id = $1
+        ORDER BY CASE w.kind WHEN 'personal' THEN 0 ELSE 1 END, w.name, w.id`,
+      [session.user.id],
+    ),
+  ]);
   const headers = noStoreHeaders({ "content-type": "application/json" });
   return new Response(
     JSON.stringify({
@@ -190,6 +229,17 @@ export async function consentDetails(
       },
       resource: stored.payload.resource,
       scopes: stored.payload.scopes,
+      permissions: stored.payload.scopes.map((scope) => ({
+        scope,
+        description: OAUTH_SCOPE_DESCRIPTIONS[scope],
+      })),
+      identity: {
+        label: maskedEmail(identity.rows[0]?.primary_email ?? null),
+      },
+      workspaceAccess: {
+        mode: "all-current-memberships",
+        workspaces: workspaces.rows,
+      },
       redirect: {
         uri: stored.payload.redirectUri,
         host: stored.payload.redirectHost,

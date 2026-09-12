@@ -114,6 +114,37 @@ describe("OAuth 2.1 authorization server integration", () => {
     const consent = new URL(consentLocation);
     const requestToken = consent.searchParams.get("request");
     if (!requestToken) throw new Error("Consent request token is missing");
+    const detailsResponse = await environment.app.fetch(
+      new Request(
+        `${OAUTH_ISSUER}/auth/oauth/consent?request=${encodeURIComponent(requestToken)}`,
+        { headers: { cookie: environment.cookie } },
+      ),
+    );
+    expect(detailsResponse.status).toBe(200);
+    const details = (await detailsResponse.json()) as {
+      readonly scopes: readonly string[];
+      readonly permissions: readonly { scope: string; description: string }[];
+      readonly identity: { label: string };
+      readonly workspaceAccess: {
+        mode: string;
+        workspaces: readonly { id: string; name: string }[];
+      };
+    };
+    expect(details.scopes).toEqual(["skills:read"]);
+    expect(details.permissions).toEqual([
+      {
+        scope: "skills:read",
+        description: "Read skill records and published versions you can access",
+      },
+    ]);
+    expect(details.identity.label).toMatch(/^oa.*•+@example\.test$/u);
+    expect(JSON.stringify(details)).not.toContain(
+      `${environment.fixture.userId.slice("user:".length)}@example.test`,
+    );
+    expect(details.workspaceAccess).toMatchObject({
+      mode: "all-current-memberships",
+      workspaces: [{ id: environment.fixture.workspaceId }],
+    });
     const response = await environment.app.fetch(
       new Request(`${OAUTH_ISSUER}/auth/oauth/consent`, {
         method: "POST",
