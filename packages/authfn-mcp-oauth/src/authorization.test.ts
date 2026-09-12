@@ -14,6 +14,7 @@ describe("OAuth consent presentation", () => {
     expect(OAUTH_SCOPE_DESCRIPTIONS["contexts:write"]).toContain(
       "archive or restore contexts",
     );
+    expect(OAUTH_SCOPE_DESCRIPTIONS["contexts:write"]).toContain("context details");
   });
 
   it("identifies an account without disclosing its full email address", () => {

@@ -138,7 +138,7 @@ describe("OAuth 2.1 authorization server integration", () => {
           "Read skill records, published versions, unpublished proposals, and review information you can access",
       },
     ]);
-    expect(details.identity.label).toMatch(/^.{1,2}•••@example\.test$/u);
+    expect(details.identity.label).toMatch(/^.{1,2}•{3,6}@example\.test$/u);
     expect(JSON.stringify(details)).not.toContain(
       `${environment.fixture.userId.slice("user:".length)}@example.test`,
     );

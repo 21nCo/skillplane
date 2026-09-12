@@ -24,7 +24,7 @@ export const OAUTH_SCOPE_DESCRIPTIONS = {
     "Approve or reject reviews, publish approved skill versions, and manage skill amendment policies",
   "contexts:read": "Read context knowledge and shared agent notes",
   "contexts:write":
-    "Create and update context knowledge and shared notes, and archive or restore contexts",
+    "Create and update context details, knowledge, and shared notes, and archive or restore contexts",
   "audit:read": "Read audit history for resources you can access",
 } as const satisfies Readonly<Record<OAuthScope, string>>;
 
