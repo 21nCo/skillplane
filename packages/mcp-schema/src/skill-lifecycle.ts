@@ -1,3 +1,4 @@
+import { compositionDependencySchema } from "./composition.js";
 import { z } from "zod";
 import { amendmentPolicyDecisionSchema } from "./amend.js";
 import { callerDeclarationSchema } from "./caller.js";
@@ -95,6 +96,14 @@ export const skillCreateInputSchema = z
       .min(1)
       .max(2 * 1024 * 1024),
     assets: z.array(skillCreateFileSchema).max(100).default([]),
+    composition: z
+      .object({
+        dependencies: z.array(compositionDependencySchema).max(32),
+        verify: z.boolean().default(false),
+        blocking: z.boolean().default(false),
+      })
+      .strict()
+      .optional(),
     idempotencyKey: idempotencyKeySchema,
     caller: callerDeclarationSchema,
   })

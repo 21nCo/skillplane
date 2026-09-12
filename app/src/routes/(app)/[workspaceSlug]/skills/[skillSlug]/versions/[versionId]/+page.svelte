@@ -5,6 +5,7 @@
   import { Badge, Button, Dialog, Input } from "@skillplane/ui";
   import SkillState from "$lib/skills/SkillState.svelte";
   import LearningMetadata from "$lib/skills/LearningMetadata.svelte";
+  import CompositionPanel from "$lib/skills/CompositionPanel.svelte";
   import VersionDiff from "$lib/skills/VersionDiff.svelte";
   import {
     getSkillDiff,
@@ -299,6 +300,17 @@
         </div>
       </dl>
     </section>
+
+    <CompositionPanel
+      canEdit={workspace.role !== "viewer"}
+      workspaceId={workspace.id}
+      skillId={detail.skill.id}
+      {version}
+      onCreated={(candidate: SkillVersion) => {
+        detail.replaceVersion(candidate);
+        void detail.refresh();
+      }}
+    />
 
     {#if version.source === "agent_amendment"}
       <section class="panel learning-panel">

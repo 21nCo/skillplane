@@ -1,3 +1,4 @@
+import { compositionPlanSchema } from "./composition.js";
 import { z } from "zod";
 import { callerDeclarationSchema } from "./caller.js";
 import {
@@ -102,6 +103,7 @@ export const skillRetrieveOutputSchema = z
         publishedAt: timestampSchema.nullable(),
       })
       .strict(),
+    composition: compositionPlanSchema.optional(),
     instructions: z.string(),
     files: z.array(fileDescriptorSchema).max(1_000),
     context: retrievedContextSchema.nullable(),

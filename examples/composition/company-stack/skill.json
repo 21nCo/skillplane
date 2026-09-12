@@ -1,0 +1,45 @@
+{
+  "dependencies": [
+    {
+      "alias": "use-ui",
+      "mode": "include",
+      "required": true,
+      "scope": "both",
+      "skill": "use-ui",
+      "version": "^1.0.0",
+      "workspace": "examples"
+    },
+    {
+      "alias": "use-auth",
+      "mode": "include",
+      "required": true,
+      "scope": "both",
+      "skill": "use-auth",
+      "version": "^1.0.0",
+      "workspace": "examples"
+    },
+    {
+      "alias": "use-datafn",
+      "mode": "include",
+      "required": true,
+      "scope": "both",
+      "skill": "use-datafn",
+      "version": "^1.0.0",
+      "workspace": "examples"
+    }
+  ],
+  "description": "SKI-3 composition reference fixture",
+  "entrypoints": { "execute": "SKILL.md" },
+  "files": [
+    {
+      "byteSize": 186,
+      "mediaType": "text/markdown; charset=utf-8",
+      "path": "SKILL.md",
+      "sha256": "eac589ee866777b56d206df3ecc180e8f6a8617e0b86819e0f59c8d5fe3477ea"
+    }
+  ],
+  "formatVersion": 2,
+  "name": "Company Stack",
+  "slug": "company-stack",
+  "tags": ["composition", "reference"]
+}

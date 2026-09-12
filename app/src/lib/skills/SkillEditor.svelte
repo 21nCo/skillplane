@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { onMount } from "svelte";
+  import CompositionEditor, { type Dependency } from "./CompositionEditor.svelte";
   import { Button, Select, Textarea } from "@skillplane/ui";
   import MarkdownEditor from "$lib/markdown/MarkdownEditor.svelte";
   import { CheckCircleIcon, WarningCircleIcon } from "phosphor-svelte";
@@ -22,7 +24,37 @@
     onCreated: (version: SkillVersion) => void;
   } = $props();
 
-  let markdown = $state(initialMarkdown);
+  let dependencies = $state<Dependency[]>([]);
+  let verify = $state(false),
+    verifier = $state(""),
+    claims = $state("[]");
+  let baseFiles = $state<ReadonlyMap<string, Uint8Array> | null>(null);
+  onMount(() => {
+    let active = true;
+    void getSkillBundle({ workspaceId, skillId: skill.id, versionId: baseVersion.id })
+      .then((bytes) => {
+        if (!active) return;
+        const files = filesFromBundle(bytes);
+        const manifest = JSON.parse(new TextDecoder().decode(files.get("skill.json")));
+        dependencies = manifest.dependencies ?? [];
+        verify = Boolean(manifest.entrypoints?.verify);
+        verifier = new TextDecoder().decode(files.get("verification/VERIFY.md"));
+        claims =
+          new TextDecoder().decode(files.get("verification/claims.json")) || "[]";
+        baseFiles = files;
+      })
+      .catch((cause: unknown) => {
+        if (active)
+          error = cause instanceof Error ? cause.message : "Could not load composition";
+      });
+    return () => {
+      active = false;
+    };
+  });
+  let markdown = $state("");
+  onMount(() => {
+    markdown = initialMarkdown;
+  });
   let changeSummary = $state("");
   let proposedBump = $state<SemanticBump>("patch");
   let saveState = $state<"idle" | "saving">("idle");
@@ -45,14 +77,18 @@
     error = null;
     try {
       progress = "Loading the immutable base bundle…";
-      const currentBundle = await getSkillBundle({
-        workspaceId,
-        skillId: skill.id,
-        versionId: baseVersion.id,
-      });
-      const files = new SvelteMap(filesFromBundle(currentBundle));
+      if (!baseFiles) throw new Error("Wait for the base bundle to load");
+      const files = new SvelteMap(baseFiles);
+      if (verify) {
+        JSON.parse(claims);
+        files.set("verification/VERIFY.md", new TextEncoder().encode(verifier));
+        files.set("verification/claims.json", new TextEncoder().encode(claims));
+      } else {
+        files.delete("verification/VERIFY.md");
+        files.delete("verification/claims.json");
+      }
+      files.delete("skill.lock.json");
       files.set("SKILL.md", new TextEncoder().encode(markdown));
-      files.delete("skill.json");
       progress = "Validating and packaging the candidate…";
       const candidateBundle = await buildSkillBundle({
         metadata: {
@@ -62,6 +98,9 @@
           tags: skill.tags,
         },
         files,
+        ...(dependencies.length || verify || baseVersion.manifest.formatVersion === 2
+          ? { composition: { dependencies, verify, blocking: false } }
+          : {}),
       });
       progress = "Writing the immutable candidate…";
       const version = await createSkillCandidate({
@@ -116,6 +155,15 @@
     oninput={changed}
   />
 
+  {#if baseFiles}<CompositionEditor
+      {workspaceId}
+      bind:dependencies
+      bind:verify
+      bind:verifier
+      bind:claims
+      onchange={changed}
+    />{:else}<p role="status">Loading composition…</p>{/if}
+
   <div class="metadata-grid">
     <Textarea
       label="Change summary"
@@ -153,7 +201,7 @@
   {/if}
 
   <div class="actions">
-    <Button type="submit" loading={saveState === "saving"}
+    <Button type="submit" disabled={!baseFiles} loading={saveState === "saving"}
       >Create candidate version</Button
     >
   </div>

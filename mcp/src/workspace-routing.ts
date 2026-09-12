@@ -113,6 +113,16 @@ const workspaceTools = new Set([
   "skills_list",
   "skills_search",
   "skill_retrieve",
+  "skill_resolve",
+  "skill_verification_plan_get",
+  "skill_verification_run_start",
+  "skill_verification_run_get",
+  "skill_verification_evidence_add",
+  "skill_verification_run_complete",
+  "skill_dependency_upgrade",
+  "skill_composition_candidate_create",
+  "skill_dependency_upgrades_get",
+  "skill_version_lifecycle_update",
   "skill_asset_retrieve",
   "skill_versions_list",
   "skill_versions_diff",
@@ -147,6 +157,8 @@ function scopeForMessage(message: unknown): McpScope {
   if (!workspaceTools.has(params.name)) return { kind: "global" };
   const arguments_ = record(params.arguments);
   const allowPublic =
+    params.name === "skill_resolve" ||
+    params.name === "skill_verification_plan_get" ||
     params.name === "skills_search" ||
     params.name === "skill_asset_retrieve" ||
     params.name === "skill_versions_list" ||

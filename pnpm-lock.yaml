@@ -463,6 +463,9 @@ importers:
       '@skillplane/email':
         specifier: workspace:*
         version: link:../email
+      '@skillplane/mcp-schema':
+        specifier: workspace:*
+        version: link:../mcp-schema
       '@skillplane/observability':
         specifier: workspace:*
         version: link:../observability
@@ -701,10 +704,16 @@ importers:
       pg:
         specifier: 'catalog:'
         version: 8.22.0
+      semver:
+        specifier: 7.7.4
+        version: 7.7.4
     devDependencies:
       '@types/pg':
         specifier: 'catalog:'
         version: 8.20.0
+      '@types/semver':
+        specifier: 7.7.1
+        version: 7.7.1
       typescript:
         specifier: 'catalog:'
         version: 6.0.3
@@ -3733,6 +3742,9 @@ packages:
   '@types/request@2.48.13':
     resolution: {integrity: sha512-FGJ6udDNUCjd19pp0Q3iTiDkwhYup7J8hpMW9c4k53NrccQFFWKRho6hvtPPEhnXWKvukfwAlB6DbDz4yhH5Gg==}
 
+  '@types/semver@7.7.1':
+    resolution: {integrity: sha512-FmgJfu+MOcQ370SD0ev7EI8TlCAfKYU+B4m5T3yXc1CiRN94g/SZPtsCkk506aUDtlMnFZvasDwHHUcZUEaYuA==}
+
   '@types/tough-cookie@4.0.5':
     resolution: {integrity: sha512-/Ad8+nIOV7Rl++6f1BdKxFSMgmoqEoYbHRpPcx3JEfv8VRsQe9Z4mCXeJBzxs7mbHY/XOZZuXlRNfhpVPbs6ZA==}
 
@@ -6217,6 +6229,11 @@ packages:
 
   scroll-into-view-if-needed@3.1.0:
     resolution: {integrity: sha512-49oNpRjWRvnU8NyGVmUaYG4jtTkNonFZI86MmGRDqBphEK2EXT9gdEUoQPZhuBM8yWHxCWbobltqYO5M4XrUvQ==}
+
+  semver@7.7.4:
+    resolution: {integrity: sha512-vFKC2IEtQnVhpT78h1Yp8wzwrf8CM+MzKMHGJZfBtzhZNycRFnXsHk6E5TxIkkMsgNS7mdX3AGB7x2QM2di4lA==}
+    engines: {node: '>=10'}
+    hasBin: true
 
   semver@7.8.5:
     resolution: {integrity: sha512-Y7/KDsb8LjooZpwaqGyulO6DQlksgCncchHGk+sZIY4SBvUocMBEFH5Ur1fI4dV+Jvl0w6cjvucaIi40puRioA==}
@@ -9857,6 +9874,8 @@ snapshots:
       form-data: 2.5.6
     optional: true
 
+  '@types/semver@7.7.1': {}
+
   '@types/tough-cookie@4.0.5':
     optional: true
 
@@ -12761,6 +12780,8 @@ snapshots:
   scroll-into-view-if-needed@3.1.0:
     dependencies:
       compute-scroll-into-view: 3.1.1
+
+  semver@7.7.4: {}
 
   semver@7.8.5: {}
 

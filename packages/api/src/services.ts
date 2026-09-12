@@ -16,6 +16,9 @@ import { createSkillplaneDatafnServer } from "@skillplane/datafn";
 import { createDatabaseClient } from "@skillplane/db";
 import { createSkillplaneSendFn } from "@skillplane/email";
 import {
+  VersionLifecycleService,
+  CompositionService,
+  VerificationService,
   AmendmentPolicyService,
   AmendmentReviewService,
   AmendmentService,
@@ -194,10 +197,19 @@ export async function buildApiServices(
           workerCaches?.default,
         )
       : null;
+    const compositionService = new CompositionService(
+      database.pool,
+      bundleStorage,
+      controlDatabase.pool,
+      publicBundleStorage ?? bundleStorage,
+      false,
+      bindings.SKILL_COMPOSITION_WRITES_ENABLED !== "false",
+    );
     const skillService = new SkillService(
       database.pool,
       bundleStorage,
       controlDatabase.pool,
+      compositionService,
     );
     const contextService = new ContextService(database.pool, skillService.idempotency);
     const amendmentPolicyService = new AmendmentPolicyService(
@@ -234,27 +246,42 @@ export async function buildApiServices(
             )
           : null,
       skillService,
+      compositionService,
+      versionLifecycleService: new VersionLifecycleService(
+        database.pool,
+        controlDatabase.pool,
+        skillService.idempotency,
+      ),
+      verificationService: new VerificationService(
+        database.pool,
+        compositionService,
+        skillService.idempotency,
+      ),
       amendmentService: new AmendmentService(
         database.pool,
         bundleStorage,
         skillService.idempotency,
         controlDatabase.pool,
+        compositionService,
       ),
       amendmentPolicyService,
       amendmentReviewService: new AmendmentReviewService(
         database.pool,
         bundleStorage,
         skillService.idempotency,
+        compositionService,
       ),
       skillVersionService: new SkillVersionService(
         database.pool,
         bundleStorage,
         skillService.idempotency,
+        compositionService,
       ),
       publicationService: new PublicationService(
         database.pool,
         bundleStorage,
         skillService.idempotency,
+        compositionService,
       ),
       skillSearchService: new SkillSearchService(
         database.pool,

@@ -4,6 +4,9 @@ import type { RuntimeBindings } from "@skillplane/config";
 import type { DatabaseClient } from "@skillplane/db";
 import type { Principal } from "@skillplane/domain";
 import type {
+  VersionLifecycleService,
+  CompositionService,
+  VerificationService,
   ContextKnowledgeService,
   ContextNoteService,
   ContextService,
@@ -41,6 +44,9 @@ export interface ApiServices {
   readonly bundleStorage: R2BundleRepository;
   readonly publicProjectionService: PublicSkillProjectionService | null;
   readonly skillService: SkillService;
+  readonly versionLifecycleService: VersionLifecycleService;
+  readonly compositionService: CompositionService;
+  readonly verificationService: VerificationService;
   readonly amendmentService: AmendmentService;
   readonly amendmentPolicyService: AmendmentPolicyService;
   readonly amendmentReviewService: AmendmentReviewService;

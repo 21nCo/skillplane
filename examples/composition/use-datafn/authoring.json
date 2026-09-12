@@ -1,0 +1,16 @@
+{
+  "formatVersion": 2,
+  "name": "Use Datafn",
+  "slug": "use-datafn",
+  "description": "SKI-3 composition reference fixture",
+  "tags": ["composition", "reference"],
+  "entrypoints": {
+    "execute": "SKILL.md",
+    "verify": "verification/VERIFY.md"
+  },
+  "dependencies": [],
+  "verification": {
+    "claims": "verification/claims.json",
+    "blocking": true
+  }
+}

@@ -1,9 +1,11 @@
+import { CompositionService } from "./composition-service.js";
 import {
   BundleValidationError,
   StorageError,
   canonicalizeBundle,
   stableJson,
   type BundleManifest,
+  type CanonicalBundle,
   type R2BundleRepository,
 } from "@skillplane/storage";
 import type { Pool } from "pg";
@@ -305,6 +307,7 @@ export class SkillService {
     readonly pool: Pool,
     readonly storage: R2BundleRepository,
     private readonly controlPool: Pool = pool,
+    private readonly composition = new CompositionService(pool, storage, controlPool),
   ) {
     this.idempotency = new IdempotencyStore(pool);
   }
@@ -324,7 +327,7 @@ export class SkillService {
     }
     authorize(options.principal, "skills:write");
     const visibility = parseSkillVisibility(options.visibility);
-    let canonical;
+    let canonical: CanonicalBundle;
     try {
       canonical = await canonicalizeBundle(options.archiveBytes);
     } catch (error) {
@@ -355,6 +358,12 @@ export class SkillService {
     let stored: Awaited<ReturnType<R2BundleRepository["putCanonicalBundle"]>> | null =
       null;
     try {
+      const prepared = await this.composition.prepare(
+        canonical,
+        options.principal,
+        visibility,
+      );
+      canonical = prepared.bundle;
       const storedBundle = await this.storage.putCanonicalBundle(
         options.workspaceId,
         skillId,
@@ -423,6 +432,18 @@ export class SkillService {
                 ? options.principal.userId
                 : (options.principal.delegatedUserId ?? null),
             ],
+          );
+          await this.composition.revalidate(
+            prepared.lock,
+            options.principal,
+            visibility,
+            client,
+          );
+          await this.composition.persist(
+            client,
+            versionId,
+            options.workspaceId,
+            prepared,
           );
           const fileIds = canonical.manifest.files.map(() => id("skill-file"));
           await client.query(
@@ -813,6 +834,38 @@ export class SkillService {
             throw new DomainError("SKILL_NOT_FOUND", "Skill was not found", 404);
           }
           assertExpectedUpdatedAt(previous, expectedUpdatedAt);
+          if (visibility !== "public") {
+            await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
+              options.principal.workspaceId,
+            ]);
+            const sequence = await client.query<{ sequence: string }>(
+              "SELECT GREATEST(COALESCE((SELECT last_sequence FROM regional_projection_sequences WHERE workspace_id=$1),0),COALESCE(MAX(sequence),0))::text AS sequence FROM regional_projection_outbox WHERE workspace_id=$1",
+              [options.principal.workspaceId],
+            );
+            const versions = await client.query<{ id: string }>(
+              "SELECT id FROM skill_versions WHERE skill_id=$1 AND workspace_id=$2 AND status='published'",
+              [options.skillId, options.principal.workspaceId],
+            );
+            await this.controlPool.query(
+              `INSERT INTO public_skill_version_lifecycle (version_id,workspace_id,reason,withdrawn_sequence) SELECT id,$2,'Visibility withdrawn',$3::bigint FROM unnest($1::text[]) AS id ON CONFLICT (version_id) DO UPDATE SET withdrawn_sequence=GREATEST(public_skill_version_lifecycle.withdrawn_sequence,EXCLUDED.withdrawn_sequence),updated_at=now()`,
+              [
+                versions.rows.map((v) => v.id),
+                options.principal.workspaceId,
+                sequence.rows[0]?.sequence ?? "0",
+              ],
+            );
+          }
+
+          const widensVisibility =
+            (visibility === "public" && previous.visibility !== "public") ||
+            (visibility === "workspace" && previous.visibility === "private");
+          if (previous.current_published_version_id && widensVisibility)
+            await this.composition.validatePublication(
+              previous.current_published_version_id,
+              options.principal,
+              visibility,
+              client,
+            );
           const result = await client.query<SkillRow>(
             `UPDATE skills s
               SET visibility = $3,

@@ -1,0 +1,11 @@
+{
+  "formatVersion": 2,
+  "name": "Create Linear Issue",
+  "slug": "create-linear-issue",
+  "description": "SKI-3 composition reference fixture",
+  "tags": ["composition", "reference"],
+  "entrypoints": {
+    "execute": "SKILL.md"
+  },
+  "dependencies": []
+}

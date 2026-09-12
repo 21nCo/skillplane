@@ -33,6 +33,12 @@ export function requiredAction(path: string, method: string): WorkspaceAction | 
   ) {
     return read ? "contexts:read" : "contexts:write";
   }
+  if (
+    /^\/api\/v1\/skills\/[^/]+\/(?:versions\/[^/]+\/)?verification-runs(?:\/|$)/u.test(
+      path,
+    )
+  )
+    return "skills:read";
   if (path.startsWith("/api/v1/skills")) {
     return read ? "skills:read" : "skills:write";
   }
