@@ -4,6 +4,14 @@ Skillplane is a management and delivery platform for versioned AI-agent skills.
 Agents can search and retrieve skills, propose audited amendments, and maintain
 versioned knowledge and notes for each skill context through MCP.
 
+## Offline client and native agent skills
+
+Use `pnpm client:install` to build and install the global client from this checkout,
+then `skillplane init Personal --target codex` (or `claude`) in a project. Local
+workspaces need no cloud account or local server. See [local-first workspaces](docs/local-first-workspaces.md)
+for profiles, mounts, resilient projections, exact-base amendments, recovery, and
+observed usage reporting.
+
 ## Local database
 
 Start the project-owned Postgres instance with:
@@ -198,6 +206,7 @@ Skillplane currently exposes:
 - `skills_list`
 - `skills_search`
 - `skill_retrieve`
+- `skill_usage_report`
 - `skill_asset_retrieve`
 - `skill_versions_list`
 - `skill_versions_diff`
