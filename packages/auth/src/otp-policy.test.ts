@@ -54,7 +54,10 @@ describe("AuthFn OTP policy hook", () => {
   });
 
   it("uses fresh server-generated idempotency keys for Turnstile", async () => {
-    const verify = vi.fn(() => Promise.resolve({ success: true as const }));
+    const verify = vi.fn((input: { idempotencyKey?: string }) => {
+      void input;
+      return Promise.resolve({ success: true, reason: "verified" as const });
+    });
     const hook = createOtpPolicyHook({
       turnstile: { verify },
       rateLimiter: {
@@ -71,8 +74,11 @@ describe("AuthFn OTP policy hook", () => {
     await hook({ request }, value);
 
     const keys = verify.mock.calls.map(([input]) => input.idempotencyKey);
-    expect(keys[0]).toMatch(/^turnstile_/u);
-    expect(keys[1]).toMatch(/^turnstile_/u);
+    for (const key of keys) {
+      expect(key).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
+      );
+    }
     expect(keys[0]).not.toBe(keys[1]);
     expect(keys).not.toContain("req_test");
   });

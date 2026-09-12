@@ -18,10 +18,18 @@ interface AuthErrorBody {
 
 function isAuthErrorBody(value: unknown): value is AuthErrorBody {
   if (!value || typeof value !== "object") return false;
-  const candidate = value as Partial<AuthErrorBody>;
+  const candidate = value as Record<string, unknown>;
+  if (!candidate.error || typeof candidate.error !== "object") return false;
+  const error = candidate.error as Record<string, unknown>;
   return (
     candidate.ok === false &&
-    typeof candidate.error?.code === "string" &&
+    typeof error.code === "string" &&
+    typeof error.message === "string" &&
+    typeof error.retryable === "boolean" &&
+    (error.details === undefined ||
+      (error.details !== null &&
+        typeof error.details === "object" &&
+        !Array.isArray(error.details))) &&
     typeof candidate.requestId === "string"
   );
 }
@@ -72,8 +80,33 @@ async function safeAuthResponse(response: Response): Promise<Response> {
 /** Bridges AuthFn's released router to Hono without redeclaring its routes. */
 export function createAuthApplication(input: CreateAuthApplicationInput) {
   const app = new Hono();
-  app.all("/auth/*", async (context) =>
-    safeAuthResponse(await input.authfn.router.handle(context.req.raw)),
-  );
+  app.all("/auth/*", async (context) => {
+    const request = context.req.raw;
+    if (!input.authfn.router.match(request.method, new URL(request.url).pathname)) {
+      const incomingRequestId = request.headers.get("x-request-id")?.trim();
+      const requestId = incomingRequestId?.length
+        ? incomingRequestId
+        : `req_${crypto.randomUUID()}`;
+      return Response.json(
+        {
+          ok: false,
+          error: {
+            code: "ROUTE_NOT_FOUND",
+            message: "The requested authentication route does not exist",
+            retryable: false,
+          },
+          requestId,
+        },
+        {
+          status: 404,
+          headers: {
+            "cache-control": "private, no-store",
+            "x-request-id": requestId,
+          },
+        },
+      );
+    }
+    return safeAuthResponse(await input.authfn.router.handle(request));
+  });
   return app;
 }

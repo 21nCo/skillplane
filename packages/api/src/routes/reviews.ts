@@ -8,6 +8,7 @@ import {
   publicSkillVersion,
   requirePrincipal,
   requireIdempotencyKey,
+  routingEpoch,
 } from "./shared.js";
 
 function publicDetail(detail: AmendmentReviewDetail) {
@@ -23,18 +24,6 @@ function reviewStatus(value: string | undefined): AmendmentReviewStatus | "all" 
     throw new DomainError("VALIDATION_FAILED", "Review status is invalid", 400);
   }
   return normalized as AmendmentReviewStatus | "all";
-}
-
-function routingEpoch(value: string | undefined): number {
-  const epoch = Number(value ?? "1");
-  if (!Number.isSafeInteger(epoch) || epoch < 1) {
-    throw new DomainError(
-      "VALIDATION_FAILED",
-      "The workspace routing epoch is invalid",
-      400,
-    );
-  }
-  return epoch;
 }
 
 export function registerReviewRoutes(app: Hono<ApiEnvironment>): void {
@@ -97,7 +86,7 @@ export function registerReviewRoutes(app: Hono<ApiEnvironment>): void {
           reason: body.reason,
           idempotencyKey: requireIdempotencyKey(context),
           requestId: context.get("requestId"),
-          fencingEpoch: routingEpoch(context.req.header("x-skillplane-routing-epoch")),
+          fencingEpoch: routingEpoch(context),
         });
         context.header("Cache-Control", "private, no-store");
         return context.json(success(context, publicDetail(detail)));

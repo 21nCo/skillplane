@@ -44,7 +44,7 @@ test("@oauth-consent shows explicit permissions and approves a loopback client",
           token_endpoint_auth_method: "none",
           grant_types: ["authorization_code", "refresh_token"],
           response_types: ["code"],
-          scope: "skills:read skills:amend contexts:read",
+          scope: "skills:read skills:write skills:amend skills:publish contexts:read",
         },
       },
     );
@@ -61,7 +61,7 @@ test("@oauth-consent shows explicit permissions and approves a loopback client",
       client_id: clientId,
       redirect_uri: redirectUri,
       resource,
-      scope: "skills:read skills:amend contexts:read",
+      scope: "skills:read skills:write skills:amend skills:publish contexts:read",
       state: "e2e-consent-state",
       code_challenge: createHash("sha256").update(verifier).digest("base64url"),
       code_challenge_method: "S256",
@@ -83,7 +83,24 @@ test("@oauth-consent shows explicit permissions and approves a loopback client",
     ).toBeVisible();
     await expect(page.getByText("skills:read", { exact: true })).toBeVisible();
     await expect(page.getByText("skills:amend", { exact: true })).toBeVisible();
+    await expect(page.getByText("skills:write", { exact: true })).toBeVisible();
+    await expect(page.getByText("skills:publish", { exact: true })).toBeVisible();
     await expect(page.getByText("contexts:read", { exact: true })).toBeVisible();
+    await expect(page.getByText("Signed in as", { exact: true })).toBeVisible();
+    await expect(page.getByText(/@example\.test$/)).toBeVisible();
+    await expect(page.getByText(harness.email, { exact: true })).toHaveCount(0);
+    await expect(page.getByText("Workspace access", { exact: true })).toBeVisible();
+    await expect(page.getByText("Manage account and workspaces")).toBeVisible();
+    await expect(
+      page.getByText(
+        "Create skills and manage skill records, visibility, and lifecycle",
+      ),
+    ).toBeVisible();
+    await expect(
+      page.getByText(
+        "Approve or reject reviews, publish approved skill versions, and manage skill amendment policies",
+      ),
+    ).toBeVisible();
     await expect(
       page.getByRole("note").getByText("localhost:9876", { exact: true }),
     ).toBeVisible();

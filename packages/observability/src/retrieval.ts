@@ -3,7 +3,6 @@ import type {
   AuditCredential,
   AuditOutcome,
   AuditWriteInput,
-  PostgresAuditWriter,
 } from "./audit.js";
 
 export interface RetrievalAuditInput {
@@ -51,11 +50,4 @@ export function retrievalAuditEvent(input: RetrievalAuditInput): AuditWriteInput
     channel: "mcp",
     retentionClass: "detailed_read_90d",
   };
-}
-
-export async function recordRetrievalAudit(
-  writer: PostgresAuditWriter,
-  input: RetrievalAuditInput,
-): Promise<string> {
-  return writer.record(retrievalAuditEvent(input));
 }

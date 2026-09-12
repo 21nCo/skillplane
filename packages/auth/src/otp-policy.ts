@@ -21,7 +21,7 @@ export function createOtpPolicyHook(input: {
     }
     const incomingIp = request.headers.get("cf-connecting-ip")?.trim();
     const remoteIp = incomingIp?.length ? incomingIp : "unknown";
-    const idempotencyKey = `turnstile_${crypto.randomUUID()}`;
+    const idempotencyKey = crypto.randomUUID();
     const verification = await input.turnstile.verify({
       token,
       remoteIp,

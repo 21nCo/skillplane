@@ -6,8 +6,6 @@ import {
   type SkillVersionRecord,
 } from "@skillplane/domain";
 import type { Context } from "hono";
-import type { PoolClient } from "pg";
-import { writeAuditEvent } from "@skillplane/observability";
 import type { ApiEnvironment } from "../context.js";
 import { requireUserPrincipal } from "../tenancy.js";
 
@@ -246,40 +244,6 @@ export function isPostgresUniqueViolation(
     record.code === "23505" &&
     (constraint === undefined || record.constraint === constraint)
   );
-}
-
-export async function writeApiAudit(
-  client: PoolClient,
-  principal: Principal,
-  event: {
-    readonly eventType: string;
-    readonly action: string;
-    readonly requestId: string;
-    readonly resourceType?: string;
-    readonly resourceId?: string;
-    readonly skillId?: string;
-    readonly metadata?: Readonly<Record<string, unknown>>;
-  },
-): Promise<void> {
-  await writeAuditEvent(client, {
-    workspaceId: principal.workspaceId,
-    eventType: event.eventType,
-    action: event.action,
-    outcome: "success",
-    actorType: principal.kind === "user" ? "user" : "service_principal",
-    actorId: principal.actorId,
-    userId:
-      principal.kind === "user"
-        ? principal.userId
-        : (principal.delegatedUserId ?? null),
-    requestId: event.requestId,
-    ...(event.resourceType ? { resourceType: event.resourceType } : {}),
-    ...(event.resourceId ? { resourceId: event.resourceId } : {}),
-    ...(event.skillId ? { skillId: event.skillId } : {}),
-    ...(event.metadata ? { metadata: event.metadata } : {}),
-    channel: "app",
-    retentionClass: "permanent",
-  });
 }
 
 export function parseOptionalExpiry(value: unknown, now = new Date()): Date | null {
