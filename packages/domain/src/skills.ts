@@ -599,21 +599,6 @@ export class SkillService {
     }
   }
 
-  async list(options: {
-    readonly workspaceId: string;
-    readonly principal: Principal;
-    readonly includeArchived?: boolean;
-    readonly limit?: number;
-  }): Promise<readonly SkillRecord[]> {
-    const page = await this.listPage({
-      workspaceId: options.workspaceId,
-      principal: options.principal,
-      archive: options.includeArchived ? "all" : "active",
-      ...(options.limit !== undefined ? { limit: options.limit } : {}),
-    });
-    return page.skills;
-  }
-
   async listPage(options: {
     readonly workspaceId: string;
     readonly principal: Principal;

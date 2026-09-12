@@ -116,13 +116,3 @@ export function redactAuditMetadata(
     removedFieldCount: counter.removed,
   };
 }
-
-export function containsSensitiveAuditData(value: unknown): boolean {
-  const counter = { removed: 0 };
-  redactValue(value, 0, counter);
-  return counter.removed > 0;
-}
-
-export function isSensitiveAuditKey(key: string): boolean {
-  return sensitiveKey(key);
-}
