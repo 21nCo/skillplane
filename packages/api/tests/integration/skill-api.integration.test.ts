@@ -419,6 +419,20 @@ describe("skill management API", () => {
       created.skill.id,
     );
 
+    for (const state of ["all", "archived"]) {
+      const explicitActiveResponse = await app.request(
+        `/api/v1/workspaces/${owner.workspaceId}/skills?includeArchived=false&state=${state}`,
+        { headers: headers(owner) },
+      );
+      expect(explicitActiveResponse.status).toBe(200);
+      const explicitActive = await data<{
+        skills: readonly { id: string }[];
+      }>(explicitActiveResponse);
+      expect(explicitActive.skills.map((skill) => skill.id)).not.toContain(
+        created.skill.id,
+      );
+    }
+
     const invalidLegacyArchiveFilter = await app.request(
       `/api/v1/workspaces/${owner.workspaceId}/skills?includeArchived=invalid`,
       { headers: headers(owner) },

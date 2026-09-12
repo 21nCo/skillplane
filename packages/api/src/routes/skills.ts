@@ -92,16 +92,18 @@ export function registerSkillRoutes(app: Hono<ApiEnvironment>): void {
     const archive =
       legacyIncludeArchived === "true"
         ? "all"
-        : legacyIncludeArchived === "false" || legacyIncludeArchived === undefined
-          ? parseSkillArchiveFilter(context.req.query("state") ?? "active")
-          : (() => {
-              throw new DomainError(
-                "VALIDATION_FAILED",
-                "includeArchived must be true or false",
-                400,
-                { field: "includeArchived" },
-              );
-            })();
+        : legacyIncludeArchived === "false"
+          ? "active"
+          : legacyIncludeArchived === undefined
+            ? parseSkillArchiveFilter(context.req.query("state") ?? "active")
+            : (() => {
+                throw new DomainError(
+                  "VALIDATION_FAILED",
+                  "includeArchived must be true or false",
+                  400,
+                  { field: "includeArchived" },
+                );
+              })();
     const limit = parseLimit(context.req.query("limit"));
     const query = context.req.query("q")?.trim() ?? "";
     const visibility = parseVisibilityFilter(context);
