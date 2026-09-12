@@ -1,9 +1,11 @@
+import { CompositionService } from "./composition-service.js";
 import {
   canonicalizeBundle,
   retrieveBundleFile,
   sha256Hex,
   validateBundleArchive,
   type BundleManifest,
+  type CanonicalBundle,
   type DownloadedSkillFile,
   type R2BundleRepository,
 } from "@skillplane/storage";
@@ -158,6 +160,7 @@ export class SkillVersionService {
     readonly pool: Pool,
     readonly storage: R2BundleRepository,
     private readonly idempotency: IdempotencyStore,
+    private readonly composition = new CompositionService(pool, storage),
   ) {}
 
   async createCandidate(options: {
@@ -174,7 +177,7 @@ export class SkillVersionService {
     authorize(options.principal, "skills:write");
     const proposedBump = parseSemanticBump(options.proposedBump);
     const changeSummary = normalizeChangeSummary(options.changeSummary);
-    let canonical;
+    let canonical: CanonicalBundle;
     try {
       canonical = await canonicalizeBundle(options.archiveBytes);
     } catch (error) {
@@ -201,6 +204,21 @@ export class SkillVersionService {
     let stored: Awaited<ReturnType<R2BundleRepository["putCanonicalBundle"]>> | null =
       null;
     try {
+      const skillVisibility =
+        canonical.skill.formatVersion === 1
+          ? { rows: [{ visibility: "private" }] }
+          : await this.pool.query<{ visibility: string }>(
+              "SELECT visibility FROM skills WHERE id = $1 AND workspace_id = $2",
+              [options.skillId, options.principal.workspaceId],
+            );
+      if (!skillVisibility.rows[0])
+        throw new DomainError("SKILL_NOT_FOUND", "Skill was not found", 404);
+      const prepared = await this.composition.prepare(
+        canonical,
+        options.principal,
+        skillVisibility.rows[0].visibility,
+      );
+      canonical = prepared.bundle;
       const reservedRevision = await withTransaction(
         this.pool,
         `${options.requestId}:reserve`,
@@ -300,6 +318,12 @@ export class SkillVersionService {
               actor.actorType,
               actor.actorId,
             ],
+          );
+          await this.composition.persist(
+            client,
+            versionId,
+            options.principal.workspaceId,
+            prepared,
           );
           await client.query(
             `INSERT INTO skill_version_files
@@ -500,6 +524,14 @@ export class SkillVersionService {
       );
     }
     if (options.principal) authorize(options.principal, "skills:read");
+    await this.composition.assertAvailable(row.id);
+    if (row.manifest.formatVersion === 2)
+      await this.composition.resolve(
+        row.id,
+        options.principal ?? null,
+        "verify",
+        Boolean(options.principal),
+      );
     return row;
   }
 

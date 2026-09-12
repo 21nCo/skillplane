@@ -77,7 +77,7 @@ export async function canonicalizeBundle(
   const expandedByteSize = files.reduce((total, file) => total + file.byteSize, 0);
   const digest = `sha256:${digestHex}` as const;
   const manifest: BundleManifest = {
-    formatVersion: 1,
+    formatVersion: normalizedSkill.formatVersion,
     digest,
     byteSize: bytes.byteLength,
     expandedByteSize,
@@ -100,7 +100,11 @@ export async function canonicalizeBundle(
  * file amendment.
  */
 export async function canonicalizeBundleFiles(options: {
-  readonly skill: Omit<SkillJson, "files">;
+  readonly skill: SkillJson extends infer S
+    ? S extends SkillJson
+      ? Omit<S, "files">
+      : never
+    : never;
   readonly files: ReadonlyMap<string, Uint8Array>;
 }): Promise<CanonicalBundle> {
   const contentFiles = new Map<string, Uint8Array>();

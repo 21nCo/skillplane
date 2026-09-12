@@ -1,3 +1,4 @@
+import { CompositionService } from "./composition-service.js";
 import {
   BundlePathError,
   BundleValidationError,
@@ -227,10 +228,10 @@ export function parseAmendmentOperations(
       }
       throw error;
     }
-    if (path === "skill.json") {
+    if (path === "skill.json" || path === "skill.lock.json") {
       throw new DomainError(
         "VALIDATION_FAILED",
-        "skill.json is generated and cannot be amended directly",
+        "Skill manifests and locks are generated and cannot be amended directly",
         400,
         { field: `${field}.path` },
       );
@@ -352,6 +353,7 @@ export class AmendmentService {
     private readonly storage: R2BundleRepository,
     private readonly idempotency: IdempotencyStore,
     private readonly controlPool: Pool = pool,
+    private readonly composition = new CompositionService(pool, storage, controlPool),
   ) {}
 
   async amend(options: {
@@ -440,17 +442,25 @@ export class AmendmentService {
       );
       const validatedBase = await validateBundleArchive(storedBase.bytes);
       const amendedFiles = await applyAmendmentOperations(validatedBase.files, changes);
-      const canonical = await canonicalizeBundleFiles({
-        skill: {
-          formatVersion: validatedBase.skill.formatVersion,
-          name: validatedBase.skill.name,
-          slug: validatedBase.skill.slug,
-          description: validatedBase.skill.description,
-          tags: validatedBase.skill.tags,
-          entrypoint: "SKILL.md",
-        },
+      let canonical = await canonicalizeBundleFiles({
+        skill: validatedBase.skill,
         files: amendedFiles,
       });
+      const composition = this.composition;
+      const visibilityResult =
+        canonical.skill.formatVersion === 1
+          ? { rows: [{ visibility: "private" }] }
+          : await this.pool.query<{ visibility: string }>(
+              "SELECT visibility FROM skills WHERE id = $1 AND workspace_id = $2",
+              [options.skillId, options.principal.workspaceId],
+            );
+      const prepared = await composition.prepare(
+        canonical,
+        options.principal,
+        visibilityResult.rows[0]?.visibility ?? "private",
+        true,
+      );
+      canonical = prepared.bundle;
       if (canonical.digest === baseRow.content_digest) {
         throw new DomainError(
           "VALIDATION_FAILED",
@@ -625,6 +635,18 @@ export class AmendmentService {
               caller.forUserId,
               autoPublished ? new Date() : null,
             ],
+          );
+          await composition.revalidate(
+            prepared.lock,
+            options.principal,
+            visibilityResult.rows[0]?.visibility ?? "private",
+            client,
+          );
+          await composition.persist(
+            client,
+            versionId,
+            options.principal.workspaceId,
+            prepared,
           );
           await client.query(
             `INSERT INTO skill_version_files

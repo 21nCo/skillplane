@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { dependencySchema } from "./composition.js";
 
 export const SKILL_BUNDLE_FORMAT_VERSION = 1 as const;
 
@@ -15,7 +16,7 @@ export const fileManifestEntrySchema = z
   })
   .strict();
 
-export const skillJsonSchema = z
+const skillJsonV1Schema = z
   .object({
     formatVersion: z.literal(SKILL_BUNDLE_FORMAT_VERSION),
     name: z.string().trim().min(1).max(160),
@@ -32,11 +33,40 @@ export const skillJsonSchema = z
   })
   .strict();
 
+export const skillJsonV2Schema = skillJsonV1Schema
+  .omit({ formatVersion: true, entrypoint: true })
+  .extend({
+    formatVersion: z.literal(2),
+    entrypoints: z
+      .object({
+        execute: z.literal("SKILL.md"),
+        verify: z.literal("verification/VERIFY.md").optional(),
+      })
+      .strict(),
+    dependencies: z.array(dependencySchema).max(32),
+    verification: z
+      .object({ claims: z.literal("verification/claims.json"), blocking: z.boolean() })
+      .strict()
+      .optional(),
+  })
+  .strict()
+  .superRefine((skill, ctx) => {
+    if (
+      new Set(skill.dependencies.map((d) => d.alias)).size !== skill.dependencies.length
+    )
+      ctx.addIssue({ code: "custom", message: "Dependency aliases must be unique" });
+    if (Boolean(skill.verification) !== Boolean(skill.entrypoints.verify))
+      ctx.addIssue({
+        code: "custom",
+        message: "Verification claims and entrypoint must be declared together",
+      });
+  });
+export const skillJsonSchema = z.union([skillJsonV1Schema, skillJsonV2Schema]);
 export type SkillJson = z.infer<typeof skillJsonSchema>;
 export type SkillFileManifestEntry = z.infer<typeof fileManifestEntrySchema>;
 
 export interface BundleManifest {
-  readonly formatVersion: typeof SKILL_BUNDLE_FORMAT_VERSION;
+  readonly formatVersion: 1 | 2;
   readonly digest: `sha256:${string}`;
   readonly byteSize: number;
   readonly expandedByteSize: number;
@@ -53,19 +83,29 @@ export interface CanonicalBundle {
 }
 
 export function canonicalSkillJson(
-  value: Omit<SkillJson, "files"> & {
+  value: (SkillJson extends infer S
+    ? S extends SkillJson
+      ? Omit<S, "files">
+      : never
+    : never) & {
     readonly files: readonly SkillFileManifestEntry[];
   },
 ): SkillJson {
   return {
-    formatVersion: SKILL_BUNDLE_FORMAT_VERSION,
+    ...(value.formatVersion === 1
+      ? { formatVersion: 1 as const, entrypoint: "SKILL.md" as const }
+      : {
+          formatVersion: 2 as const,
+          entrypoints: value.entrypoints,
+          dependencies: value.dependencies,
+          ...(value.verification ? { verification: value.verification } : {}),
+        }),
     name: value.name.trim(),
     slug: value.slug.trim(),
     description: value.description,
     tags: [...new Set(value.tags.map((tag) => tag.trim()))].sort((left, right) =>
       left.localeCompare(right, "en"),
     ),
-    entrypoint: "SKILL.md",
     files: [...value.files],
   };
 }

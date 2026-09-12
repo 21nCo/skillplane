@@ -1,0 +1,17 @@
+{
+  "dependencies": [],
+  "description": "SKI-3 composition reference fixture",
+  "entrypoints": { "execute": "SKILL.md" },
+  "files": [
+    {
+      "byteSize": 418,
+      "mediaType": "text/markdown; charset=utf-8",
+      "path": "SKILL.md",
+      "sha256": "8be2a922a099745f9a9a5fc57e8635bd8e284b4a8c0bd7d495b8ce1ebbb1d101"
+    }
+  ],
+  "formatVersion": 2,
+  "name": "Create Linear Issue",
+  "slug": "create-linear-issue",
+  "tags": ["composition", "reference"]
+}
