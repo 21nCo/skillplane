@@ -1,0 +1,8 @@
+# Response annotations:
+Each item contains text selected from an earlier Codex response and may include a user comment. Treat items as Annotation 1, Annotation 2, and so on in array order. Use every selection as context and address every comment. For every annotation you address, include its inline directive `:codex-annotation{index="N"}`, where N is its one-based array position (for example, `:codex-annotation{index="1"}`). Do not use unstructured annotation labels.
+<response-annotations>
+[{"text":"skillplane (current checkout): substantial uncommitted SKI-15 local-first/runtime work — 15 modified tracked files (91 additions, 34 deletions) plus new docs, usage tooling/tests, a packages/local-runtime package, input/schema additions, and an install script.skillplane-pr21-remediation: clean; contains three committed SKI-15-related commits beyond origin/main.","source":{"messageId":"msg_0ea97a13f1d613ef016aa633aafb0087d0acbcdcaf8ed80cbc","startOffset":116,"endOffset":479}}]
+</response-annotations>
+
+## My request:
+PR 21 got merged into origin/main right? what are these changes?
