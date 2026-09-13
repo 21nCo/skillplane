@@ -172,9 +172,12 @@ export function assertCloudflareProductionOrder({
       resolveCloudflareRelease(deployedTag);
       recognizedRelease = true;
     } catch {
-      if (!allowLegacyBootstrap || ledgerTag !== null) {
+      const retryingLedgerHighWater =
+        ledgerTag !== null &&
+        compareCloudflareReleaseTags(ledgerTag, requestedTag) === 0;
+      if (!allowLegacyBootstrap || (ledgerTag !== null && !retryingLedgerHighWater)) {
         throw new Error(
-          "The active production Worker has no recognized release tag; the protected legacy bootstrap override is allowed only before the first recorded tagged release",
+          "The active production Worker has no recognized release tag; the protected legacy bootstrap override is allowed only for the first tagged release or a retry of the recorded high-water release",
         );
       }
     }

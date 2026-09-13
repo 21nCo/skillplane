@@ -249,7 +249,19 @@ describe("tagged releases", () => {
           ledgerTags: ["skillplane-cloudflare-v1.0.0"],
           allowLegacyBootstrap: true,
         }),
-      /only before the first recorded tagged release/u,
+      /retry of the recorded high-water release/u,
+    );
+    assert.deepEqual(
+      assertCloudflareProductionOrder({
+        ...input,
+        ledgerTags: ["skillplane-cloudflare-v2.0.0"],
+        allowLegacyBootstrap: true,
+      }),
+      {
+        deployedTag: "phase16-legacy-release",
+        ledgerTag: "skillplane-cloudflare-v2.0.0",
+        requestedTag: "skillplane-cloudflare-v2.0.0",
+      },
     );
   });
 
@@ -363,15 +375,26 @@ describe("tagged releases", () => {
   });
 
   it("preserves every npm release behind an explicit queue", async () => {
-    const workflow = await readFile(
-      resolve(import.meta.dirname, "..", ".github", "workflows", "publish-tag.yml"),
-      "utf8",
+    const workflows = await Promise.all(
+      ["publish-tag.yml", "deploy-cloudflare-tag.yml"].map((name) =>
+        readFile(
+          resolve(import.meta.dirname, "..", ".github", "workflows", name),
+          "utf8",
+        ),
+      ),
     );
-    assert.doesNotMatch(workflow, /^concurrency:/mu);
-    assert.match(workflow, /jobs:\n {2}queue:/u);
-    assert.match(workflow, /verify:\n {4}needs: queue/u);
-    assert.match(workflow, /select\(\.run_number < \$\{CURRENT_RUN_NUMBER\}\)/u);
-    assert.equal((workflow.match(/github\.run_attempt != 1/gu) ?? []).length, 2);
+    const [publishWorkflow] = workflows;
+    assert.doesNotMatch(publishWorkflow, /^concurrency:/mu);
+    assert.match(publishWorkflow, /jobs:\n {2}queue:/u);
+    assert.match(publishWorkflow, /verify:\n {4}needs: queue/u);
+    assert.match(publishWorkflow, /select\(\.run_number < \$\{CURRENT_RUN_NUMBER\}\)/u);
+    assert.equal((publishWorkflow.match(/github\.run_attempt != 1/gu) ?? []).length, 2);
+    for (const workflow of workflows) {
+      assert.match(
+        workflow,
+        /queue:\n {4}runs-on: ubuntu-latest\n {4}timeout-minutes: 360/u,
+      );
+    }
   });
 
   it("writes only well-formed single-line GitHub outputs", async () => {
