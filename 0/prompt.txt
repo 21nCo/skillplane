@@ -1,0 +1,3 @@
+[https://linear.app/21n/issue/SKI-3/support-native-skill-composition-dependency-resolution-and](https://linear.app/21n/issue/SKI-3/support-native-skill-composition-dependency-resolution-and)
+
+Implement this fully in a clean worktree
