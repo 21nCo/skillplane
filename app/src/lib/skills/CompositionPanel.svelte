@@ -294,7 +294,9 @@
             </p>{/each}
         {/each}{/if}
     {/if}
-  {:else if !resolutionError}<p role="status">Resolving the immutable closure…</p>{/if}
+  {:else if !resolutionError && !error}<p role="status">
+      Resolving the immutable closure…
+    </p>{/if}
 </section>
 
 <style>
