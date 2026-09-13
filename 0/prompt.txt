@@ -1,0 +1,1 @@
+remove `skillplane-pr21-remediation` worktree and carefully review the deviations on primary checkout and sync with origin/main on the primary checkout clearly local changes if those are stale (you can push it as a backup to origin on a different branch if needed)
