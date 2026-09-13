@@ -62,7 +62,7 @@
       evidence: { type: string; uri: string; description: string; sha256: string }[];
     }[];
   } | null>(null);
-  let repairNeeded = $state(false);
+  let resolutionError = $state<{ message: string; repairNeeded: boolean } | null>(null);
   let upgradeKey = $state(crypto.randomUUID());
   let previous = $state<Plan | null>(null);
   let runs = $state<
@@ -83,7 +83,7 @@
       base = version.baseVersionId;
     let active = true;
     plan = null;
-    repairNeeded = false;
+    resolutionError = null;
     previous = null;
     error = null;
     results = null;
@@ -95,10 +95,12 @@
       })
       .catch((e: unknown) => {
         if (active) {
-          error = e instanceof Error ? e.message : "Resolution failed";
-          repairNeeded =
-            e instanceof SkillplaneApiError &&
-            ["SKILL_VERSION_REVOKED", "SKILL_DEPENDENCY_CONFLICT"].includes(e.code);
+          resolutionError = {
+            message: e instanceof Error ? e.message : "Resolution failed",
+            repairNeeded:
+              e instanceof SkillplaneApiError &&
+              ["SKILL_VERSION_REVOKED", "SKILL_DEPENDENCY_CONFLICT"].includes(e.code),
+          };
         }
       });
     if (base)
@@ -187,15 +189,16 @@
 
 <section aria-label="Dependency graph and verification">
   <h2>Composition and verification</h2>
-  {#if error}
-    <p role="alert">{error}</p>
-    {#if repairNeeded && canEdit && !publicView}
+  {#if resolutionError}
+    <p role="alert">{resolutionError.message}</p>
+    {#if resolutionError.repairNeeded && canEdit && !publicView}
       <p>
         To replace a revoked dependency or change an exact version pin, open Content and
         choose Edit.
       </p>
     {/if}
   {/if}
+  {#if error}<p role="alert">{error}</p>{/if}
   {#if plan}
     <p>Closure digest <code>{plan.closureDigest}</code></p>
     {#each plan.warnings as warning (warning)}<p>{warning}</p>{/each}
@@ -291,7 +294,7 @@
             </p>{/each}
         {/each}{/if}
     {/if}
-  {:else if !error}<p role="status">Resolving the immutable closure…</p>{/if}
+  {:else if !resolutionError}<p role="status">Resolving the immutable closure…</p>{/if}
 </section>
 
 <style>

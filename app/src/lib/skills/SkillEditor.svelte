@@ -27,6 +27,7 @@
     verifier = $state(""),
     claims = $state("[]");
   let baseFiles = $state<ReadonlyMap<string, Uint8Array> | null>(null);
+  let loadError = $state<string | null>(null);
   onMount(() => {
     let active = true;
     void getSkillRepairBundle({
@@ -49,7 +50,8 @@
       })
       .catch((cause: unknown) => {
         if (active)
-          error = cause instanceof Error ? cause.message : "Could not load composition";
+          loadError =
+            cause instanceof Error ? cause.message : "Could not load composition";
       });
     return () => {
       active = false;
@@ -166,6 +168,8 @@
       bind:claims
       onchange={changed}
     />
+  {:else if loadError}
+    <p class="error" role="alert">{loadError}</p>
   {:else}
     <p role="status">Loading composition…</p>
   {/if}

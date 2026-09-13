@@ -260,7 +260,10 @@ export class Projections {
     const sameState =
       old?.digest === snapshot.bundle.digest &&
       old.version.id === snapshot.version.id &&
-      stableJson(old.target) === stableJson(target);
+      old.path === path &&
+      old.target.adapter === target.adapter &&
+      old.target.scope === target.scope &&
+      stableJson(old.target.policy) === stableJson(target.policy);
     const changing = replaced ?? (sameState ? undefined : old);
     if (changing) this.assertReplacementOwner(changing, project);
     const existing = old ?? replaced;

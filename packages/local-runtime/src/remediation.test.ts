@@ -400,6 +400,23 @@ describe("review regressions", () => {
     await expect(runtime.sync(project)).rejects.toThrow("PROJECTION_DIVERGED");
     expect(() => runtime.projections.uninstall(old.id)).toThrow("PROJECTION_DIVERGED");
   });
+  it("shares equivalent destinations across selection filters and directory spellings", async () => {
+    const { runtime, project, other, target, record } = await sharedFixture();
+    runtime.configure(other, {
+      ...runtime.project(other),
+      targets: [{ ...target, skills: ["review"], directory: "../shared" }],
+    });
+    const shared = requireValue((await runtime.sync(other))[0]);
+    expect(shared.generation).toBe(record.generation);
+    expect(runtime.projections.owners(shared).sort()).toEqual([project, other].sort());
+    runtime.configure(other, {
+      ...runtime.project(other),
+      targets: [{ ...target, skills: [] }],
+    });
+    expect(await runtime.sync(other)).toEqual([]);
+    expect(runtime.projections.owners(record)).toEqual([project]);
+    runtime.projections.verify(record);
+  });
   it("rejects conflicting shared versions and policies but repairs the same missing link", async () => {
     const { runtime, provider, project, other, target, record } = await sharedFixture();
     const snapshot = await provider.retrieve(record.skill.id);
@@ -420,6 +437,9 @@ describe("review regressions", () => {
     expect(() => runtime.projections.sync(snapshot, pinned, project)).toThrow(
       "Destination is owned by another project",
     );
+    expect(() =>
+      runtime.projections.sync(snapshot, { ...target, adapter: "claude" }, other),
+    ).toThrow("Destination is owned by another project");
     unlinkSync(record.path);
     const repaired = runtime.projections.sync(snapshot, target, other);
     runtime.projections.verify(repaired);
