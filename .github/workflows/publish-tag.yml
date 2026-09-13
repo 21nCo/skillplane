@@ -12,14 +12,53 @@ on:
         type: string
 
 permissions:
+  actions: read
   contents: read
 
-concurrency:
-  group: skillplane-npm-publish
-  cancel-in-progress: false
-
 jobs:
+  queue:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Wait for earlier package releases
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          CURRENT_RUN_ID: ${{ github.run_id }}
+          CURRENT_RUN_NUMBER: ${{ github.run_number }}
+          CURRENT_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          if [[ "${CURRENT_RUN_ATTEMPT}" != "1" ]]; then
+            echo "Job re-runs are not supported for package releases; start a fresh workflow_dispatch run for the release tag" >&2
+            exit 1
+          fi
+          workflow="publish-tag.yml"
+          active_statuses=(requested waiting pending queued in_progress)
+          while true; do
+            blockers=()
+            for status in "${active_statuses[@]}"; do
+              run_ids="$(
+                gh api --paginate --method GET \
+                  "repos/${REPOSITORY}/actions/workflows/${workflow}/runs" \
+                  -f status="${status}" \
+                  -f per_page=100 \
+                  --jq ".workflow_runs[] | select(.id != ${CURRENT_RUN_ID}) | select(.run_number < ${CURRENT_RUN_NUMBER}) | .id"
+              )"
+              while IFS= read -r run_id; do
+                [[ -n "${run_id}" ]] && blockers+=("${run_id}")
+              done <<< "${run_ids}"
+            done
+            if [[ "${#blockers[@]}" -eq 0 ]]; then
+              break
+            fi
+            echo "Waiting for ${#blockers[@]} earlier package release run(s): ${blockers[*]}"
+            sleep 30
+          done
+
   verify:
+    needs: queue
     runs-on: ubuntu-latest
     timeout-minutes: 30
     outputs:
@@ -28,6 +67,12 @@ jobs:
     env:
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
     steps:
+      - name: Reject GitHub re-run attempts
+        if: ${{ github.run_attempt != 1 }}
+        run: |
+          echo "Job re-runs are not supported for package releases; start a fresh workflow_dispatch run for the release tag" >&2
+          exit 1
+
       - name: Checkout release tag
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -104,6 +149,12 @@ jobs:
       contents: read
       id-token: write
     steps:
+      - name: Reject GitHub re-run attempts
+        if: ${{ github.run_attempt != 1 }}
+        run: |
+          echo "Job re-runs are not supported for package releases; start a fresh workflow_dispatch run for the release tag" >&2
+          exit 1
+
       - name: Verify protected release environment
         shell: bash
         env:

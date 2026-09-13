@@ -109,7 +109,13 @@ export function resolveCloudflareRelease(tag) {
       `Unsupported Cloudflare tag: ${normalizedTag}. Expected skillplane-cloudflare-v<version>.`,
     );
   }
-  return { tag: normalizedTag, version: match.groups.version };
+  const version = match.groups.version;
+  if (semver.parse(version)?.raw !== version) {
+    throw new Error(
+      `Unsupported Cloudflare version: ${version}. Expected exact SemVer within the supported numeric range.`,
+    );
+  }
+  return { tag: normalizedTag, version };
 }
 
 /** Compare two exact SemVer strings. */
@@ -166,9 +172,9 @@ export function assertCloudflareProductionOrder({
       resolveCloudflareRelease(deployedTag);
       recognizedRelease = true;
     } catch {
-      if (!allowLegacyBootstrap) {
+      if (!allowLegacyBootstrap || ledgerTag !== null) {
         throw new Error(
-          "The active production Worker has no recognized release tag; use the protected legacy bootstrap override only after verifying its provenance",
+          "The active production Worker has no recognized release tag; the protected legacy bootstrap override is allowed only before the first recorded tagged release",
         );
       }
     }
@@ -189,9 +195,15 @@ export function activeCloudflareVersionId(deployments) {
   if (!Array.isArray(versions) || versions.length === 0) {
     throw new Error("Wrangler's active deployment omitted its versions");
   }
-  const active = versions.find((version) => Number(version?.percentage) === 100);
-  if (typeof active?.version_id !== "string") {
+  const activeVersions = versions.filter(
+    (version) => Number(version?.percentage) === 100,
+  );
+  if (activeVersions.length !== 1) {
     throw new Error("The active Worker uses split traffic; release order is ambiguous");
+  }
+  const [active] = activeVersions;
+  if (typeof active.version_id !== "string" || active.version_id.trim().length === 0) {
+    throw new Error("The active Worker returned an invalid version id");
   }
   return active.version_id;
 }

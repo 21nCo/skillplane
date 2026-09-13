@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { describe, it } from "node:test";
 import {
   listCloudflareReleaseLedger,
@@ -120,6 +120,11 @@ describe("tagged releases", () => {
       () => resolveCloudflareRelease(`skillplane-cloudflare-v2.0.0-${"a".repeat(40)}`),
       /must not exceed 54 characters/u,
     );
+    assert.throws(
+      () =>
+        resolveCloudflareRelease("skillplane-cloudflare-v100000000000000000000.0.0"),
+      /supported numeric range/u,
+    );
   });
 
   it("orders Cloudflare release tags using SemVer precedence", () => {
@@ -237,6 +242,15 @@ describe("tagged releases", () => {
         requestedTag: "skillplane-cloudflare-v2.0.0",
       },
     );
+    assert.throws(
+      () =>
+        assertCloudflareProductionOrder({
+          ...input,
+          ledgerTags: ["skillplane-cloudflare-v1.0.0"],
+          allowLegacyBootstrap: true,
+        }),
+      /only before the first recorded tagged release/u,
+    );
   });
 
   it("fails closed when Wrangler cannot identify one active version", () => {
@@ -254,6 +268,13 @@ describe("tagged releases", () => {
     assert.throws(
       () =>
         activeCloudflareVersionId([
+          { versions: [{ version_id: "", percentage: 100 }] },
+        ]),
+      /invalid version id/u,
+    );
+    assert.throws(
+      () =>
+        activeCloudflareVersionId([
           { versions: [{ version_id: "older-version", percentage: 100 }] },
           { versions: [] },
         ]),
@@ -266,6 +287,18 @@ describe("tagged releases", () => {
             versions: [
               { version_id: "version-one", percentage: 50 },
               { version_id: "version-two", percentage: 50 },
+            ],
+          },
+        ]),
+      /split traffic/u,
+    );
+    assert.throws(
+      () =>
+        activeCloudflareVersionId([
+          {
+            versions: [
+              { version_id: "version-one", percentage: 100 },
+              { version_id: "version-two", percentage: 100 },
             ],
           },
         ]),
@@ -327,6 +360,18 @@ describe("tagged releases", () => {
     assert.deepEqual(create.required_contexts, []);
     assert.equal(create.ref, "skillplane-cloudflare-v2.2.0");
     assert.equal(create.production_environment, false);
+  });
+
+  it("preserves every npm release behind an explicit queue", async () => {
+    const workflow = await readFile(
+      resolve(import.meta.dirname, "..", ".github", "workflows", "publish-tag.yml"),
+      "utf8",
+    );
+    assert.doesNotMatch(workflow, /^concurrency:/mu);
+    assert.match(workflow, /jobs:\n {2}queue:/u);
+    assert.match(workflow, /verify:\n {4}needs: queue/u);
+    assert.match(workflow, /select\(\.run_number < \$\{CURRENT_RUN_NUMBER\}\)/u);
+    assert.equal((workflow.match(/github\.run_attempt != 1/gu) ?? []).length, 2);
   });
 
   it("writes only well-formed single-line GitHub outputs", async () => {

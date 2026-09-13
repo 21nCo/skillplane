@@ -113,11 +113,13 @@ Both workflows may be retried manually with `workflow_dispatch`, but the input
 must name an existing tag. Manual runs check out the tag itself; they do not
 publish or deploy the default branch by accident. For Cloudflare, the tag must
 be at least as new as the active or previously accepted production release.
-The first tagged release over an existing legacy deployment must use the
+The first tagged release over an existing legacy deployment may use the
 protected `allow_legacy_bootstrap` input after reviewers verify that deployment's
-provenance; later unrecognized active tags fail closed.
+provenance. The override is rejected after the durable ledger contains any
+tagged release, so later unrecognized active tags fail closed.
 
-The npm workflow serializes every `skillplane` release under one workflow lock,
+The npm workflow preserves every `skillplane` release in an explicit FIFO queue,
 checks the target channel's current registry version before publication, rejects
 version downgrades, and treats an exact already-published version as an
-idempotent retry.
+idempotent retry. GitHub job re-runs are rejected at every package release stage;
+retry the existing tag with a fresh `workflow_dispatch` run.
