@@ -1,0 +1,8 @@
+# Response annotations:
+Each item contains text selected from an earlier Codex response and may include a user comment. Treat items as Annotation 1, Annotation 2, and so on in array order. Use every selection as context and address every comment. For every annotation you address, include its inline directive `:codex-annotation{index="N"}`, where N is its one-based array position (for example, `:codex-annotation{index="1"}`). Do not use unstructured annotation labels.
+<response-annotations>
+[{"text":"/Users/serro/Documents/dev/n/agent/experiments/skillplane-ski-3-prcodex/ski-3-native-composition-prClean; tracks its remote branch at fa6b3ec; not merged into origin/main.","source":{"messageId":"msg_0ea97a13f1d613ef016aa63591d88487d08324a7fb3663a5af","startOffset":178,"endOffset":349}}]
+</response-annotations>
+
+## My request:
+is this safe to remove?
