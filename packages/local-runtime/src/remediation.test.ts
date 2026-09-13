@@ -22,6 +22,7 @@ import { McpTransport } from "./cloud-provider.js";
 import { UsageQueue, type UsageEvent } from "./analytics.js";
 import {
   requireValue,
+  declaredCaller,
   RuntimeError,
   selectVersion,
   targetSchema,
@@ -108,6 +109,15 @@ function event(workspace = "cloud:test"): UsageEvent {
   };
 }
 describe("review regressions", () => {
+  it("derives the hosted client identity from the published package", async () => {
+    const packageJson = (await import("../package.json", { with: { type: "json" } }))
+      .default;
+    expect(declaredCaller()).toMatchObject({
+      clientName: "skillplane-cli",
+      clientVersion: packageJson.version,
+    });
+  });
+
   it("preserves native composition metadata in the shared cloud builder and refuses incomplete local projections", async () => {
     const composition = { dependencies: [], verify: false, blocking: false };
     const bundle = await createSkillBundle({ ...create, composition });

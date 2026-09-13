@@ -1,9 +1,19 @@
 {
   "name": "skillplane",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": false,
   "description": "Local-first Skillplane CLI for versioned AI-agent skills",
-  "license": "UNLICENSED",
+  "license": "MIT",
+  "keywords": [
+    "ai-agents",
+    "cli",
+    "codex",
+    "claude",
+    "local-first",
+    "mcp",
+    "model-context-protocol",
+    "skills"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/21nCo/skillplane.git",
