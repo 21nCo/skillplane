@@ -97,6 +97,27 @@ describe("tagged releases", () => {
     }
   });
 
+  it("ships the public CLI with MIT metadata and useful npm documentation", async () => {
+    const root = resolve(import.meta.dirname, "..");
+    const packageRoot = join(root, "packages", "local-runtime");
+    const packageJson = JSON.parse(
+      await readFile(join(packageRoot, "package.json"), "utf8"),
+    );
+    const readme = await readFile(join(packageRoot, "README.md"), "utf8");
+    const license = await readFile(join(packageRoot, "LICENSE"), "utf8");
+
+    assert.equal(packageJson.name, "skillplane");
+    assert.equal(packageJson.private, false);
+    assert.equal(packageJson.license, "MIT");
+    assert.ok(packageJson.keywords.includes("mcp"));
+    assert.match(readme, /## Quick start/u);
+    assert.match(readme, /## Hosted workspaces/u);
+    assert.match(readme, /## Commands/u);
+    assert.match(readme, /## License/u);
+    assert.match(license, /^MIT License$/mu);
+    assert.match(license, /Copyright \(c\) 2026 21n/u);
+  });
+
   it("accepts only the dedicated Cloudflare tag namespace", () => {
     assert.deepEqual(resolveCloudflareRelease("skillplane-cloudflare-v2.0.0-rc.1"), {
       tag: "skillplane-cloudflare-v2.0.0-rc.1",
