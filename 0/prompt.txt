@@ -1,0 +1,1 @@
+Create a CI pipeline similar to super functions to publish skillplane CLI NPM package with a tag-based approach. Also to deploy skill plane MCP and web apps to Cloudflare on a tag-based approach.
