@@ -1,0 +1,3 @@
+[https://linear.app/21n/issue/SKI-15/support-local-first-workspaces-and-resilient-agent-skill-projections](https://linear.app/21n/issue/SKI-15/support-local-first-workspaces-and-resilient-agent-skill-projections)
+
+Implement this fully
