@@ -1,0 +1,3 @@
+directly create the linear issue without following the skillplane skill
+
+Also for PR #16 - fix valid PR review findings
