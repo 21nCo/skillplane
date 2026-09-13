@@ -1,0 +1,1 @@
+whats pending for merge? I also connected sonarqube via MCP
