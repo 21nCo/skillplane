@@ -1,0 +1,1 @@
+I logged into Cloudflare on aside browser. You can use that or use Wrangler to get the credentials needed for testing and carry out the testing.
