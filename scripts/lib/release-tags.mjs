@@ -213,19 +213,21 @@ export function activeCloudflareVersionId(deployments) {
 
 /** Decide whether a package channel can advance to the requested version. */
 export function packagePublishDecision(publishedVersion, requestedVersion) {
+  const requested = semver.parse(requestedVersion);
+  if (requested?.raw !== requestedVersion) {
+    throw new Error("Requested package version must be an exact SemVer value");
+  }
   if (publishedVersion === undefined) {
-    compareReleaseVersions(requestedVersion, requestedVersion);
     return { publish: true, publishedVersion, requestedVersion };
   }
-  const comparison = compareReleaseVersions(requestedVersion, publishedVersion);
+  const published = semver.parse(publishedVersion);
+  if (published?.raw !== publishedVersion) {
+    throw new Error("Published package version must be an exact SemVer value");
+  }
+  const comparison = semver.compare(requested.version, published.version);
   if (comparison < 0) {
     throw new Error(
       `${requestedVersion} is older than published channel version ${publishedVersion}`,
-    );
-  }
-  if (comparison === 0 && requestedVersion !== publishedVersion) {
-    throw new Error(
-      `${requestedVersion} does not advance published channel version ${publishedVersion}`,
     );
   }
   return {

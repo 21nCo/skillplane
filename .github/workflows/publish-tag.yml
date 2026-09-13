@@ -36,6 +36,7 @@ jobs:
           fi
           workflow="publish-tag.yml"
           active_statuses=(requested waiting pending queued in_progress)
+          poll_interval=60
           while true; do
             blockers=()
             for status in "${active_statuses[@]}"; do
@@ -54,7 +55,13 @@ jobs:
               break
             fi
             echo "Waiting for ${#blockers[@]} earlier package release run(s): ${blockers[*]}"
-            sleep 30
+            sleep "${poll_interval}"
+            if (( poll_interval < 600 )); then
+              poll_interval=$((poll_interval * 2))
+              if (( poll_interval > 600 )); then
+                poll_interval=600
+              fi
+            fi
           done
 
   verify:

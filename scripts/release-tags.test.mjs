@@ -330,9 +330,10 @@ describe("tagged releases", () => {
       () => packagePublishDecision("1.1.0", "1.0.0"),
       /older than published channel version/u,
     );
-    assert.throws(
-      () => packagePublishDecision("1.0.0+one", "1.0.0+two"),
-      /does not advance/u,
+    assert.equal(packagePublishDecision("1.0.0", "1.0.0+build-one").publish, false);
+    assert.equal(
+      packagePublishDecision("1.0.0+build-one", "1.0.0+build-two").publish,
+      false,
     );
   });
 
@@ -394,6 +395,8 @@ describe("tagged releases", () => {
         workflow,
         /queue:\n {4}runs-on: ubuntu-latest\n {4}timeout-minutes: 360/u,
       );
+      assert.match(workflow, /poll_interval=60/u);
+      assert.match(workflow, /poll_interval > 600/u);
     }
   });
 

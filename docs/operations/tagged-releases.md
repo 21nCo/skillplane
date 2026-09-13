@@ -115,18 +115,17 @@ publish or deploy the default branch by accident. For Cloudflare, the tag must
 be at least as new as the active or previously accepted production release.
 The first tagged release over an existing legacy deployment may use the
 protected `allow_legacy_bootstrap` input after reviewers verify that deployment's
-provenance. The override is rejected after the durable ledger contains any
-newer tagged release. If the first bootstrap stops after recording its high-water
-mark but before replacing the legacy Worker, a fresh protected dispatch of that
-same tag may use the override again. Once the ledger is initialized, the override
-cannot advance beyond its recorded high-water tag while the active Worker remains
-unrecognized.
+provenance. With a nonempty ledger, the override accepts only an exact retry of
+the recorded high-water tag. If the first bootstrap stops after recording that
+tag but before replacing the legacy Worker, a fresh protected dispatch of the
+same tag may use the override again; it cannot advance while the active Worker
+remains unrecognized.
 
 The npm workflow preserves every `skillplane` release in an explicit FIFO queue,
 checks the target channel's current registry version before publication, rejects
 version downgrades, and treats an exact already-published version as an
 idempotent retry. GitHub job re-runs are rejected at every package release stage;
 retry the existing tag with a fresh `workflow_dispatch` run. Both FIFO queues use
-GitHub's maximum six-hour job window. If an earlier release remains active beyond
-that window, retry the timed-out tag with a fresh dispatch after the blocker
-settles.
+GitHub's maximum six-hour job window and exponentially back off API polling to a
+ten-minute interval. If an earlier release remains active beyond that window,
+retry the timed-out tag with a fresh dispatch after the blocker settles.
