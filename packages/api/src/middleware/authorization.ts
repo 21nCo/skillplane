@@ -39,7 +39,8 @@ const routeActions: readonly [RegExp, WorkspaceAction, WorkspaceAction][] = [
 export function requiredAction(path: string, method: string): WorkspaceAction | null {
   const read = ["GET", "HEAD", "OPTIONS"].includes(method);
   const match = routeActions.find(([pattern]) => pattern.test(path));
-  return match ? match[read ? 1 : 2] : null;
+  if (!match) return null;
+  return match[read ? 1 : 2];
 }
 
 export function authorizationMiddleware(): MiddlewareHandler<ApiEnvironment> {

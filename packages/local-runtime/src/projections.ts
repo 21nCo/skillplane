@@ -141,13 +141,16 @@ export class Projections {
     this.verify(record);
     return true;
   }
-  verify(record: ProjectionRecord): void {
+  private verifyLink(record: ProjectionRecord): void {
     safeDirectory(dirname(record.path));
     if (
       !lstatSync(record.path).isSymbolicLink() ||
       resolve(dirname(record.path), readlinkSync(record.path)) !== record.generation
     )
       throw new RuntimeError("PROJECTION_DIVERGED");
+  }
+  verify(record: ProjectionRecord): void {
+    this.verifyLink(record);
     if (stableJson(inventory(record.generation)) !== stableJson(record.files))
       throw new RuntimeError("PROJECTION_DIVERGED");
   }
@@ -267,7 +270,9 @@ export class Projections {
     if (present && sameState) {
       return this.store.transaction(() => {
         this.assertCurrent(old);
-        this.verify(old);
+        // Content was hashed before acquiring the writer lock. Protocol writers
+        // replace generations, so only identity and the owned link need rechecking.
+        this.verifyLink(old);
         this.rememberOwner(old, project);
         return old;
       });

@@ -567,4 +567,41 @@ describe("review regressions", () => {
     expect(rolled.digest).toBe(snapshot.bundle.digest);
     expect(runtime.projections.owners(rolled)).toEqual([other]);
   });
+  it("hashes unchanged content once outside the SQLite writer lock", async () => {
+    const { runtime, provider, project, store } = fixture();
+    await provider.create(create);
+    const record = requireValue((await runtime.sync(project))[0]);
+    const other = new LocalStore(store.root);
+    other.db.exec("PRAGMA busy_timeout=1");
+    const verify = runtime.projections.verify.bind(runtime.projections);
+    const calls = vi
+      .spyOn(runtime.projections, "verify")
+      .mockImplementation((value) => {
+        other.transaction(() => other.set("hash-reader-can-write", true));
+        verify(value);
+      });
+    try {
+      expect(requireValue((await runtime.sync(project))[0]).generation).toBe(
+        record.generation,
+      );
+      expect(calls).toHaveBeenCalledOnce();
+    } finally {
+      other.close();
+    }
+  });
+  it("rejects a link changed after hashing but before the no-op transaction", async () => {
+    const { runtime, provider, project, root, store } = fixture();
+    await provider.create(create);
+    const record = requireValue((await runtime.sync(project))[0]);
+    const snapshot = await provider.retrieve(record.skill.id);
+    const transaction = store.transaction.bind(store);
+    vi.spyOn(store, "transaction").mockImplementationOnce((fn) => {
+      unlinkSync(record.path);
+      symlinkSync(root, record.path, "dir");
+      return transaction(fn);
+    });
+    expect(() => runtime.projections.sync(snapshot, record.target, project)).toThrow(
+      "PROJECTION_DIVERGED",
+    );
+  });
 });

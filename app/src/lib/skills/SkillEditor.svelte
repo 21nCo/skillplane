@@ -145,27 +145,30 @@
     </span>
   </div>
 
-  <MarkdownEditor
-    surface="skill-amend"
-    label="Skill instructions"
-    description="Markdown shown to agents when this skill is retrieved."
-    rows={20}
-    required
-    maxBytes={1_048_576}
-    maxCharacters={1_048_576}
-    disabled={!baseFiles}
-    bind:value={markdown}
-    oninput={changed}
-  />
+  {#if baseFiles}
+    <MarkdownEditor
+      surface="skill-amend"
+      label="Skill instructions"
+      description="Markdown shown to agents when this skill is retrieved."
+      rows={20}
+      required
+      maxBytes={1_048_576}
+      maxCharacters={1_048_576}
+      bind:value={markdown}
+      oninput={changed}
+    />
 
-  {#if baseFiles}<CompositionEditor
+    <CompositionEditor
       {workspaceId}
       bind:dependencies
       bind:verify
       bind:verifier
       bind:claims
       onchange={changed}
-    />{:else}<p role="status">Loading composition…</p>{/if}
+    />
+  {:else}
+    <p role="status">Loading composition…</p>
+  {/if}
 
   <div class="metadata-grid">
     <Textarea

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Button } from "@skillplane/ui";
-  import { apiRequest, jsonBody } from "$lib/api/client.js";
+  import { apiRequest, jsonBody, SkillplaneApiError } from "$lib/api/client.js";
   import type { SkillVersion } from "./types.js";
   interface Plan {
     closureDigest: string;
@@ -62,6 +62,7 @@
       evidence: { type: string; uri: string; description: string; sha256: string }[];
     }[];
   } | null>(null);
+  let repairNeeded = $state(false);
   let upgradeKey = $state(crypto.randomUUID());
   let previous = $state<Plan | null>(null);
   let runs = $state<
@@ -82,6 +83,7 @@
       base = version.baseVersionId;
     let active = true;
     plan = null;
+    repairNeeded = false;
     previous = null;
     error = null;
     results = null;
@@ -92,7 +94,12 @@
         if (active && id === version.id) plan = r.plan;
       })
       .catch((e: unknown) => {
-        if (active) error = e instanceof Error ? e.message : "Resolution failed";
+        if (active) {
+          error = e instanceof Error ? e.message : "Resolution failed";
+          repairNeeded =
+            e instanceof SkillplaneApiError &&
+            ["SKILL_VERSION_REVOKED", "SKILL_DEPENDENCY_CONFLICT"].includes(e.code);
+        }
       });
     if (base)
       void apiRequest<{ plan: Plan }>(
@@ -182,7 +189,7 @@
   <h2>Composition and verification</h2>
   {#if error}
     <p role="alert">{error}</p>
-    {#if canEdit && !publicView}
+    {#if repairNeeded && canEdit && !publicView}
       <p>
         To replace a revoked dependency or change an exact version pin, open Content and
         choose Edit.
