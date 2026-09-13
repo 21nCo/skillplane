@@ -1,0 +1,3 @@
+the npm package should be public if not already and should use bare "skillplane" as the package name
+
+the npm token is already present in org secrets
