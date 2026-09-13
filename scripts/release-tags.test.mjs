@@ -405,6 +405,10 @@ describe("tagged releases", () => {
     );
     assert.match(
       publishWorkflow,
+      /pnpm --dir packages\/local-runtime exec esbuild \.\.\/\.\.\/scripts\/verify-npm-release-order\.mjs/u,
+    );
+    assert.match(
+      publishWorkflow,
       /if: \$\{\{ steps\.order\.outputs\.publish == 'true' \}\}/u,
     );
     assert.equal((publishWorkflow.match(/github\.run_attempt != 1/gu) ?? []).length, 2);
