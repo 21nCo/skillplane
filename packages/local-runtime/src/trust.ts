@@ -18,7 +18,7 @@ export function trustEnvelope(bundle: CanonicalBundle): TrustEnvelope {
   for (const [path, bytes] of bundle.files) {
     if (
       path.startsWith("scripts/") ||
-      /\.(?:sh|bash|zsh|fish|ps1|bat|cmd|py|js|mjs|cjs|ts|rb|pl|php|lua|wasm)$/i.test(
+      /\.(?:sh|bash|zsh|fish|ps1|psm1|bat|cmd|py|js|mjs|cjs|ts|rb|pl|php|lua|wasm)$/i.test(
         path,
       ) ||
       new TextDecoder().decode(bytes.subarray(0, 2)) === "#!"
@@ -26,7 +26,7 @@ export function trustEnvelope(bundle: CanonicalBundle): TrustEnvelope {
       scripts[path] = hash(bytes);
     if (path === "skill.json") continue;
     const text = new TextDecoder().decode(bytes);
-    for (const match of text.matchAll(/https?:\/\/[^\s<>"'`\])}]+/g)) {
+    for (const match of text.matchAll(/(?:https?|wss?):\/\/[^\s<>"'`\])}]+/gi)) {
       try {
         network.add(new URL(match[0]).origin);
       } catch {

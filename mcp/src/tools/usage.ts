@@ -7,7 +7,11 @@ import { withDomainTransaction } from "@skillplane/domain";
 import type { SkillUsageReportInput } from "@skillplane/mcp-schema";
 import { resolveSkill, resolveVersion } from "./resolve.js";
 import { principalForWorkspace } from "../auth.js";
-import { executeMutationTool, type McpToolRuntime } from "./shared.js";
+import {
+  mutationAuditContext,
+  executeMutationTool,
+  type McpToolRuntime,
+} from "./shared.js";
 
 export function skillUsageReport(
   runtime: McpToolRuntime,
@@ -56,6 +60,11 @@ export function skillUsageReport(
             execution.requestId,
             async ({ client }) => {
               await insertPrincipalAudit(client, principal, {
+                auditContext: mutationAuditContext(runtime, input.caller),
+                reportedAttribution: {
+                  agent: input.event.agent,
+                  model: input.event.model,
+                },
                 eventType: `usage.${input.event.type}.reported`,
                 action: "skills:read",
                 requestId: execution.requestId,

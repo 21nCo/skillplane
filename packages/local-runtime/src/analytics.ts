@@ -21,7 +21,7 @@ export const usageEventSchema = z
     projectionId: z.string().nullable(),
     installationId: z.uuid(),
     agent: z.string().min(1).max(160),
-    model: z.string().max(160).default("unknown"),
+    model: z.string().min(1).max(160).default("unknown"),
     modelTrust: z.literal("caller-declared"),
     sessionId: z.string().max(200).nullable(),
     delivery: z.enum(["projection", "live-cli", "live-mcp", "cached-cli"]),
@@ -64,17 +64,28 @@ export class UsageQueue {
     this.store.db
       .prepare("INSERT INTO usage(id,payload) VALUES(?,?) ON CONFLICT(id) DO NOTHING")
       .run(event.id, JSON.stringify(event));
+    const stored = this.store.db
+      .prepare("SELECT payload FROM usage WHERE id=?")
+      .get(event.id);
+    if (stableJson(JSON.parse(String(stored?.payload))) !== stableJson(event))
+      throw new RuntimeError("USAGE_EVENT_CONFLICT");
   }
   report(): {
     coverage: string;
     uploadEnabled: boolean;
     counts: Record<string, number>;
     pending: number;
+    quarantined: number;
   } {
     const rows = this.store.db.prepare("SELECT payload,uploaded FROM usage").all();
     const counts: Record<string, number> = {};
     for (const row of rows) {
-      const e = usageEventSchema.parse(JSON.parse(String(row.payload)));
+      let e: UsageEvent;
+      try {
+        e = usageEventSchema.parse(JSON.parse(String(row.payload)));
+      } catch {
+        continue;
+      }
       const key = `${e.type}/${e.delivery}/${e.confidence}`;
       counts[key] = (counts[key] ?? 0) + 1;
     }
@@ -84,6 +95,7 @@ export class UsageQueue {
       uploadEnabled: this.store.get("analytics:consent") === true,
       counts,
       pending: rows.filter((r) => r.uploaded === 0).length,
+      quarantined: rows.filter((r) => r.uploaded === -1).length,
     };
   }
   async upload(
@@ -92,21 +104,58 @@ export class UsageQueue {
   ): Promise<number> {
     if (this.store.get("analytics:consent") !== true)
       throw new RuntimeError("ANALYTICS_CONSENT_REQUIRED");
-    const events = this.store.db
+    if (!workspace?.startsWith("cloud:"))
+      throw new RuntimeError("CLOUD_WORKSPACE_REQUIRED");
+    const rows = this.store.db
       .prepare(
-        "SELECT payload FROM usage WHERE uploaded=0 AND (? IS NULL OR json_extract(payload,'$.workspace')=?) LIMIT 100",
+        "SELECT id,payload FROM usage WHERE uploaded=0 AND CASE WHEN json_valid(payload) THEN json_extract(payload,'$.workspace')=? ELSE 1 END LIMIT 100",
       )
-      .all(workspace ?? null, workspace ?? null)
-      .map((r) => usageEventSchema.parse(JSON.parse(String(r.payload))));
-    if (!events.length) return 0;
-    const ids = await send(events);
-    const sent = new Set(events.map((e) => e.id));
-    if (ids.some((id) => !sent.has(id)))
-      throw new RuntimeError("ANALYTICS_ACK_INVALID");
-    this.store.transaction(() => {
-      for (const id of ids)
-        this.store.db.prepare("UPDATE usage SET uploaded=1 WHERE id=?").run(id);
-    });
-    return ids.length;
+      .all(workspace);
+    let accepted = 0;
+    let lastFailure: unknown;
+    for (const row of rows) {
+      let event: UsageEvent;
+      try {
+        event = usageEventSchema.parse(JSON.parse(String(row.payload)));
+      } catch {
+        this.store.db
+          .prepare("UPDATE usage SET uploaded=-1 WHERE id=?")
+          .run(String(row.id));
+        continue;
+      }
+      if (event.workspace !== workspace) continue;
+      try {
+        const ids = await send([event]);
+        if (ids.some((id) => id !== event.id) || ids.length > 1)
+          throw new RuntimeError("ANALYTICS_ACK_INVALID");
+        if (ids.includes(event.id)) {
+          this.store.db.prepare("UPDATE usage SET uploaded=1 WHERE id=?").run(event.id);
+          accepted++;
+        }
+      } catch (error) {
+        if (error instanceof RuntimeError && error.code === "ANALYTICS_ACK_INVALID")
+          throw error;
+        if (
+          error instanceof RuntimeError &&
+          [
+            "SKILL_NOT_FOUND",
+            "SKILL_VERSION_NOT_FOUND",
+            "NOT_FOUND",
+            "VALIDATION_FAILED",
+            "USAGE_SCOPE_INVALID",
+            "IDEMPOTENCY_KEY_REUSED",
+          ].includes(error.code)
+        )
+          this.store.db
+            .prepare("UPDATE usage SET uploaded=-1 WHERE id=?")
+            .run(event.id);
+        else lastFailure = error;
+      }
+    }
+    if (!accepted && lastFailure)
+      throw lastFailure instanceof Error
+        ? lastFailure
+        : new RuntimeError("CLOUD_UNAVAILABLE");
+    return accepted;
   }
 }

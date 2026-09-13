@@ -272,6 +272,11 @@
 </section>
 
 <style>
+  .coverage-notice {
+    margin-block: var(--sp-space-3);
+    color: var(--sp-color-text-muted);
+    font-size: var(--sp-font-size-2);
+  }
   .analytics-page {
     width: min(100%, 84rem);
     margin: 0 auto;

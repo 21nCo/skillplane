@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { safeName, RuntimeError } from "./contracts.js";
+import { safeName, endpointSchema, RuntimeError } from "./contracts.js";
 import { type LocalStore } from "./store.js";
 
 export interface SecretStore {
@@ -113,19 +113,9 @@ export class Profiles {
     token: string,
   ): Promise<AccountProfile> {
     safeName.parse(alias);
-    const url = new URL(endpoint);
-    if (
-      url.username ||
-      url.password ||
-      url.search ||
-      url.hash ||
-      (url.protocol !== "https:" &&
-        !(
-          url.protocol === "http:" &&
-          ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname)
-        ))
-    )
+    if (!endpointSchema.safeParse(endpoint).success)
       throw new RuntimeError("ENDPOINT_INVALID");
+    const url = new URL(endpoint);
     if (!accountId.trim()) throw new RuntimeError("ACCOUNT_ID_REQUIRED");
     endpoint = url.href;
     const existing = this.store.get<AccountProfile>(`profile:${alias}`);
@@ -149,7 +139,9 @@ export class Profiles {
   }
   get(alias: string, endpoint: string): AccountProfile {
     const profile = this.store.get<AccountProfile>(`profile:${safeName.parse(alias)}`);
-    if (profile?.endpoint !== endpoint)
+    if (!endpointSchema.safeParse(endpoint).success)
+      throw new RuntimeError("ENDPOINT_INVALID");
+    if (profile?.endpoint !== new URL(endpoint).href)
       throw new RuntimeError("PROFILE_IDENTITY_CONFLICT");
     return profile;
   }

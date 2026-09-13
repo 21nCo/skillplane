@@ -107,6 +107,11 @@ export class LocalWorkspaceProvider implements WorkspaceProvider {
       workspace: { id: this.workspace.id },
       caller: declaredCaller(),
     });
+    if (input.composition)
+      throw new RuntimeError(
+        "COMPOSITION_RESOLUTION_REQUIRED",
+        "Create composed skills in a cloud workspace using native MCP",
+      );
     const key = `${this.workspace.id}:create:${input.idempotencyKey}`;
     const replay = this.store.replay<{
       skillId: string;
@@ -226,7 +231,13 @@ export class LocalWorkspaceProvider implements WorkspaceProvider {
     reason: string,
     idempotencyKey: string,
   ): Promise<VersionInfo> {
-    if (!reason.trim() || reason.length > 2000 || !idempotencyKey)
+    if (
+      typeof reason !== "string" ||
+      !reason.trim() ||
+      reason.length > 2000 ||
+      typeof idempotencyKey !== "string" ||
+      !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,254}$/.test(idempotencyKey)
+    )
       throw new RuntimeError("DECISION_INVALID");
     const request = { skillId, reviewId, expectedUpdatedAt, approve, reason };
     const key = `${this.workspace.id}:decide:${idempotencyKey}`;

@@ -204,7 +204,7 @@ before another fails. Re-running sync safely completes the remaining work.
 A SQLite journal survives a crash before the state commit. `doctor`, `resolve`, or
 `sync` reconcile a completed swap; a staged but uninstalled generation is retained
 for inspection. Hash inventories detect edited/extra files. Existing unmanaged
-folders, divergent projections, and symlinks in destination ancestors are refused.
+folders, divergent projections, and symlinks in destination ancestors are refused. On POSIX systems, ancestors must also be owned by the current user or root and must not be writable by other users (root-owned sticky temporary directories are allowed). The runtime shares the current OS user’s security boundary; it does not isolate malicious processes running as that same user.
 `rollback ID` restores the previous verified bundle and pins it so the next invocation
 does not immediately advance again. An explicit later `sync` uses project policy.
 Uninstall removes only the verified owned discovery link. Local authority and old
@@ -262,3 +262,7 @@ offline authority, immutable amendments, multi-account routing, trust expansion,
 projection interruption recovery, ownership/symlink security, and analytics replay.
 The MCP integration suite uses the repository's disposable test database to exercise
 the actual cloud domain and authorization contracts.
+
+Usage uploads require an explicit cloud workspace even after consent. Local workspace events remain local. Uploads acknowledge each event independently; invalid durable payloads and deterministic server validation failures are retained in quarantine and counted by `usage`. Transient failures remain pending.
+
+Local projections and offline authority currently support v1 bundles. V2 composition requires native MCP `skill_resolve`, which returns the pinned dependency closure and verification obligations. Local projection, live refresh into a local projection, and offline v2 creation fail with `COMPOSITION_RESOLUTION_REQUIRED`; they never execute only the parent while omitting its dependencies. Cloud creation/import preserves v2 metadata.

@@ -97,6 +97,12 @@ describe("cloud usage ingestion", () => {
   it("authorizes exact version, fences the write and stores caller claims as reported", async () => {
     const result = await skillUsageReport(runtime, input);
     expect(result.isError).not.toBe(true);
+    expect(mocks.principalForWorkspace).toHaveBeenCalledWith(
+      runtime.services,
+      runtime.identity,
+      "workspace:test",
+      "skills:read",
+    );
     expect(mocks.resolveVersion).toHaveBeenCalledWith(
       runtime,
       expect.anything(),
@@ -107,6 +113,7 @@ describe("cloud usage ingestion", () => {
       expect.anything(),
       expect.anything(),
       expect.objectContaining({
+        reportedAttribution: { agent: input.event.agent, model: input.event.model },
         metadata: {
           usage: expect.objectContaining({
             confidence: "reported",
@@ -114,6 +121,23 @@ describe("cloud usage ingestion", () => {
             delivery: "cached-cli",
           }),
         },
+      }),
+    );
+    expect(mocks.complete).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      200,
+      { acceptedId: input.event.id },
+    );
+    expect(result.structuredContent).toMatchObject({
+      acceptedId: input.event.id,
+      confidence: "reported",
+    });
+    expect(mocks.insert).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({
+        auditContext: expect.objectContaining({ channel: "mcp", caller: input.caller }),
       }),
     );
     expect(mocks.transaction).toHaveBeenCalledWith(
@@ -129,7 +153,7 @@ describe("cloud usage ingestion", () => {
     expect(mocks.insert).not.toHaveBeenCalled();
   });
   it("denies cross-workspace access before claiming an event receipt", async () => {
-    mocks.resolveSkill.mockRejectedValue(new Error("WORKSPACE_FORBIDDEN"));
+    mocks.principalForWorkspace.mockResolvedValue(null);
     const result = await skillUsageReport(runtime, input);
     expect(result.isError).toBe(true);
     expect(mocks.claim).not.toHaveBeenCalled();

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { requiredScopesForRequest } from "./auth.js";
-const scopes = (name: string) =>
+const scopes = (name: string, args: Record<string, unknown> = {}) =>
   requiredScopesForRequest(
     new Request("https://example.test/mcp", {
       method: "POST",
@@ -8,11 +8,18 @@ const scopes = (name: string) =>
         jsonrpc: "2.0",
         id: 1,
         method: "tools/call",
-        params: { name, arguments: {} },
+        params: { name, arguments: args },
       }),
     }),
   );
 describe("composition token scopes", () => {
+  it("preserves v1 write-only creation while requiring read access for composition", async () => {
+    expect(await scopes("skill_create")).toEqual(["skills:write"]);
+    expect(await scopes("skill_create", { composition: {} })).toEqual([
+      "skills:read",
+      "skills:write",
+    ]);
+  });
   it.each([
     "skill_execution_report",
     "skill_composition_candidate_create",

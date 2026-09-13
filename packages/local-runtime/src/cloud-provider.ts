@@ -5,6 +5,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { canonicalizeBundleFiles, skillJsonSchema } from "@skillplane/storage";
 import {
+  mcpErrorSchema,
   skillRetrieveOutputSchema,
   skillAssetRetrieveOutputSchema,
   skillsListOutputSchema,
@@ -12,6 +13,7 @@ import {
   skillCreateOutputSchema,
   skillAmendOutputSchema,
   skillCandidatesListOutputSchema,
+  skillCandidateDecisionOutputSchema,
   skillUsageReportOutputSchema,
   type CallerDeclaration,
 } from "@skillplane/mcp-schema";
@@ -53,11 +55,15 @@ export class McpTransport implements CloudTransport {
       const result = await client.callTool({ name, arguments: args }, undefined, {
         timeout: 15000,
       });
-      if (result.isError)
+      if (result.isError) {
+        const parsed = mcpErrorSchema.safeParse(result.structuredContent);
+        if (parsed.success)
+          throw new RuntimeError(parsed.data.error.code, parsed.data.error.message);
         throw new RuntimeError(
           "CLOUD_REQUEST_REJECTED",
           JSON.stringify(result.structuredContent ?? result.content),
         );
+      }
       if (result.structuredContent) return result.structuredContent;
       const content = result.content as {
         type: string;
@@ -73,33 +79,38 @@ export class McpTransport implements CloudTransport {
         "Cloud connection failed or credentials expired",
       );
     } finally {
-      await client.close();
+      await client.close().catch(() => undefined);
     }
   }
   async download(url: string, max: number): Promise<Uint8Array> {
     if (new URL(url).origin !== new URL(this.endpoint).origin)
       throw new RuntimeError("DOWNLOAD_ORIGIN_INVALID");
-    const response = await fetch(url, {
-      headers: { Authorization: `Bearer ${await this.token()}` },
-      redirect: "error",
-      signal: AbortSignal.timeout(15000),
-    });
-    if (!response.ok || !response.body) throw new RuntimeError("CLOUD_UNAVAILABLE");
-    const reader = response.body.getReader();
-    const chunks: Uint8Array[] = [];
-    let size = 0;
     try {
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        size += value.length;
-        if (size > max) throw new RuntimeError("ASSET_TOO_LARGE");
-        chunks.push(value);
+      const response = await fetch(url, {
+        headers: { Authorization: `Bearer ${await this.token()}` },
+        redirect: "error",
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!response.ok || !response.body) throw new RuntimeError("CLOUD_UNAVAILABLE");
+      const reader = response.body.getReader();
+      const chunks: Uint8Array[] = [];
+      let size = 0;
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          size += value.length;
+          if (size > max) throw new RuntimeError("ASSET_TOO_LARGE");
+          chunks.push(value);
+        }
+      } finally {
+        await reader.cancel().catch(() => undefined);
       }
-    } finally {
-      await reader.cancel();
+      return Buffer.concat(chunks);
+    } catch (error) {
+      if (error instanceof RuntimeError) throw error;
+      throw new RuntimeError("CLOUD_UNAVAILABLE", "Asset download failed");
     }
-    return Buffer.concat(chunks);
   }
 }
 export class CloudWorkspaceProvider implements WorkspaceProvider {
@@ -223,6 +234,15 @@ export class CloudWorkspaceProvider implements WorkspaceProvider {
         asset.bundleDigest !== output.version.digest
       )
         throw new RuntimeError("ASSET_IDENTITY_MISMATCH");
+      const max = Math.min(descriptor.byteSize, 5 * 1024 * 1024);
+      if (
+        descriptor.byteSize > max ||
+        (asset.delivery === "text" &&
+          Buffer.byteLength(requireValue(asset.text), "utf8") > max) ||
+        (asset.delivery === "base64" &&
+          requireValue(asset.base64).length > 4 * Math.ceil(max / 3))
+      )
+        throw new RuntimeError("ASSET_TOO_LARGE");
       const bytes =
         asset.delivery === "text"
           ? Buffer.from(requireValue(asset.text))
@@ -244,18 +264,30 @@ export class CloudWorkspaceProvider implements WorkspaceProvider {
       throw new RuntimeError("DIGEST_MISMATCH");
     return {
       workspace: this.workspace,
-      skill: output.skill,
+      skill: {
+        id: output.skill.id,
+        slug: immutableSkill.slug,
+        name: immutableSkill.name,
+        description: immutableSkill.description,
+      },
       version: output.version,
       bundle,
     };
   }
-  async reportUsage(event: UsageEvent): Promise<string> {
+  async reportUsage(
+    event: UsageEvent,
+    membership?: ReadonlySet<string>,
+  ): Promise<string> {
     if (
       event.workspace !== workspaceKey(this.workspace) ||
       event.type === "skill_success_verified"
     )
       throw new RuntimeError("USAGE_SCOPE_INVALID");
-    if (!(await this.list()).some((skill) => skill.id === event.skillId))
+    if (
+      !(membership ?? new Set((await this.list()).map((skill) => skill.id))).has(
+        event.skillId,
+      )
+    )
       throw new RuntimeError("SKILL_NOT_FOUND");
     const {
       id,
@@ -331,6 +363,7 @@ export class CloudWorkspaceProvider implements WorkspaceProvider {
           cursor,
         }),
       );
+      if (page.skillId !== skillId) throw new RuntimeError("SKILL_MISMATCH");
       items.push(...page.candidates);
       cursor = page.nextCursor;
       if (cursor && seen.has(cursor)) throw new RuntimeError("PAGINATION_INVALID");
@@ -348,12 +381,16 @@ export class CloudWorkspaceProvider implements WorkspaceProvider {
   ): Promise<unknown> {
     if (!(await this.list()).some((s) => s.id === skillId))
       throw new RuntimeError("SKILL_NOT_FOUND");
-    return this.call(approve ? "skill_candidate_approve" : "skill_candidate_reject", {
-      skill: { id: skillId },
-      reviewId,
-      expectedUpdatedAt,
-      reason,
-      idempotencyKey,
-    });
+    const output = skillCandidateDecisionOutputSchema.parse(
+      await this.call(approve ? "skill_candidate_approve" : "skill_candidate_reject", {
+        skill: { id: skillId },
+        reviewId,
+        expectedUpdatedAt,
+        reason,
+        idempotencyKey,
+      }),
+    );
+    if (output.skillId !== skillId) throw new RuntimeError("SKILL_MISMATCH");
+    return output;
   }
 }

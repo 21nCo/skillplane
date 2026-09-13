@@ -1,7 +1,8 @@
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { execFileSync, spawnSync } from "node:child_process";
 import {
   mkdtempSync,
+  rmSync,
   realpathSync,
   writeFileSync,
   readFileSync,
@@ -10,18 +11,24 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
-const cli = resolve("dist/skillplane.mjs");
+const packageRoot = resolve(import.meta.dirname, "..");
+const roots: string[] = [];
+afterAll(() => {
+  for (const root of roots) rmSync(root, { recursive: true, force: true });
+});
+const cli = resolve(packageRoot, "dist/skillplane.mjs");
 beforeAll(() => {
-  execFileSync(process.execPath, ["build.mjs"], { cwd: process.cwd() });
+  execFileSync(process.execPath, ["build.mjs"], { cwd: packageRoot });
 });
 describe("packaged global CLI", () => {
   it("installs and completes offline initialization, creation, invocation, export and diagnostics", () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "skillplane-cli-")));
+    roots.push(root);
     const project = join(root, "project");
     mkdirSync(project);
     const bin = join(root, "bin");
     execFileSync(process.execPath, [
-      resolve("../../scripts/install-local-client.mjs"),
+      resolve(packageRoot, "../../scripts/install-local-client.mjs"),
       bin,
     ]);
     const installed = join(bin, "skillplane");
@@ -61,7 +68,7 @@ describe("packaged global CLI", () => {
     run("uninstall", record.id);
     expect(run("doctor").projections).toHaveLength(0);
     const overwrite = spawnSync(process.execPath, [
-      resolve("../../scripts/install-local-client.mjs"),
+      resolve(packageRoot, "../../scripts/install-local-client.mjs"),
       bin,
     ]);
     expect(overwrite.status).not.toBe(0);

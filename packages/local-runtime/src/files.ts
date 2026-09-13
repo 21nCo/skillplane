@@ -10,6 +10,7 @@ import {
   fsyncSync,
   renameSync,
   readdirSync,
+  rmSync,
 } from "node:fs";
 import { dirname, resolve, parse, join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
@@ -34,6 +35,18 @@ export function safeDirectory(path: string): string {
       mkdirSync(current, { mode: 0o700 });
     }
     const stat = lstatSync(current);
+    // Local installation paths must not be replaceable by other OS users.
+    // A root-owned sticky temporary directory protects the caller-owned child.
+    const uid = process.getuid?.();
+    if (
+      uid !== undefined &&
+      ((stat.uid !== uid && stat.uid !== 0) ||
+        ((stat.mode & 0o022) !== 0 && !(stat.uid === 0 && stat.mode & 0o1000)))
+    )
+      throw new RuntimeError(
+        "UNSAFE_DIRECTORY",
+        "Projection ancestors must be owned by this user or root and not writable by other users",
+      );
     if (!stat.isDirectory() || stat.isSymbolicLink())
       throw new RuntimeError("SYMLINK_FORBIDDEN");
   }
@@ -63,15 +76,23 @@ export function writeAtomic(path: string, data: string | Uint8Array): void {
   if (existsSync(path) && !lstatSync(path).isFile())
     throw new RuntimeError("UNSAFE_FILE");
   const temp = join(parent, `.skillplane-write-${randomUUID()}`);
-  const fd = openSync(temp, "wx", 0o600);
   try {
-    writeFileSync(fd, data);
-    fsyncSync(fd);
+    const fd = openSync(
+      temp,
+      constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+      0o600,
+    );
+    try {
+      writeFileSync(fd, data);
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+    renameSync(temp, path);
+    syncDirectory(parent);
   } finally {
-    closeSync(fd);
+    rmSync(temp, { force: true });
   }
-  renameSync(temp, path);
-  syncDirectory(parent);
 }
 export function inventory(root: string): Record<string, string> {
   const result: Record<string, string> = {};

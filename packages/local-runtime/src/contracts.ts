@@ -10,7 +10,12 @@ export const safeName = z
   .max(64)
   .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
 export const endpointSchema = z.url().refine((value) => {
-  const url = new URL(value);
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
   return (
     !url.username &&
     !url.password &&
@@ -164,6 +169,8 @@ export class RuntimeError extends Error {
     super(message);
   }
 }
+import { rcompare, valid } from "semver";
+
 export function selectVersion(versions: VersionInfo[], policy: Policy): VersionInfo {
   const rule = policy.version;
   const found = versions
@@ -176,14 +183,9 @@ export function selectVersion(versions: VersionInfo[], policy: Policy): VersionI
             : v.semanticVersion?.split(".")[0] === String(rule.major))),
     )
     .sort((a, b) => {
-      const av = (a.semanticVersion ?? "0.0.0").split(".").map(Number);
-      const bv = (b.semanticVersion ?? "0.0.0").split(".").map(Number);
-      return (
-        requireValue(bv[0]) - requireValue(av[0]) ||
-        requireValue(bv[1]) - requireValue(av[1]) ||
-        requireValue(bv[2]) - requireValue(av[2]) ||
-        b.createdAt.localeCompare(a.createdAt)
-      );
+      const av = valid(a.semanticVersion ?? "") ?? "0.0.0";
+      const bv = valid(b.semanticVersion ?? "") ?? "0.0.0";
+      return rcompare(av, bv) || b.createdAt.localeCompare(a.createdAt);
     })[0];
   if (!found) throw new RuntimeError("VERSION_UNAVAILABLE");
   return found;

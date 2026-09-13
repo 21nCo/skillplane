@@ -9,7 +9,7 @@ import {
 } from "node:fs";
 import { join, relative, resolve, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
-import { stableJson } from "@skillplane/storage";
+import { stableJson, type CanonicalBundle } from "@skillplane/storage";
 import { type LocalStore } from "./store.js";
 import { hash, inventory, safeDirectory, syncDirectory, writeAtomic } from "./files.js";
 import { RuntimeError, workspaceKey, type Snapshot, type Target } from "./contracts.js";
@@ -17,6 +17,7 @@ import { trustEnvelope, trustExpands, type TrustEnvelope } from "./trust.js";
 import { projectionName, renderLauncher, targetDirectory } from "./adapters.js";
 import { UsageQueue } from "./analytics.js";
 export interface ProjectionRecord {
+  project?: string;
   formatVersion: 1;
   id: string;
   eventId: string;
@@ -32,6 +33,13 @@ export interface ProjectionRecord {
   synchronizedAt: string;
   trust: TrustEnvelope;
   files: Record<string, string>;
+}
+export function assertProjectionSupported(bundle: CanonicalBundle): void {
+  if (bundle.skill.formatVersion === 2)
+    throw new RuntimeError(
+      "COMPOSITION_RESOLUTION_REQUIRED",
+      "Use native MCP skill_resolve for composed skills; local projections cannot materialize dependency closures",
+    );
 }
 export class Projections {
   constructor(
@@ -55,6 +63,13 @@ export class Projections {
   }
   recover(): string[] {
     const recovered: string[] = [];
+    for (const [key, record] of this.store.entries<ProjectionRecord>(
+      "uninstall-journal:",
+    )) {
+      this.finishUninstall(record);
+      this.store.delete(key);
+      recovered.push(record.id);
+    }
     this.store.transaction(() => {
       for (const [key, record] of this.store.entries<ProjectionRecord>("journal:")) {
         if (
@@ -82,6 +97,7 @@ export class Projections {
     project: string,
     name = snapshot.skill.slug,
   ): ProjectionRecord {
+    assertProjectionSupported(snapshot.bundle);
     if (
       !/^[A-Za-z0-9:_-]{1,160}$/.test(snapshot.version.id) ||
       (snapshot.version.semanticVersion !== null &&
@@ -149,6 +165,7 @@ export class Projections {
     const synchronizedAt = new Date().toISOString();
     const record: ProjectionRecord = {
       formatVersion: 1,
+      project: resolve(project),
       id,
       eventId: randomUUID(),
       installationId: requireValue(this.store.get<string>("installation")),
@@ -184,6 +201,7 @@ export class Projections {
     writeAtomic(
       join(generation, "SKILL.md"),
       renderLauncher({
+        home: this.store.root,
         id,
         name,
         description: snapshot.skill.description,
@@ -282,17 +300,27 @@ export class Projections {
           version: { kind: "pinned", id: previous.version.id },
         },
       },
-      dirname(previous.path),
+      previous.project ?? dirname(previous.path),
       previous.name,
     );
   }
-  uninstall(id: string): void {
-    const record = this.get(id);
-    this.store.transaction(() => {
+  private finishUninstall(record: ProjectionRecord): void {
+    safeDirectory(dirname(record.path));
+    try {
+      lstatSync(record.path);
       this.verify(record);
       unlinkSync(record.path);
       syncDirectory(dirname(record.path));
-      this.store.delete(`projection:${id}`);
-    });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    this.store.delete(`projection:${record.id}`);
+  }
+  uninstall(id: string): void {
+    const record = this.get(id);
+    this.verify(record);
+    this.store.set(`uninstall-journal:${id}`, record);
+    this.finishUninstall(record);
+    this.store.delete(`uninstall-journal:${id}`);
   }
 }

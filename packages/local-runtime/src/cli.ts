@@ -62,7 +62,10 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
   const project = resolve(requireValue(value("--project", process.cwd())));
   const agent = requireValue(value("--agent", "unknown"));
   const target = value("--target");
-  const [command, ...rest] = args;
+  const flags = new Set(
+    args.filter((a) => ["--live-only", "--cache-only", "--online"].includes(a)),
+  );
+  const [command, ...rest] = args.filter((a) => !flags.has(a));
   if (!command || ["help", "--help", "-h"].includes(command)) {
     console.log(help);
     return;
@@ -194,8 +197,8 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
         break;
       case "resolve":
         result = await runtime.resolve(required(0), {
-          liveOnly: rest.includes("--live-only"),
-          cacheOnly: rest.includes("--cache-only"),
+          liveOnly: flags.has("--live-only"),
+          cacheOnly: flags.has("--cache-only"),
           agent,
         });
         break;
@@ -214,7 +217,7 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
         result = { uninstalled: required(0) };
         break;
       case "doctor":
-        result = await runtime.doctor(rest.includes("--online"), project);
+        result = await runtime.doctor(flags.has("--online"), project);
         break;
       case "usage":
         result = runtime.usage.report();
@@ -227,10 +230,12 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
             "CLOUD_WORKSPACE_REQUIRED",
             "Local workspace events remain local; select an explicit cloud primary to upload its events",
           );
+        const membership = new Set((await provider.list()).map((skill) => skill.id));
         result = {
           uploaded: await runtime.usage.upload(async (events) => {
             const ids: string[] = [];
-            for (const event of events) ids.push(await provider.reportUsage(event));
+            for (const event of events)
+              ids.push(await provider.reportUsage(event, membership));
             return ids;
           }, workspaceKey(workspace)),
         };

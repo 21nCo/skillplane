@@ -69,14 +69,29 @@ function fixture() {
             id: result.skillId,
             workspaceId: workspace.id,
             workspaceSlug: "work",
-            ...snapshot.bundle.skill,
+            slug: snapshot.bundle.skill.slug,
+            name: snapshot.bundle.skill.name,
+            description: snapshot.bundle.skill.description,
+            tags: snapshot.bundle.skill.tags,
             visibility: "private",
             currentVersion: { id: result.versionId, semanticVersion: "1.0.0" },
             archivedAt: null,
             createdAt: now,
             updatedAt: now,
           },
-          version: {},
+          version: {
+            id: result.versionId,
+            revision: 1,
+            semanticVersion: "1.0.0",
+            state: "published",
+            source: "human",
+            digest: snapshot.bundle.digest,
+            baseVersionId: null,
+            proposedBump: null,
+            changeSummary: "Created",
+            createdAt: now,
+            publishedAt: now,
+          },
         };
       }
       if (name === "skills_list")
@@ -193,6 +208,14 @@ function fixture() {
   };
 }
 describe("cloud provider transport contract", () => {
+  it("creates through the shared immutable bundle contract", async () => {
+    const { cloud } = fixture();
+    const created = await cloud.create(request);
+    expect(created.skillId).toBeTruthy();
+    expect(
+      (await cloud.retrieve(created.skillId, created.versionId)).bundle.skill.name,
+    ).toBe(request.name);
+  });
   it("uses immutable metadata and verifies every file instead of mutable catalog metadata", async () => {
     const { local, cloud, calls } = fixture();
     const initial = await local.create(request);
@@ -200,6 +223,7 @@ describe("cloud provider transport contract", () => {
     const cloudSnapshot = await cloud.retrieve(initial.skillId);
     expect(cloudSnapshot.bundle.digest).toBe(localSnapshot.bundle.digest);
     expect(cloudSnapshot.bundle.skill.description).toBe(request.description);
+    expect(cloudSnapshot.skill.description).toBe(request.description);
     expect(calls.filter((name) => name === "skill_asset_retrieve")).toHaveLength(2);
     expect(requireValue((await cloud.list())[0]).id).toBe(initial.skillId);
     expect(requireValue((await cloud.versions(initial.skillId))[0]).id).toBe(
@@ -219,7 +243,10 @@ describe("cloud provider transport contract", () => {
       async call(name, args) {
         const result = await transport.call(name, args);
         return name === "skill_asset_retrieve"
-          ? { ...(result as object), text: "tampered" }
+          ? {
+              ...(result as object),
+              text: "x".repeat(String((result as { text: string }).text).length),
+            }
           : result;
       },
     });

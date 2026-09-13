@@ -19,7 +19,7 @@ export const skillUsageReportInputSchema = z
         ]),
         installationId: z.uuid(),
         agent: z.string().min(1).max(160),
-        model: z.string().max(160),
+        model: z.string().min(1).max(160),
         sessionId: z.string().max(200).nullable(),
         delivery: z.enum(["projection", "live-cli", "live-mcp", "cached-cli"]),
         freshness: z.enum(["verified", "unverified", "pinned"]),

@@ -573,9 +573,14 @@ describe("analytics boundaries and replay", () => {
     );
     expect(send).not.toHaveBeenCalled();
     store.set("analytics:consent", true);
-    const count = await runtime.usage.upload(send);
-    expect(count).toBe(4);
-    expect(await runtime.usage.upload(send)).toBe(0);
+    await expect(runtime.usage.upload(send)).rejects.toThrow(
+      "CLOUD_WORKSPACE_REQUIRED",
+    );
+    await expect(
+      runtime.usage.upload(send, workspaceKey(runtime.project(project).primary)),
+    ).rejects.toThrow("CLOUD_WORKSPACE_REQUIRED");
+    expect(await runtime.usage.upload(send, "cloud:test")).toBe(0);
+    expect(send).not.toHaveBeenCalled();
     expect(runtime.usage.report().coverage).toContain("not complete usage totals");
   });
 });

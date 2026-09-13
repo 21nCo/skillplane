@@ -296,7 +296,7 @@ export const skillplaneMcpDeclaration = defineMcpFnServer<McpToolRuntime>({
       name: "skill_verification_run_start",
       title: "Start independent verification",
       description:
-        "Record a verifier run tied to the locked closure, repository commit and environment. The declared executor must differ from the authenticated verifier.",
+        "Record a verifier run tied to the locked closure, repository commit and environment. The executor in the immutable execution record must differ from the authenticated verifier.",
       input: verificationStartInputSchema,
       output: compositionMutationOutputSchema,
       annotations: MUTATION_ANNOTATIONS,

@@ -7,7 +7,12 @@ import { type LocalStore } from "./store.js";
 import { Profiles } from "./profiles.js";
 import { LocalWorkspaceProvider } from "./local-provider.js";
 import { CloudWorkspaceProvider } from "./cloud-provider.js";
-import { Projections, type ProjectionRecord } from "./projections.js";
+import { targetDirectory } from "./adapters.js";
+import {
+  Projections,
+  assertProjectionSupported,
+  type ProjectionRecord,
+} from "./projections.js";
 import { UsageQueue } from "./analytics.js";
 import { readSafe, writeAtomic, safeDirectory } from "./files.js";
 import { trustEnvelope, trustExpands } from "./trust.js";
@@ -164,13 +169,42 @@ export class Runtime {
           target.policy,
         );
         const snapshot = await item.provider.retrieve(item.skillId, selected.id);
+        assertProjectionSupported(snapshot.bundle);
         plans.push({ target, item, snapshot });
       }
+    const desired = new Set<string>();
+    for (const { target, item } of plans) {
+      const path = join(targetDirectory(target, project), item.name);
+      if (desired.has(path))
+        throw new RuntimeError(
+          "PROJECTION_COLLISION",
+          `Duplicate target destination: ${path}`,
+        );
+      desired.add(path);
+    }
+    const projectKey = `project-projections:${resolve(project)}`;
+    const previous = [
+      ...new Set([
+        ...(this.store.get<string[]>(projectKey) ?? []),
+        ...this.store
+          .entries<ProjectionRecord>("projection:")
+          .filter(([, record]) => record.project === resolve(project))
+          .map(([, record]) => record.id),
+      ]),
+    ];
     const records = [];
     for (const { target, item, snapshot } of plans) {
       this.cache(snapshot);
       records.push(this.projections.sync(snapshot, target, project, item.name));
     }
+    for (const id of previous) {
+      const record = this.store.get<ProjectionRecord>(`projection:${id}`);
+      if (record && !desired.has(record.path)) this.projections.uninstall(id);
+    }
+    this.store.set(
+      projectKey,
+      records.map((record) => record.id),
+    );
     return records;
   }
   async resolve(
@@ -224,17 +258,30 @@ export class Runtime {
         version: record.version,
         digest: record.digest,
       });
-      const selected = selectVersion(
-        candidates.map((c) => c.version),
-        policy,
-      );
-      const cached = requireValue(candidates.find((c) => c.version.id === selected.id));
-      snapshot = {
-        workspace: cached.workspace,
-        skill: cached.skill,
-        version: cached.version,
-        bundle: await this.store.bundle(cached.digest),
-      };
+      while (candidates.length) {
+        const selected = selectVersion(
+          candidates.map((c) => c.version),
+          policy,
+        );
+        const index = candidates.findIndex((c) => c.version.id === selected.id);
+        const cached = requireValue(candidates.splice(index, 1)[0]);
+        try {
+          snapshot = {
+            workspace: cached.workspace,
+            skill: cached.skill,
+            version: cached.version,
+            bundle: await this.store.bundle(cached.digest),
+          };
+          break;
+        } catch (error) {
+          if (policy.mode === "pinned") throw error;
+        }
+      }
+      if (!snapshot)
+        throw new RuntimeError(
+          "VERSION_UNAVAILABLE",
+          "No intact cached version is available",
+        );
     }
     if (
       workspaceKey(snapshot.workspace) !== workspaceKey(record.workspace) ||
@@ -243,6 +290,7 @@ export class Runtime {
       snapshot.version.state !== "published"
     )
       throw new RuntimeError("SNAPSHOT_IDENTITY_MISMATCH");
+    assertProjectionSupported(snapshot.bundle);
     const trust = trustEnvelope(snapshot.bundle);
     // Even approved frontmatter changes must first be installed by sync, because
     // the current host already parsed the old projection metadata.
@@ -271,6 +319,14 @@ export class Runtime {
         : source === "live-cli"
           ? "verified"
           : "unverified";
+    let resourceDirectory: string | undefined;
+    if (!same) {
+      resourceDirectory = safeDirectory(
+        join(this.store.root, "resolved", snapshot.bundle.digest.slice(7)),
+      );
+      for (const [path, bytes] of snapshot.bundle.files)
+        writeAtomic(join(resourceDirectory, path), bytes);
+    }
     this.store.transaction(() => {
       for (const type of ["skill_resolved", "skill_invoked_observed"] as const)
         this.usage.record({
@@ -292,14 +348,6 @@ export class Runtime {
           evidence: null,
         });
     });
-    let resourceDirectory: string | undefined;
-    if (!same) {
-      resourceDirectory = safeDirectory(
-        join(this.store.root, "resolved", snapshot.bundle.digest.slice(7)),
-      );
-      for (const [path, bytes] of snapshot.bundle.files)
-        writeAtomic(join(resourceDirectory, path), bytes);
-    }
     return {
       source,
       freshness,
@@ -386,7 +434,12 @@ export class Runtime {
       cloudChecked: checkCloud,
       cliAvailable: (process.env.PATH ?? "")
         .split(process.platform === "win32" ? ";" : ":")
-        .some((directory) => existsSync(join(directory, "skillplane"))),
+        .some((directory) =>
+          (process.platform === "win32"
+            ? ["skillplane.cmd", "skillplane.ps1", "skillplane"]
+            : ["skillplane"]
+          ).some((name) => existsSync(join(directory, name))),
+        ),
       projectStatus: project
         ? await this.projectHealth(project, checkCloud)
         : "not-checked",
@@ -417,6 +470,15 @@ export class Runtime {
   ): Promise<unknown> {
     const bundle = await canonicalizeBundle(bytes);
     return this.create(context, {
+      ...(bundle.skill.formatVersion === 2
+        ? {
+            composition: {
+              dependencies: bundle.skill.dependencies,
+              verify: Boolean(bundle.skill.entrypoints.verify),
+              blocking: bundle.skill.verification?.blocking ?? false,
+            },
+          }
+        : {}),
       slug: bundle.skill.slug,
       name: bundle.skill.name,
       description: bundle.skill.description,
@@ -424,7 +486,14 @@ export class Runtime {
       visibility: "private",
       instructions: new TextDecoder().decode(bundle.files.get("SKILL.md")),
       assets: [...bundle.files]
-        .filter(([p]) => !["SKILL.md", "skill.json"].includes(p))
+        .filter(
+          ([p]) =>
+            ![
+              "SKILL.md",
+              "skill.json",
+              ...(bundle.skill.formatVersion === 2 ? ["skill.lock.json"] : []),
+            ].includes(p),
+        )
         .map(([path, content]) => ({
           path,
           contentBase64: Buffer.from(content).toString("base64"),
