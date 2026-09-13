@@ -1,0 +1,67 @@
+[
+  {
+    "id": "datafn.read-surfaces",
+    "statement": "Every application read surface is inventoried and routes through an approved DataFn client or adapter.",
+    "severity": "blocking",
+    "scope": "Every page loader, component query, server route, scheduled job, export and background read.",
+    "requiredEvidence": [
+      "read-surface-inventory",
+      "static-call-path-trace",
+      "representative-runtime-traces",
+      "read-integration-tests"
+    ],
+    "prohibitedBypasses": [
+      "Direct database queries outside approved adapters",
+      "Parallel API clients bypassing DataFn"
+    ],
+    "rules": {
+      "pass": "All relevant surfaces are inventoried, reconciled to source paths and evidenced at the exact commit. Required static, runtime and test evidence independently confirms approved routing.",
+      "fail": "Any relevant surface uses a prohibited bypass or authorization or tenant-isolation tests fail.",
+      "unknown": "Any surface is unaccounted for, any required evidence is missing, or the verifier cannot independently establish routing."
+    }
+  },
+  {
+    "id": "datafn.mutations",
+    "statement": "Every application mutation routes through an approved DataFn mutation API.",
+    "severity": "blocking",
+    "scope": "Every form action, server mutation, upload, scheduled write and background mutation.",
+    "requiredEvidence": [
+      "mutation-inventory",
+      "static-bypass-scan",
+      "successful-mutation-tests",
+      "failing-mutation-tests",
+      "authorization-evidence",
+      "tenant-isolation-evidence"
+    ],
+    "prohibitedBypasses": [
+      "Direct writes outside approved adapters",
+      "Mutations with missing authorization or tenant scope"
+    ],
+    "rules": {
+      "pass": "All relevant surfaces are inventoried, reconciled to source paths and evidenced at the exact commit. Required static, runtime and test evidence independently confirms approved routing.",
+      "fail": "Any relevant surface uses a prohibited bypass or authorization or tenant-isolation tests fail.",
+      "unknown": "Any surface is unaccounted for, any required evidence is missing, or the verifier cannot independently establish routing."
+    }
+  },
+  {
+    "id": "datafn.no-bypass",
+    "statement": "No unaccounted database, storage or parallel API access bypasses approved adapter boundaries.",
+    "severity": "blocking",
+    "scope": "The complete repository at the attested commit, including background jobs and generated routes.",
+    "requiredEvidence": [
+      "approved-adapter-boundaries",
+      "repository-wide-bypass-scan",
+      "inventory-reconciliation",
+      "runtime-bypass-probes"
+    ],
+    "prohibitedBypasses": [
+      "Unapproved database or storage clients",
+      "Unused DataFn endpoints presented as adoption evidence"
+    ],
+    "rules": {
+      "pass": "All relevant surfaces are inventoried, reconciled to source paths and evidenced at the exact commit. Required static, runtime and test evidence independently confirms approved routing.",
+      "fail": "Any relevant surface uses a prohibited bypass or authorization or tenant-isolation tests fail.",
+      "unknown": "Any surface is unaccounted for, any required evidence is missing, or the verifier cannot independently establish routing."
+    }
+  }
+]

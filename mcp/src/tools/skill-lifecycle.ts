@@ -251,12 +251,30 @@ export function skillCreate(runtime: McpToolRuntime, input: SkillCreateInput) {
       }
       const canonical = await canonicalizeBundleFiles({
         skill: {
-          formatVersion: 1,
+          ...(input.composition
+            ? {
+                formatVersion: 2 as const,
+                entrypoints: {
+                  execute: "SKILL.md" as const,
+                  ...(input.composition.verify
+                    ? { verify: "verification/VERIFY.md" as const }
+                    : {}),
+                },
+                dependencies: input.composition.dependencies,
+                ...(input.composition.verify
+                  ? {
+                      verification: {
+                        claims: "verification/claims.json" as const,
+                        blocking: input.composition.blocking,
+                      },
+                    }
+                  : {}),
+              }
+            : { formatVersion: 1 as const, entrypoint: "SKILL.md" as const }),
           name: input.name,
           slug: input.slug,
           description: input.description,
           tags: input.tags,
-          entrypoint: "SKILL.md",
         },
         files,
       });

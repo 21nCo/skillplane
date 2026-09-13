@@ -188,8 +188,14 @@ export class PostgresPublicProjectionDirectory implements PublicProjectionDirect
                EXCLUDED.projection_sequence
          RETURNING workspace_id
        )
+       , withdrawn AS (
+         INSERT INTO public_skill_version_lifecycle (version_id,workspace_id,reason,withdrawn_sequence)
+         SELECT version_id,workspace_id,'Visibility withdrawn',$4 FROM public_skill_projections
+         WHERE workspace_id=$1 AND skill_id=$2 AND EXISTS (SELECT 1 FROM accepted_head)
+         ON CONFLICT (version_id) DO UPDATE SET withdrawn_sequence=GREATEST(public_skill_version_lifecycle.withdrawn_sequence,EXCLUDED.withdrawn_sequence),updated_at=now()
+       )
        UPDATE public_skill_projections
-          SET state = 'unpublished', projection_sequence = $4,
+          SET state = 'unpublished' , projection_sequence = $4,
               unpublished_at = now(), updated_at = now()
         WHERE workspace_id = $1 AND skill_id = $2
           AND state = 'published' AND projection_sequence <= $4

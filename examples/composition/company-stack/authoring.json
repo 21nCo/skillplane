@@ -1,0 +1,39 @@
+{
+  "formatVersion": 2,
+  "name": "Company Stack",
+  "slug": "company-stack",
+  "description": "SKI-3 composition reference fixture",
+  "tags": ["composition", "reference"],
+  "entrypoints": {
+    "execute": "SKILL.md"
+  },
+  "dependencies": [
+    {
+      "alias": "use-ui",
+      "workspace": "examples",
+      "skill": "use-ui",
+      "version": "^1.0.0",
+      "scope": "both",
+      "mode": "include",
+      "required": true
+    },
+    {
+      "alias": "use-auth",
+      "workspace": "examples",
+      "skill": "use-auth",
+      "version": "^1.0.0",
+      "scope": "both",
+      "mode": "include",
+      "required": true
+    },
+    {
+      "alias": "use-datafn",
+      "workspace": "examples",
+      "skill": "use-datafn",
+      "version": "^1.0.0",
+      "scope": "both",
+      "mode": "include",
+      "required": true
+    }
+  ]
+}

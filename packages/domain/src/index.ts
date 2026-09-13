@@ -19,3 +19,11 @@ export * from "./service-principals.js";
 export * from "./skill-versions.js";
 export * from "./skills.js";
 export * from "./workspaces.js";
+
+export * from "./composition.js";
+
+export * from "./composition-service.js";
+
+export * from "./verification.js";
+
+export * from "./version-lifecycle.js";
