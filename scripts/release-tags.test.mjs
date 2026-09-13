@@ -405,7 +405,11 @@ describe("tagged releases", () => {
     );
     assert.match(
       publishWorkflow,
-      /node packages\/local-runtime\/bundle-release-verifier\.mjs/u,
+      /pnpm --dir packages\/local-runtime exec node --input-type=module -e/u,
+    );
+    assert.match(
+      publishWorkflow,
+      /entryPoints: \["\.\.\/\.\.\/scripts\/verify-npm-release-order\.mjs"\]/u,
     );
     assert.match(
       publishWorkflow,
