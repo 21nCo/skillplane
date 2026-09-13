@@ -385,13 +385,18 @@ describe("tagged releases", () => {
         ),
       ),
     );
-    const [publishWorkflow] = workflows;
+    const [publishWorkflow, deployWorkflow] = workflows;
     assert.doesNotMatch(publishWorkflow, /^concurrency:/mu);
     assert.match(publishWorkflow, /jobs:\n {2}queue:/u);
     assert.match(publishWorkflow, /verify:\n {4}needs: queue/u);
-    assert.match(publishWorkflow, /select\(\.run_number < \$\{CURRENT_RUN_NUMBER\}\)/u);
-    assert.doesNotMatch(publishWorkflow, /-f status=/u);
-    assert.match(publishWorkflow, /select\(\.status == \\"requested\\"/u);
+    assert.match(
+      publishWorkflow,
+      /scripts\/wait-for-release-queue\.sh publish-tag\.yml package/u,
+    );
+    assert.match(
+      deployWorkflow,
+      /scripts\/wait-for-release-queue\.sh deploy-cloudflare-tag\.yml production/u,
+    );
     assert.match(publishWorkflow, /Recheck npm publication order/u);
     assert.match(
       publishWorkflow,
@@ -403,33 +408,42 @@ describe("tagged releases", () => {
         workflow,
         /queue:\n {4}runs-on: ubuntu-latest\n {4}timeout-minutes: 360/u,
       );
-      assert.match(workflow, /poll_interval=60/u);
-      assert.match(workflow, /poll_interval > 600/u);
-      assert.doesNotMatch(workflow, /-f status=/u);
-      assert.doesNotMatch(workflow, /mapfile -t blockers < <\(/u);
-      assert.match(workflow, /blocker_ids="\$\(\n {14}gh api/u);
-      assert.match(workflow, /\n {12}\)"\n {12}blockers=\(\)/u);
-      assert.match(workflow, /done <<< "\$\{blocker_ids\}"/u);
+      assert.match(workflow, /Checkout release queue implementation/u);
+      assert.doesNotMatch(workflow, /gh api --paginate/u);
     }
   });
 
-  it("fails closed when release queue discovery fails", () => {
-    const result = spawnSync(
-      "bash",
-      [
-        "-c",
-        [
-          "set -euo pipefail",
-          'blocker_ids="$(false)"',
-          "blockers=()",
-          'while IFS= read -r run_id; do [[ -n "${run_id}" ]] && blockers+=("${run_id}"); done <<< "${blocker_ids}"',
-          'echo "queue released"',
-        ].join("\n"),
-      ],
-      { encoding: "utf8" },
-    );
-    assert.notEqual(result.status, 0);
-    assert.doesNotMatch(result.stdout, /queue released/u);
+  it("fails closed when the shared release queue cannot discover runs", async () => {
+    const root = await mkdtemp(join(tmpdir(), "skillplane-release-queue-"));
+    const gh = join(root, "gh");
+    const script = resolve(import.meta.dirname, "wait-for-release-queue.sh");
+    const environment = {
+      ...process.env,
+      PATH: [root, process.env.PATH ?? ""].join(":"),
+      GH_TOKEN: "test-token",
+      REPOSITORY: "21nCo/skillplane",
+      CURRENT_RUN_ID: "22",
+      CURRENT_RUN_NUMBER: "22",
+      CURRENT_RUN_ATTEMPT: "1",
+    };
+    try {
+      await writeFile(gh, "#!/bin/sh\nexit 42\n", { mode: 0o755 });
+      const failed = spawnSync("bash", [script, "publish-tag.yml", "package"], {
+        encoding: "utf8",
+        env: environment,
+      });
+      assert.equal(failed.status, 42);
+
+      await writeFile(gh, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      const empty = spawnSync(
+        "bash",
+        [script, "deploy-cloudflare-tag.yml", "production"],
+        { encoding: "utf8", env: environment },
+      );
+      assert.equal(empty.status, 0, empty.stderr);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it("writes only well-formed single-line GitHub outputs", async () => {

@@ -20,6 +20,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 360
     steps:
+      - name: Checkout release queue implementation
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
       - name: Wait for earlier package releases
         shell: bash
         env:
@@ -28,37 +33,7 @@ jobs:
           CURRENT_RUN_ID: ${{ github.run_id }}
           CURRENT_RUN_NUMBER: ${{ github.run_number }}
           CURRENT_RUN_ATTEMPT: ${{ github.run_attempt }}
-        run: |
-          set -euo pipefail
-          if [[ "${CURRENT_RUN_ATTEMPT}" != "1" ]]; then
-            echo "Job re-runs are not supported for package releases; start a fresh workflow_dispatch run for the release tag" >&2
-            exit 1
-          fi
-          workflow="publish-tag.yml"
-          poll_interval=60
-          while true; do
-            blocker_ids="$(
-              gh api --paginate --method GET \
-                "repos/${REPOSITORY}/actions/workflows/${workflow}/runs" \
-                -f per_page=100 \
-                --jq ".workflow_runs[] | select(.id != ${CURRENT_RUN_ID}) | select(.run_number < ${CURRENT_RUN_NUMBER}) | select(.status == \"requested\" or .status == \"waiting\" or .status == \"pending\" or .status == \"queued\" or .status == \"in_progress\") | .id"
-            )"
-            blockers=()
-            while IFS= read -r run_id; do
-              [[ -n "${run_id}" ]] && blockers+=("${run_id}")
-            done <<< "${blocker_ids}"
-            if [[ "${#blockers[@]}" -eq 0 ]]; then
-              break
-            fi
-            echo "Waiting for ${#blockers[@]} earlier package release run(s): ${blockers[*]}"
-            sleep "${poll_interval}"
-            if (( poll_interval < 600 )); then
-              poll_interval=$((poll_interval * 2))
-              if (( poll_interval > 600 )); then
-                poll_interval=600
-              fi
-            fi
-          done
+        run: scripts/wait-for-release-queue.sh publish-tag.yml package
 
   verify:
     needs: queue
