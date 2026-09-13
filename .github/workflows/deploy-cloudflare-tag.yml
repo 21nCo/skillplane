@@ -40,22 +40,14 @@ jobs:
             exit 1
           fi
           workflow="deploy-cloudflare-tag.yml"
-          active_statuses=(requested waiting pending queued in_progress)
           poll_interval=60
           while true; do
-            blockers=()
-            for status in "${active_statuses[@]}"; do
-              run_ids="$(
-                gh api --paginate --method GET \
-                  "repos/${REPOSITORY}/actions/workflows/${workflow}/runs" \
-                  -f status="${status}" \
-                  -f per_page=100 \
-                  --jq ".workflow_runs[] | select(.id != ${CURRENT_RUN_ID}) | select(.run_number < ${CURRENT_RUN_NUMBER}) | .id"
-              )"
-              while IFS= read -r run_id; do
-                [[ -n "${run_id}" ]] && blockers+=("${run_id}")
-              done <<< "${run_ids}"
-            done
+            mapfile -t blockers < <(
+              gh api --paginate --method GET \
+                "repos/${REPOSITORY}/actions/workflows/${workflow}/runs" \
+                -f per_page=100 \
+                --jq ".workflow_runs[] | select(.id != ${CURRENT_RUN_ID}) | select(.run_number < ${CURRENT_RUN_NUMBER}) | select(.status == \"requested\" or .status == \"waiting\" or .status == \"pending\" or .status == \"queued\" or .status == \"in_progress\") | .id"
+            )
             if [[ "${#blockers[@]}" -eq 0 ]]; then
               break
             fi

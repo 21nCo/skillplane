@@ -122,10 +122,13 @@ same tag may use the override again; it cannot advance while the active Worker
 remains unrecognized.
 
 The npm workflow preserves every `skillplane` release in an explicit FIFO queue,
-checks the target channel's current registry version before publication, rejects
-version downgrades, and treats an exact already-published version as an
-idempotent retry. GitHub job re-runs are rejected at every package release stage;
-retry the existing tag with a fresh `workflow_dispatch` run. Both FIFO queues use
-GitHub's maximum six-hour job window and exponentially back off API polling to a
-ten-minute interval. If an earlier release remains active beyond that window,
-retry the timed-out tag with a fresh dispatch after the blocker settles.
+checks the target channel's current registry version before building and again
+immediately after production approval, rejects version downgrades, and treats an
+exact already-published version as an idempotent retry. GitHub job re-runs are
+rejected at every package release stage; retry the existing tag with a fresh
+`workflow_dispatch` run. Each queue reads all workflow runs once per poll and
+filters active states locally, so status transitions cannot disappear between
+separate API queries. Both FIFO queues use GitHub's maximum six-hour job window
+and exponentially back off API polling to a ten-minute interval. If an earlier
+release remains active beyond that window, retry the timed-out tag with a fresh
+dispatch after the blocker settles.

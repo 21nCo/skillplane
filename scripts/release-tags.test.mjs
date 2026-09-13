@@ -389,6 +389,13 @@ describe("tagged releases", () => {
     assert.match(publishWorkflow, /jobs:\n {2}queue:/u);
     assert.match(publishWorkflow, /verify:\n {4}needs: queue/u);
     assert.match(publishWorkflow, /select\(\.run_number < \$\{CURRENT_RUN_NUMBER\}\)/u);
+    assert.doesNotMatch(publishWorkflow, /-f status=/u);
+    assert.match(publishWorkflow, /select\(\.status == \\"requested\\"/u);
+    assert.match(publishWorkflow, /Recheck npm publication order/u);
+    assert.match(
+      publishWorkflow,
+      /if: \$\{\{ steps\.order\.outputs\.publish == 'true' \}\}/u,
+    );
     assert.equal((publishWorkflow.match(/github\.run_attempt != 1/gu) ?? []).length, 2);
     for (const workflow of workflows) {
       assert.match(
@@ -397,6 +404,7 @@ describe("tagged releases", () => {
       );
       assert.match(workflow, /poll_interval=60/u);
       assert.match(workflow, /poll_interval > 600/u);
+      assert.doesNotMatch(workflow, /-f status=/u);
     }
   });
 
