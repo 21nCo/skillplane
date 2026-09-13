@@ -1,0 +1,11 @@
+# Response annotations:
+Each item contains text selected from an earlier Codex response and may include a user comment. Treat items as Annotation 1, Annotation 2, and so on in array order. Use every selection as context and address every comment. For every annotation you address, include its inline directive `:codex-annotation{index="N"}`, where N is its one-based array position (for example, `:codex-annotation{index="1"}`). Do not use unstructured annotation labels.
+<response-annotations>
+[{"text":"DataFn date handling: The installed 0.1.1 can turn dates into {} during relation projection. Upstream dev already contains the fix, but npm’s latest is still 0.1.1. Next step: release DataFn, upgrade Skillplane, then remove our compatibility workaround.","source":{"messageId":"msg_051888961a3da539016aa2ab70fdb487d098232805df4c216d","startOffset":193,"endOffset":446}}]
+</response-annotations>
+
+## My request:
+splane add-to-backlog
+
+create a backlog linear task for this (just the Skillplane side bump to use latest datafn) and remove compatibility workaround
+datafn side latest publishing will take some time as there are other changes that are pending merge on datafn
