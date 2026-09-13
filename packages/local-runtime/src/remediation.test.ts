@@ -1,5 +1,5 @@
 import { createSkillBundle } from "@skillplane/domain";
-import { assertProjectionSupported } from "./projections.js";
+import { Projections, assertProjectionSupported } from "./projections.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   mkdtempSync,
@@ -9,6 +9,7 @@ import {
   unlinkSync,
   existsSync,
   readFileSync,
+  symlinkSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -270,5 +271,114 @@ describe("review regressions", () => {
     runtime.configure(project, context);
     expect(await runtime.sync(project)).toHaveLength(0);
     expect(existsSync(requireValue(record).path)).toBe(false);
+  });
+  it("replaces an owned destination when the configured workspace changes", async () => {
+    const { runtime, provider, project, store } = fixture();
+    await provider.create(create);
+    const old = requireValue((await runtime.sync(project))[0]);
+    const next = LocalWorkspaceProvider.create(store, "Replacement");
+    await next.create({ ...create, instructions: "Replacement instructions." });
+    runtime.configure(project, {
+      ...runtime.project(project),
+      primary: next.workspace,
+    });
+    const current = requireValue((await runtime.sync(project))[0]);
+    expect(current.id).not.toBe(old.id);
+    expect(current.path).toBe(old.path);
+    runtime.projections.verify(current);
+    expect(store.get(`projection:${old.id}`)).toBeUndefined();
+    expect(readFileSync(join(current.generation, "snapshot", "SKILL.md"), "utf8")).toBe(
+      "Replacement instructions.",
+    );
+  });
+  it("recovers ownership after an interrupted source replacement", async () => {
+    const { runtime, provider, project, store } = fixture();
+    const created = await provider.create(create);
+    const old = requireValue((await runtime.sync(project))[0]);
+    const next = LocalWorkspaceProvider.create(store, "Replacement");
+    const replacement = await next.create({ ...create, instructions: "Replacement" });
+    expect(replacement.skillId).not.toBe(created.skillId);
+    const snapshot = await next.retrieve(replacement.skillId, replacement.versionId);
+    const projections = new Projections(store, (point) => {
+      if (point === "after-swap") throw new Error("simulated crash");
+    });
+    expect(() => projections.sync(snapshot, old.target, project, old.name)).toThrow(
+      "simulated crash",
+    );
+    const recovered = runtime.projections.recover();
+    expect(recovered).toHaveLength(1);
+    const current = runtime.projections.get(requireValue(recovered[0]));
+    runtime.projections.verify(current);
+    expect(runtime.projections.owners(current)).toEqual([project]);
+    expect(store.get(`projection:${old.id}`)).toBeUndefined();
+  });
+  it("keeps shared user projections until the final project releases them", async () => {
+    const { runtime, provider, project, root } = fixture();
+    await provider.create(create);
+    const target = targetSchema.parse({
+      adapter: "codex",
+      scope: "user",
+      directory: join(root, "shared"),
+    });
+    runtime.configure(project, { ...runtime.project(project), targets: [target] });
+    const other = join(root, "other");
+    mkdirSync(other);
+    runtime.configure(other, runtime.project(project));
+    const first = requireValue((await runtime.sync(project))[0]);
+    expect(requireValue((await runtime.sync(other))[0]).id).toBe(first.id);
+    runtime.configure(project, { ...runtime.project(project), targets: [] });
+    await runtime.sync(project);
+    runtime.projections.verify(first);
+    expect(await runtime.sync(other)).toHaveLength(1);
+    runtime.configure(other, { ...runtime.project(other), targets: [] });
+    await runtime.sync(other);
+    expect(existsSync(first.path)).toBe(false);
+  });
+  it("refuses to replace a destination still referenced by another project", async () => {
+    const { runtime, provider, project, root, store } = fixture();
+    await provider.create(create);
+    const target = targetSchema.parse({
+      adapter: "codex",
+      scope: "user",
+      directory: join(root, "shared"),
+    });
+    runtime.configure(project, { ...runtime.project(project), targets: [target] });
+    const other = join(root, "other");
+    mkdirSync(other);
+    runtime.configure(other, runtime.project(project));
+    const old = requireValue((await runtime.sync(project))[0]);
+    await runtime.sync(other);
+    const next = LocalWorkspaceProvider.create(store, "Replacement");
+    await next.create(create);
+    runtime.configure(project, {
+      ...runtime.project(project),
+      primary: next.workspace,
+    });
+    await expect(runtime.sync(project)).rejects.toThrow(
+      "Destination is owned by another project",
+    );
+    runtime.projections.verify(old);
+  });
+  it("recreates a missing owned link and can remove a missing excluded link", async () => {
+    const { runtime, provider, project, store } = fixture();
+    await provider.create(create);
+    const old = requireValue((await runtime.sync(project))[0]);
+    unlinkSync(old.path);
+    const repaired = requireValue((await runtime.sync(project))[0]);
+    expect(repaired.id).toBe(old.id);
+    runtime.projections.verify(repaired);
+    unlinkSync(repaired.path);
+    runtime.configure(project, { ...runtime.project(project), targets: [] });
+    await runtime.sync(project);
+    expect(store.get(`projection:${old.id}`)).toBeUndefined();
+  });
+  it("continues to reject an existing divergent link during repair and uninstall", async () => {
+    const { runtime, provider, project, root } = fixture();
+    await provider.create(create);
+    const old = requireValue((await runtime.sync(project))[0]);
+    unlinkSync(old.path);
+    symlinkSync(root, old.path, "dir");
+    await expect(runtime.sync(project)).rejects.toThrow("PROJECTION_DIVERGED");
+    expect(() => runtime.projections.uninstall(old.id)).toThrow("PROJECTION_DIVERGED");
   });
 });

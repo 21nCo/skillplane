@@ -6,7 +6,7 @@
   import { CheckCircleIcon, WarningCircleIcon } from "phosphor-svelte";
   import { SvelteMap } from "svelte/reactivity";
   import { capturePostHog } from "$lib/analytics/posthog.client.js";
-  import { createSkillCandidate, getSkillBundle } from "./api.js";
+  import { createSkillCandidate, getSkillRepairBundle } from "./api.js";
   import { buildSkillBundle, bytesToBase64, filesFromBundle } from "./bundle.js";
   import type { SemanticBump, Skill, SkillVersion } from "./types.js";
 
@@ -14,13 +14,11 @@
     workspaceId,
     skill,
     baseVersion,
-    initialMarkdown,
     onCreated,
   }: {
     workspaceId: string;
     skill: Skill;
     baseVersion: SkillVersion;
-    initialMarkdown: string;
     onCreated: (version: SkillVersion) => void;
   } = $props();
 
@@ -31,7 +29,11 @@
   let baseFiles = $state<ReadonlyMap<string, Uint8Array> | null>(null);
   onMount(() => {
     let active = true;
-    void getSkillBundle({ workspaceId, skillId: skill.id, versionId: baseVersion.id })
+    void getSkillRepairBundle({
+      workspaceId,
+      skillId: skill.id,
+      versionId: baseVersion.id,
+    })
       .then((bytes) => {
         if (!active) return;
         const files = filesFromBundle(bytes);
@@ -42,6 +44,7 @@
         verifier = new TextDecoder().decode(files.get("verification/VERIFY.md"));
         claims =
           new TextDecoder().decode(files.get("verification/claims.json")) || "[]";
+        markdown = new TextDecoder().decode(files.get("SKILL.md"));
         baseFiles = files;
       })
       .catch((cause: unknown) => {
@@ -54,9 +57,6 @@
   });
   let blocking = $state(false);
   let markdown = $state("");
-  onMount(() => {
-    markdown = initialMarkdown;
-  });
   let changeSummary = $state("");
   let proposedBump = $state<SemanticBump>("patch");
   let saveState = $state<"idle" | "saving">("idle");
@@ -153,6 +153,7 @@
     required
     maxBytes={1_048_576}
     maxCharacters={1_048_576}
+    disabled={!baseFiles}
     bind:value={markdown}
     oninput={changed}
   />

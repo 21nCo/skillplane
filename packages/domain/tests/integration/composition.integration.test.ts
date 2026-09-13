@@ -188,6 +188,65 @@ describe.skipIf(!url)(
       };
     }, 30000);
     afterAll(async () => pool.end());
+    it("repairs an exact revoked pin using only the authored root", async () => {
+      const child = await create("repair-exact-child");
+      const pin = { ...dependency("repair-exact-child"), version: "1.0.0" };
+      const parent = await create("repair-exact-parent", [pin]);
+      const next = await versions.createCandidate({
+        ...mutation(),
+        skillId: child.skill.id,
+        baseVersionId: child.version.id,
+        proposedBump: "patch",
+        changeSummary: "Safe child",
+        archiveBytes: (await bundle("repair-exact-child", [], "Safe child")).bytes,
+      });
+      await publication.publish({
+        ...mutation(),
+        skillId: child.skill.id,
+        candidateVersionId: next.id,
+      });
+      await lifecycle.set({
+        ...mutation(),
+        skillId: child.skill.id,
+        versionId: child.version.id,
+        state: "revoked",
+        reason: "Unsafe old child",
+      });
+      await expect(
+        versions.retrieveBundle({
+          skillId: parent.skill.id,
+          versionId: parent.version.id,
+          principal,
+        }),
+      ).rejects.toThrow("revoked");
+      await expect(
+        composition.upgradePreview(parent.version.id, principal, parent.skill.id),
+      ).rejects.toThrow();
+      const root = await composition.upgradeBundle(
+        parent.version.id,
+        parent.skill.id,
+        principal,
+      );
+      expect(root.skill.formatVersion).toBe(2);
+      expect(root.files.has("SKILL.md")).toBe(true);
+      const replacement = await versions.createCandidate({
+        ...mutation(),
+        skillId: parent.skill.id,
+        baseVersionId: parent.version.id,
+        proposedBump: "patch",
+        changeSummary: "Replace exact pin",
+        archiveBytes: (
+          await bundle("repair-exact-parent", [{ ...pin, version: "1.0.1" }])
+        ).bytes,
+      });
+      const plan = await composition.resolve(
+        replacement.id,
+        principal,
+        "execute",
+        true,
+      );
+      expect(plan.dag.nodes[0]?.versionId).toBe(next.id);
+    });
     it("creates a server lock, persists normalized edges and inherits execution child claims", async () => {
       const child = await create("datafn", [], true);
       const parent = await create("company-stack", [dependency("datafn")]);
@@ -291,6 +350,18 @@ describe.skipIf(!url)(
           principal,
         }),
       ).rejects.toThrow("revoked");
+      await expect(
+        composition.upgradeBundle(candidate.id, parent.skill.id, {
+          ...principal,
+          role: "viewer",
+        }),
+      ).rejects.toThrow();
+      await expect(
+        composition.upgradeBundle(candidate.id, parent.skill.id, foreign),
+      ).rejects.toThrow();
+      await expect(
+        composition.upgradeBundle(candidate.id, child.skill.id, principal),
+      ).rejects.toThrow();
       const repairBundle = await composition.upgradeBundle(
         candidate.id,
         parent.skill.id,

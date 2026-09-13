@@ -180,7 +180,15 @@
 
 <section aria-label="Dependency graph and verification">
   <h2>Composition and verification</h2>
-  {#if error}<p role="alert">{error}</p>{/if}
+  {#if error}
+    <p role="alert">{error}</p>
+    {#if canEdit && !publicView}
+      <p>
+        To replace a revoked dependency or change an exact version pin, open Content and
+        choose Edit.
+      </p>
+    {/if}
+  {/if}
   {#if plan}
     <p>Closure digest <code>{plan.closureDigest}</code></p>
     {#each plan.warnings as warning (warning)}<p>{warning}</p>{/each}

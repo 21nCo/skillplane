@@ -188,7 +188,9 @@ export class Runtime {
         ...(this.store.get<string[]>(projectKey) ?? []),
         ...this.store
           .entries<ProjectionRecord>("projection:")
-          .filter(([, record]) => record.project === resolve(project))
+          .filter(([, record]) =>
+            this.projections.owners(record).includes(resolve(project)),
+          )
           .map(([, record]) => record.id),
       ]),
     ];
@@ -199,7 +201,12 @@ export class Runtime {
     }
     for (const id of previous) {
       const record = this.store.get<ProjectionRecord>(`projection:${id}`);
-      if (record && !desired.has(record.path)) this.projections.uninstall(id);
+      if (
+        record &&
+        !records.some((current) => current.id === id) &&
+        !this.projections.owners(record).some((owner) => owner !== resolve(project))
+      )
+        this.projections.uninstall(id);
     }
     this.store.set(
       projectKey,

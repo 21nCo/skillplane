@@ -14,6 +14,8 @@ import { routingEpoch } from "../routes/shared.js";
 
 export function requiredAction(path: string, method: string): WorkspaceAction | null {
   const read = ["GET", "HEAD", "OPTIONS"].includes(method);
+  if (/^\/api\/v1\/skills\/[^/]+\/versions\/[^/]+\/repair-bundle$/u.test(path))
+    return "skills:write";
   if (/^\/api\/v1\/skills\/[^/]+\/amendments(?:\/|$)/u.test(path)) {
     return read ? "skills:read" : "skills:amend";
   }

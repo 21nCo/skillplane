@@ -18,6 +18,7 @@ import { projectionName, renderLauncher, targetDirectory } from "./adapters.js";
 import { UsageQueue } from "./analytics.js";
 export interface ProjectionRecord {
   project?: string;
+  replacesId?: string;
   formatVersion: 1;
   id: string;
   eventId: string;
@@ -51,6 +52,48 @@ export class Projections {
     if (!record) throw new RuntimeError("PROJECTION_NOT_FOUND");
     return record;
   }
+  owners(record: ProjectionRecord): string[] {
+    const owners = this.store
+      .entries<string[]>("project-projections:")
+      .filter(([, ids]) => ids.includes(record.id))
+      .map(([key]) => key.slice("project-projections:".length));
+    if (
+      record.project &&
+      this.store.get(`project-projections:${record.project}`) === undefined
+    )
+      owners.push(record.project);
+    return owners;
+  }
+  private assertReplacementOwner(record: ProjectionRecord, project: string): void {
+    const owners = this.owners(record);
+    if (
+      !owners.includes(resolve(project)) ||
+      owners.some((owner) => owner !== resolve(project))
+    )
+      throw new RuntimeError(
+        "PROJECTION_COLLISION",
+        "Destination is owned by another project",
+      );
+  }
+  private rememberOwner(record: ProjectionRecord, project: string): void {
+    const key = `project-projections:${resolve(project)}`;
+    const ids = this.store.get<string[]>(key) ?? [];
+    this.store.set(key, [
+      ...new Set([...ids.filter((id) => id !== record.replacesId), record.id]),
+    ]);
+    if (record.replacesId) this.store.delete(`projection:${record.replacesId}`);
+  }
+  private verifyForSync(record: ProjectionRecord): boolean {
+    try {
+      lstatSync(record.path);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      safeDirectory(dirname(record.path));
+      return false;
+    }
+    this.verify(record);
+    return true;
+  }
   verify(record: ProjectionRecord): void {
     safeDirectory(dirname(record.path));
     if (
@@ -82,6 +125,7 @@ export class Projections {
           if (prior && prior.generation !== record.generation)
             this.store.set(`history:${record.id}:${prior.eventId}`, prior);
           this.store.set(`projection:${record.id}`, record);
+          if (record.project) this.rememberOwner(record, record.project);
           this.recordInstall(record);
           recovered.push(record.id);
         }
@@ -117,8 +161,16 @@ export class Projections {
       `${path}\0${workspaceKey(snapshot.workspace)}\0${snapshot.skill.id}`,
     ).slice(0, 32);
     const old = this.store.get<ProjectionRecord>(`projection:${id}`);
-    if (old) this.verify(old);
-    else {
+    const replaced = old
+      ? undefined
+      : this.store
+          .entries<ProjectionRecord>("projection:")
+          .map(([, record]) => record)
+          .find((record) => record.path === path);
+    if (replaced) this.assertReplacementOwner(replaced, project);
+    const existing = old ?? replaced;
+    const present = existing ? this.verifyForSync(existing) : false;
+    if (!existing) {
       try {
         lstatSync(path);
         throw new RuntimeError(
@@ -152,11 +204,14 @@ export class Projections {
       );
     }
     if (
+      present &&
       old?.digest === snapshot.bundle.digest &&
       old.version.id === snapshot.version.id &&
       stableJson(old.target) === stableJson(target)
-    )
+    ) {
+      this.rememberOwner(old, project);
       return old;
+    }
     this.fault?.("before-write");
     this.store.putBundle(snapshot.bundle);
     const generation = safeDirectory(
@@ -164,6 +219,7 @@ export class Projections {
     );
     const synchronizedAt = new Date().toISOString();
     const record: ProjectionRecord = {
+      ...(replaced ? { replacesId: replaced.id } : {}),
       formatVersion: 1,
       project: resolve(project),
       id,
@@ -217,7 +273,8 @@ export class Projections {
     this.store.set(`journal:${id}:${record.eventId}`, record);
     this.fault?.("before-swap");
     this.store.transaction(() => {
-      if (old) this.verify(old);
+      if (replaced) this.assertReplacementOwner(replaced, project);
+      if (existing) this.verifyForSync(existing);
       else {
         try {
           lstatSync(path);
@@ -233,6 +290,7 @@ export class Projections {
       this.fault?.("after-swap");
       if (old) this.store.set(`history:${id}:${old.eventId}`, old);
       this.store.set(`projection:${id}`, record);
+      this.rememberOwner(record, project);
       this.store.delete(`journal:${id}:${record.eventId}`);
       this.store.delete(`pending-trust:${id}`);
       this.store.delete(`refresh:${id}`);
@@ -318,7 +376,7 @@ export class Projections {
   }
   uninstall(id: string): void {
     const record = this.get(id);
-    this.verify(record);
+    this.verifyForSync(record);
     this.store.set(`uninstall-journal:${id}`, record);
     this.finishUninstall(record);
     this.store.delete(`uninstall-journal:${id}`);
