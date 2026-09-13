@@ -15,3 +15,4 @@ SKI-13-datafn-placement-upstream,"Adopt the published DataFn region placement po
 SKI-14,"Adapt Skillplane tool contracts for authenticated client compatibility",0,,
 SKI-14-posthog-context-regression,"PostHog context injection breaks stateless MCP tool calls",1,2026-08-30T13:22:51Z,2026-08-30-7785fc18-completion
 2026-08-31-native-private-use-oauth-redirects,"Cursor-family dynamic registration rejects a private-use callback bundle",1,2026-08-31T07:29:59Z,2026-08-31-native-private-use-oauth-redirects-completion
+SKI-15,Support local-first workspaces and resilient agent skill projections,1,2026-09-12T06:38:34.993617Z,2026-09-12-e4dc40df-completion

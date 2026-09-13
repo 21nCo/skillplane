@@ -24,7 +24,7 @@ import type {
   SkillRecord,
   SkillVersionRecord,
 } from "@skillplane/domain";
-import { canonicalizeBundleFiles } from "@skillplane/storage";
+import { createSkillBundle } from "@skillplane/domain";
 import { registerResourceRoutes } from "@skillplane/api";
 import { principalForWorkspace } from "../auth.js";
 import { resolveSkill, type ResolvedSkill } from "./resolve.js";
@@ -222,11 +222,6 @@ async function resolveWorkspaceForWrite(
   };
 }
 
-function decodeBase64(value: string): Uint8Array {
-  const binary = atob(value);
-  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
-}
-
 export function skillCreate(runtime: McpToolRuntime, input: SkillCreateInput) {
   return executeMutationTool(
     runtime,
@@ -238,28 +233,7 @@ export function skillCreate(runtime: McpToolRuntime, input: SkillCreateInput) {
         execution,
         input.workspace,
       );
-      const files = new Map<string, Uint8Array>([
-        ["SKILL.md", new TextEncoder().encode(input.instructions)],
-      ]);
-      for (const asset of input.assets) {
-        files.set(
-          asset.path,
-          asset.content !== undefined
-            ? new TextEncoder().encode(asset.content)
-            : decodeBase64(asset.contentBase64 ?? ""),
-        );
-      }
-      const canonical = await canonicalizeBundleFiles({
-        skill: {
-          formatVersion: 1,
-          name: input.name,
-          slug: input.slug,
-          description: input.description,
-          tags: input.tags,
-          entrypoint: "SKILL.md",
-        },
-        files,
-      });
+      const canonical = await createSkillBundle(input);
       const created = await runtime.services.skillService.create({
         workspaceId: resolved.workspace.id,
         principal: resolved.principal,

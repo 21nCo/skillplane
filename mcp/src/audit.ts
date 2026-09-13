@@ -104,6 +104,17 @@ function auditInput(event: McpAuditRecord): AuditWriteInput {
     ...(event.contextId ? { contextId: event.contextId } : {}),
     ...(event.errorCode ? { errorCode: event.errorCode } : {}),
     latencyMs: event.latencyMs,
+    metadata: {
+      usage: {
+        type:
+          event.tool === "skill_retrieve" ? "skill_resolved" : "skill_action_called",
+        delivery: "live-mcp",
+        confidence: "observed",
+        modelTrust: "caller-declared",
+        coverage: "observed-paths-only",
+        successVerified: false,
+      },
+    },
     fencingEpoch: event.fencingEpoch,
   };
 }

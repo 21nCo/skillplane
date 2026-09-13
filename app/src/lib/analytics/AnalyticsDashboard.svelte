@@ -121,6 +121,13 @@
     </div>
   </header>
 
+  <p class="coverage-notice">
+    Observed cloud activity only (API and live MCP). Retrieval success means content was
+    delivered, not that the skill completed successfully. Disconnected embedded fallback
+    use is unobservable. Local CLI counts remain on the installation unless explicitly
+    uploaded; uploaded events are client-reported, not verified success.
+  </p>
+
   {#if loading && !analytics}
     <div class="metrics" aria-label="Loading analytics" aria-busy="true">
       {#each metricSkeletons as skeleton (skeleton)}
@@ -145,7 +152,7 @@
     <section class="state empty-state">
       <ChartLineUpIcon weight="duotone" aria-hidden="true" />
       <div>
-        <h2>No usage in this range</h2>
+        <h2>No observed activity in this range</h2>
         <p>
           Retrievals, amendments, approvals, and failures will appear after the daily
           UTC rollup.
