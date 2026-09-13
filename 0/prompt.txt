@@ -1,0 +1,1 @@
+which of these worktrees can be removed safely?
