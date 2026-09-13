@@ -84,12 +84,12 @@ jobs:
           node-version: 22.13.0
           cache: pnpm
 
+      - name: Install dependencies without lifecycle scripts
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
       - name: Resolve publish target
         id: resolve
         run: node scripts/resolve-release-tag.mjs "${RELEASE_TAG}"
-
-      - name: Install dependencies without lifecycle scripts
-        run: pnpm install --frozen-lockfile --ignore-scripts
 
       - name: Reject out-of-order npm publication
         id: order

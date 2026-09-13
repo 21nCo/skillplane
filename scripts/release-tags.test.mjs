@@ -398,6 +398,11 @@ describe("tagged releases", () => {
       /scripts\/wait-for-release-queue\.sh deploy-cloudflare-tag\.yml production/u,
     );
     assert.match(publishWorkflow, /Recheck npm publication order/u);
+    assert.ok(
+      publishWorkflow.indexOf("Install dependencies without lifecycle scripts") <
+        publishWorkflow.indexOf("Resolve publish target"),
+      "the release resolver must run after its dependencies are installed",
+    );
     assert.match(
       publishWorkflow,
       /if: \$\{\{ steps\.order\.outputs\.publish == 'true' \}\}/u,
