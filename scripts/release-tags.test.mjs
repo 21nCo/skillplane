@@ -405,7 +405,7 @@ describe("tagged releases", () => {
     );
     assert.match(
       publishWorkflow,
-      /pnpm --dir packages\/local-runtime exec esbuild \.\.\/\.\.\/scripts\/verify-npm-release-order\.mjs/u,
+      /node packages\/local-runtime\/bundle-release-verifier\.mjs/u,
     );
     assert.match(
       publishWorkflow,
