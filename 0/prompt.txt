@@ -1,0 +1,8 @@
+# Response annotations:
+Each item contains text selected from an earlier Codex response and may include a user comment. Treat items as Annotation 1, Annotation 2, and so on in array order. Use every selection as context and address every comment. For every annotation you address, include its inline directive `:codex-annotation{index="N"}`, where N is its one-based array position (for example, `:codex-annotation{index="1"}`). Do not use unstructured annotation labels.
+<response-annotations>
+[{"text":"/Users/serro/Documents/dev/n/worktrees/skillplane/SKI-13/Users/serro/Documents/dev/n/worktrees/skillplane/SKI-13-request-lifecycle/Users/serro/Documents/dev/n/worktrees/skillplane/SKI-2","source":{"messageId":"msg_09a5e0000f92b2a0016aa2a37d3c7887d094e471acbd32a734","startOffset":212,"endOffset":397}}]
+</response-annotations>
+
+## My request:
+remove these 3 worktrees
