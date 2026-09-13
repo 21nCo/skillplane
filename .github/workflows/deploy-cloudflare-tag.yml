@@ -10,6 +10,11 @@ on:
         description: "Existing release tag in the form skillplane-cloudflare-v<version>"
         required: true
         type: string
+      allow_legacy_bootstrap:
+        description: "Allow an initial tagged release over a verified legacy deployment"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   actions: read
@@ -62,6 +67,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 180
     environment: production
+    permissions:
+      contents: read
+      deployments: write
     env:
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
       SKILLPLANE_RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
@@ -74,6 +82,12 @@ jobs:
       SKILLPLANE_CELL_US_EAST_BUCKET: ${{ vars.SKILLPLANE_CELL_US_EAST_BUCKET }}
       PUBLIC_TURNSTILE_SITE_KEY: ${{ vars.PUBLIC_TURNSTILE_SITE_KEY }}
     steps:
+      - name: Reject GitHub re-run attempts
+        if: ${{ github.run_attempt != 1 }}
+        run: |
+          echo "Job re-runs are not supported for production releases; start a fresh workflow_dispatch run for the release tag" >&2
+          exit 1
+
       - name: Verify protected release environment
         shell: bash
         env:
@@ -130,9 +144,18 @@ jobs:
         run: node scripts/verify-cloudflare-release-order.mjs "${RELEASE_TAG}"
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          ALLOW_LEGACY_BOOTSTRAP: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_legacy_bootstrap }}
 
       - name: Validate Cloudflare release
         run: pnpm deploy:check
+
+      - name: Record production release high-water mark
+        run: node scripts/record-cloudflare-release-order.mjs "${RELEASE_TAG}"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
 
       - name: Back up and migrate production topology
         run: pnpm db:migrate:topology

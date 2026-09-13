@@ -15,7 +15,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: skillplane-npm-${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+  group: skillplane-npm-publish
   cancel-in-progress: false
 
 jobs:
@@ -24,6 +24,7 @@ jobs:
     timeout-minutes: 30
     outputs:
       npm_tag: ${{ steps.resolve.outputs.npm_tag }}
+      publish: ${{ steps.order.outputs.publish }}
     env:
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
     steps:
@@ -66,6 +67,14 @@ jobs:
 
       - name: Install dependencies without lifecycle scripts
         run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Reject out-of-order npm publication
+        id: order
+        run: >-
+          node scripts/verify-npm-release-order.mjs
+          skillplane
+          "${{ steps.resolve.outputs.pkg_version }}"
+          "${{ steps.resolve.outputs.npm_tag }}"
 
       - name: Build reviewed native dependencies
         run: pnpm rebuild esbuild
@@ -118,6 +127,7 @@ jobs:
           path: release-artifacts
 
       - name: Publish package
+        if: ${{ needs.verify.outputs.publish == 'true' }}
         shell: bash
         run: |
           set -euo pipefail

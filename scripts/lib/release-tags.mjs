@@ -1,5 +1,6 @@
 import { appendFile, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import semver from "semver";
 
 const numericIdentifier = "(?:0|[1-9]\\d*)";
 const prereleaseIdentifier = "(?:0|[1-9]\\d*|\\d*[A-Za-z-][0-9A-Za-z-]*)";
@@ -111,57 +112,19 @@ export function resolveCloudflareRelease(tag) {
   return { tag: normalizedTag, version: match.groups.version };
 }
 
-function comparePrerelease(left, right) {
-  if (left === undefined || right === undefined) {
-    if (left === right) return 0;
-    return left === undefined ? 1 : -1;
+/** Compare two exact SemVer strings. */
+export function compareReleaseVersions(left, right) {
+  if (semver.parse(left)?.raw !== left || semver.parse(right)?.raw !== right) {
+    throw new Error("Release versions must be exact SemVer values");
   }
-  const leftParts = left.split(".");
-  const rightParts = right.split(".");
-  for (
-    let index = 0;
-    index < Math.max(leftParts.length, rightParts.length);
-    index += 1
-  ) {
-    const leftPart = leftParts[index];
-    const rightPart = rightParts[index];
-    if (leftPart === undefined || rightPart === undefined) {
-      return leftPart === undefined ? -1 : 1;
-    }
-    if (leftPart === rightPart) continue;
-    const leftNumeric = /^\d+$/u.test(leftPart);
-    const rightNumeric = /^\d+$/u.test(rightPart);
-    if (leftNumeric && rightNumeric) {
-      return BigInt(leftPart) < BigInt(rightPart) ? -1 : 1;
-    }
-    if (leftNumeric !== rightNumeric) return leftNumeric ? -1 : 1;
-    return leftPart < rightPart ? -1 : 1;
-  }
-  return 0;
+  return semver.compare(left, right);
 }
 
 /** Compare two validated Cloudflare release tags using SemVer precedence. */
 export function compareCloudflareReleaseTags(leftTag, rightTag) {
   const left = resolveCloudflareRelease(leftTag).version;
   const right = resolveCloudflareRelease(rightTag).version;
-  const leftPrereleaseIndex = left.indexOf("-");
-  const rightPrereleaseIndex = right.indexOf("-");
-  const leftCore =
-    leftPrereleaseIndex === -1 ? left : left.slice(0, leftPrereleaseIndex);
-  const rightCore =
-    rightPrereleaseIndex === -1 ? right : right.slice(0, rightPrereleaseIndex);
-  const leftPrerelease =
-    leftPrereleaseIndex === -1 ? undefined : left.slice(leftPrereleaseIndex + 1);
-  const rightPrerelease =
-    rightPrereleaseIndex === -1 ? undefined : right.slice(rightPrereleaseIndex + 1);
-  const leftParts = leftCore.split(".").map(BigInt);
-  const rightParts = rightCore.split(".").map(BigInt);
-  for (let index = 0; index < 3; index += 1) {
-    if (leftParts[index] !== rightParts[index]) {
-      return leftParts[index] < rightParts[index] ? -1 : 1;
-    }
-  }
-  return comparePrerelease(leftPrerelease, rightPrerelease);
+  return compareReleaseVersions(left, right);
 }
 
 /** Reject a tagged deployment that would move production backwards. */
@@ -172,6 +135,89 @@ export function assertCloudflareReleaseOrder(deployedTag, requestedTag) {
     );
   }
   return { deployedTag, requestedTag };
+}
+
+/** Return the highest release tag recorded in the durable deployment ledger. */
+export function highestCloudflareReleaseTag(tags) {
+  if (!Array.isArray(tags)) {
+    throw new Error("Cloudflare release ledger must be an array");
+  }
+  return tags.reduce((highest, tag) => {
+    resolveCloudflareRelease(tag);
+    return highest === null || compareCloudflareReleaseTags(tag, highest) > 0
+      ? tag
+      : highest;
+  }, null);
+}
+
+/** Verify the requested release against active and partially applied releases. */
+export function assertCloudflareProductionOrder({
+  requestedTag,
+  deployedTag,
+  ledgerTags,
+  allowLegacyBootstrap = false,
+}) {
+  resolveCloudflareRelease(requestedTag);
+  const ledgerTag = highestCloudflareReleaseTag(ledgerTags);
+  if (ledgerTag) assertCloudflareReleaseOrder(ledgerTag, requestedTag);
+  if (deployedTag !== null) {
+    let recognizedRelease = false;
+    try {
+      resolveCloudflareRelease(deployedTag);
+      recognizedRelease = true;
+    } catch {
+      if (!allowLegacyBootstrap) {
+        throw new Error(
+          "The active production Worker has no recognized release tag; use the protected legacy bootstrap override only after verifying its provenance",
+        );
+      }
+    }
+    if (recognizedRelease) {
+      assertCloudflareReleaseOrder(deployedTag, requestedTag);
+    }
+  }
+  return { deployedTag, ledgerTag, requestedTag };
+}
+
+/** Resolve the sole active version from Wrangler's latest deployment. */
+export function activeCloudflareVersionId(deployments) {
+  if (!Array.isArray(deployments)) {
+    throw new Error("Wrangler deployments output must be an array");
+  }
+  if (deployments.length === 0) return null;
+  const versions = deployments.at(-1)?.versions;
+  if (!Array.isArray(versions) || versions.length === 0) {
+    throw new Error("Wrangler's active deployment omitted its versions");
+  }
+  const active = versions.find((version) => Number(version?.percentage) === 100);
+  if (typeof active?.version_id !== "string") {
+    throw new Error("The active Worker uses split traffic; release order is ambiguous");
+  }
+  return active.version_id;
+}
+
+/** Decide whether a package channel can advance to the requested version. */
+export function packagePublishDecision(publishedVersion, requestedVersion) {
+  if (publishedVersion === undefined) {
+    compareReleaseVersions(requestedVersion, requestedVersion);
+    return { publish: true, publishedVersion, requestedVersion };
+  }
+  const comparison = compareReleaseVersions(requestedVersion, publishedVersion);
+  if (comparison < 0) {
+    throw new Error(
+      `${requestedVersion} is older than published channel version ${publishedVersion}`,
+    );
+  }
+  if (comparison === 0 && requestedVersion !== publishedVersion) {
+    throw new Error(
+      `${requestedVersion} does not advance published channel version ${publishedVersion}`,
+    );
+  }
+  return {
+    publish: comparison > 0,
+    publishedVersion,
+    requestedVersion,
+  };
 }
 
 /** Append single-line values to a GitHub Actions output file. */

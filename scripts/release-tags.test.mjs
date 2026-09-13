@@ -4,8 +4,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import {
+  listCloudflareReleaseLedger,
+  recordCloudflareRelease,
+} from "./lib/github-release-ledger.mjs";
+import {
+  activeCloudflareVersionId,
   assertCloudflareReleaseOrder,
+  assertCloudflareProductionOrder,
   compareCloudflareReleaseTags,
+  packagePublishDecision,
   resolveCloudflareRelease,
   resolvePackageRelease,
   writeGithubOutputs,
@@ -139,10 +146,31 @@ describe("tagged releases", () => {
     );
     assert.equal(
       compareCloudflareReleaseTags(
-        "skillplane-cloudflare-v100000000000000000000.0.0",
-        "skillplane-cloudflare-v99999999999999999999.0.0",
+        "skillplane-cloudflare-v2.0.0-alpha.1",
+        "skillplane-cloudflare-v2.0.0-1",
       ),
       1,
+    );
+    assert.equal(
+      compareCloudflareReleaseTags(
+        "skillplane-cloudflare-v2.0.0-rc.1",
+        "skillplane-cloudflare-v2.0.0-rc",
+      ),
+      1,
+    );
+    assert.equal(
+      compareCloudflareReleaseTags(
+        "skillplane-cloudflare-v2.0.0-rc.1",
+        "skillplane-cloudflare-v2.0.0",
+      ),
+      -1,
+    );
+    assert.equal(
+      compareCloudflareReleaseTags(
+        "skillplane-cloudflare-v2.0.0",
+        "skillplane-cloudflare-v2.0.0",
+      ),
+      0,
     );
   });
 
@@ -165,6 +193,140 @@ describe("tagged releases", () => {
         ),
       /use the production rollback procedure/u,
     );
+  });
+
+  it("uses the durable ledger when a newer release stops after migration", () => {
+    assert.throws(
+      () =>
+        assertCloudflareProductionOrder({
+          requestedTag: "skillplane-cloudflare-v2.0.0",
+          deployedTag: "skillplane-cloudflare-v2.0.0",
+          ledgerTags: ["skillplane-cloudflare-v2.1.0"],
+        }),
+      /older than deployed release/u,
+    );
+    assert.deepEqual(
+      assertCloudflareProductionOrder({
+        requestedTag: "skillplane-cloudflare-v2.1.0",
+        deployedTag: "skillplane-cloudflare-v2.0.0",
+        ledgerTags: ["skillplane-cloudflare-v2.0.0", "skillplane-cloudflare-v2.1.0"],
+      }),
+      {
+        deployedTag: "skillplane-cloudflare-v2.0.0",
+        ledgerTag: "skillplane-cloudflare-v2.1.0",
+        requestedTag: "skillplane-cloudflare-v2.1.0",
+      },
+    );
+  });
+
+  it("requires a protected override for an unrecognized active deployment", () => {
+    const input = {
+      requestedTag: "skillplane-cloudflare-v2.0.0",
+      deployedTag: "phase16-legacy-release",
+      ledgerTags: [],
+    };
+    assert.throws(
+      () => assertCloudflareProductionOrder(input),
+      /protected legacy bootstrap override/u,
+    );
+    assert.deepEqual(
+      assertCloudflareProductionOrder({ ...input, allowLegacyBootstrap: true }),
+      {
+        deployedTag: "phase16-legacy-release",
+        ledgerTag: null,
+        requestedTag: "skillplane-cloudflare-v2.0.0",
+      },
+    );
+  });
+
+  it("fails closed when Wrangler cannot identify one active version", () => {
+    assert.equal(activeCloudflareVersionId([]), null);
+    assert.equal(
+      activeCloudflareVersionId([
+        { versions: [{ version_id: "version-one", percentage: 100 }] },
+      ]),
+      "version-one",
+    );
+    assert.throws(
+      () => activeCloudflareVersionId([{ versions: [] }]),
+      /omitted its versions/u,
+    );
+    assert.throws(
+      () =>
+        activeCloudflareVersionId([
+          { versions: [{ version_id: "older-version", percentage: 100 }] },
+          { versions: [] },
+        ]),
+      /omitted its versions/u,
+    );
+    assert.throws(
+      () =>
+        activeCloudflareVersionId([
+          {
+            versions: [
+              { version_id: "version-one", percentage: 50 },
+              { version_id: "version-two", percentage: 50 },
+            ],
+          },
+        ]),
+      /split traffic/u,
+    );
+  });
+
+  it("advances npm channels monotonically and makes exact retries idempotent", () => {
+    assert.deepEqual(packagePublishDecision(undefined, "1.0.0"), {
+      publish: true,
+      publishedVersion: undefined,
+      requestedVersion: "1.0.0",
+    });
+    assert.equal(packagePublishDecision("1.0.0", "1.0.0").publish, false);
+    assert.equal(packagePublishDecision("1.0.0", "1.1.0").publish, true);
+    assert.throws(
+      () => packagePublishDecision("1.1.0", "1.0.0"),
+      /older than published channel version/u,
+    );
+    assert.throws(
+      () => packagePublishDecision("1.0.0+one", "1.0.0+two"),
+      /does not advance/u,
+    );
+  });
+
+  it("reads and records the GitHub deployment ledger", async () => {
+    const environment = {
+      GITHUB_REPOSITORY: "21nCo/skillplane",
+      GH_TOKEN: "test-token",
+    };
+    const requests = [];
+    const transport = async (url, options = {}) => {
+      requests.push({ url: String(url), options });
+      if (options.method === "POST") {
+        return new Response(JSON.stringify({ id: 42 }), { status: 201 });
+      }
+      return new Response(
+        JSON.stringify([
+          {
+            environment: "skillplane-cloudflare-release-ledger",
+            ref: "skillplane-cloudflare-v2.1.0",
+          },
+        ]),
+        { status: 200 },
+      );
+    };
+    assert.deepEqual(await listCloudflareReleaseLedger(environment, transport), [
+      "skillplane-cloudflare-v2.1.0",
+    ]);
+    assert.equal(
+      await recordCloudflareRelease(
+        "skillplane-cloudflare-v2.2.0",
+        environment,
+        transport,
+      ),
+      42,
+    );
+    const create = JSON.parse(requests[1].options.body);
+    assert.deepEqual(create.required_contexts, []);
+    assert.equal(create.ref, "skillplane-cloudflare-v2.2.0");
+    assert.equal(create.production_environment, false);
   });
 
   it("writes only well-formed single-line GitHub outputs", async () => {

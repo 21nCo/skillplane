@@ -85,8 +85,10 @@ queue job waits until all earlier active runs of the same workflow finish, so a
 newer tag cannot replace an already-pending release. GitHub job re-runs are
 rejected because they retain the old queue position; retry a release with a new
 `workflow_dispatch` run instead. Before any migration, the workflow compares
-the requested tag with the release tag on the active app Worker and rejects a
-downgrade. Production rollback remains the separate, explicit procedure in
+the requested tag with both the active app Worker and a durable GitHub
+deployment ledger. It records the accepted version in that ledger immediately
+before migration, so a partial release cannot later be superseded by an older
+tag. Production rollback remains the separate, explicit procedure in
 [`rollback.md`](./rollback.md). The deployment then enters the protected
 `production` environment and runs the established blocking sequence:
 
@@ -110,4 +112,12 @@ owned and released from the 21n monorepo's `landing/skillplane` workspace.
 Both workflows may be retried manually with `workflow_dispatch`, but the input
 must name an existing tag. Manual runs check out the tag itself; they do not
 publish or deploy the default branch by accident. For Cloudflare, the tag must
-be at least as new as the active tagged production release.
+be at least as new as the active or previously accepted production release.
+The first tagged release over an existing legacy deployment must use the
+protected `allow_legacy_bootstrap` input after reviewers verify that deployment's
+provenance; later unrecognized active tags fail closed.
+
+The npm workflow serializes every `skillplane` release under one workflow lock,
+checks the target channel's current registry version before publication, rejects
+version downgrades, and treats an exact already-published version as an
+idempotent retry.

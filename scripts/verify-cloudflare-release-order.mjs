@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 
 import { spawnSync } from "node:child_process";
+import { listCloudflareReleaseLedger } from "./lib/github-release-ledger.mjs";
 import {
-  assertCloudflareReleaseOrder,
+  activeCloudflareVersionId,
+  assertCloudflareProductionOrder,
   resolveCloudflareRelease,
 } from "./lib/release-tags.mjs";
 
@@ -29,57 +31,20 @@ function wrangler(args) {
   }
 }
 
-function activeVersion(deployments) {
-  if (!Array.isArray(deployments)) {
-    throw new Error("Wrangler deployments output must be an array");
-  }
-  if (deployments.length === 0) return null;
-  const versions = deployments.at(-1)?.versions;
-  if (!Array.isArray(versions)) {
-    throw new Error("Wrangler's active deployment omitted its versions");
-  }
-  const active = versions.find((version) => Number(version?.percentage) === 100);
-  if (versions.length > 0 && typeof active?.version_id !== "string") {
-    throw new Error(`${workerName} uses split traffic; release order is ambiguous`);
-  }
-  return active?.version_id ?? null;
-}
-
 const requestedTag = process.argv[2] ?? process.env.SKILLPLANE_RELEASE_TAG;
 resolveCloudflareRelease(requestedTag);
-const versionId = activeVersion(
+const ledgerTags = await listCloudflareReleaseLedger();
+const versionId = activeCloudflareVersionId(
   wrangler(["deployments", "list", "--name", workerName, "--json"]),
 );
-if (!versionId) {
-  process.stdout.write("No active production deployment; allowing initial release\n");
-  process.exit(0);
-}
-
-const version = wrangler([
-  "versions",
-  "view",
-  versionId,
-  "--name",
-  workerName,
-  "--json",
-]);
-const deployedTag = version?.annotations?.["workers/tag"];
-try {
-  resolveCloudflareRelease(deployedTag);
-} catch (error) {
-  if (
-    typeof deployedTag === "string" &&
-    deployedTag.startsWith("skillplane-cloudflare-v")
-  ) {
-    throw error;
-  }
-  process.stdout.write(
-    `Active production version ${versionId} predates tagged releases; allowing bootstrap\n`,
-  );
-  process.exit(0);
-}
-
-assertCloudflareReleaseOrder(deployedTag, requestedTag);
-process.stdout.write(
-  `${JSON.stringify({ ok: true, worker: workerName, deployedTag, requestedTag })}\n`,
-);
+const version = versionId
+  ? wrangler(["versions", "view", versionId, "--name", workerName, "--json"])
+  : null;
+const deployedTag = versionId ? version?.annotations?.["workers/tag"] : null;
+const order = assertCloudflareProductionOrder({
+  requestedTag,
+  deployedTag,
+  ledgerTags,
+  allowLegacyBootstrap: process.env.ALLOW_LEGACY_BOOTSTRAP === "true",
+});
+process.stdout.write(`${JSON.stringify({ ok: true, worker: workerName, ...order })}\n`);
