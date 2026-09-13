@@ -6,11 +6,18 @@ versioned knowledge and notes for each skill context through MCP.
 
 ## Offline client and native agent skills
 
-Use `pnpm client:install` to build and install the global client from this checkout,
-then `skillplane init Personal --target codex` (or `claude`) in a project. Local
-workspaces need no cloud account or local server. See [local-first workspaces](docs/local-first-workspaces.md)
-for profiles, mounts, resilient projections, exact-base amendments, recovery, and
-observed usage reporting.
+Install the published CLI with `npm install --global skillplane`, then run
+`skillplane init Personal --target codex` (or `claude`) in a project. To build
+and install the client from this checkout instead, use `pnpm client:install`.
+Local workspaces need no cloud account or local server. See
+[local-first workspaces](docs/local-first-workspaces.md) for profiles, mounts,
+resilient projections, exact-base amendments, recovery, and observed usage
+reporting.
+
+CLI publication and Cloudflare production deployments are driven by protected
+Git tags. See [tagged releases](docs/operations/tagged-releases.md) for the tag
+formats, required GitHub environment configuration, and the exact gates each
+workflow runs.
 
 ## Local database
 

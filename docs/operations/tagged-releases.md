@@ -1,0 +1,94 @@
+# Tagged releases
+
+Skillplane has two independent tag namespaces. Both workflows require the tag
+to exist and point to a commit already contained in `origin/main`.
+
+| Tag                            | Result                                                                                                                                      |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `skillplane-v0.1.0`            | Verify, pack, smoke-install, and publish the public `skillplane@0.1.0` package to npm                                                       |
+| `skillplane-cloudflare-v0.1.0` | Back up and migrate the production topology, deploy the app/MCP/projection Workers, run production smoke checks, and deploy the docs Worker |
+
+The CLI tag version must exactly match `packages/local-runtime/package.json`.
+The Cloudflare version is a release identifier and is recorded as the Wrangler
+deployment tag through `SKILLPLANE_RELEASE_TAG`.
+
+## GitHub configuration
+
+Create a protected GitHub environment named `production`. Require deployment
+reviewers if production releases need an approval gate. Configure these
+environment variables:
+
+- `CLOUDFLARE_ACCOUNT_ID`
+- `CLOUDFLARE_CONTROL_HYPERDRIVE_ID`
+- `SKILLPLANE_CELL_IN_SOUTH_HYPERDRIVE_ID`
+- `SKILLPLANE_CELL_US_EAST_HYPERDRIVE_ID`
+- `SKILLPLANE_PUBLIC_BUCKET`
+- `SKILLPLANE_CELL_IN_SOUTH_BUCKET`
+- `SKILLPLANE_CELL_US_EAST_BUCKET`
+- `PUBLIC_TURNSTILE_SITE_KEY`
+
+Configure these environment secrets:
+
+- `CLOUDFLARE_API_TOKEN`
+- `SKILLPLANE_PRODUCTION_DATABASE_URL`
+- `SKILLPLANE_CELL_IN_SOUTH_DATABASE_URL`
+- `SKILLPLANE_CELL_US_EAST_DATABASE_URL`
+- `SKILLPLANE_BACKUP_ENCRYPTION_KEY`
+- `SKILLPLANE_R2_ACCESS_KEY_ID`
+- `SKILLPLANE_R2_SECRET_ACCESS_KEY`
+- `AUTHFN_SECRET`
+- `OAUTH_TOKEN_PEPPER`
+- `TURNSTILE_SECRET_KEY`
+- `POSTHOG_PROJECT_TOKEN`
+- `WORKSPACE_ROUTING_KEYS`
+
+The workflow intentionally uses `SKILLPLANE_PRODUCTION_DATABASE_URL` as both
+the canonical production URL and the control-plane URL, matching the topology
+deployment invariant. `WORKSPACE_ROUTING_KEYS` is the complete JSON keyring
+required by `deployment/topology.production.json`.
+
+Set the repository secret `NPM_TOKEN` for CLI publication. The workflow also
+requests an OIDC token so npm can attach build provenance.
+
+## Creating a release
+
+Update and validate the target version before creating a tag. For example:
+
+```bash
+pnpm cli:release:check
+git tag skillplane-v0.1.0
+git push origin skillplane-v0.1.0
+```
+
+For a Cloudflare release, first ensure the tagged commit's migrations and
+topology manifest are production-ready:
+
+```bash
+pnpm deploy:check
+git tag skillplane-cloudflare-v0.1.0
+git push origin skillplane-cloudflare-v0.1.0
+```
+
+The Cloudflare workflow serializes all production runs and uses the protected
+`production` environment. It runs the established blocking sequence:
+
+```text
+deploy:check
+db:migrate:topology
+deploy:all
+smoke:production:release
+deploy:docs
+```
+
+`deploy:all` keeps the existing dependency-safe Worker ordering and performs
+its own release smoke before returning. The explicit smoke step remains as the
+final app/MCP check before docs deployment. Encrypted topology backups and
+migration state are retained as a private workflow artifact for 30 days,
+including when a later step fails.
+
+The apex landing Worker at `skillplane.dev` remains excluded because it is
+owned and released from the 21n monorepo's `landing/skillplane` workspace.
+
+Both workflows may be rerun manually with `workflow_dispatch`, but the input
+must name an existing tag. Manual runs check out the tag itself; they do not
+publish or deploy the default branch by accident.

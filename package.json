@@ -1,5 +1,5 @@
 {
-  "name": "skillplane",
+  "name": "@skillplane/monorepo",
   "version": "0.0.0",
   "private": true,
   "description": "Production control plane for versioned, context-aware AI skills",
@@ -95,7 +95,9 @@
     "test:mcp:production": "node --env-file-if-exists=.env.production.local scripts/test-mcp-production.mjs",
     "verify:email:production": "node --env-file-if-exists=.env.production.local scripts/verify-email-production.mjs",
     "verify:rollback:production": "node --env-file-if-exists=.env.production.local scripts/rollback.mjs",
-    "client:bundle": "pnpm --filter @skillplane/local-runtime bundle",
+    "cli:release:check": "node scripts/verify-cli-release.mjs",
+    "release-tags:test": "node --test scripts/release-tags.test.mjs",
+    "client:bundle": "pnpm --filter skillplane bundle",
     "client:install": "pnpm client:bundle && node scripts/install-local-client.mjs"
   },
   "devDependencies": {
