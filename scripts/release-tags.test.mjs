@@ -73,12 +73,12 @@ describe("tagged releases", () => {
     }
   });
 
-  it("keeps stable build metadata on npm latest", async () => {
+  it("rejects npm package releases with build metadata", async () => {
     const root = await fixture({ version: "1.2.3+build-alpha" });
     try {
-      assert.equal(
-        (await resolvePackageRelease("skillplane-v1.2.3+build-alpha", root)).npmTag,
-        "latest",
+      await assert.rejects(
+        resolvePackageRelease("skillplane-v1.2.3+build-alpha", root),
+        /Unsupported tag format/u,
       );
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -331,10 +331,13 @@ describe("tagged releases", () => {
       () => packagePublishDecision("1.1.0", "1.0.0"),
       /older than published channel version/u,
     );
-    assert.equal(packagePublishDecision("1.0.0", "1.0.0+build-one").publish, false);
-    assert.equal(
-      packagePublishDecision("1.0.0+build-one", "1.0.0+build-two").publish,
-      false,
+    assert.throws(
+      () => packagePublishDecision("1.0.0", "1.0.0+build-one"),
+      /must not use SemVer build metadata/u,
+    );
+    assert.throws(
+      () => packagePublishDecision("1.0.0+build-one", "1.0.0"),
+      /must not contain SemVer build metadata/u,
     );
   });
 
@@ -398,9 +401,14 @@ describe("tagged releases", () => {
       /scripts\/wait-for-release-queue\.sh deploy-cloudflare-tag\.yml production/u,
     );
     assert.match(publishWorkflow, /Recheck npm publication order/u);
+    const installIndex = publishWorkflow.indexOf(
+      "Install dependencies without lifecycle scripts",
+    );
+    const resolveIndex = publishWorkflow.indexOf("Resolve publish target");
+    assert.notEqual(installIndex, -1, "the dependency installation step must exist");
+    assert.notEqual(resolveIndex, -1, "the release resolver step must exist");
     assert.ok(
-      publishWorkflow.indexOf("Install dependencies without lifecycle scripts") <
-        publishWorkflow.indexOf("Resolve publish target"),
+      installIndex < resolveIndex,
       "the release resolver must run after its dependencies are installed",
     );
     assert.match(
