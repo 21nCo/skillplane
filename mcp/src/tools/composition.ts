@@ -4,6 +4,7 @@ import {
   type versionLifecycleInputSchema,
   type compositionCandidateInputSchema,
   type verificationStartInputSchema,
+  type executionReportInputSchema,
   type verificationEvidenceInputSchema,
   type verificationCompleteInputSchema,
   type verificationRunInputSchema,
@@ -23,7 +24,9 @@ export function skillResolve(runtime: McpToolRuntime, input: SkillResolveInput) 
         action: "skills:read",
         allowPublic: true,
       });
-      const version = await resolveVersion(runtime, execution, skill, input.version);
+      const version = await resolveVersion(runtime, execution, skill, input.version, {
+        forDependencyUpgrade: true,
+      });
       return {
         output: {
           requestId: execution.requestId,
@@ -31,9 +34,37 @@ export function skillResolve(runtime: McpToolRuntime, input: SkillResolveInput) 
             version.id,
             skill.principal,
             input.purpose,
+            true,
           ),
         },
       };
+    },
+  );
+}
+export function executionReport(
+  runtime: McpToolRuntime,
+  input: z.infer<typeof executionReportInputSchema>,
+) {
+  return executeMutationTool(
+    runtime,
+    "skill_execution_report",
+    input.caller,
+    async (execution) => {
+      const skill = await resolveSkill(runtime, execution, input.skill, {
+        action: "skills:write",
+        allowPublic: false,
+      });
+      if (!skill.principal)
+        throw new McpToolError("WORKSPACE_FORBIDDEN", "Workspace access is required");
+      const version = await resolveVersion(runtime, execution, skill, input.version);
+      const result = await runtime.services.verificationService.recordExecution({
+        ...input,
+        versionId: version.id,
+        principal: skill.principal,
+        requestId: execution.requestId,
+        fencingEpoch: runtime.fencingEpoch,
+      });
+      return { output: { requestId: execution.requestId, result } };
     },
   );
 }
@@ -47,7 +78,7 @@ export function verificationStart(
     input.caller,
     async (execution) => {
       const skill = await resolveSkill(runtime, execution, input.skill, {
-        action: "skills:read",
+        action: "skills:write",
         allowPublic: false,
       });
       if (!skill.principal)
@@ -104,7 +135,7 @@ export function verificationEvidence(
     input.caller,
     async (execution) => {
       const skill = await resolveSkill(runtime, execution, input.skill, {
-        action: "skills:read",
+        action: "skills:write",
         allowPublic: false,
       });
       if (!skill.principal)
@@ -130,7 +161,7 @@ export function verificationComplete(
     input.caller,
     async (execution) => {
       const skill = await resolveSkill(runtime, execution, input.skill, {
-        action: "skills:read",
+        action: "skills:write",
         allowPublic: false,
       });
       if (!skill.principal)
@@ -169,11 +200,6 @@ export function dependencyUpgrade(
         skill.id,
         skill.principal,
       );
-      const diff = await runtime.services.compositionService.upgradePreview(
-        version.id,
-        skill.principal,
-        skill.id,
-      );
       const candidate = await runtime.services.skillVersionService.createCandidate({
         skillId: skill.id,
         principal: skill.principal,
@@ -188,6 +214,15 @@ export function dependencyUpgrade(
       await registerResourceRoutes(runtime.services, skill.workspaceId, [
         { resourceType: "skill_version", resourceId: candidate.id },
       ]);
+      const storedCandidate = await runtime.services.bundleStorage.getCanonicalBundle(
+        candidate.objectKey,
+        candidate.digest,
+      );
+      const { canonicalizeBundle } = await import("@skillplane/storage");
+      const diff = await runtime.services.compositionService.diffBundles(
+        bundle,
+        await canonicalizeBundle(storedCandidate.bytes),
+      );
       const publicCandidate = { ...candidate, objectKey: undefined };
       return {
         output: {
@@ -274,7 +309,9 @@ export function compositionCandidate(
       });
       if (!skill.principal)
         throw new McpToolError("WORKSPACE_FORBIDDEN", "Workspace access is required");
-      const version = await resolveVersion(runtime, execution, skill, input.version);
+      const version = await resolveVersion(runtime, execution, skill, input.version, {
+        forDependencyUpgrade: true,
+      });
       const stored = await runtime.services.bundleStorage.getCanonicalBundle(
         version.objectKey,
         version.digest,

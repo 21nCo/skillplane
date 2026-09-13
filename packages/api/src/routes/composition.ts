@@ -65,7 +65,7 @@ export function registerCompositionRoutes(app: Hono<ApiEnvironment>) {
       skillId: c.req.param("skillId"),
       versionId: c.req.param("versionId"),
       state,
-      reason: parseStringField(fields.reason, "reason"),
+      reason: parseStringField(fields.reason, "reason", { maxLength: 2000 }),
       principal: requirePrincipal(c),
       idempotencyKey: requireIdempotencyKey(c),
       requestId: c.get("requestId"),
@@ -92,6 +92,13 @@ export function registerCompositionRoutes(app: Hono<ApiEnvironment>) {
     async (c) => {
       const s = requireServices(c);
       const principal = requirePrincipal(c);
+      const fields = await readJsonObject(c);
+      const proposedBump = fields.proposedBump ?? "minor";
+      if (
+        typeof proposedBump !== "string" ||
+        !["patch", "minor", "major"].includes(proposedBump)
+      )
+        throw new DomainError("VALIDATION_FAILED", "Invalid proposed bump", 400);
       const bundle = await s.compositionService.upgradeBundle(
         c.req.param("versionId"),
         c.req.param("skillId"),
@@ -102,7 +109,7 @@ export function registerCompositionRoutes(app: Hono<ApiEnvironment>) {
         baseVersionId: c.req.param("versionId"),
         principal,
         archiveBytes: bundle.bytes,
-        proposedBump: "minor",
+        proposedBump: proposedBump as "patch" | "minor" | "major",
         changeSummary: "Upgrade locked skill dependencies",
         idempotencyKey: requireIdempotencyKey(c),
         requestId: c.get("requestId"),
@@ -112,6 +119,34 @@ export function registerCompositionRoutes(app: Hono<ApiEnvironment>) {
         { resourceType: "skill_version", resourceId: version.id },
       ]);
       return c.json(success(c, { version: publicSkillVersion(version) }), 201);
+    },
+  );
+  app.post(
+    "/api/v1/skills/:skillId/versions/:versionId/execution-records",
+    async (c) => {
+      const s = requireServices(c),
+        principal = requirePrincipal(c);
+      const fields = verificationStartFieldsSchema
+        .omit({ executionId: true, agent: true, model: true })
+        .safeParse(await readJsonObject(c));
+      if (!fields.success)
+        throw new DomainError("VALIDATION_FAILED", "Invalid execution target", 400);
+      const plan = await s.compositionService.resolve(
+        c.req.param("versionId"),
+        principal,
+        "verify",
+      );
+      if (plan.root.skillId !== c.req.param("skillId"))
+        throw new DomainError("NOT_FOUND", "Skill was not found", 404);
+      const execution = await s.verificationService.recordExecution({
+        ...fields.data,
+        versionId: plan.root.versionId,
+        principal,
+        idempotencyKey: requireIdempotencyKey(c),
+        requestId: c.get("requestId"),
+        fencingEpoch: routingEpoch(c),
+      });
+      return c.json(success(c, { execution }), 201);
     },
   );
   app.post(
@@ -144,8 +179,8 @@ export function registerCompositionRoutes(app: Hono<ApiEnvironment>) {
     const s = requireServices(c);
     const principal = requirePrincipal(c);
     const rows = await s.database.pool.query(
-      "SELECT id,version_id,status,commit_sha,environment,started_at,completed_at FROM skill_verification_runs WHERE workspace_id=$1 AND version_id IN (SELECT id FROM skill_versions WHERE skill_id=$2 AND workspace_id=$1) AND expires_at>now() ORDER BY started_at DESC LIMIT 50",
-      [principal.workspaceId, c.req.param("skillId")],
+      "SELECT id,version_id,status,commit_sha,environment,started_at,completed_at FROM skill_verification_runs WHERE workspace_id=$1 AND version_id IN (SELECT id FROM skill_versions WHERE skill_id=$2 AND workspace_id=$1) AND ($3::text IS NULL OR version_id=$3) AND expires_at>now() ORDER BY started_at DESC LIMIT 50",
+      [principal.workspaceId, c.req.param("skillId"), c.req.query("versionId") ?? null],
     );
     c.header("Cache-Control", "private, no-store");
     return c.json(success(c, { runs: rows.rows }));

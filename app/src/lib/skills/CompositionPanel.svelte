@@ -51,11 +51,18 @@
     busy = $state(false),
     runId = $state("");
   let results = $state<{
+    version_id: string;
     status: string;
     commit_sha: string;
     environment: string;
-    results: { claimId: string; status: string; explanation: string }[];
+    results: {
+      claimId: string;
+      status: string;
+      explanation: string;
+      evidence: { type: string; uri: string; description: string; sha256: string }[];
+    }[];
   } | null>(null);
+  let upgradeKey = $state(crypto.randomUUID());
   let previous = $state<Plan | null>(null);
   let runs = $state<
     { id: string; version_id: string; status: string; commit_sha: string }[]
@@ -104,7 +111,7 @@
         });
     if (!publicView) {
       void apiRequest<{ runs: typeof runs }>(
-        `/api/v1/skills/${encodeURIComponent(skillId)}/verification-runs`,
+        `/api/v1/skills/${encodeURIComponent(skillId)}/verification-runs?versionId=${encodeURIComponent(id)}`,
         { headers: headers() },
       )
         .then((r) => {
@@ -142,11 +149,12 @@
     error = null;
     try {
       const h = headers();
-      h.set("idempotency-key", crypto.randomUUID());
+      h.set("idempotency-key", upgradeKey);
       const r = await apiRequest<{ version: SkillVersion }>(
         `${prefix()}/dependency-upgrade`,
         { method: "POST", headers: h, ...jsonBody({}) },
       );
+      upgradeKey = crypto.randomUUID();
       onCreated(r.version);
     } catch (e) {
       error = e instanceof Error ? e.message : "Upgrade failed";
@@ -161,6 +169,8 @@
         `/api/v1/skills/${encodeURIComponent(skillId)}/verification-runs/${encodeURIComponent(runId)}`,
         { headers: headers() },
       );
+      if (r.run.version_id !== version.id)
+        throw new Error("This run belongs to another version");
       results = r.run;
     } catch (e) {
       error = e instanceof Error ? e.message : "Run not found";
@@ -218,6 +228,10 @@
     {#if upgrades?.available}<h3>Available dependency upgrades</h3>
       {#each upgrades.added as node (`${node.skill}/${node.semanticVersion}`)}<p>
           {node.skill} → {node.semanticVersion}
+        </p>{/each}
+      {#each upgrades.removed as node (`${node.skill}/${node.semanticVersion}`)}<p>
+          Removed {node.skill}
+          {node.semanticVersion}
         </p>{/each}{/if}
     <h3>Verification obligations</h3>
     {#each plan.verificationPlan.claims as claim (claim.namespacedId)}
@@ -252,7 +266,15 @@
         </p>
         {#each results.results as result (result.claimId)}<p>
             {result.claimId}: {result.status} — {result.explanation}
-          </p>{/each}{/if}
+          </p>
+          {#each result.evidence as evidence (`${evidence.type}/${evidence.sha256}/${evidence.uri}`)}<p
+            >
+              {evidence.type}:
+              <!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- external evidence reference validated by the API -->
+              <a href={evidence.uri} rel="noreferrer">{evidence.description}</a>
+              <code>{evidence.sha256}</code>
+            </p>{/each}
+        {/each}{/if}
     {/if}
   {:else if !error}<p role="status">Resolving the immutable closure…</p>{/if}
 </section>

@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import {
   bigint,
   pgTable,
@@ -99,7 +100,9 @@ export const skillVerificationRuns = pgTable(
     evidenceManifestDigest: text("evidence_manifest_digest"),
     startedAt: utc("started_at").notNull().defaultNow(),
     completedAt: utc("completed_at"),
-    expiresAt: utc("expires_at").notNull(),
+    expiresAt: utc("expires_at")
+      .notNull()
+      .default(sql`now() + interval '90 days'`),
   },
   (t) => [
     uniqueIndex("skill_verification_runs_workspace_id_unique").on(t.workspaceId, t.id),

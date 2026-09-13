@@ -38,6 +38,7 @@
         const manifest = JSON.parse(new TextDecoder().decode(files.get("skill.json")));
         dependencies = manifest.dependencies ?? [];
         verify = Boolean(manifest.entrypoints?.verify);
+        blocking = Boolean(manifest.verification?.blocking);
         verifier = new TextDecoder().decode(files.get("verification/VERIFY.md"));
         claims =
           new TextDecoder().decode(files.get("verification/claims.json")) || "[]";
@@ -51,6 +52,7 @@
       active = false;
     };
   });
+  let blocking = $state(false);
   let markdown = $state("");
   onMount(() => {
     markdown = initialMarkdown;
@@ -99,7 +101,7 @@
         },
         files,
         ...(dependencies.length || verify || baseVersion.manifest.formatVersion === 2
-          ? { composition: { dependencies, verify, blocking: false } }
+          ? { composition: { dependencies, verify, blocking: verify && blocking } }
           : {}),
       });
       progress = "Writing the immutable candidate…";

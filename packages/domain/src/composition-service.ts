@@ -59,6 +59,29 @@ export class CompositionService {
     readonly writesEnabled = true,
   ) {}
 
+  private readonly parsed = new Map<string, CanonicalBundle>();
+  private parsedBytes = 0;
+  private async canonical(bytes: Uint8Array, digest: string) {
+    const cached = this.parsed.get(digest);
+    if (cached) return cached;
+    const bundle = await canonicalizeBundle(bytes);
+    while (
+      this.parsed.size &&
+      this.parsedBytes + bundle.manifest.expandedByteSize >
+        COMPOSITION_LIMITS.expandedBytes
+    ) {
+      const entry = this.parsed.entries().next().value;
+      if (!entry) break;
+      const [key, old] = entry;
+      this.parsed.delete(key);
+      this.parsedBytes -= old.manifest.expandedByteSize;
+    }
+    if (bundle.manifest.expandedByteSize <= COMPOSITION_LIMITS.expandedBytes) {
+      this.parsed.set(digest, bundle);
+      this.parsedBytes += bundle.manifest.expandedByteSize;
+    }
+    return bundle;
+  }
   private denied(): never {
     throw new DomainError(
       "SKILL_DEPENDENCY_CONFLICT",
@@ -66,18 +89,25 @@ export class CompositionService {
       409,
     );
   }
-  private async workspaceSlug(workspaceId: string): Promise<string> {
-    const result = await this.controlPool.query<{ slug: string }>(
-      "SELECT slug FROM workspaces WHERE id = $1",
-      [workspaceId],
-    );
+  private async workspaceSlug(
+    workspaceId: string,
+    db: Queryable = this.pool,
+  ): Promise<string> {
+    const result = await (
+      this.controlPool === this.pool ? db : this.controlPool
+    ).query<{ slug: string }>("SELECT slug FROM workspaces WHERE id = $1", [
+      workspaceId,
+    ]);
     if (!result.rows[0]) this.denied();
     return result.rows[0].slug;
   }
   async assertAvailable(
     versionId: string,
+    db: Queryable = this.pool,
   ): Promise<{ deprecated_at: Date | null; withdrawn_sequence: string | null }> {
-    const result = await this.controlPool.query<{
+    const result = await (
+      this.controlPool === this.pool ? db : this.controlPool
+    ).query<{
       deprecated_at: Date | null;
       revoked_at: Date | null;
       withdrawn_sequence: string | null;
@@ -101,7 +131,7 @@ export class CompositionService {
     principal: Principal | null,
     db: Queryable = this.pool,
   ): Promise<Source> {
-    const globalLifecycle = await this.assertAvailable(versionId);
+    const globalLifecycle = await this.assertAvailable(versionId, db);
     const result = this.publicOnly
       ? { rows: [] }
       : await db.query<Omit<Source, "bundle" | "workspace_slug" | "publicSource">>(
@@ -110,8 +140,8 @@ export class CompositionService {
               lifecycle.deprecated_at, lifecycle.revoked_at
          FROM skill_versions v JOIN skills s ON s.id = v.skill_id
          LEFT JOIN skill_version_lifecycle lifecycle ON lifecycle.version_id = v.id
-        WHERE v.id = $1`,
-          [versionId],
+        WHERE v.id = $1 AND v.workspace_id = $2`,
+          [versionId, principal?.workspaceId ?? null],
         );
     const row = result.rows[0];
     if (row) {
@@ -132,12 +162,15 @@ export class CompositionService {
       );
       return {
         ...row,
-        workspace_slug: await this.workspaceSlug(row.workspace_id),
-        bundle: await canonicalizeBundle(stored.bytes),
+        deprecated_at: row.deprecated_at ?? globalLifecycle.deprecated_at,
+        workspace_slug: await this.workspaceSlug(row.workspace_id, db),
+        bundle: await this.canonical(stored.bytes, row.content_digest),
         publicSource: false,
       };
     }
-    const projection = await this.controlPool.query<{
+    const projection = await (
+      this.controlPool === this.pool ? db : this.controlPool
+    ).query<{
       version_id: string;
       workspace_id: string;
       workspace_slug: string;
@@ -179,7 +212,7 @@ export class CompositionService {
       status: "published",
       deprecated_at: globalLifecycle.deprecated_at,
       revoked_at: null,
-      bundle: await canonicalizeBundle(stored.bytes),
+      bundle: await this.canonical(stored.bytes, remote.digest),
       publicSource: true,
     };
   }
@@ -223,6 +256,7 @@ export class CompositionService {
   private async choices(
     dependency: SkillDependency,
     principal: Principal,
+    budget: { expandedBytes: number; seen: Set<string> },
   ): Promise<DependencyChoice[]> {
     const workspace = await this.controlPool.query<{ id: string }>(
       "SELECT id FROM workspaces WHERE slug = $1",
@@ -238,11 +272,27 @@ export class CompositionService {
       `SELECT v.id,v.semantic_version,v.manifest FROM skill_versions v JOIN skills s ON s.id = v.skill_id
       LEFT JOIN skill_version_lifecycle lifecycle ON lifecycle.version_id = v.id
       WHERE s.workspace_id = $1 AND s.slug = $2 AND v.status = 'published'
-      AND (s.workspace_id = $3 OR (s.visibility = 'public' AND s.archived_at IS NULL)) AND lifecycle.revoked_at IS NULL AND ($4::text IS NULL OR v.semantic_version=$4)
+      AND s.workspace_id = $3 AND lifecycle.revoked_at IS NULL AND ($4::text IS NULL OR v.semantic_version=$4)
       ORDER BY v.revision DESC LIMIT 101`,
       [workspaceId, dependency.skill, principal.workspaceId, valid(dependency.version)],
     );
-    let ids = rows.rows
+    if (rows.rows.length >= 101)
+      throw new DomainError(
+        "SKILL_DEPENDENCY_CONFLICT",
+        "Publication catalog exceeds search limit; use an exact semantic version",
+        409,
+      );
+    const availableRows = [];
+    for (const row of rows.rows) {
+      try {
+        await this.assertAvailable(row.id);
+        availableRows.push(row);
+      } catch (error) {
+        if (!(error instanceof DomainError) || error.code !== "SKILL_VERSION_REVOKED")
+          throw error;
+      }
+    }
+    let ids = availableRows
       .filter((r) => satisfies(r.semantic_version, dependency.version))
       .map((r) => r.id);
     if (!ids.length && workspaceId !== principal.workspaceId) {
@@ -255,6 +305,12 @@ export class CompositionService {
         WHERE p.workspace_slug = $1 AND p.skill_slug = $2 AND p.state = 'published' AND NOT EXISTS (SELECT 1 FROM public_skill_version_lifecycle l WHERE l.version_id=p.version_id AND (l.revoked_at IS NOT NULL OR h.projection_sequence<=l.withdrawn_sequence)) AND ($3::text IS NULL OR p.semantic_version=$3) ORDER BY p.published_at DESC LIMIT 101`,
         [dependency.workspace, dependency.skill, valid(dependency.version)],
       );
+      if (publicRows.rows.length >= 101)
+        throw new DomainError(
+          "SKILL_DEPENDENCY_CONFLICT",
+          "Publication catalog exceeds search limit; use an exact semantic version",
+          409,
+        );
       ids = publicRows.rows
         .filter((r) => satisfies(r.semantic_version, dependency.version))
         .map((r) => r.version_id);
@@ -266,11 +322,13 @@ export class CompositionService {
         409,
       );
     const choices: DependencyChoice[] = [];
-    let expandedBytes = 0;
     for (const id of ids) {
       const source = await this.source(id, principal);
-      expandedBytes += source.bundle.manifest.expandedByteSize;
-      if (expandedBytes > COMPOSITION_LIMITS.expandedBytes)
+      if (!budget.seen.has(id)) {
+        budget.seen.add(id);
+        budget.expandedBytes += source.bundle.manifest.expandedByteSize;
+      }
+      if (budget.expandedBytes > COMPOSITION_LIMITS.expandedBytes)
         throw new DomainError(
           "SKILL_DEPENDENCY_CONFLICT",
           "Dependency version search exceeds expanded byte budget; use a narrower range",
@@ -293,6 +351,9 @@ export class CompositionService {
     return source.bundle;
   }
   async upgradePreview(versionId: string, principal: Principal, skillId?: string) {
+    return (await this.prepareUpgrade(versionId, principal, skillId)).diff;
+  }
+  async prepareUpgrade(versionId: string, principal: Principal, skillId?: string) {
     authorize(principal, "skills:read");
     const source = await this.source(versionId, principal);
     if (
@@ -301,13 +362,25 @@ export class CompositionService {
       source.status !== "published"
     )
       this.denied();
-    const before = this.lock(source.bundle);
-    const prepared = await this.prepare(source.bundle, principal, source.visibility);
-    const after = prepared.lock;
+    const prepared = await this.prepare(
+      source.bundle,
+      principal,
+      source.visibility,
+      false,
+      true,
+    );
     return {
-      available: prepared.bundle.digest !== source.bundle.digest,
-      beforeClosureDigest: await compositionDigest(source.bundle.digest, before),
-      afterClosureDigest: prepared.closureDigest,
+      bundle: prepared.bundle,
+      diff: await this.diffBundles(source.bundle, prepared.bundle),
+    };
+  }
+  async diffBundles(beforeBundle: CanonicalBundle, afterBundle: CanonicalBundle) {
+    const before = this.lock(beforeBundle),
+      after = this.lock(afterBundle);
+    return {
+      available: beforeBundle.digest !== afterBundle.digest,
+      beforeClosureDigest: await compositionDigest(beforeBundle.digest, before),
+      afterClosureDigest: await compositionDigest(afterBundle.digest, after),
       added: after.nodes.filter(
         (n) => !before.nodes.some((b) => b.versionId === n.versionId),
       ),
@@ -318,11 +391,13 @@ export class CompositionService {
       afterEdges: after.edges,
     };
   }
+
   async prepare(
     bundle: CanonicalBundle,
     principal: Principal,
     visibility: string,
     preserveLock = false,
+    preview = false,
   ): Promise<PreparedComposition> {
     const started = performance.now();
     try {
@@ -331,6 +406,7 @@ export class CompositionService {
         principal,
         visibility,
         preserveLock,
+        preview,
       );
       if (bundle.skill.formatVersion === 2)
         console.info(
@@ -357,6 +433,7 @@ export class CompositionService {
     principal: Principal,
     visibility: string,
     preserveLock = false,
+    preview = false,
   ): Promise<PreparedComposition> {
     if (bundle.skill.formatVersion === 1)
       return {
@@ -364,7 +441,7 @@ export class CompositionService {
         lock: emptyLock(),
         closureDigest: await compositionDigest(bundle.digest, emptyLock()),
       };
-    if (!this.writesEnabled)
+    if (!preview && !this.writesEnabled)
       throw new DomainError(
         "SERVICE_UNAVAILABLE",
         "Composition writes are disabled",
@@ -379,12 +456,13 @@ export class CompositionService {
       skill: bundle.skill.slug,
       expandedBytes: authored.manifest.expandedByteSize,
     };
+    const budget = { expandedBytes: 0, seen: new Set<string>() };
     const lock = preserveLock
       ? this.lock(bundle)
       : await resolveDependencies({
           dependencies: bundle.skill.dependencies,
           root,
-          choices: (d) => this.choices(d, principal),
+          choices: (d) => this.choices(d, principal, budget),
         });
     validateLock(lock, root);
     await this.revalidate(lock, principal, visibility);
@@ -409,7 +487,7 @@ export class CompositionService {
       if (source.status !== "published") this.denied();
       if (
         (visibility === "public" || source.workspace_id !== principal?.workspaceId) &&
-        source.visibility !== "public"
+        (source.visibility !== "public" || source.archived_at !== null)
       )
         this.denied();
       if (visibility === "workspace" && source.visibility === "private") this.denied();
@@ -501,23 +579,22 @@ export class CompositionService {
     principal: Principal | null,
     purpose: "execute" | "verify" = "execute",
     allowCandidate = false,
+    db: Queryable = this.pool,
   ): Promise<CompositionPlan> {
     if (principal) authorize(principal, "skills:read");
-    const source = await this.source(versionId, principal);
+    const source = await this.source(versionId, principal, db);
     if (
       source.status !== "published" &&
       !(
         allowCandidate &&
-        principal &&
-        principal.role !== "viewer" &&
-        source.workspace_id === principal.workspaceId &&
-        (principal.kind === "user" || principal.scopes.includes("skills:amend"))
+        source.workspace_id === principal?.workspaceId &&
+        (principal.kind === "user" || principal.scopes.includes("skills:read"))
       )
     )
       this.denied();
     const root = await this.node(source);
     const lock = this.lock(source.bundle);
-    const sources = await this.revalidate(lock, principal, source.visibility);
+    const sources = await this.revalidate(lock, principal, source.visibility, db);
     sources.set(versionId, source);
     const executionIds = new Set<string>();
     const verificationIds = new Set<string>();

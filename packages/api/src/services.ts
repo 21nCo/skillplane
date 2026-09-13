@@ -203,7 +203,7 @@ export async function buildApiServices(
       controlDatabase.pool,
       publicBundleStorage ?? bundleStorage,
       false,
-      bindings.SKILL_COMPOSITION_WRITES_ENABLED !== "false",
+      bindings.SKILL_COMPOSITION_WRITES_ENABLED === "true",
     );
     const skillService = new SkillService(
       database.pool,

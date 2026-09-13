@@ -69,7 +69,9 @@ export function skillRetrieve(runtime: McpToolRuntime, input: SkillRetrieveInput
       action: "skills:read",
       allowPublic: true,
     });
-    const version = await resolveVersion(runtime, execution, skill, input.version);
+    const version = await resolveVersion(runtime, execution, skill, input.version, {
+      forDependencyUpgrade: true,
+    });
     let selectedContext: SkillRetrieveOutput["context"] = null;
     if (input.context) {
       skill = await resolveSkill(runtime, execution, input.skill, {
@@ -95,6 +97,8 @@ export function skillRetrieve(runtime: McpToolRuntime, input: SkillRetrieveInput
               await runtime.services.compositionService.resolve(
                 version.id,
                 skill.principal,
+                "execute",
+                true,
               ),
             ),
           }

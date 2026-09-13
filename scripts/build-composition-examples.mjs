@@ -18,7 +18,10 @@ for (const entry of await readdir(examples, { withFileTypes: true })) {
       const path = join(relative, item.name);
       if (item.isDirectory()) await collect(path);
       else if (!["authoring.json", "skill.json"].includes(path))
-        files.set(path, new Uint8Array(await readFile(join(directory, path))));
+        files.set(
+          path.replaceAll("\\", "/"),
+          new Uint8Array(await readFile(join(directory, path))),
+        );
     }
   }
   await collect();

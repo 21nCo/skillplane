@@ -90,7 +90,7 @@ export class VerificationService {
     payload: unknown,
     work: (client: PoolClient) => Promise<T>,
   ): Promise<T> {
-    authorize(options.principal, "skills:read");
+    authorize(options.principal, "skills:write");
     const claim = await this.idempotency.claim<{ result: T }>({
       workspaceId: options.principal.workspaceId,
       principal: options.principal,
@@ -108,11 +108,14 @@ export class VerificationService {
           const result = await work(client);
           await insertPrincipalAudit(client, options.principal, {
             eventType: operation,
-            action: "skills:read",
+            action: "skills:write",
             requestId: options.requestId,
             resourceType: "skill_verification",
             resourceId: (result as { id?: string }).id ?? "claim",
             metadata: {
+              ...(operation === "skill.execution.reported"
+                ? { execution: result }
+                : {}),
               operation,
               status: (result as { status?: string }).status ?? null,
             },
@@ -129,22 +132,57 @@ export class VerificationService {
       throw error;
     }
   }
+  async recordExecution(
+    options: Mutation & {
+      versionId: string;
+      repository: string;
+      commit: string;
+      environment: string;
+    },
+  ) {
+    const repository = bounded(options.repository, "repository");
+    const environment = bounded(options.environment, "environment", 500);
+    if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(options.commit))
+      invalid("An exact repository commit is required");
+    return this.mutate(
+      options,
+      "skill.execution.reported",
+      { versionId: options.versionId, repository, commit: options.commit, environment },
+      async (client) => {
+        const plan = await this.composition.resolve(
+          options.versionId,
+          options.principal,
+          "verify",
+          false,
+          client,
+        );
+        if (plan.root.workspaceId !== options.principal.workspaceId)
+          invalid("Record execution in the root workspace");
+        return {
+          id: `execution:${crypto.randomUUID()}`,
+          versionId: options.versionId,
+          closureDigest: plan.closureDigest,
+          repository,
+          commit: options.commit,
+          environment,
+        };
+      },
+    );
+  }
   async start(
     options: Mutation & {
       versionId: string;
       repository: string;
       commit: string;
       environment: string;
-      executorActorId: string;
+      executionId: string;
       agent: string;
       model: string;
     },
   ): Promise<VerificationRun> {
     const repository = bounded(options.repository, "repository");
     const environment = bounded(options.environment, "environment", 500);
-    const executor = bounded(options.executorActorId, "executor identity", 160);
-    if (executor === options.principal.actorId)
-      invalid("Independent verification requires a different executor identity");
+    const executionId = bounded(options.executionId, "execution record", 160);
     if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(options.commit))
       invalid("An exact repository commit is required");
     const agent = bounded(options.agent, "agent", 160),
@@ -157,7 +195,7 @@ export class VerificationService {
         repository,
         environment,
         commit: options.commit,
-        executor,
+        executionId,
         agent,
         model,
       },
@@ -166,9 +204,43 @@ export class VerificationService {
           options.versionId,
           options.principal,
           "verify",
+          false,
+          client,
         );
         if (plan.root.workspaceId !== options.principal.workspaceId)
           invalid("Start verification in the root skill workspace");
+        const execution = await client.query<{
+          actor_id: string;
+          actor_type: string;
+          metadata: {
+            execution: {
+              versionId: string;
+              closureDigest: string;
+              repository: string;
+              commit: string;
+              environment: string;
+            };
+          };
+        }>(
+          "SELECT actor_id,actor_type,metadata FROM audit_events WHERE workspace_id=$1 AND event_type='skill.execution.reported' AND resource_id=$2 AND outcome='success' ORDER BY occurred_at DESC LIMIT 1",
+          [options.principal.workspaceId, executionId],
+        );
+        const record = execution.rows[0];
+        const target = record?.metadata.execution;
+        if (
+          target?.versionId !== options.versionId ||
+          target.closureDigest !== plan.closureDigest ||
+          target.repository !== repository ||
+          target.commit !== options.commit ||
+          target.environment !== environment
+        )
+          invalid("Execution record does not match the exact verification target");
+        if (record?.actor_id === options.principal.actorId)
+          invalid(
+            "Independent verification requires a different authenticated executor",
+          );
+        if (!record) invalid("Execution record is missing");
+        const executor = record.actor_id;
         const actor = principalAuditActor(options.principal);
         const result = await client.query<VerificationRun>(
           `INSERT INTO skill_verification_runs (id,workspace_id,version_id,closure_digest,repository,commit_sha,environment,verifier_actor_id,verifier_actor_type,executor_actor_id,agent,model,plan)
@@ -209,7 +281,13 @@ export class VerificationService {
     );
     const run = result.rows[0];
     if (!run) throw new DomainError("NOT_FOUND", "Verification run was not found", 404);
-    const current = await this.composition.resolve(run.version_id, principal, "verify");
+    const current = await this.composition.resolve(
+      run.version_id,
+      principal,
+      "verify",
+      false,
+      client,
+    );
     if (skillId && current.root.skillId !== skillId)
       throw new DomainError("NOT_FOUND", "Verification run was not found", 404);
     if (current.closureDigest !== run.closure_digest)
@@ -275,16 +353,17 @@ export class VerificationService {
         !["https:", "urn:"].includes(uri.protocol) ||
         uri.username ||
         uri.password ||
-        uri.search
+        uri.search ||
+        uri.hash
       )
         invalid(
-          "Use a redacted HTTPS or URN reference without credentials or query tokens",
+          "Use a redacted HTTPS or URN reference without credentials, query tokens or fragments",
         );
     }
     return this.mutate(
       options,
       "skill.verification.evidence_added",
-      { runId: options.runId, result },
+      { runId: options.runId, skillId: options.skillId ?? null, result },
       async (client) => {
         const run = await this.run(
           client,
@@ -323,7 +402,7 @@ export class VerificationService {
     return this.mutate(
       options,
       "skill.verification.completed",
-      { runId: options.runId },
+      { runId: options.runId, skillId: options.skillId ?? null },
       async (client) => {
         const run = await this.run(
           client,

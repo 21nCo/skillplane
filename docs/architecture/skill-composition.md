@@ -36,6 +36,7 @@ The DataFn reference requires complete read/mutation inventories, call-path trac
 - `skill_retrieve`: unchanged leaf shape; v2 adds `composition`.
 - `skill_composition_candidate_create`: author dependencies and verifier files against a base version.
 - `skill_dependency_upgrades_get`, `skill_dependency_upgrade`: preview and create a reviewable upgrade.
+- `skill_execution_report`: records the exact target under the authenticated executor identity and returns an immutable audit-backed `executionId`. The verifier must use a different authenticated principal and supply that ID; it cannot choose an executor name. This is an attributed execution report, not proof of success.
 - `skill_verification_plan_get`, `skill_verification_run_start`, `skill_verification_evidence_add`, `skill_verification_run_complete`, `skill_verification_run_get`.
 - `skill_version_lifecycle_update`: owner/admin deprecation or revocation.
 
@@ -43,7 +44,7 @@ HTTP equivalents live below `/api/v1/skills/:skillId/versions/:versionId` (`reso
 
 ## Migration, validation and rollout
 
-Apply regional migrations 0048/0050 and control migrations 0049/0051 before activating v2 writers. Set `SKILL_COMPOSITION_WRITES_ENABLED=false` to disable v2 creation/publication while retaining v2 reads. Historical versions need no bundle rewrite: v1 composition metadata is derived at read time; v2 metadata and normalized edges are immutable companion records. New regional tables participate in workspace migration fences and namespace movement. Control-plane invalidations remain global. Public visibility withdrawal records the regional projection sequence cutoff before changing visibility: replayed stale events cannot restore access, even if processed later. Only a causally newer public projection can restore it.
+After control migration 0051 commits, validate its check separately with `ALTER TABLE public_skill_version_lifecycle VALIDATE CONSTRAINT public_skill_version_lifecycle_withdrawn_sequence_check`. Apply regional migrations 0048/0050 and control migrations 0049/0051 before activating v2 writers. Writers are disabled by default; set `SKILL_COMPOSITION_WRITES_ENABLED=true` after migration to enable them. Set `SKILL_COMPOSITION_WRITES_ENABLED=false` to disable v2 creation/publication while retaining v2 reads. Historical versions need no bundle rewrite: v1 composition metadata is derived at read time; v2 metadata and normalized edges are immutable companion records. New regional tables participate in workspace migration fences and namespace movement. Control-plane invalidations remain global. Public visibility withdrawal is queued in the regional transaction and applies its projection sequence cutoff atomically with the control-plane unpublish event: replayed stale events cannot restore access, even if processed later. Only a causally newer public projection can restore it.
 
 Run `DATABASE_URL=<regional-database-url> node scripts/verification-retention.mjs` from a scheduled regional maintenance job. Each invocation deletes at most 500 expired runs and their evidence in one transaction. It skips migrating workspaces and holds each active workspace routing epoch so moved workspaces can still expire records safely. Database triggers freeze completed results and targets, and allow deletion only after expiry.
 

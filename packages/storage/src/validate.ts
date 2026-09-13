@@ -491,11 +491,6 @@ export async function validateBundleArchive(
       for (const claim of claims) {
         if (claim.procedure && !files.has(claim.procedure))
           return fail("SKILL_BUNDLE_INVALID", "Claim procedure is missing");
-        if (skill.verification.blocking && claim.severity !== "blocking")
-          return fail(
-            "SKILL_BUNDLE_INVALID",
-            "Blocking verification cannot declare advisory claims",
-          );
       }
     } catch {
       return fail("SKILL_BUNDLE_INVALID", "Invalid verification claims");

@@ -834,38 +834,23 @@ export class SkillService {
             throw new DomainError("SKILL_NOT_FOUND", "Skill was not found", 404);
           }
           assertExpectedUpdatedAt(previous, expectedUpdatedAt);
-          if (visibility !== "public") {
-            await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
-              options.principal.workspaceId,
-            ]);
-            const sequence = await client.query<{ sequence: string }>(
-              "SELECT GREATEST(COALESCE((SELECT last_sequence FROM regional_projection_sequences WHERE workspace_id=$1),0),COALESCE(MAX(sequence),0))::text AS sequence FROM regional_projection_outbox WHERE workspace_id=$1",
-              [options.principal.workspaceId],
-            );
-            const versions = await client.query<{ id: string }>(
-              "SELECT id FROM skill_versions WHERE skill_id=$1 AND workspace_id=$2 AND status='published'",
-              [options.skillId, options.principal.workspaceId],
-            );
-            await this.controlPool.query(
-              `INSERT INTO public_skill_version_lifecycle (version_id,workspace_id,reason,withdrawn_sequence) SELECT id,$2,'Visibility withdrawn',$3::bigint FROM unnest($1::text[]) AS id ON CONFLICT (version_id) DO UPDATE SET withdrawn_sequence=GREATEST(public_skill_version_lifecycle.withdrawn_sequence,EXCLUDED.withdrawn_sequence),updated_at=now()`,
-              [
-                versions.rows.map((v) => v.id),
-                options.principal.workspaceId,
-                sequence.rows[0]?.sequence ?? "0",
-              ],
-            );
-          }
 
           const widensVisibility =
             (visibility === "public" && previous.visibility !== "public") ||
             (visibility === "workspace" && previous.visibility === "private");
-          if (previous.current_published_version_id && widensVisibility)
-            await this.composition.validatePublication(
-              previous.current_published_version_id,
-              options.principal,
-              visibility,
-              client,
+          if (widensVisibility) {
+            const versions = await client.query<{ id: string }>(
+              "SELECT id FROM skill_versions WHERE skill_id=$1 AND workspace_id=$2 AND status='published'",
+              [options.skillId, options.principal.workspaceId],
             );
+            for (const version of versions.rows)
+              await this.composition.validatePublication(
+                version.id,
+                options.principal,
+                visibility,
+                client,
+              );
+          }
           const result = await client.query<SkillRow>(
             `UPDATE skills s
               SET visibility = $3,

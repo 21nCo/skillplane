@@ -99,7 +99,7 @@
       ]}
       bind:value={searchScope}
     />
-    <Button type="button" loading={searching} onclick={search}
+    <Button type="button" loading={searching} disabled={searching} onclick={search}
       >Search dependencies</Button
     >
   </div>
@@ -157,6 +157,10 @@
           bind:value={dependency.mode}
           {onchange}
         />
+        <label
+          ><input type="checkbox" bind:checked={dependency.required} {onchange} /> Required
+          dependency</label
+        >
       </div>
       <Button
         type="button"

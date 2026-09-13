@@ -4,6 +4,7 @@ import { skillResolveOutputSchema } from "@skillplane/mcp-schema";
 import {
   startMcpTestEnvironment,
   parseStructured,
+  parseToolError,
   TEST_CALLER,
   type McpTestEnvironment,
   type ConnectedMcpClient,
@@ -14,7 +15,9 @@ let skillId: string;
 let versionId: string;
 beforeAll(async () => {
   environment = await startMcpTestEnvironment("composition");
-  client = await environment.connect(environment.skillsOnlyToken);
+  client = await environment.connect(
+    await environment.issueOAuthToken("skills:read skills:write"),
+  );
   const workspace = await environment.services.controlDatabase.pool.query<{
     slug: string;
   }>("SELECT slug FROM workspaces WHERE id=$1", [environment.owner.workspaceId]);
@@ -116,7 +119,24 @@ describe("native composition through authenticated MCP", () => {
         repository: "https://example.com/repository",
         commit: "a".repeat(40),
         environment: "test",
-        executorActorId: "executor:other",
+        executionId: (
+          await environment.services.verificationService.recordExecution({
+            principal: {
+              kind: "user",
+              actorId: "executor:other",
+              userId: environment.owner.userId,
+              sessionId: "fixture",
+              workspaceId: environment.owner.workspaceId,
+              role: "owner",
+            },
+            versionId,
+            repository: "https://example.com/repository",
+            commit: "a".repeat(40),
+            environment: "test",
+            idempotencyKey: crypto.randomUUID(),
+            requestId: crypto.randomUUID(),
+          })
+        ).id,
         agent: "independent-verifier",
         model: "test-model",
         idempotencyKey: crypto.randomUUID(),
@@ -141,6 +161,10 @@ describe("native composition through authenticated MCP", () => {
       },
     });
     expect(incomplete.isError).toBe(true);
+    expect(parseToolError(incomplete).error).toMatchObject({
+      code: "VERIFICATION_INVALID",
+      message: "Passing claims require every declared evidence type",
+    });
     const completionArgs = {
       skill: { id: skillId },
       runId: run.id,

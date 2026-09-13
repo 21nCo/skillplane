@@ -1,10 +1,11 @@
 import {
+  dependencySchema,
   sha256Hex,
   stableJson,
   type SkillDependency,
   type VerificationClaim,
 } from "@skillplane/storage";
-import { satisfies, rcompare, validRange } from "semver";
+import { satisfies, rcompare, validRange, valid } from "semver";
 import { DomainError } from "./errors.js";
 
 export const COMPOSITION_LIMITS = {
@@ -65,6 +66,41 @@ export function validateLock(
   root: { workspace: string; skill: string; expandedBytes: number },
   limits = COMPOSITION_LIMITS,
 ): void {
+  const object = (v: unknown): v is Record<string, unknown> =>
+    Boolean(v && typeof v === "object" && !Array.isArray(v));
+  const text = (v: unknown) => typeof v === "string" && v.length > 0;
+  if (
+    !object(lock) ||
+    !Array.isArray(lock.nodes) ||
+    !Array.isArray(lock.edges) ||
+    lock.nodes.some(
+      (n: unknown) =>
+        !object(n) ||
+        ![n.versionId, n.workspaceId, n.skillId, n.workspace, n.skill].every(text) ||
+        typeof n.semanticVersion !== "string" ||
+        !valid(n.semanticVersion) ||
+        typeof n.digest !== "string" ||
+        !/^sha256:[a-f0-9]{64}$/.test(n.digest) ||
+        typeof n.closureDigest !== "string" ||
+        !/^sha256:[a-f0-9]{64}$/.test(n.closureDigest),
+    ) ||
+    lock.edges.some(
+      (e: unknown) =>
+        !object(e) ||
+        !text(e.parent) ||
+        !text(e.child) ||
+        !Number.isSafeInteger(e.ordinal) ||
+        Number(e.ordinal) < 0 ||
+        !dependencySchema.safeParse(
+          Object.fromEntries(
+            Object.entries(e).filter(
+              ([key]) => !["parent", "child", "ordinal"].includes(key),
+            ),
+          ),
+        ).success,
+    )
+  )
+    conflict("Invalid persisted dependency lock");
   if (
     (lock as { formatVersion: unknown }).formatVersion !== 1 ||
     lock.nodes.length > limits.nodes
@@ -201,7 +237,7 @@ export async function resolveDependencies(options: {
         const result = search(index + 1, next);
         if (result) return result;
       } catch (error) {
-        if (!(error instanceof DomainError)) throw error;
+        if (!(error instanceof DomainError) || attempts > limits.attempts) throw error;
         lastError = error;
       }
     }

@@ -203,6 +203,26 @@ function requiredString(value: unknown, field: string, maxLength: number): strin
   return value;
 }
 
+function validDependency(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const d = value as Record<string, unknown>;
+  return (
+    [d.alias, d.workspace, d.skill].every(
+      (v) =>
+        typeof v === "string" &&
+        v.length <= 120 &&
+        /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(v),
+    ) &&
+    typeof d.version === "string" &&
+    d.version.trim().length > 0 &&
+    d.version.length <= 200 &&
+    ["execution", "verification", "both"].includes(String(d.scope)) &&
+    ["include", "invoke"].includes(String(d.mode)) &&
+    (d.required === undefined || typeof d.required === "boolean") &&
+    (d.order === undefined ||
+      (Number.isInteger(d.order) && Number(d.order) >= 0 && Number(d.order) <= 1000))
+  );
+}
 export function inspectSkillBundle(bytes: Uint8Array): InspectedSkillBundle {
   if (bytes.byteLength === 0 || bytes.byteLength > MAX_COMPRESSED_BYTES) {
     throw new Error("Choose a non-empty ZIP bundle no larger than 10 MiB.");
@@ -233,6 +253,32 @@ export function inspectSkillBundle(bytes: Uint8Array): InspectedSkillBundle {
     !Array.isArray(record.files)
   ) {
     throw new Error("skill.json must use Skillplane bundle format version 1 or 2.");
+  }
+  if (record.formatVersion === 2) {
+    const entrypoints = record.entrypoints as {
+      execute?: unknown;
+      verify?: unknown;
+    } | null;
+    const verification = record.verification as {
+      claims?: unknown;
+      blocking?: unknown;
+    } | null;
+    if (
+      entrypoints?.execute !== "SKILL.md" ||
+      !Array.isArray(record.dependencies) ||
+      record.dependencies.length > 32 ||
+      record.dependencies.some((d) => !validDependency(d)) ||
+      (entrypoints.verify !== undefined &&
+        entrypoints.verify !== "verification/VERIFY.md") ||
+      Boolean(entrypoints.verify) !== Boolean(verification) ||
+      (verification &&
+        (verification.claims !== "verification/claims.json" ||
+          typeof verification.blocking !== "boolean")) ||
+      (entrypoints.verify &&
+        (!Object.hasOwn(files, "verification/VERIFY.md") ||
+          !Object.hasOwn(files, "verification/claims.json")))
+    )
+      throw new Error("Invalid version 2 composition or verification manifest.");
   }
   const tags = Array.isArray(record.tags)
     ? record.tags.filter((tag): tag is string => typeof tag === "string")

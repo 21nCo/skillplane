@@ -115,6 +115,7 @@ const workspaceTools = new Set([
   "skill_retrieve",
   "skill_resolve",
   "skill_verification_plan_get",
+  "skill_execution_report",
   "skill_verification_run_start",
   "skill_verification_run_get",
   "skill_verification_evidence_add",

@@ -4,6 +4,7 @@ import {
   versionLifecycle,
   skillResolve,
   verificationStart,
+  executionReport,
   verificationGet,
   verificationEvidence,
   verificationComplete,
@@ -15,6 +16,7 @@ import {
   skillResolveInputSchema,
   skillResolveOutputSchema,
   verificationStartInputSchema,
+  executionReportInputSchema,
   verificationRunInputSchema,
   verificationEvidenceInputSchema,
   verificationCompleteInputSchema,
@@ -143,7 +145,10 @@ export const SKILLPLANE_MCP_SERVER_INFO: McpFnServerInfo = {
   ],
 };
 
-type ToolAnnotations = typeof READ_ONLY_ANNOTATIONS | typeof MUTATION_ANNOTATIONS;
+type ToolAnnotations = Omit<
+  typeof MUTATION_ANNOTATIONS,
+  "destructiveHint" | "readOnlyHint"
+> & { destructiveHint: boolean; readOnlyHint: boolean };
 
 function objectSchema(schema: ZodType, io: "input" | "output"): McpFnObjectSchema {
   const converted = z.toJSONSchema(schema, { target: "draft-7", io });
@@ -241,7 +246,7 @@ export const skillplaneMcpDeclaration = defineMcpFnServer<McpToolRuntime>({
         "Deprecate or permanently revoke a published version. Revocation fails dependent retrieval closed.",
       input: versionLifecycleInputSchema,
       output: compositionMutationOutputSchema,
-      annotations: MUTATION_ANNOTATIONS,
+      annotations: { ...MUTATION_ANNOTATIONS, destructiveHint: true },
       run: versionLifecycle,
     }),
     tool({
@@ -263,6 +268,16 @@ export const skillplaneMcpDeclaration = defineMcpFnServer<McpToolRuntime>({
       output: skillResolveOutputSchema,
       annotations: READ_ONLY_ANNOTATIONS,
       run: (runtime, input) => skillResolve(runtime, { ...input, purpose: "verify" }),
+    }),
+    tool({
+      name: "skill_execution_report",
+      title: "Record skill execution",
+      description:
+        "Record the exact repository, commit and environment under the authenticated executor identity before a separate principal verifies it. This report is not proof of successful execution.",
+      input: executionReportInputSchema,
+      output: compositionMutationOutputSchema,
+      annotations: MUTATION_ANNOTATIONS,
+      run: executionReport,
     }),
     tool({
       name: "skill_verification_run_start",

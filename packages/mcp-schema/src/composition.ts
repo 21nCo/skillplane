@@ -10,9 +10,21 @@ import {
 import { idempotencyKeySchema } from "./context-mutations.js";
 export const compositionDependencySchema = z
   .object({
-    alias: z.string().min(1).max(120),
-    workspace: z.string().min(1).max(120),
-    skill: z.string().min(1).max(120),
+    alias: z
+      .string()
+      .min(1)
+      .max(120)
+      .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
+    workspace: z
+      .string()
+      .min(1)
+      .max(120)
+      .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
+    skill: z
+      .string()
+      .min(1)
+      .max(120)
+      .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
     version: z.string().min(1).max(200),
     scope: z.enum(["execution", "verification", "both"]),
     mode: z.enum(["include", "invoke"]),
@@ -100,7 +112,7 @@ export const verificationStartFieldsSchema = z
     repository: z.string().min(1).max(2000),
     commit: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/),
     environment: z.string().min(1).max(500),
-    executorActorId: z.string().min(1).max(160),
+    executionId: z.string().min(1).max(160),
     agent: z.string().min(1).max(160),
     model: z.string().min(1).max(160),
   })
@@ -111,6 +123,11 @@ export const verificationStartInputSchema = skillResolveInputSchema
     ...verificationStartFieldsSchema.shape,
     idempotencyKey: idempotencyKeySchema,
   });
+export const executionReportInputSchema = verificationStartInputSchema.omit({
+  executionId: true,
+  agent: true,
+  model: true,
+});
 export const evidenceReferenceSchema = z
   .object({
     type: z.string().min(1).max(100),

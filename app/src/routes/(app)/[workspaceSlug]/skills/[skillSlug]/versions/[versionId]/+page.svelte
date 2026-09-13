@@ -302,13 +302,21 @@
     </section>
 
     <CompositionPanel
-      canEdit={workspace.role !== "viewer"}
+      canEdit={workspace.role !== "viewer" &&
+        !detail.skill.archivedAt &&
+        detail.skill.currentPublishedVersionId === version.id}
       workspaceId={workspace.id}
       skillId={detail.skill.id}
       {version}
       onCreated={(candidate: SkillVersion) => {
-        detail.replaceVersion(candidate);
-        void detail.refresh();
+        if (!detail.skill) return;
+        void goto(
+          resolve("/(app)/[workspaceSlug]/skills/[skillSlug]/versions/[versionId]", {
+            workspaceSlug: workspace.slug,
+            skillSlug: detail.skill.slug,
+            versionId: candidate.id,
+          }),
+        );
       }}
     />
 

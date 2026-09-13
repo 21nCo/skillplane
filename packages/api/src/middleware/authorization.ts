@@ -38,7 +38,7 @@ export function requiredAction(path: string, method: string): WorkspaceAction | 
       path,
     )
   )
-    return "skills:read";
+    return read ? "skills:read" : "skills:write";
   if (path.startsWith("/api/v1/skills")) {
     return read ? "skills:read" : "skills:write";
   }

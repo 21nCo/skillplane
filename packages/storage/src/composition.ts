@@ -29,7 +29,7 @@ export const verificationClaimSchema = z
     statement: z.string().trim().min(1).max(4000),
     severity: z.enum(["blocking", "advisory"]),
     scope: z.string().trim().min(1).max(1000),
-    requiredEvidence: z.array(z.string().min(1).max(100)).min(1).max(30),
+    requiredEvidence: z.array(z.string().trim().min(1).max(100)).min(1).max(30),
     prohibitedBypasses: z.array(z.string().min(1).max(1000)).max(30),
     rules: z
       .object({
@@ -47,6 +47,7 @@ export const verificationClaimSchema = z
   .strict();
 export const verificationClaimsSchema = z
   .array(verificationClaimSchema)
+  .min(1)
   .max(100)
   .superRefine((claims, ctx) => {
     if (new Set(claims.map((c) => c.id)).size !== claims.length)

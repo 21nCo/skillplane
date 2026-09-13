@@ -513,10 +513,11 @@ export class AmendmentService {
             readonly next_revision: number;
             readonly archived_at: Date | null;
             readonly amendment_policy: unknown;
+            readonly visibility: string;
           }>(
             `SELECT skill.current_published_version_id,
                     current.semantic_version AS current_semantic_version,
-                    skill.next_revision, skill.archived_at, skill.amendment_policy
+                    skill.next_revision, skill.archived_at, skill.amendment_policy, skill.visibility
                FROM skills skill
                LEFT JOIN skill_versions current
                  ON current.id = skill.current_published_version_id
@@ -639,7 +640,7 @@ export class AmendmentService {
           await composition.revalidate(
             prepared.lock,
             options.principal,
-            visibilityResult.rows[0]?.visibility ?? "private",
+            skillRow.visibility,
             client,
           );
           await composition.persist(

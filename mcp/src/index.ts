@@ -139,6 +139,8 @@ function isJsonObject(value: unknown): value is Record<string, unknown> {
 
 const LINEAR_OMITTED_SCHEMA_KEYWORDS = new Set([
   "$schema",
+  "description",
+  "additionalProperties",
   "default",
   "exclusiveMaximum",
   "exclusiveMinimum",
@@ -217,6 +219,7 @@ function compactLinearInputSchema(value: unknown): void {
     return;
   }
   if (!isJsonObject(value)) return;
+  if ("enum" in value || "const" in value) delete value.type;
   for (const [key, child] of Object.entries(value)) {
     if (LINEAR_OMITTED_SCHEMA_KEYWORDS.has(key)) {
       value[key] = undefined;
@@ -271,6 +274,11 @@ export async function projectMcpToolCatalogResponse(
     if (profile.compactToolCatalog) {
       // Linear only needs names, descriptions, and input contracts. Keep optional
       // MCP presentation and output metadata server-side to stay within its budget.
+      if (typeof tool.description === "string")
+        tool.description =
+          typeof tool.title === "string"
+            ? tool.title
+            : tool.description.split(/(?<=\.)\s/)[0]?.slice(0, 40);
       delete tool.outputSchema;
       delete tool.execution;
       delete tool.annotations;

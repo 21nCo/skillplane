@@ -1,3 +1,4 @@
+import { PostgresPublicProjectionDirectory } from "../../../control-plane/src/publication.js";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { beforeAll, afterAll, describe, it, expect } from "vitest";
@@ -215,7 +216,7 @@ describe.skipIf(!url)(
         "inaccessible",
       );
     });
-    it("keeps published and candidate locks pinned across concurrent child publication", async () => {
+    it("keeps published and candidate locks pinned across sequential child publications", async () => {
       const child = await create("up-child");
       const parent = await create("up-parent", [dependency("up-child")]);
       const original = await composition.resolve(parent.version.id, principal);
@@ -346,10 +347,25 @@ describe.skipIf(!url)(
         repository: "https://example.test/repository",
         commit: "a".repeat(40),
         environment: "test",
-        executorActorId: "executor:separate",
+        executionId: (
+          await verification.recordExecution({
+            ...mutation(),
+            principal: { ...principal, actorId: "executor:separate" },
+            versionId: root.version.id,
+            repository: "https://example.test/repository",
+            commit: "a".repeat(40),
+            environment: "test",
+          })
+        ).id,
         agent: "Verifier",
         model: "test",
       };
+      await expect(
+        verification.start({ ...input, principal: { ...principal, role: "viewer" } }),
+      ).rejects.toThrow();
+      await expect(
+        verification.start({ ...input, executionId: "execution:invented" }),
+      ).rejects.toThrow("Execution record does not match");
       const first = await verification.start(input);
       expect((await verification.start(input)).id).toBe(first.id);
       expect(
@@ -389,7 +405,35 @@ describe.skipIf(!url)(
           evidence,
         },
       });
+      await expect(
+        verification.addEvidence({
+          ...mutation(),
+          runId: run.id,
+          result: {
+            claimId,
+            status: "pass",
+            explanation: "Secret fragment",
+            evidence: evidence.map((e) => ({ ...e, uri: e.uri + "#secret" })),
+          },
+        }),
+      ).rejects.toThrow("fragments");
       const completed = await verification.complete({ ...mutation(), runId: run.id });
+      const running = await verification.start({
+        ...input,
+        idempotencyKey: crypto.randomUUID(),
+      });
+      await expect(
+        pool.query(
+          "UPDATE skill_verification_claim_results SET run_id=$2 WHERE run_id=$1",
+          [run.id, running.id],
+        ),
+      ).rejects.toMatchObject({ code: "55000" });
+      await expect(
+        pool.query(
+          "UPDATE skill_verification_runs SET status='pass',completed_at=now(),evidence_manifest_digest=$2 WHERE id=$1",
+          [running.id, `sha256:${"a".repeat(64)}`],
+        ),
+      ).rejects.toMatchObject({ code: "55000" });
       expect(completed.status).toBe("pass");
       expect(completed.evidence_manifest_digest).toMatch(/^sha256:/);
       await expect(
@@ -403,10 +447,18 @@ describe.skipIf(!url)(
       await expect(
         verification.start({
           ...input,
-          executorActorId: principal.actorId,
+          executionId: (
+            await verification.recordExecution({
+              ...mutation(),
+              versionId: root.version.id,
+              repository: "https://example.test/repository",
+              commit: "a".repeat(40),
+              environment: "test",
+            })
+          ).id,
           idempotencyKey: crypto.randomUUID(),
         }),
-      ).rejects.toThrow("different executor");
+      ).rejects.toThrow("different authenticated executor");
     });
     it("preserves deprecated pins and fails revoked retrieval and publication closed", async () => {
       const child = await create("revoke-child"),
@@ -506,6 +558,17 @@ describe.skipIf(!url)(
         skillId: child.skill.id,
         visibility: "private",
       });
+      // Apply the committed regional outbox withdrawal before replaying stale data.
+      const sequence = await pool.query<{ sequence: string }>(
+        "SELECT max(sequence)::text AS sequence FROM regional_projection_outbox WHERE workspace_id=$1",
+        [principal.workspaceId],
+      );
+      await new PostgresPublicProjectionDirectory(pool).unpublish({
+        workspaceId: principal.workspaceId,
+        skillId: child.skill.id,
+        versionId: child.version.id,
+        projectionSequence: Number(sequence.rows[0]?.sequence ?? "0"),
+      });
       // A delayed old event can update processing time, but cannot advance its causal sequence.
       await pool.query(
         "UPDATE public_skill_projections SET updated_at=clock_timestamp() WHERE version_id=$1",
@@ -543,7 +606,16 @@ describe.skipIf(!url)(
         repository: "https://example.com/repo",
         commit: "a".repeat(40),
         environment: "test",
-        executorActorId: "executor:other",
+        executionId: (
+          await verification.recordExecution({
+            ...mutation(),
+            principal: { ...principal, actorId: "executor:other" },
+            versionId: root.version.id,
+            repository: "https://example.com/repo",
+            commit: "a".repeat(40),
+            environment: "test",
+          })
+        ).id,
         agent: "verifier",
         model: "test",
       });

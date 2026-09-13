@@ -103,6 +103,7 @@ export const skillCreateInputSchema = z
         blocking: z.boolean().default(false),
       })
       .strict()
+      .refine((v) => v.verify || !v.blocking, "blocking requires verify")
       .optional(),
     idempotencyKey: idempotencyKeySchema,
     caller: callerDeclarationSchema,

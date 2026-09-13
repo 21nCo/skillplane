@@ -2,7 +2,7 @@
 -- Emergency invalidations are checked independently of immutable public bundles.
 CREATE TABLE public_skill_version_lifecycle (
   version_id text PRIMARY KEY,
-  workspace_id text NOT NULL,
+  workspace_id text NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   deprecated_at timestamptz,
   revoked_at timestamptz,
   reason text NOT NULL,
