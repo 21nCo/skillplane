@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import {
+  assertCloudflareReleaseOrder,
+  compareCloudflareReleaseTags,
   resolveCloudflareRelease,
   resolvePackageRelease,
   writeGithubOutputs,
@@ -110,6 +112,58 @@ describe("tagged releases", () => {
     assert.throws(
       () => resolveCloudflareRelease(`skillplane-cloudflare-v2.0.0-${"a".repeat(40)}`),
       /must not exceed 54 characters/u,
+    );
+  });
+
+  it("orders Cloudflare release tags using SemVer precedence", () => {
+    assert.equal(
+      compareCloudflareReleaseTags(
+        "skillplane-cloudflare-v2.0.0-rc.10",
+        "skillplane-cloudflare-v2.0.0-rc.2",
+      ),
+      1,
+    );
+    assert.equal(
+      compareCloudflareReleaseTags(
+        "skillplane-cloudflare-v2.0.0",
+        "skillplane-cloudflare-v2.0.0-rc.10",
+      ),
+      1,
+    );
+    assert.equal(
+      compareCloudflareReleaseTags(
+        "skillplane-cloudflare-v2.0.0-alpha-beta.2",
+        "skillplane-cloudflare-v2.0.0-alpha-beta.1",
+      ),
+      1,
+    );
+    assert.equal(
+      compareCloudflareReleaseTags(
+        "skillplane-cloudflare-v100000000000000000000.0.0",
+        "skillplane-cloudflare-v99999999999999999999.0.0",
+      ),
+      1,
+    );
+  });
+
+  it("rejects production release downgrades but permits retries", () => {
+    assert.deepEqual(
+      assertCloudflareReleaseOrder(
+        "skillplane-cloudflare-v2.1.0",
+        "skillplane-cloudflare-v2.1.0",
+      ),
+      {
+        deployedTag: "skillplane-cloudflare-v2.1.0",
+        requestedTag: "skillplane-cloudflare-v2.1.0",
+      },
+    );
+    assert.throws(
+      () =>
+        assertCloudflareReleaseOrder(
+          "skillplane-cloudflare-v2.1.0",
+          "skillplane-cloudflare-v2.0.9",
+        ),
+      /use the production rollback procedure/u,
     );
   });
 

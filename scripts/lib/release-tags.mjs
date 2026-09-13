@@ -111,6 +111,69 @@ export function resolveCloudflareRelease(tag) {
   return { tag: normalizedTag, version: match.groups.version };
 }
 
+function comparePrerelease(left, right) {
+  if (left === undefined || right === undefined) {
+    if (left === right) return 0;
+    return left === undefined ? 1 : -1;
+  }
+  const leftParts = left.split(".");
+  const rightParts = right.split(".");
+  for (
+    let index = 0;
+    index < Math.max(leftParts.length, rightParts.length);
+    index += 1
+  ) {
+    const leftPart = leftParts[index];
+    const rightPart = rightParts[index];
+    if (leftPart === undefined || rightPart === undefined) {
+      return leftPart === undefined ? -1 : 1;
+    }
+    if (leftPart === rightPart) continue;
+    const leftNumeric = /^\d+$/u.test(leftPart);
+    const rightNumeric = /^\d+$/u.test(rightPart);
+    if (leftNumeric && rightNumeric) {
+      return BigInt(leftPart) < BigInt(rightPart) ? -1 : 1;
+    }
+    if (leftNumeric !== rightNumeric) return leftNumeric ? -1 : 1;
+    return leftPart < rightPart ? -1 : 1;
+  }
+  return 0;
+}
+
+/** Compare two validated Cloudflare release tags using SemVer precedence. */
+export function compareCloudflareReleaseTags(leftTag, rightTag) {
+  const left = resolveCloudflareRelease(leftTag).version;
+  const right = resolveCloudflareRelease(rightTag).version;
+  const leftPrereleaseIndex = left.indexOf("-");
+  const rightPrereleaseIndex = right.indexOf("-");
+  const leftCore =
+    leftPrereleaseIndex === -1 ? left : left.slice(0, leftPrereleaseIndex);
+  const rightCore =
+    rightPrereleaseIndex === -1 ? right : right.slice(0, rightPrereleaseIndex);
+  const leftPrerelease =
+    leftPrereleaseIndex === -1 ? undefined : left.slice(leftPrereleaseIndex + 1);
+  const rightPrerelease =
+    rightPrereleaseIndex === -1 ? undefined : right.slice(rightPrereleaseIndex + 1);
+  const leftParts = leftCore.split(".").map(BigInt);
+  const rightParts = rightCore.split(".").map(BigInt);
+  for (let index = 0; index < 3; index += 1) {
+    if (leftParts[index] !== rightParts[index]) {
+      return leftParts[index] < rightParts[index] ? -1 : 1;
+    }
+  }
+  return comparePrerelease(leftPrerelease, rightPrerelease);
+}
+
+/** Reject a tagged deployment that would move production backwards. */
+export function assertCloudflareReleaseOrder(deployedTag, requestedTag) {
+  if (compareCloudflareReleaseTags(requestedTag, deployedTag) < 0) {
+    throw new Error(
+      `${requestedTag} is older than deployed release ${deployedTag}; use the production rollback procedure instead`,
+    );
+  }
+  return { deployedTag, requestedTag };
+}
+
 /** Append single-line values to a GitHub Actions output file. */
 export async function writeGithubOutputs(
   outputs,

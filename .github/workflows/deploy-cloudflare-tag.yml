@@ -27,8 +27,13 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           CURRENT_RUN_ID: ${{ github.run_id }}
           CURRENT_RUN_NUMBER: ${{ github.run_number }}
+          CURRENT_RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           set -euo pipefail
+          if [[ "${CURRENT_RUN_ATTEMPT}" != "1" ]]; then
+            echo "Job re-runs are not supported for production releases; start a fresh workflow_dispatch run for the release tag" >&2
+            exit 1
+          fi
           workflow="deploy-cloudflare-tag.yml"
           active_statuses=(requested waiting pending queued in_progress)
           while true; do
@@ -120,6 +125,11 @@ jobs:
 
       - name: Build reviewed native dependencies
         run: pnpm rebuild esbuild protobufjs sharp workerd
+
+      - name: Reject out-of-order production release
+        run: node scripts/verify-cloudflare-release-order.mjs "${RELEASE_TAG}"
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
 
       - name: Validate Cloudflare release
         run: pnpm deploy:check

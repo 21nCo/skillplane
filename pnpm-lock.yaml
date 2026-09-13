@@ -193,6 +193,9 @@ importers:
       aws4fetch:
         specifier: 1.0.20
         version: 1.0.20
+      cross-spawn:
+        specifier: 7.0.6
+        version: 7.0.6
       drizzle-kit:
         specifier: 0.31.10
         version: 0.31.10

@@ -1,19 +1,18 @@
 #!/usr/bin/env node
 
-import { spawnSync } from "node:child_process";
 import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
+import crossSpawn from "cross-spawn";
 
 const root = resolve(import.meta.dirname, "..");
 
 /** Run one release verification command and surface its captured failure output. */
 function run(command, args, options = {}) {
-  const result = spawnSync(command, args, {
+  const result = crossSpawn.sync(command, args, {
     cwd: options.cwd ?? root,
     encoding: "utf8",
     env: options.env ?? process.env,
-    shell: process.platform === "win32",
     stdio: options.capture ? ["ignore", "pipe", "pipe"] : "inherit",
   });
   if (result.status !== 0) {

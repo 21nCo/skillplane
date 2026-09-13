@@ -82,9 +82,13 @@ git push origin skillplane-cloudflare-v0.1.0
 
 The Cloudflare workflow keeps every production release run. A credential-free
 queue job waits until all earlier active runs of the same workflow finish, so a
-newer tag cannot replace an already-pending release. The deployment then enters
-the protected `production` environment and runs the established blocking
-sequence:
+newer tag cannot replace an already-pending release. GitHub job re-runs are
+rejected because they retain the old queue position; retry a release with a new
+`workflow_dispatch` run instead. Before any migration, the workflow compares
+the requested tag with the release tag on the active app Worker and rejects a
+downgrade. Production rollback remains the separate, explicit procedure in
+[`rollback.md`](./rollback.md). The deployment then enters the protected
+`production` environment and runs the established blocking sequence:
 
 ```text
 deploy:check
@@ -103,6 +107,7 @@ including when a later step fails.
 The apex landing Worker at `skillplane.dev` remains excluded because it is
 owned and released from the 21n monorepo's `landing/skillplane` workspace.
 
-Both workflows may be rerun manually with `workflow_dispatch`, but the input
+Both workflows may be retried manually with `workflow_dispatch`, but the input
 must name an existing tag. Manual runs check out the tag itself; they do not
-publish or deploy the default branch by accident.
+publish or deploy the default branch by accident. For Cloudflare, the tag must
+be at least as new as the active tagged production release.
