@@ -1,0 +1,1 @@
+remove the safe to remove worktrees first and provide summary on the remaining worktrees on what changes are present locally
