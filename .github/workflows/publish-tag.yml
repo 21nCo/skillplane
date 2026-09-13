@@ -177,7 +177,8 @@ jobs:
             echo "Expected exactly one verified package archive" >&2
             exit 1
           fi
-          npm publish "${archives[0]}" \
+          archive="$(realpath "${archives[0]}")"
+          npm publish "${archive}" \
             --access public \
             --provenance \
             --tag "${{ needs.verify.outputs.npm_tag }}"

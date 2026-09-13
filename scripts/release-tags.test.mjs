@@ -415,6 +415,8 @@ describe("tagged releases", () => {
       publishWorkflow,
       /if: \$\{\{ steps\.order\.outputs\.publish == 'true' \}\}/u,
     );
+    assert.match(publishWorkflow, /archive="\$\(realpath "\$\{archives\[0\]\}"\)"/u);
+    assert.match(publishWorkflow, /npm publish "\$\{archive\}"/u);
     assert.equal((publishWorkflow.match(/github\.run_attempt != 1/gu) ?? []).length, 2);
     for (const workflow of workflows) {
       assert.match(
