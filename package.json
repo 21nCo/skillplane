@@ -1,5 +1,5 @@
 {
-  "name": "skillplane",
+  "name": "@skillplane/monorepo",
   "version": "0.0.0",
   "private": true,
   "description": "Production control plane for versioned, context-aware AI skills",
@@ -40,7 +40,7 @@
     "test:mcp:e2e": "node scripts/run-mcp-e2e.mjs",
     "test:e2e": "node scripts/run-e2e-tests.mjs",
     "build": "node scripts/run-turbo-build.mjs",
-    "deploy:check": "node scripts/deployment-self-test.mjs && turbo run deploy:check && node scripts/topology-config-dry-run.mjs && node scripts/development-config-dry-run.mjs && node scripts/development-topology-config-dry-run.mjs",
+    "deploy:check": "pnpm turbo run build --filter=@skillplane/control-plane... && node scripts/deployment-self-test.mjs && turbo run deploy:check && node scripts/topology-config-dry-run.mjs && node scripts/development-config-dry-run.mjs && node scripts/development-topology-config-dry-run.mjs",
     "security:scan": "node scripts/security-scan.mjs",
     "client-secrets:verify": "node scripts/scan-client-secrets.mjs",
     "lint:design-system": "node scripts/lint-design-system.mjs --self-test",
@@ -95,7 +95,9 @@
     "test:mcp:production": "node --env-file-if-exists=.env.production.local scripts/test-mcp-production.mjs",
     "verify:email:production": "node --env-file-if-exists=.env.production.local scripts/verify-email-production.mjs",
     "verify:rollback:production": "node --env-file-if-exists=.env.production.local scripts/rollback.mjs",
-    "client:bundle": "pnpm --filter @skillplane/local-runtime bundle",
+    "cli:release:check": "node scripts/verify-cli-release.mjs",
+    "release-tags:test": "node --test scripts/release-tags.test.mjs",
+    "client:bundle": "pnpm --filter skillplane bundle",
     "client:install": "pnpm client:bundle && node scripts/install-local-client.mjs"
   },
   "devDependencies": {
@@ -106,6 +108,7 @@
     "@types/node": "22.20.1",
     "@types/pg": "8.20.0",
     "aws4fetch": "1.0.20",
+    "cross-spawn": "7.0.6",
     "drizzle-kit": "0.31.10",
     "drizzle-orm": "0.45.2",
     "eslint": "10.8.0",
@@ -114,6 +117,7 @@
     "pg": "8.22.0",
     "prettier": "3.9.6",
     "prettier-plugin-svelte": "4.1.1",
+    "semver": "7.8.5",
     "svelte": "5.56.8",
     "turbo": "2.10.7",
     "typescript": "6.0.3",

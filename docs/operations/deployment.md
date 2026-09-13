@@ -161,6 +161,10 @@ pnpm deploy:all
 pnpm smoke:production:release
 ```
 
+The same sequence is automated for production tags, together with the docs web
+app deployment. See [`tagged-releases.md`](./tagged-releases.md). The local
+commands remain the recovery path when GitHub Actions is unavailable.
+
 `db:migrate:topology` writes a short-lived safety record tied to the exact Git
 commit, topology manifest, verified encrypted backups of the control database
 and every cell, and control/cell database fingerprints. All backups complete

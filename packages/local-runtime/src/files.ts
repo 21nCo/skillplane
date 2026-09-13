@@ -18,6 +18,7 @@ import { RuntimeError } from "./contracts.js";
 
 export const hash = (bytes: string | Uint8Array): string =>
   createHash("sha256").update(bytes).digest("hex");
+/** Resolve a directory path while rejecting unsafe ownership and symlink traversal. */
 export function safeDirectory(path: string): string {
   path = resolve(path);
   const root = parse(path).root;
@@ -35,6 +36,8 @@ export function safeDirectory(path: string): string {
       mkdirSync(current, { mode: 0o700 });
     }
     const stat = lstatSync(current);
+    if (!stat.isDirectory() || stat.isSymbolicLink())
+      throw new RuntimeError("SYMLINK_FORBIDDEN");
     // Local installation paths must not be replaceable by other OS users.
     // A root-owned sticky temporary directory protects the caller-owned child.
     const uid = process.getuid?.();
@@ -47,8 +50,6 @@ export function safeDirectory(path: string): string {
         "UNSAFE_DIRECTORY",
         "Projection ancestors must be owned by this user or root and not writable by other users",
       );
-    if (!stat.isDirectory() || stat.isSymbolicLink())
-      throw new RuntimeError("SYMLINK_FORBIDDEN");
   }
   return path;
 }

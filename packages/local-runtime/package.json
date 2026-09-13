@@ -1,21 +1,26 @@
 {
-  "name": "@skillplane/local-runtime",
+  "name": "skillplane",
   "version": "0.1.0",
-  "private": true,
+  "private": false,
+  "description": "Local-first Skillplane CLI for versioned AI-agent skills",
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/21nCo/skillplane.git",
+    "directory": "packages/local-runtime"
+  },
+  "homepage": "https://skillplane.dev",
   "type": "module",
   "bin": {
     "skillplane": "dist/skillplane.mjs"
   },
-  "exports": {
-    ".": {
-      "types": "./src/index.ts",
-      "development": "./src/index.ts",
-      "default": "./dist/index.js"
-    }
-  },
   "files": [
-    "dist"
+    "dist/skillplane.mjs"
   ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "engines": {
     "node": ">=22.13.0 <25"
   },
@@ -25,19 +30,17 @@
     "test:unit": "vitest run --exclude 'dist/**' src",
     "bundle": "node build.mjs"
   },
-  "dependencies": {
+  "devDependencies": {
     "@modelcontextprotocol/sdk": "catalog:",
     "@skillplane/domain": "workspace:*",
     "@skillplane/mcp-schema": "workspace:*",
     "@skillplane/storage": "workspace:*",
-    "semver": "7.7.4",
-    "yaml": "2.9.0",
-    "zod": "catalog:"
-  },
-  "devDependencies": {
     "@types/semver": "7.7.1",
     "esbuild": "0.28.1",
+    "semver": "7.7.4",
     "typescript": "catalog:",
-    "vitest": "catalog:"
+    "vitest": "catalog:",
+    "yaml": "2.9.0",
+    "zod": "catalog:"
   }
 }

@@ -251,8 +251,8 @@ projection. Native invocation syntax remains a host capability.
 ## Verification
 
 ```sh
-pnpm --filter @skillplane/local-runtime test:unit
-pnpm --filter @skillplane/local-runtime typecheck
+pnpm --filter skillplane test:unit
+pnpm --filter skillplane typecheck
 pnpm test:mcp:contract
 NODE_OPTIONS=--conditions=development pnpm --filter @skillplane/mcp exec vitest run tests/integration/local-provider-contract.test.ts
 ```
