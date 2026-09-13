@@ -37,12 +37,16 @@ jobs:
           workflow="publish-tag.yml"
           poll_interval=60
           while true; do
-            mapfile -t blockers < <(
+            blocker_ids="$(
               gh api --paginate --method GET \
                 "repos/${REPOSITORY}/actions/workflows/${workflow}/runs" \
                 -f per_page=100 \
                 --jq ".workflow_runs[] | select(.id != ${CURRENT_RUN_ID}) | select(.run_number < ${CURRENT_RUN_NUMBER}) | select(.status == \"requested\" or .status == \"waiting\" or .status == \"pending\" or .status == \"queued\" or .status == \"in_progress\") | .id"
-            )
+            )"
+            blockers=()
+            while IFS= read -r run_id; do
+              [[ -n "${run_id}" ]] && blockers+=("${run_id}")
+            done <<< "${blocker_ids}"
             if [[ "${#blockers[@]}" -eq 0 ]]; then
               break
             fi

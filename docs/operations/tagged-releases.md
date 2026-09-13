@@ -128,7 +128,8 @@ exact already-published version as an idempotent retry. GitHub job re-runs are
 rejected at every package release stage; retry the existing tag with a fresh
 `workflow_dispatch` run. Each queue reads all workflow runs once per poll and
 filters active states locally, so status transitions cannot disappear between
-separate API queries. Both FIFO queues use GitHub's maximum six-hour job window
-and exponentially back off API polling to a ten-minute interval. If an earlier
-release remains active beyond that window, retry the timed-out tag with a fresh
-dispatch after the blocker settles.
+separate API queries. A failed workflow-run query aborts the queue instead of
+treating an empty response as permission to release. Both FIFO queues use
+GitHub's maximum six-hour job window and exponentially back off API polling to a
+ten-minute interval. If an earlier release remains active beyond that window,
+retry the timed-out tag with a fresh dispatch after the blocker settles.

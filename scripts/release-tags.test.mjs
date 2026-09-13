@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -405,7 +406,30 @@ describe("tagged releases", () => {
       assert.match(workflow, /poll_interval=60/u);
       assert.match(workflow, /poll_interval > 600/u);
       assert.doesNotMatch(workflow, /-f status=/u);
+      assert.doesNotMatch(workflow, /mapfile -t blockers < <\(/u);
+      assert.match(workflow, /blocker_ids="\$\(\n {14}gh api/u);
+      assert.match(workflow, /\n {12}\)"\n {12}blockers=\(\)/u);
+      assert.match(workflow, /done <<< "\$\{blocker_ids\}"/u);
     }
+  });
+
+  it("fails closed when release queue discovery fails", () => {
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        [
+          "set -euo pipefail",
+          'blocker_ids="$(false)"',
+          "blockers=()",
+          'while IFS= read -r run_id; do [[ -n "${run_id}" ]] && blockers+=("${run_id}"); done <<< "${blocker_ids}"',
+          'echo "queue released"',
+        ].join("\n"),
+      ],
+      { encoding: "utf8" },
+    );
+    assert.notEqual(result.status, 0);
+    assert.doesNotMatch(result.stdout, /queue released/u);
   });
 
   it("writes only well-formed single-line GitHub outputs", async () => {
