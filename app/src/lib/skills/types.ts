@@ -71,7 +71,7 @@ export interface SkillManifestFile {
 }
 
 export interface SkillBundleManifest {
-  readonly formatVersion: 1;
+  readonly formatVersion: 1 | 2;
   readonly digest: `sha256:${string}`;
   readonly byteSize: number;
   readonly expandedByteSize: number;

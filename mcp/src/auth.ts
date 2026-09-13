@@ -104,6 +104,10 @@ function scopesForToolCall(message: unknown): readonly McpScope[] {
     case "skill_versions_list":
     case "skill_versions_diff":
     case "skill_candidates_list":
+    case "skill_resolve":
+    case "skill_verification_plan_get":
+    case "skill_verification_run_get":
+    case "skill_dependency_upgrades_get":
     case "skill_amendment_policy_get":
       return ["skills:read"];
     case "skill_retrieve": {
@@ -123,11 +127,20 @@ function scopesForToolCall(message: unknown): readonly McpScope[] {
       return ["contexts:read"];
     case "skill_amend":
       return ["skills:amend"];
+    case "skill_composition_candidate_create":
+    case "skill_dependency_upgrade":
+    case "skill_execution_report":
+    case "skill_verification_run_start":
+    case "skill_verification_evidence_add":
+    case "skill_verification_run_complete":
+      return ["skills:read", "skills:write"];
     case "skill_create":
+      return ["skills:read", "skills:write"];
     case "skill_visibility_update":
     case "skill_archive":
     case "skill_restore":
       return ["skills:write"];
+    case "skill_version_lifecycle_update":
     case "skill_candidate_approve":
     case "skill_candidate_reject":
     case "skill_amendment_policy_update":

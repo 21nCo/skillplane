@@ -1,0 +1,17 @@
+{
+  "dependencies": [],
+  "description": "SKI-3 composition reference fixture",
+  "entrypoints": { "execute": "SKILL.md" },
+  "files": [
+    {
+      "byteSize": 215,
+      "mediaType": "text/markdown; charset=utf-8",
+      "path": "SKILL.md",
+      "sha256": "4b540afe743c94db04f2cb809d4d0bc5ad812d68f92802135cd238b3937f5ce3"
+    }
+  ],
+  "formatVersion": 2,
+  "name": "Use Auth",
+  "slug": "use-auth",
+  "tags": ["composition", "reference"]
+}

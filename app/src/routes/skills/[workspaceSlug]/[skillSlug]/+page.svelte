@@ -2,6 +2,7 @@
   import { resolve } from "$app/paths";
   import { page } from "$app/state";
   import { Badge, BrandMark, Button, SafeMarkdown } from "@skillplane/ui";
+  import CompositionPanel from "$lib/skills/CompositionPanel.svelte";
   import SkillState from "$lib/skills/SkillState.svelte";
   import { getPublicSkill, getPublicSkillFile } from "$lib/skills/api.js";
   import type { PublicSkill } from "$lib/skills/types.js";
@@ -143,6 +144,12 @@
 
       <article>
         <SafeMarkdown source={markdown} />
+        <CompositionPanel
+          publicView
+          workspaceId={resource.skill.workspaceId}
+          skillId={resource.skill.id}
+          version={resource.version}
+        />
       </article>
 
       <footer class="digest">

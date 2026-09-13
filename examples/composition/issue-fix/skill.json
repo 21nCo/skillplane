@@ -1,0 +1,27 @@
+{
+  "dependencies": [
+    {
+      "alias": "linear",
+      "mode": "invoke",
+      "required": true,
+      "scope": "both",
+      "skill": "create-linear-issue",
+      "version": "^1.0.0",
+      "workspace": "examples"
+    }
+  ],
+  "description": "SKI-3 composition reference fixture",
+  "entrypoints": { "execute": "SKILL.md" },
+  "files": [
+    {
+      "byteSize": 248,
+      "mediaType": "text/markdown; charset=utf-8",
+      "path": "SKILL.md",
+      "sha256": "c9b0f17c18295899a6997f49aae4cad3dc496b93842c9497959c82991f7e5139"
+    }
+  ],
+  "formatVersion": 2,
+  "name": "Issue Fix",
+  "slug": "issue-fix",
+  "tags": ["composition", "reference"]
+}

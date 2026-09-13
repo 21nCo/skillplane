@@ -332,6 +332,7 @@ export async function startMcpTestEnvironment(
   const storage = new TestObjectStorage();
   const services = await buildApiServices({
     RUNTIME_ENV: "local",
+    SKILL_COMPOSITION_WRITES_ENABLED: "true",
     DATABASE_ADAPTER: "postgres",
     AUTH_MODE: "disabled",
     DATABASE_URL: databaseUrl,

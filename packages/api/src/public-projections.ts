@@ -1,4 +1,5 @@
 import {
+  CompositionService,
   DomainError,
   normalizePublicSearchInput,
   type SkillRecord,
@@ -225,7 +226,8 @@ const SELECT = `SELECT projection.workspace_id, projection.workspace_slug,
   JOIN public_skill_projection_heads head
     ON head.workspace_id = projection.workspace_id
    AND head.skill_id = projection.skill_id
-   AND head.state = 'published'`;
+   AND head.state = 'published'
+   AND NOT EXISTS (SELECT 1 FROM public_skill_version_lifecycle lifecycle WHERE lifecycle.version_id=projection.version_id AND (lifecycle.revoked_at IS NOT NULL OR head.projection_sequence <= lifecycle.withdrawn_sequence))`;
 
 /** Read-only global discovery/retrieval projection used by canonical public hosts. */
 export class PublicSkillProjectionService {
@@ -233,6 +235,13 @@ export class PublicSkillProjectionService {
     private readonly pool: Pool,
     private readonly storage: R2BundleRepository,
     private readonly cursorSecret: string,
+    private readonly composition = new CompositionService(
+      pool,
+      storage,
+      pool,
+      storage,
+      true,
+    ),
   ) {}
 
   private notFound(): never {
@@ -264,6 +273,7 @@ export class PublicSkillProjectionService {
             AND head.skill_id = projection.skill_id
             AND head.current_version_id = projection.version_id
             AND head.state = 'published'
+   AND NOT EXISTS (SELECT 1 FROM public_skill_version_lifecycle lifecycle WHERE lifecycle.version_id=projection.version_id AND (lifecycle.revoked_at IS NOT NULL OR head.projection_sequence <= lifecycle.withdrawn_sequence))
           WHERE projection.state = 'published'
           ORDER BY projection.workspace_id, projection.skill_id,
                    projection.published_at DESC, projection.version_id ASC
@@ -332,7 +342,17 @@ export class PublicSkillProjectionService {
     );
     const row = result.rows[0];
     if (!row) return this.notFound();
-    return { skill: skill(row), version: version(row) };
+    await this.composition.assertAvailable(row.version_id);
+    const record = version(row);
+    const plan =
+      record.manifest.formatVersion === 2
+        ? await this.composition.resolve(row.version_id, null)
+        : undefined;
+    return {
+      skill: skill(row),
+      version: record,
+      ...(plan ? { composition: plan } : {}),
+    };
   }
 
   async getCurrentBySkillId(skillId: string) {
@@ -346,7 +366,17 @@ export class PublicSkillProjectionService {
     );
     const row = result.rows[0];
     if (!row) return this.notFound();
-    return { skill: skill(row), version: version(row) };
+    await this.composition.assertAvailable(row.version_id);
+    const record = version(row);
+    const plan =
+      record.manifest.formatVersion === 2
+        ? await this.composition.resolve(row.version_id, null)
+        : undefined;
+    return {
+      skill: skill(row),
+      version: record,
+      ...(plan ? { composition: plan } : {}),
+    };
   }
 
   async listVersions(workspaceSlug: string, skillSlug: string, limit?: number) {
@@ -382,6 +412,9 @@ export class PublicSkillProjectionService {
     const row = result.rows[0];
     if (!row) return this.notFound();
     try {
+      await this.composition.assertAvailable(row.version_id);
+      if (version(row).manifest.formatVersion === 2)
+        await this.composition.resolve(row.version_id, null, "verify");
       return await retrieveBundleFile({
         repository: this.storage,
         objectKey: row.object_key,

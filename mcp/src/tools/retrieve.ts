@@ -1,5 +1,5 @@
 import type { SkillRetrieveInput, SkillRetrieveOutput } from "@skillplane/mcp-schema";
-import { McpToolError } from "@skillplane/mcp-schema";
+import { compositionPlanSchema, McpToolError } from "@skillplane/mcp-schema";
 import {
   canonicalizeBundle,
   stableJson,
@@ -69,7 +69,9 @@ export function skillRetrieve(runtime: McpToolRuntime, input: SkillRetrieveInput
       action: "skills:read",
       allowPublic: true,
     });
-    const version = await resolveVersion(runtime, execution, skill, input.version);
+    const version = await resolveVersion(runtime, execution, skill, input.version, {
+      forDependencyUpgrade: true,
+    });
     let selectedContext: SkillRetrieveOutput["context"] = null;
     if (input.context) {
       skill = await resolveSkill(runtime, execution, input.skill, {
@@ -89,6 +91,18 @@ export function skillRetrieve(runtime: McpToolRuntime, input: SkillRetrieveInput
     }
     const bundle = await loadExactCanonicalBundle(runtime, version);
     const output: SkillRetrieveOutput = {
+      ...(bundle.skill.formatVersion === 2
+        ? {
+            composition: compositionPlanSchema.parse(
+              await runtime.services.compositionService.resolve(
+                version.id,
+                skill.principal,
+                "execute",
+                true,
+              ),
+            ),
+          }
+        : {}),
       requestId: execution.requestId,
       skill: {
         id: skill.id,

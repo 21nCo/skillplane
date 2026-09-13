@@ -12,3 +12,5 @@ export * from "./search.js";
 export * from "./skill-lifecycle.js";
 export * from "./versions.js";
 export * from "./usage.js";
+
+export * from "./composition.js";

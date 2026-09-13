@@ -230,6 +230,7 @@ export async function resolveVersion(
   execution: ToolExecution,
   skill: ResolvedSkill,
   selector: VersionSelector,
+  options: { allowRevoked?: boolean; forDependencyUpgrade?: boolean } = {},
 ): Promise<ResolvedVersion> {
   let predicate: string;
   let value: string | number | null;
@@ -290,6 +291,19 @@ export async function resolveVersion(
       { status: 404 },
     );
   }
+  if (!options.allowRevoked)
+    await runtime.services.compositionService.assertAvailable(row.id);
+  if (
+    !options.allowRevoked &&
+    !options.forDependencyUpgrade &&
+    row.manifest.formatVersion === 2
+  )
+    await runtime.services.compositionService.resolve(
+      row.id,
+      skill.principal,
+      "verify",
+      Boolean(principalMayReadUnpublished),
+    );
   execution.setScope({
     resourceType: "skill_version",
     resourceId: row.id,

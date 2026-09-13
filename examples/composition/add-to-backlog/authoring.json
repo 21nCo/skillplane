@@ -1,0 +1,21 @@
+{
+  "formatVersion": 2,
+  "name": "Add To Backlog",
+  "slug": "add-to-backlog",
+  "description": "SKI-3 composition reference fixture",
+  "tags": ["composition", "reference"],
+  "entrypoints": {
+    "execute": "SKILL.md"
+  },
+  "dependencies": [
+    {
+      "alias": "linear",
+      "workspace": "examples",
+      "skill": "create-linear-issue",
+      "version": "^1.0.0",
+      "scope": "both",
+      "mode": "invoke",
+      "required": true
+    }
+  ]
+}
