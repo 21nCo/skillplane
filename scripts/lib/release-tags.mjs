@@ -4,11 +4,9 @@ import semver from "semver";
 
 const numericIdentifier = "(?:0|[1-9]\\d*)";
 const prereleaseIdentifier = "(?:0|[1-9]\\d*|\\d*[A-Za-z-][0-9A-Za-z-]*)";
-const buildIdentifier = "[0-9A-Za-z-]+";
 const prereleasePattern = `${prereleaseIdentifier}(?:\\.${prereleaseIdentifier})*`;
-const buildPattern = `${buildIdentifier}(?:\\.${buildIdentifier})*`;
 
-export const VERSION_PATTERN = `${numericIdentifier}\\.${numericIdentifier}\\.${numericIdentifier}(?:-${prereleasePattern})?(?:\\+${buildPattern})?`;
+export const VERSION_PATTERN = `${numericIdentifier}\\.${numericIdentifier}\\.${numericIdentifier}(?:-${prereleasePattern})?`;
 
 const packageTagPattern = new RegExp(
   `^(?<slug>[a-z0-9][a-z0-9-]*)-v(?<version>${VERSION_PATTERN})$`,
@@ -217,12 +215,20 @@ export function packagePublishDecision(publishedVersion, requestedVersion) {
   if (requested?.raw !== requestedVersion) {
     throw new Error("Requested package version must be an exact SemVer value");
   }
+  if (requested.build.length > 0) {
+    throw new Error("npm package releases must not use SemVer build metadata");
+  }
   if (publishedVersion === undefined) {
     return { publish: true, publishedVersion, requestedVersion };
   }
   const published = semver.parse(publishedVersion);
   if (published?.raw !== publishedVersion) {
     throw new Error("Published package version must be an exact SemVer value");
+  }
+  if (published.build.length > 0) {
+    throw new Error(
+      "Published package versions must not contain SemVer build metadata",
+    );
   }
   const comparison = semver.compare(requested.version, published.version);
   if (comparison < 0) {
