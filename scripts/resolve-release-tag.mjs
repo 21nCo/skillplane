@@ -15,5 +15,6 @@ await writeGithubOutputs({
   pkg_name: release.name,
   pkg_version: release.version,
   pkg_path: release.path,
+  npm_tag: release.npmTag,
 });
 process.stdout.write(`${JSON.stringify(release, null, 2)}\n`);

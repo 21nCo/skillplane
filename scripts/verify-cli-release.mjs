@@ -7,11 +7,13 @@ import { delimiter, join, resolve } from "node:path";
 
 const root = resolve(import.meta.dirname, "..");
 
+/** Run one release verification command and surface its captured failure output. */
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
     cwd: options.cwd ?? root,
     encoding: "utf8",
     env: options.env ?? process.env,
+    shell: process.platform === "win32",
     stdio: options.capture ? ["ignore", "pipe", "pipe"] : "inherit",
   });
   if (result.status !== 0) {

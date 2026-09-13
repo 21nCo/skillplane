@@ -40,7 +40,7 @@
     "test:mcp:e2e": "node scripts/run-mcp-e2e.mjs",
     "test:e2e": "node scripts/run-e2e-tests.mjs",
     "build": "node scripts/run-turbo-build.mjs",
-    "deploy:check": "node scripts/deployment-self-test.mjs && turbo run deploy:check && node scripts/topology-config-dry-run.mjs && node scripts/development-config-dry-run.mjs && node scripts/development-topology-config-dry-run.mjs",
+    "deploy:check": "pnpm turbo run build --filter=@skillplane/control-plane... && node scripts/deployment-self-test.mjs && turbo run deploy:check && node scripts/topology-config-dry-run.mjs && node scripts/development-config-dry-run.mjs && node scripts/development-topology-config-dry-run.mjs",
     "security:scan": "node scripts/security-scan.mjs",
     "client-secrets:verify": "node scripts/scan-client-secrets.mjs",
     "lint:design-system": "node scripts/lint-design-system.mjs --self-test",

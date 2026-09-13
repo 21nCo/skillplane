@@ -9,15 +9,25 @@ to exist and point to a commit already contained in `origin/main`.
 | `skillplane-cloudflare-v0.1.0` | Back up and migrate the production topology, deploy the app/MCP/projection Workers, run production smoke checks, and deploy the docs Worker |
 
 The CLI tag version must exactly match `packages/local-runtime/package.json`.
+Stable versions publish to npm's `latest` dist-tag; prerelease versions publish
+to `next` and never replace `latest`.
 The Cloudflare version is a release identifier and is recorded as the Wrangler
 deployment tag through `SKILLPLANE_RELEASE_TAG`.
 
 ## GitHub configuration
 
-Create a protected GitHub environment named `production`. Require deployment
-reviewers if production releases need an approval gate. Configure these
+Create a protected GitHub environment named `production` and require deployment
+reviewers. Both the npm publication job and the Cloudflare deployment job use
+this approval boundary before credentials become available.
+
+Create repository tag rulesets for `skillplane-v*` and
+`skillplane-cloudflare-v*`. Restrict tag creation, updates, and deletion to the
+intended release principals; do not permit force-updating either release
+namespace. Configure these
 environment variables:
 
+- `PRODUCTION_RELEASES_ENABLED=true` (set only after reviewers and tag rulesets
+  are active; both workflows fail closed when it is absent)
 - `CLOUDFLARE_ACCOUNT_ID`
 - `CLOUDFLARE_CONTROL_HYPERDRIVE_ID`
 - `SKILLPLANE_CELL_IN_SOUTH_HYPERDRIVE_ID`
@@ -47,8 +57,9 @@ the canonical production URL and the control-plane URL, matching the topology
 deployment invariant. `WORKSPACE_ROUTING_KEYS` is the complete JSON keyring
 required by `deployment/topology.production.json`.
 
-Set the repository secret `NPM_TOKEN` for CLI publication. The workflow also
-requests an OIDC token so npm can attach build provenance.
+Grant this repository access to the organization secret `NPM_TOKEN` for CLI
+publication. Only the approved publication job requests an OIDC token so npm
+can attach build provenance.
 
 ## Creating a release
 
@@ -69,8 +80,11 @@ git tag skillplane-cloudflare-v0.1.0
 git push origin skillplane-cloudflare-v0.1.0
 ```
 
-The Cloudflare workflow serializes all production runs and uses the protected
-`production` environment. It runs the established blocking sequence:
+The Cloudflare workflow keeps every production release run. A credential-free
+queue job waits until all earlier active runs of the same workflow finish, so a
+newer tag cannot replace an already-pending release. The deployment then enters
+the protected `production` environment and runs the established blocking
+sequence:
 
 ```text
 deploy:check

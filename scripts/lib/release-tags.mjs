@@ -1,18 +1,24 @@
 import { appendFile, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
-export const VERSION_PATTERN =
-  "\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?";
+const numericIdentifier = "(?:0|[1-9]\\d*)";
+const prereleaseIdentifier = "(?:0|[1-9]\\d*|\\d*[A-Za-z-][0-9A-Za-z-]*)";
+const buildIdentifier = "[0-9A-Za-z-]+";
+const prereleasePattern = `${prereleaseIdentifier}(?:\\.${prereleaseIdentifier})*`;
+const buildPattern = `${buildIdentifier}(?:\\.${buildIdentifier})*`;
+
+export const VERSION_PATTERN = `${numericIdentifier}\\.${numericIdentifier}\\.${numericIdentifier}(?:-${prereleasePattern})?(?:\\+${buildPattern})?`;
 
 const packageTagPattern = new RegExp(
   `^(?<slug>[a-z0-9][a-z0-9-]*)-v(?<version>${VERSION_PATTERN})$`,
   "u",
 );
 const cloudflareTagPattern = new RegExp(
-  "^skillplane-cloudflare-v(?<version>\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?)$",
+  `^skillplane-cloudflare-v(?<version>${numericIdentifier}\\.${numericIdentifier}\\.${numericIdentifier}(?:-${prereleasePattern})?)$`,
   "u",
 );
 
+/** Require a non-empty release tag string. */
 function requireTag(tag) {
   if (typeof tag !== "string" || tag.length === 0) {
     throw new Error("Expected a release tag argument or GITHUB_REF_NAME");
@@ -20,6 +26,7 @@ function requireTag(tag) {
   return tag;
 }
 
+/** Load and validate every public package declared in the release manifest. */
 export async function loadReleasePackages(repoRoot) {
   const manifestPath = resolve(repoRoot, "release-packages.json");
   const entries = JSON.parse(await readFile(manifestPath, "utf8"));
@@ -61,6 +68,7 @@ export async function loadReleasePackages(repoRoot) {
   return targets;
 }
 
+/** Resolve a package tag to its exact manifest entry and npm distribution tag. */
 export async function resolvePackageRelease(tag, repoRoot) {
   const normalizedTag = requireTag(tag);
   const match = normalizedTag.match(packageTagPattern);
@@ -81,9 +89,14 @@ export async function resolvePackageRelease(tag, repoRoot) {
       `Tag version ${match.groups.version} does not match ${target.name}@${target.version}`,
     );
   }
-  return { tag: normalizedTag, ...target };
+  return {
+    tag: normalizedTag,
+    ...target,
+    npmTag: match.groups.version.split("+", 1)[0].includes("-") ? "next" : "latest",
+  };
 }
 
+/** Resolve and validate a Cloudflare production release tag. */
 export function resolveCloudflareRelease(tag) {
   const normalizedTag = requireTag(tag);
   if (normalizedTag.length > 54) {
@@ -98,15 +111,21 @@ export function resolveCloudflareRelease(tag) {
   return { tag: normalizedTag, version: match.groups.version };
 }
 
+/** Append single-line values to a GitHub Actions output file. */
 export async function writeGithubOutputs(
   outputs,
   outputPath = process.env.GITHUB_OUTPUT,
 ) {
   if (!outputPath) return;
-  await appendFile(
-    outputPath,
-    `${Object.entries(outputs)
-      .map(([key, value]) => `${key}=${value}`)
-      .join("\n")}\n`,
-  );
+  const lines = Object.entries(outputs).map(([key, value]) => {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(key)) {
+      throw new Error(`Invalid GitHub output name: ${key}`);
+    }
+    const normalizedValue = String(value);
+    if (/[\r\n]/u.test(normalizedValue)) {
+      throw new Error(`GitHub output ${key} must be a single-line value`);
+    }
+    return `${key}=${normalizedValue}`;
+  });
+  await appendFile(outputPath, `${lines.join("\n")}\n`);
 }

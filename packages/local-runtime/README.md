@@ -7,4 +7,4 @@ npm install --global skillplane
 skillplane --help
 ```
 
-Node.js 22.13 or newer is required.
+Node.js `>=22.13.0 <25` is required.

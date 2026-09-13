@@ -1,13 +1,15 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import {
   resolveCloudflareRelease,
   resolvePackageRelease,
+  writeGithubOutputs,
 } from "./lib/release-tags.mjs";
 
+/** Create a disposable release manifest and package fixture. */
 async function fixture(packageJson = {}) {
   const root = await mkdtemp(join(tmpdir(), "skillplane-release-tags-"));
   await mkdir(join(root, "packages", "cli"), { recursive: true });
@@ -34,10 +36,39 @@ describe("tagged releases", () => {
         name: "skillplane",
         version: "1.2.3",
         path: "packages/cli",
+        npmTag: "latest",
       });
       await assert.rejects(
         resolvePackageRelease("skillplane-v1.2.4", root),
         /does not match/u,
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("routes prerelease packages away from npm latest", async () => {
+    const root = await fixture({ version: "1.2.3-rc.1" });
+    try {
+      assert.equal(
+        (await resolvePackageRelease("skillplane-v1.2.3-rc.1", root)).npmTag,
+        "next",
+      );
+      await assert.rejects(
+        resolvePackageRelease("skillplane-v1.2.3-01", root),
+        /Unsupported tag format/u,
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps stable build metadata on npm latest", async () => {
+    const root = await fixture({ version: "1.2.3+build-alpha" });
+    try {
+      assert.equal(
+        (await resolvePackageRelease("skillplane-v1.2.3+build-alpha", root)).npmTag,
+        "latest",
       );
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -69,9 +100,35 @@ describe("tagged releases", () => {
       () => resolveCloudflareRelease("skillplane-cloudflare-v2.0.0+build.1"),
       /Unsupported Cloudflare tag/u,
     );
+    for (const tag of [
+      "skillplane-cloudflare-v02.0.0",
+      "skillplane-cloudflare-v2.0.0-01",
+      "skillplane-cloudflare-v2.0.0-alpha..1",
+    ]) {
+      assert.throws(() => resolveCloudflareRelease(tag), /Unsupported Cloudflare tag/u);
+    }
     assert.throws(
       () => resolveCloudflareRelease(`skillplane-cloudflare-v2.0.0-${"a".repeat(40)}`),
       /must not exceed 54 characters/u,
     );
+  });
+
+  it("writes only well-formed single-line GitHub outputs", async () => {
+    const root = await mkdtemp(join(tmpdir(), "skillplane-release-outputs-"));
+    const output = join(root, "github-output");
+    try {
+      await writeGithubOutputs({ pkg_path: "packages/local-runtime" }, output);
+      assert.equal(await readFile(output, "utf8"), "pkg_path=packages/local-runtime\n");
+      await assert.rejects(
+        writeGithubOutputs({ pkg_path: "packages/local-runtime\nadmin=true" }, output),
+        /must be a single-line value/u,
+      );
+      await assert.rejects(
+        writeGithubOutputs({ "bad-name": "value" }, output),
+        /Invalid GitHub output name/u,
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

@@ -12,14 +12,48 @@ on:
         type: string
 
 permissions:
+  actions: read
   contents: read
 
-concurrency:
-  group: skillplane-production-cloudflare
-  cancel-in-progress: false
-
 jobs:
+  queue:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Wait for earlier production releases
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          CURRENT_RUN_ID: ${{ github.run_id }}
+          CURRENT_RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          workflow="deploy-cloudflare-tag.yml"
+          active_statuses=(requested waiting pending queued in_progress)
+          while true; do
+            blockers=()
+            for status in "${active_statuses[@]}"; do
+              run_ids="$(
+                gh api --paginate --method GET \
+                  "repos/${REPOSITORY}/actions/workflows/${workflow}/runs" \
+                  -f status="${status}" \
+                  -f per_page=100 \
+                  --jq ".workflow_runs[] | select(.id != ${CURRENT_RUN_ID}) | select(.run_number < ${CURRENT_RUN_NUMBER}) | .id"
+              )"
+              while IFS= read -r run_id; do
+                [[ -n "${run_id}" ]] && blockers+=("${run_id}")
+              done <<< "${run_ids}"
+            done
+            if [[ "${#blockers[@]}" -eq 0 ]]; then
+              break
+            fi
+            echo "Waiting for ${#blockers[@]} earlier production release run(s): ${blockers[*]}"
+            sleep 30
+          done
+
   deploy:
+    needs: queue
     runs-on: ubuntu-latest
     timeout-minutes: 180
     environment: production
@@ -35,11 +69,22 @@ jobs:
       SKILLPLANE_CELL_US_EAST_BUCKET: ${{ vars.SKILLPLANE_CELL_US_EAST_BUCKET }}
       PUBLIC_TURNSTILE_SITE_KEY: ${{ vars.PUBLIC_TURNSTILE_SITE_KEY }}
     steps:
+      - name: Verify protected release environment
+        shell: bash
+        env:
+          PRODUCTION_RELEASES_ENABLED: ${{ vars.PRODUCTION_RELEASES_ENABLED }}
+        run: |
+          if [[ "${PRODUCTION_RELEASES_ENABLED}" != "true" ]]; then
+            echo "The protected production environment is not enabled for releases" >&2
+            exit 1
+          fi
+
       - name: Checkout release tag
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
+          persist-credentials: false
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.sha }}
 
       - name: Verify tagged main revision
         shell: bash
@@ -57,12 +102,12 @@ jobs:
           fi
 
       - name: Set up pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
         with:
           version: 11.9.0
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22.13.0
           cache: pnpm
@@ -70,8 +115,11 @@ jobs:
       - name: Resolve deployment target
         run: node scripts/resolve-cloudflare-tag.mjs "${RELEASE_TAG}"
 
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+      - name: Install dependencies without lifecycle scripts
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Build reviewed native dependencies
+        run: pnpm rebuild esbuild protobufjs sharp workerd
 
       - name: Validate Cloudflare release
         run: pnpm deploy:check
@@ -112,7 +160,7 @@ jobs:
 
       - name: Preserve encrypted recovery and release evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: production-recovery-${{ env.RELEASE_TAG }}-${{ github.run_attempt }}
           path: |
