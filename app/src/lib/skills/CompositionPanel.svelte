@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Button } from "@skillplane/ui";
-  import { apiRequest, jsonBody } from "$lib/api/client.js";
+  import { apiRequest, jsonBody, SkillplaneApiError } from "$lib/api/client.js";
   import type { SkillVersion } from "./types.js";
   interface Plan {
     closureDigest: string;
@@ -62,6 +62,7 @@
       evidence: { type: string; uri: string; description: string; sha256: string }[];
     }[];
   } | null>(null);
+  let resolutionError = $state<{ message: string; repairNeeded: boolean } | null>(null);
   let upgradeKey = $state(crypto.randomUUID());
   let previous = $state<Plan | null>(null);
   let runs = $state<
@@ -82,6 +83,7 @@
       base = version.baseVersionId;
     let active = true;
     plan = null;
+    resolutionError = null;
     previous = null;
     error = null;
     results = null;
@@ -92,7 +94,14 @@
         if (active && id === version.id) plan = r.plan;
       })
       .catch((e: unknown) => {
-        if (active) error = e instanceof Error ? e.message : "Resolution failed";
+        if (active) {
+          resolutionError = {
+            message: e instanceof Error ? e.message : "Resolution failed",
+            repairNeeded:
+              e instanceof SkillplaneApiError &&
+              ["SKILL_VERSION_REVOKED", "SKILL_DEPENDENCY_CONFLICT"].includes(e.code),
+          };
+        }
       });
     if (base)
       void apiRequest<{ plan: Plan }>(
@@ -180,6 +189,15 @@
 
 <section aria-label="Dependency graph and verification">
   <h2>Composition and verification</h2>
+  {#if resolutionError}
+    <p role="alert">{resolutionError.message}</p>
+    {#if resolutionError.repairNeeded && canEdit && !publicView}
+      <p>
+        To replace a revoked dependency or change an exact version pin, open Content and
+        choose Edit.
+      </p>
+    {/if}
+  {/if}
   {#if error}<p role="alert">{error}</p>{/if}
   {#if plan}
     <p>Closure digest <code>{plan.closureDigest}</code></p>
@@ -276,7 +294,9 @@
             </p>{/each}
         {/each}{/if}
     {/if}
-  {:else if !error}<p role="status">Resolving the immutable closure…</p>{/if}
+  {:else if !resolutionError && !error}<p role="status">
+      Resolving the immutable closure…
+    </p>{/if}
 </section>
 
 <style>

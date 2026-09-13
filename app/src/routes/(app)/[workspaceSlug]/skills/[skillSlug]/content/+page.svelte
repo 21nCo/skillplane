@@ -197,13 +197,12 @@
     />
   </section>
 
-  {#if editing && fileText !== null}
+  {#if editing && canEdit}
     <section class="editor-panel">
       <SkillEditor
         workspaceId={workspace.id}
         skill={detail.skill}
         baseVersion={selectedVersion}
-        initialMarkdown={fileText}
         onCreated={candidateCreated}
       />
       <div class="cancel-edit">
@@ -269,7 +268,7 @@
                   Source
                 </Button>
               {/if}
-              {#if canEdit && fileText !== null}
+              {#if canEdit}
                 <Button size="sm" variant="secondary" onclick={() => (editing = true)}>
                   {#snippet leading()}<NotePencilIcon weight="bold" />{/snippet}
                   Edit

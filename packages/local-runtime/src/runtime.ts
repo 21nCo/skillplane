@@ -182,29 +182,17 @@ export class Runtime {
         );
       desired.add(path);
     }
-    const projectKey = `project-projections:${resolve(project)}`;
-    const previous = [
-      ...new Set([
-        ...(this.store.get<string[]>(projectKey) ?? []),
-        ...this.store
-          .entries<ProjectionRecord>("projection:")
-          .filter(([, record]) => record.project === resolve(project))
-          .map(([, record]) => record.id),
-      ]),
-    ];
+    const previous = this.projections.projectIds(project);
     const records = [];
     for (const { target, item, snapshot } of plans) {
       this.cache(snapshot);
       records.push(this.projections.sync(snapshot, target, project, item.name));
     }
+    const installed = new Set(records.map((record) => record.id));
     for (const id of previous) {
-      const record = this.store.get<ProjectionRecord>(`projection:${id}`);
-      if (record && !desired.has(record.path)) this.projections.uninstall(id);
+      if (!installed.has(id) && this.store.get(`projection:${id}`))
+        this.projections.uninstall(id, project);
     }
-    this.store.set(
-      projectKey,
-      records.map((record) => record.id),
-    );
     return records;
   }
   async resolve(

@@ -266,3 +266,11 @@ the actual cloud domain and authorization contracts.
 Usage uploads require an explicit cloud workspace even after consent. Local workspace events remain local. Uploads acknowledge each event independently; invalid durable payloads and deterministic server validation failures are retained in quarantine and counted by `usage`. Transient failures remain pending.
 
 Local projections and offline authority currently support v1 bundles. V2 composition requires native MCP `skill_resolve`, which returns the pinned dependency closure and verification obligations. Local projection, live refresh into a local projection, and offline v2 creation fail with `COMPOSITION_RESOLUTION_REQUIRED`; they never execute only the parent while omitting its dependencies. Cloud creation/import preserves v2 metadata.
+
+### Reconciling changed projections
+
+When a configured source changes at an existing destination, `sync` atomically replaces the link only if the current project exclusively owns it. A user-scoped projection referenced by another project remains installed when one project removes its target; changing its source requires the other project to release it first. Ownership is recorded with each completed installation so interrupted batches can recover. Missing owned links are recreated by `sync` or removed from runtime state when excluded. Existing links or files that differ from the owned projection still fail closed.
+
+Shared destinations must keep identical versions and target policies. Sync refuses content or policy changes, and rollback refuses a shared destination, until only one project owns it; identical sharing and missing-link repair remain allowed. ID-only CLI uninstall rejects shared projections. Removing a target from one project's configuration releases only that project's ownership; final removal clears all ownership records. Uninstall and swap use the same SQLite writer lock, including recovery.
+
+The runtime migrates legacy ownership lists and ownerless historical records in one SQLite transaction, then uses indexed ownership rows for discovery and cleanup. Existing per-projection owners take precedence over the historical installer so a released owner is not resurrected. This local metadata migration needs no cloud database change.

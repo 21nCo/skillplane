@@ -12,39 +12,35 @@ import type { ApiEnvironment } from "../context.js";
 import { requestedWorkspaceId, resolveWorkspaceRequestContext } from "./context.js";
 import { routingEpoch } from "../routes/shared.js";
 
+const routeActions: readonly [RegExp, WorkspaceAction, WorkspaceAction][] = [
+  [
+    /^\/api\/v1\/skills\/[^/]+\/versions\/[^/]+\/repair-bundle$/u,
+    "skills:write",
+    "skills:write",
+  ],
+  [/^\/api\/v1\/skills\/[^/]+\/amendments(?:\/|$)/u, "skills:read", "skills:amend"],
+  [
+    /^\/api\/v1\/skills\/[^/]+\/amendment-policy(?:\/|$)/u,
+    "skills:read",
+    "skills:publish",
+  ],
+  [
+    /^\/api\/v1\/skills\/[^/]+\/reviews\/[^/]+\/(?:approve|reject)$/u,
+    "skills:publish",
+    "skills:publish",
+  ],
+  [/^\/api\/v1\/skills\/[^/]+\/candidates(?:\/|$)/u, "skills:read", "skills:read"],
+  [/^\/api\/v1\/(?:contexts|context-notes)/u, "contexts:read", "contexts:write"],
+  [/^\/api\/v1\/skills\/[^/]+\/contexts(?:\/|$)/u, "contexts:read", "contexts:write"],
+  [/^\/api\/v1\/skills/u, "skills:read", "skills:write"],
+  [/^\/api\/v1\/analytics/u, "analytics:read", "analytics:read"],
+  [/^\/api\/v1\/audit/u, "audit:read", "audit:read"],
+];
 export function requiredAction(path: string, method: string): WorkspaceAction | null {
   const read = ["GET", "HEAD", "OPTIONS"].includes(method);
-  if (/^\/api\/v1\/skills\/[^/]+\/amendments(?:\/|$)/u.test(path)) {
-    return read ? "skills:read" : "skills:amend";
-  }
-  if (/^\/api\/v1\/skills\/[^/]+\/amendment-policy(?:\/|$)/u.test(path)) {
-    return read ? "skills:read" : "skills:publish";
-  }
-  if (/^\/api\/v1\/skills\/[^/]+\/reviews\/[^/]+\/(?:approve|reject)$/u.test(path)) {
-    return "skills:publish";
-  }
-  if (/^\/api\/v1\/skills\/[^/]+\/candidates(?:\/|$)/u.test(path)) {
-    return "skills:read";
-  }
-  if (
-    path.startsWith("/api/v1/contexts") ||
-    path.startsWith("/api/v1/context-notes") ||
-    /^\/api\/v1\/skills\/[^/]+\/contexts(?:\/|$)/u.test(path)
-  ) {
-    return read ? "contexts:read" : "contexts:write";
-  }
-  if (
-    /^\/api\/v1\/skills\/[^/]+\/(?:versions\/[^/]+\/)?verification-runs(?:\/|$)/u.test(
-      path,
-    )
-  )
-    return read ? "skills:read" : "skills:write";
-  if (path.startsWith("/api/v1/skills")) {
-    return read ? "skills:read" : "skills:write";
-  }
-  if (path.startsWith("/api/v1/analytics")) return "analytics:read";
-  if (path.startsWith("/api/v1/audit")) return "audit:read";
-  return null;
+  const match = routeActions.find(([pattern]) => pattern.test(path));
+  if (!match) return null;
+  return match[read ? 1 : 2];
 }
 
 export function authorizationMiddleware(): MiddlewareHandler<ApiEnvironment> {

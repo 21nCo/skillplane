@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import type { ApiEnvironment } from "../context.js";
 import { toApiError } from "../errors.js";
-import { authorizationMiddleware } from "./authorization.js";
+import { authorizationMiddleware, requiredAction } from "./authorization.js";
 
 describe("regional public skill authorization", () => {
   it("leaves a trusted routed version read unauthenticated for visibility checks", async () => {
@@ -67,5 +67,28 @@ describe("regional public skill authorization", () => {
     await expect(response.json()).resolves.toMatchObject({
       error: { code: "VALIDATION_FAILED" },
     });
+  });
+});
+
+describe("route action precedence", () => {
+  it.each([
+    ["/api/v1/skills/s/versions/v/repair-bundle", "skills:write", "skills:write"],
+    ["/api/v1/skills/s/amendments/a", "skills:read", "skills:amend"],
+    ["/api/v1/skills/s/amendment-policy", "skills:read", "skills:publish"],
+    ["/api/v1/skills/s/reviews/r/approve", "skills:publish", "skills:publish"],
+    ["/api/v1/skills/s/candidates", "skills:read", "skills:read"],
+    ["/api/v1/skills/s/contexts/c", "contexts:read", "contexts:write"],
+    ["/api/v1/contexts/c", "contexts:read", "contexts:write"],
+    ["/api/v1/context-notes/n", "contexts:read", "contexts:write"],
+    ["/api/v1/skills/s/versions/v/verification-runs", "skills:read", "skills:write"],
+    ["/api/v1/skills/s", "skills:read", "skills:write"],
+    ["/api/v1/analytics", "analytics:read", "analytics:read"],
+    ["/api/v1/audit", "audit:read", "audit:read"],
+    ["/api/v1/health/live", null, null],
+  ])("preserves read and mutation authorization for %s", (path, read, write) => {
+    for (const method of ["GET", "HEAD", "OPTIONS"])
+      expect(requiredAction(path, method)).toBe(read);
+    for (const method of ["POST", "PUT", "PATCH", "DELETE"])
+      expect(requiredAction(path, method)).toBe(write);
   });
 });

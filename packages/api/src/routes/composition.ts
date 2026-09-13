@@ -22,6 +22,19 @@ function requireServices(c: Context<ApiEnvironment>): ApiServices {
   return s;
 }
 export function registerCompositionRoutes(app: Hono<ApiEnvironment>) {
+  // Writer-only authored root for repair; normal retrieval still validates the closure.
+  app.get("/api/v1/skills/:skillId/versions/:versionId/repair-bundle", async (c) => {
+    const principal = requirePrincipal(c);
+    const bundle = await requireServices(c).compositionService.upgradeBundle(
+      c.req.param("versionId"),
+      c.req.param("skillId"),
+      principal,
+    );
+    c.header("Cache-Control", "private, no-store");
+    c.header("Content-Type", "application/zip");
+    c.header("ETag", `"${bundle.digest}"`);
+    return c.body(new Uint8Array(bundle.bytes).buffer);
+  });
   app.get("/api/v1/skills/:skillId/versions/:versionId/resolve", async (c) => {
     const services = c.get("services");
     if (!services) throw new DomainError("NOT_FOUND", "Skill was not found", 404);

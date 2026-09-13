@@ -182,6 +182,20 @@ export async function getSkillBundle(options: {
   return new Uint8Array(await response.arrayBuffer());
 }
 
+export async function getSkillRepairBundle(options: {
+  readonly workspaceId: string;
+  readonly skillId: string;
+  readonly versionId: string;
+}): Promise<Uint8Array> {
+  const response = await rawFileRequest(
+    `/api/v1/skills/${encodeURIComponent(
+      options.skillId,
+    )}/versions/${encodeURIComponent(options.versionId)}/repair-bundle`,
+    options.workspaceId,
+  );
+  return new Uint8Array(await response.arrayBuffer());
+}
+
 export async function getPublicSkillFile(options: {
   readonly skillId: string;
   readonly versionId: string;

@@ -6,7 +6,7 @@
   import { CheckCircleIcon, WarningCircleIcon } from "phosphor-svelte";
   import { SvelteMap } from "svelte/reactivity";
   import { capturePostHog } from "$lib/analytics/posthog.client.js";
-  import { createSkillCandidate, getSkillBundle } from "./api.js";
+  import { createSkillCandidate, getSkillRepairBundle } from "./api.js";
   import { buildSkillBundle, bytesToBase64, filesFromBundle } from "./bundle.js";
   import type { SemanticBump, Skill, SkillVersion } from "./types.js";
 
@@ -14,13 +14,11 @@
     workspaceId,
     skill,
     baseVersion,
-    initialMarkdown,
     onCreated,
   }: {
     workspaceId: string;
     skill: Skill;
     baseVersion: SkillVersion;
-    initialMarkdown: string;
     onCreated: (version: SkillVersion) => void;
   } = $props();
 
@@ -29,9 +27,14 @@
     verifier = $state(""),
     claims = $state("[]");
   let baseFiles = $state<ReadonlyMap<string, Uint8Array> | null>(null);
+  let loadError = $state<string | null>(null);
   onMount(() => {
     let active = true;
-    void getSkillBundle({ workspaceId, skillId: skill.id, versionId: baseVersion.id })
+    void getSkillRepairBundle({
+      workspaceId,
+      skillId: skill.id,
+      versionId: baseVersion.id,
+    })
       .then((bytes) => {
         if (!active) return;
         const files = filesFromBundle(bytes);
@@ -42,11 +45,13 @@
         verifier = new TextDecoder().decode(files.get("verification/VERIFY.md"));
         claims =
           new TextDecoder().decode(files.get("verification/claims.json")) || "[]";
+        markdown = new TextDecoder().decode(files.get("SKILL.md"));
         baseFiles = files;
       })
       .catch((cause: unknown) => {
         if (active)
-          error = cause instanceof Error ? cause.message : "Could not load composition";
+          loadError =
+            cause instanceof Error ? cause.message : "Could not load composition";
       });
     return () => {
       active = false;
@@ -54,9 +59,6 @@
   });
   let blocking = $state(false);
   let markdown = $state("");
-  onMount(() => {
-    markdown = initialMarkdown;
-  });
   let changeSummary = $state("");
   let proposedBump = $state<SemanticBump>("patch");
   let saveState = $state<"idle" | "saving">("idle");
@@ -145,26 +147,32 @@
     </span>
   </div>
 
-  <MarkdownEditor
-    surface="skill-amend"
-    label="Skill instructions"
-    description="Markdown shown to agents when this skill is retrieved."
-    rows={20}
-    required
-    maxBytes={1_048_576}
-    maxCharacters={1_048_576}
-    bind:value={markdown}
-    oninput={changed}
-  />
+  {#if baseFiles}
+    <MarkdownEditor
+      surface="skill-amend"
+      label="Skill instructions"
+      description="Markdown shown to agents when this skill is retrieved."
+      rows={20}
+      required
+      maxBytes={1_048_576}
+      maxCharacters={1_048_576}
+      bind:value={markdown}
+      oninput={changed}
+    />
 
-  {#if baseFiles}<CompositionEditor
+    <CompositionEditor
       {workspaceId}
       bind:dependencies
       bind:verify
       bind:verifier
       bind:claims
       onchange={changed}
-    />{:else}<p role="status">Loading composition…</p>{/if}
+    />
+  {:else if loadError}
+    <p class="error" role="alert">{loadError}</p>
+  {:else}
+    <p role="status">Loading composition…</p>
+  {/if}
 
   <div class="metadata-grid">
     <Textarea

@@ -57,3 +57,7 @@ TEST_DATABASE_URL="$DISPOSABLE_TEST_DATABASE_URL" pnpm exec vitest run packages/
 ```
 
 The suite does not reset or delete a database; it creates uniquely named fixtures. Production canaries require deploying readers and migrations first, then enabling writers and publishing the reference composites. Rollback must retain v2 readers; disabling composition writes must not erase existing locks or verification history.
+
+## Repairing revoked dependencies
+
+Workspace writers can open **Content → Edit** on the current parent even when a revoked dependency blocks ordinary retrieval. The editor loads the authenticated `GET /api/v1/skills/:skillId/versions/:versionId/repair-bundle` route, which requires `skills:write` and returns only the authored root bundle. Writers can change exact version pins and submit a replacement candidate; candidate creation resolves and validates the new closure. Normal file, bundle, and execution reads continue to reject revoked dependencies. The repair response is private and never cacheable.
