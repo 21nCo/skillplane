@@ -97,6 +97,7 @@ function scopesForToolCall(message: unknown): readonly McpScope[] {
   }
   switch (record.params.name) {
     case "workspaces_list":
+    case "skill_usage_report":
     case "skills_list":
     case "skills_search":
     case "skill_asset_retrieve":
@@ -133,8 +134,16 @@ function scopesForToolCall(message: unknown): readonly McpScope[] {
     case "skill_verification_evidence_add":
     case "skill_verification_run_complete":
       return ["skills:read", "skills:write"];
-    case "skill_create":
-      return ["skills:read", "skills:write"];
+    case "skill_create": {
+      const args = record.params.arguments;
+      const composed =
+        args !== null &&
+        typeof args === "object" &&
+        !Array.isArray(args) &&
+        "composition" in args &&
+        args.composition != null;
+      return composed ? ["skills:read", "skills:write"] : ["skills:write"];
+    }
     case "skill_visibility_update":
     case "skill_archive":
     case "skill_restore":

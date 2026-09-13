@@ -1,3 +1,4 @@
+import { skillUsageReport } from "./tools/usage.js";
 import {
   compositionCandidate,
   dependencyUpgradePreview,
@@ -53,6 +54,8 @@ import {
   skillAmendOutputSchema,
   skillAssetRetrieveInputSchema,
   skillAssetRetrieveOutputSchema,
+  skillUsageReportInputSchema,
+  skillUsageReportOutputSchema,
   skillRetrieveInputSchema,
   skillRetrieveOutputSchema,
   skillsSearchInputSchema,
@@ -220,6 +223,16 @@ export const skillplaneMcpDeclaration = defineMcpFnServer<McpToolRuntime>({
       run: skillsSearch,
     }),
     tool({
+      name: "skill_usage_report",
+      title: "Report observed skill activity",
+      description:
+        "Report a client event for an authorized exact skill version. Deduplicated by event ID. Client claims remain reported; verified success and unobservable embedded usage cannot be claimed.",
+      input: skillUsageReportInputSchema,
+      output: skillUsageReportOutputSchema,
+      annotations: MUTATION_ANNOTATIONS,
+      run: skillUsageReport,
+    }),
+    tool({
       name: "skill_composition_candidate_create",
       title: "Compose a skill candidate",
       description:
@@ -283,7 +296,7 @@ export const skillplaneMcpDeclaration = defineMcpFnServer<McpToolRuntime>({
       name: "skill_verification_run_start",
       title: "Start independent verification",
       description:
-        "Record a verifier run tied to the locked closure, repository commit and environment. The declared executor must differ from the authenticated verifier.",
+        "Record a verifier run tied to the locked closure, repository commit and environment. The executor in the immutable execution record must differ from the authenticated verifier.",
       input: verificationStartInputSchema,
       output: compositionMutationOutputSchema,
       annotations: MUTATION_ANNOTATIONS,

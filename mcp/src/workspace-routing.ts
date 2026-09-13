@@ -110,6 +110,7 @@ function downloadToken(value: string | undefined): string | null {
 }
 
 const workspaceTools = new Set([
+  "skill_usage_report",
   "skills_list",
   "skills_search",
   "skill_retrieve",

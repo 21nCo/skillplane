@@ -46,6 +46,9 @@ export interface MutationAuditEvent {
 }
 
 export interface PrincipalAuditEvent {
+  readonly auditContext?: MutationAuditContext;
+  /** Original caller-declared dimensions for explicitly reported telemetry. */
+  readonly reportedAttribution?: { readonly agent: string; readonly model: string };
   readonly eventType: string;
   readonly action: string;
   readonly outcome?: "success" | "denied" | "error";
@@ -157,7 +160,17 @@ export async function insertPrincipalAudit(
       ...(event.skillId ? { skillId: event.skillId } : {}),
       ...(event.versionId ? { versionId: event.versionId } : {}),
       ...(event.contextId ? { contextId: event.contextId } : {}),
-      channel: "app",
+      ...(event.auditContext
+        ? {
+            channel: "mcp" as const,
+            credential: event.auditContext.credential,
+            caller: event.auditContext.caller,
+            agent:
+              event.reportedAttribution?.agent ?? event.auditContext.caller.agentName,
+            model:
+              event.reportedAttribution?.model ?? event.auditContext.caller.modelName,
+          }
+        : { channel: "app" as const }),
       retentionClass: "permanent",
       ...(event.metadata ? { metadata: event.metadata } : {}),
     });

@@ -19,6 +19,8 @@ export * from "./service-principals.js";
 export * from "./skill-versions.js";
 export * from "./skills.js";
 export * from "./workspaces.js";
+export * from "./skill-input.js";
+export { withDomainTransaction } from "./transactions.js";
 
 export * from "./composition.js";
 

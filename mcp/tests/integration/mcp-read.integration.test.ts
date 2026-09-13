@@ -76,6 +76,7 @@ describe("MCP read surface", () => {
       "skill_create",
       "skill_restore",
       "skill_retrieve",
+      "skill_usage_report",
       "skill_versions_diff",
       "skill_versions_list",
       "skill_visibility_update",
@@ -86,6 +87,7 @@ describe("MCP read surface", () => {
     for (const tool of listed.tools) {
       expect(tool.annotations).toMatchObject({
         readOnlyHint: ![
+          "skill_usage_report",
           "context_knowledge_update",
           "context_note_upsert",
           "context_archive",

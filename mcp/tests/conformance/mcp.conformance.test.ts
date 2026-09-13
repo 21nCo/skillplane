@@ -98,12 +98,12 @@ describe("MCP Streamable HTTP conformance", () => {
     await expect(connection.client.ping()).resolves.toEqual({});
   });
 
-  it("advertises thirty-eight complete tool contracts as JSON Schema", async () => {
+  it("advertises thirty-nine complete tool contracts as JSON Schema", async () => {
     const result = await connection.client.listTools();
-    expect(result.tools).toHaveLength(38);
+    expect(result.tools).toHaveLength(39);
     for (const tool of result.tools) {
       expect(tool.name).toMatch(
-        /^(skill_execution_report|skill_composition_candidate_create|skill_dependency_upgrades_get|skill_dependency_upgrade|skill_version_lifecycle_update|skill_resolve|skill_verification_plan_get|skill_verification_run_start|skill_verification_run_get|skill_verification_evidence_add|skill_verification_run_complete|workspaces_list|skills_list|skills_search|skill_retrieve|skill_asset_retrieve|skill_versions_list|skill_versions_diff|skill_candidates_list|skill_amendment_policy_get|contexts_list|context_get|context_knowledge_history|context_notes_list|skill_amend|skill_create|skill_visibility_update|skill_archive|skill_restore|skill_candidate_approve|skill_candidate_reject|skill_amendment_policy_update|context_create|context_update|context_archive|context_restore|context_knowledge_update|context_note_upsert)$/u,
+        /^(skill_usage_report|skill_execution_report|skill_composition_candidate_create|skill_dependency_upgrades_get|skill_dependency_upgrade|skill_version_lifecycle_update|skill_resolve|skill_verification_plan_get|skill_verification_run_start|skill_verification_run_get|skill_verification_evidence_add|skill_verification_run_complete|workspaces_list|skills_list|skills_search|skill_retrieve|skill_asset_retrieve|skill_versions_list|skill_versions_diff|skill_candidates_list|skill_amendment_policy_get|contexts_list|context_get|context_knowledge_history|context_notes_list|skill_amend|skill_create|skill_visibility_update|skill_archive|skill_restore|skill_candidate_approve|skill_candidate_reject|skill_amendment_policy_update|context_create|context_update|context_archive|context_restore|context_knowledge_update|context_note_upsert)$/u,
       );
       expect(tool.description?.length).toBeGreaterThan(40);
       expect(tool.inputSchema).toMatchObject({
@@ -116,6 +116,7 @@ describe("MCP Streamable HTTP conformance", () => {
       );
       expect(tool.outputSchema).toMatchObject({ type: "object" });
       const mutating = [
+        "skill_usage_report",
         "skill_execution_report",
         "skill_composition_candidate_create",
         "skill_dependency_upgrade",
@@ -159,7 +160,7 @@ describe("MCP Streamable HTTP conformance", () => {
     };
 
     expect(Buffer.byteLength(body)).toBeLessThan(32 * 1_024);
-    expect(compacted.result.tools).toHaveLength(38);
+    expect(compacted.result.tools).toHaveLength(39);
     for (const tool of compacted.result.tools) {
       expect(tool).not.toHaveProperty("outputSchema");
       expect(tool).not.toHaveProperty("execution");

@@ -94,7 +94,9 @@
     "smoke:production:topology": "node --env-file-if-exists=.env.production.local scripts/production-smoke.mjs topology",
     "test:mcp:production": "node --env-file-if-exists=.env.production.local scripts/test-mcp-production.mjs",
     "verify:email:production": "node --env-file-if-exists=.env.production.local scripts/verify-email-production.mjs",
-    "verify:rollback:production": "node --env-file-if-exists=.env.production.local scripts/rollback.mjs"
+    "verify:rollback:production": "node --env-file-if-exists=.env.production.local scripts/rollback.mjs",
+    "client:bundle": "pnpm --filter @skillplane/local-runtime bundle",
+    "client:install": "pnpm client:bundle && node scripts/install-local-client.mjs"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20260722.1",
