@@ -1,0 +1,1 @@
+splane pr-quality-analysis open skillplane PRs
