@@ -26,6 +26,8 @@ export class LocalStore {
     this.db
       .exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;
       CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS projection_owner (projection_id TEXT NOT NULL, project TEXT NOT NULL, PRIMARY KEY(projection_id, project));
+      CREATE INDEX IF NOT EXISTS projection_owner_project ON projection_owner(project, projection_id);
       CREATE TABLE IF NOT EXISTS workspace (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE);
       CREATE TABLE IF NOT EXISTS skill (id TEXT PRIMARY KEY, workspace TEXT NOT NULL REFERENCES workspace(id), slug TEXT NOT NULL, name TEXT NOT NULL, description TEXT NOT NULL, current TEXT, UNIQUE(workspace,slug));
       CREATE TABLE IF NOT EXISTS version (id TEXT PRIMARY KEY, skill TEXT NOT NULL REFERENCES skill(id), digest TEXT NOT NULL, state TEXT NOT NULL, semantic TEXT, base TEXT, bump TEXT NOT NULL, created TEXT NOT NULL, updated TEXT NOT NULL, learning TEXT NOT NULL, reason TEXT);

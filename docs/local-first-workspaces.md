@@ -270,3 +270,7 @@ Local projections and offline authority currently support v1 bundles. V2 composi
 ### Reconciling changed projections
 
 When a configured source changes at an existing destination, `sync` atomically replaces the link only if the current project exclusively owns it. A user-scoped projection referenced by another project remains installed when one project removes its target; changing its source requires the other project to release it first. Ownership is recorded with each completed installation so interrupted batches can recover. Missing owned links are recreated by `sync` or removed from runtime state when excluded. Existing links or files that differ from the owned projection still fail closed.
+
+Shared destinations must keep identical versions and target policies. Sync refuses content or policy changes, and rollback refuses a shared destination, until only one project owns it; identical sharing and missing-link repair remain allowed. ID-only CLI uninstall rejects shared projections. Removing a target from one project's configuration releases only that project's ownership; final removal clears all ownership records. Uninstall and swap use the same SQLite writer lock, including recovery.
+
+The runtime migrates legacy ownership lists and ownerless historical records in one SQLite transaction, then uses indexed ownership rows for discovery and cleanup. Existing per-projection owners take precedence over the historical installer so a released owner is not resurrected. This local metadata migration needs no cloud database change.

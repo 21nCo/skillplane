@@ -51,6 +51,25 @@ function fixture() {
     provider: new LocalWorkspaceProvider(store, context.primary.id),
   };
 }
+async function sharedFixture() {
+  const f = fixture();
+  await f.provider.create(create);
+  const target = targetSchema.parse({
+    adapter: "codex",
+    scope: "user",
+    directory: join(f.root, "shared"),
+  });
+  f.runtime.configure(f.project, {
+    ...f.runtime.project(f.project),
+    targets: [target],
+  });
+  const other = join(f.root, "other");
+  mkdirSync(other);
+  f.runtime.configure(other, f.runtime.project(f.project));
+  const record = requireValue((await f.runtime.sync(f.project))[0]);
+  await f.runtime.sync(other);
+  return { ...f, other, target, record };
+}
 afterEach(() => {
   vi.restoreAllMocks();
   for (const { root, store } of resources.splice(0)) {
@@ -380,5 +399,172 @@ describe("review regressions", () => {
     symlinkSync(root, old.path, "dir");
     await expect(runtime.sync(project)).rejects.toThrow("PROJECTION_DIVERGED");
     expect(() => runtime.projections.uninstall(old.id)).toThrow("PROJECTION_DIVERGED");
+  });
+  it("rejects conflicting shared versions and policies but repairs the same missing link", async () => {
+    const { runtime, provider, project, other, target, record } = await sharedFixture();
+    const snapshot = await provider.retrieve(record.skill.id);
+    expect(() =>
+      runtime.projections.sync(
+        {
+          ...snapshot,
+          version: { ...snapshot.version, id: "another", semanticVersion: "1.0.1" },
+        },
+        target,
+        other,
+      ),
+    ).toThrow("Destination is owned by another project");
+    const pinned = targetSchema.parse({
+      ...target,
+      policy: { mode: "pinned", version: { kind: "pinned", id: snapshot.version.id } },
+    });
+    expect(() => runtime.projections.sync(snapshot, pinned, project)).toThrow(
+      "Destination is owned by another project",
+    );
+    unlinkSync(record.path);
+    const repaired = runtime.projections.sync(snapshot, target, other);
+    runtime.projections.verify(repaired);
+    expect(runtime.projections.owners(repaired).sort()).toEqual(
+      [project, other].sort(),
+    );
+  });
+  it("rejects explicit shared uninstall and clears owners after the final removal", async () => {
+    const { runtime, project, other, record, store } = await sharedFixture();
+    expect(() => runtime.projections.uninstall(record.id)).toThrow(
+      "Remove this target",
+    );
+    runtime.projections.verify(record);
+    runtime.projections.uninstall(record.id, project);
+    expect(runtime.projections.owners(record)).toEqual([other]);
+    runtime.projections.uninstall(record.id);
+    expect(runtime.projections.owners(record)).toEqual([]);
+    expect(runtime.projections.projectIds(other)).toEqual([]);
+    expect(store.get(`projection:${record.id}`)).toBeUndefined();
+    const installed = requireValue((await runtime.sync(project))[0]);
+    expect(runtime.projections.owners(installed)).toEqual([project]);
+  });
+  it("backfills every legacy record before incremental owner registrations", async () => {
+    const { runtime, provider, project, store } = fixture();
+    await provider.create(create);
+    await provider.create({ ...create, slug: "second", idempotencyKey: "second" });
+    const records = await runtime.sync(project);
+    const first = requireValue(records[0]),
+      second = requireValue(records[1]);
+    store.db.exec("DELETE FROM projection_owner");
+    store.delete("projection-owners:migrated");
+    store.set(`project-projections:${project}`, [first.id]);
+    const projections = new Projections(store);
+    expect(projections.owners(second)).toEqual([project]);
+    const next = LocalWorkspaceProvider.create(store, "Next");
+    const created = await next.create(create);
+    const replacement = projections.sync(
+      await next.retrieve(created.skillId),
+      second.target,
+      project,
+      second.name,
+    );
+    projections.verify(replacement);
+    expect(projections.projectIds(project).sort()).toEqual(
+      [first.id, replacement.id].sort(),
+    );
+    expect(new Projections(store).owners(replacement)).toEqual([project]);
+  });
+  it("migration does not resurrect a released historical installer or ghost IDs", async () => {
+    const { runtime, project, other, record, store } = await sharedFixture();
+    runtime.projections.uninstall(record.id, project);
+    store.db.exec("DELETE FROM projection_owner");
+    store.delete("projection-owners:migrated");
+    store.set(`project-projections:${project}`, ["deleted-id"]);
+    store.set(`project-projections:${other}`, [record.id]);
+    const projections = new Projections(store);
+    expect(projections.owners(record)).toEqual([other]);
+    expect(projections.projectIds(project)).toEqual([]);
+  });
+  it("does not scan ownership JSON for each projection during a no-op batch", async () => {
+    const { runtime, provider, project, store } = fixture();
+    for (let i = 0; i < 12; i++)
+      await provider.create({
+        ...create,
+        slug: `skill-${i}`,
+        idempotencyKey: `skill-${i}`,
+      });
+    await runtime.sync(project);
+    const entries = vi.spyOn(store, "entries");
+    expect(await runtime.sync(project)).toHaveLength(12);
+    expect(
+      entries.mock.calls.filter(([prefix]) => prefix === "project-projections:"),
+    ).toHaveLength(0);
+  });
+  it("holds the SQLite writer lock across uninstall verification and unlink", async () => {
+    const { runtime, provider, project, store } = fixture();
+    await provider.create(create);
+    const record = requireValue((await runtime.sync(project))[0]);
+    const second = new LocalStore(store.root);
+    second.db.exec("PRAGMA busy_timeout=1");
+    let checked = false;
+    const projections = new Projections(store, (point) => {
+      if (point === "before-unlink") {
+        expect(() =>
+          second.transaction(() => second.set("concurrent-swap", true)),
+        ).toThrow(/locked/);
+        checked = true;
+      }
+    });
+    try {
+      projections.uninstall(record.id);
+      expect(checked).toBe(true);
+      second.transaction(() => second.set("after-uninstall", true));
+      expect(existsSync(record.path)).toBe(false);
+      expect(projections.owners(record)).toEqual([]);
+    } finally {
+      second.close();
+    }
+  });
+  it("a stale uninstall journal cannot remove a newer generation", async () => {
+    const { runtime, provider, project, store } = fixture();
+    await provider.create(create);
+    const old = requireValue((await runtime.sync(project))[0]);
+    unlinkSync(old.path);
+    const current = requireValue((await runtime.sync(project))[0]);
+    store.set(`uninstall-journal:${old.id}`, old);
+    runtime.projections.recover();
+    runtime.projections.verify(current);
+    expect(runtime.projections.owners(current)).toEqual([project]);
+  });
+
+  it("rollback respects current ownership after the historical installer leaves", async () => {
+    const { runtime, provider, project, root } = fixture();
+    const created = await provider.create(create);
+    const snapshot = await provider.retrieve(created.skillId);
+    const target = targetSchema.parse({
+      adapter: "codex",
+      scope: "user",
+      directory: join(root, "shared"),
+    });
+    const old = runtime.projections.sync(snapshot, target, project);
+    const bundle = await createSkillBundle({
+      ...create,
+      instructions: "Second version",
+    });
+    const next = {
+      ...snapshot,
+      bundle,
+      version: {
+        ...snapshot.version,
+        id: "next",
+        semanticVersion: "1.0.1",
+        digest: bundle.digest,
+      },
+    };
+    runtime.projections.sync(next, target, project);
+    const other = join(root, "other");
+    mkdirSync(other);
+    runtime.projections.sync(next, target, other);
+    await expect(runtime.projections.rollback(old.id)).rejects.toThrow(
+      "Rollback requires one owning project",
+    );
+    runtime.projections.uninstall(old.id, project);
+    const rolled = await runtime.projections.rollback(old.id);
+    expect(rolled.digest).toBe(snapshot.bundle.digest);
+    expect(runtime.projections.owners(rolled)).toEqual([other]);
   });
 });
