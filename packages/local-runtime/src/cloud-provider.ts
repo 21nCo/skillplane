@@ -20,6 +20,8 @@ import {
 import {
   workspaceKey,
   declaredCaller,
+  CLIENT_NAME,
+  CLIENT_VERSION,
   RuntimeError,
   type WorkspaceProvider,
   type WorkspaceRef,
@@ -41,7 +43,7 @@ export class McpTransport implements CloudTransport {
     readonly token: () => Promise<string>,
   ) {}
   async call(name: string, args: Record<string, unknown>): Promise<unknown> {
-    const client = new Client({ name: "skillplane-cli", version: "0.1.0" });
+    const client = new Client({ name: CLIENT_NAME, version: CLIENT_VERSION });
     try {
       await client.connect(
         new StreamableHTTPClientTransport(new URL(this.endpoint), {

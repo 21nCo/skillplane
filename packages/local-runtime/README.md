@@ -125,7 +125,7 @@ Global options:
 
 - `--project DIR` selects a project without changing directories.
 - `--home DIR` selects the private runtime state directory.
-- `--agent PRODUCT` declares the calling product when resolving or recording use.
+- `--agent PRODUCT` identifies the calling product for retrieval and resolution.
 - `resolve` accepts `--live-only` or `--cache-only`.
 
 Run `skillplane --help` for the authoritative command summary.

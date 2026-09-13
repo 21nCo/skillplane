@@ -5,6 +5,9 @@ import type {
   SkillAmendInput,
   CallerDeclaration,
 } from "@skillplane/mcp-schema";
+import packageJson from "../package.json" with { type: "json" };
+export const CLIENT_NAME = "skillplane-cli";
+export const CLIENT_VERSION = packageJson.version;
 export const safeName = z
   .string()
   .max(64)
@@ -154,8 +157,8 @@ export function declaredCaller(
     modelProvider: "unknown",
     modelName: "unknown",
     modelVersion: "unknown",
-    clientName: "skillplane-cli",
-    clientVersion: "0.1.0",
+    clientName: CLIENT_NAME,
+    clientVersion: CLIENT_VERSION,
     runId: sessionId,
     sessionId,
     conversationId: sessionId,
