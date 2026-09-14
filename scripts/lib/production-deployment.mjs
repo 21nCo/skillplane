@@ -129,20 +129,6 @@ export function productionSecrets() {
   return secrets;
 }
 
-export function productionSecretsForWorker(worker) {
-  if (worker.name === workers.app.name) {
-    return productionSecrets();
-  }
-  return Object.fromEntries(
-    worker.secretNames.map((name) => [
-      name,
-      name === "POSTHOG_PROJECT_TOKEN"
-        ? requirePostHogProjectToken()
-        : requireSecretEnvironment(name),
-    ]),
-  );
-}
-
 export function publicTurnstileSiteKey() {
   const value = requireEnvironment("PUBLIC_TURNSTILE_SITE_KEY", {
     minimumLength: 10,
@@ -275,30 +261,11 @@ export function postgresTlsEvidence(client, serverRow = {}) {
 
 export function productionDatabase() {
   const canonical = process.env.SKILLPLANE_PRODUCTION_DATABASE_URL?.trim();
-  const legacy = process.env.RAILWAY_DATABASE_URL?.trim();
-  if (canonical && legacy) {
-    const canonicalDatabase = parseDirectPostgresUrl(
-      canonical,
-      "SKILLPLANE_PRODUCTION_DATABASE_URL",
-    );
-    const legacyDatabase = parseDirectPostgresUrl(
-      legacy,
-      "legacy RAILWAY_DATABASE_URL",
-    );
-    if (canonicalDatabase.fingerprint !== legacyDatabase.fingerprint) {
-      throw new Error(
-        "SKILLPLANE_PRODUCTION_DATABASE_URL conflicts with legacy RAILWAY_DATABASE_URL",
-      );
-    }
-    return canonicalDatabase;
-  }
   return parseDirectPostgresUrl(
-    canonical || legacy || process.env.MIGRATION_DATABASE_URL?.trim(),
+    canonical || process.env.MIGRATION_DATABASE_URL?.trim(),
     canonical
       ? "SKILLPLANE_PRODUCTION_DATABASE_URL"
-      : legacy
-        ? "legacy RAILWAY_DATABASE_URL"
-        : "SKILLPLANE_PRODUCTION_DATABASE_URL for direct production backup and migration",
+      : "SKILLPLANE_PRODUCTION_DATABASE_URL for direct production backup and migration",
   );
 }
 
