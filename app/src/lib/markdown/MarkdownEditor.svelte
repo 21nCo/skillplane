@@ -7,7 +7,6 @@
     markdownConstraintMessage,
     markdownDiagnostics,
   } from "./diagnostics.js";
-  import { isMarkdownEditorEnabled } from "./flags.js";
   import {
     loadMarkdownEditor,
     type SkillplaneEditorController,
@@ -55,7 +54,6 @@
     oninput?: (event: Event) => void;
   } = $props();
 
-  const enabled = $derived(isMarkdownEditorEnabled(surface));
   const initialValue = value;
   let loadState = $state<MarkdownEditorLoadState>("source-fallback");
   let loadError = $state<string | null>(null);
@@ -72,10 +70,9 @@
   const overCharacters = $derived(
     typeof maxCharacters === "number" ? value.length > maxCharacters : false,
   );
-  const usesVisual = $derived(enabled && mode === "visual" && !readOnly);
+  const usesVisual = $derived(mode === "visual" && !readOnly);
   const showsLabeledSource = $derived(
-    !enabled ||
-      mode === "source" ||
+    mode === "source" ||
       mode === "split" ||
       loadState === "failed" ||
       (mode === "visual" && (!usesVisual || loadState !== "ready")),
@@ -108,10 +105,6 @@
   }
 
   $effect(() => {
-    if (!enabled) {
-      diagnostics = [];
-      return;
-    }
     const source = value;
     const timer = setTimeout(() => {
       diagnostics = markdownDiagnostics(source);
@@ -127,7 +120,7 @@
     if (!browser || !usesVisual) {
       VisualEditor = null;
       controller = null;
-      loadState = enabled ? "source-fallback" : "ready";
+      loadState = "source-fallback";
       loadError = null;
       return;
     }
@@ -169,43 +162,40 @@
 
 <div
   class="markdown-editor"
-  class:legacy={!enabled}
   data-testid="markdown-editor"
   data-surface={surface}
-  data-mode={enabled ? mode : "legacy"}
+  data-mode={mode}
   data-load-state={loadState}
 >
-  {#if enabled}
-    <div class="toolbar">
-      <div class="modes" role="tablist" aria-label={`${label} editor mode`}>
-        {#each [{ id: "source", label: "Source" }, { id: "visual", label: "Visual" }, { id: "split", label: "Split" }, { id: "preview", label: "Preview" }] as tab (tab.id)}
-          <button
-            type="button"
-            role="tab"
-            aria-selected={mode === tab.id}
-            data-testid={`markdown-mode-${tab.id}`}
-            {disabled}
-            onclick={() => selectMode(tab.id as MarkdownEditorMode)}
-          >
-            {tab.label}
-          </button>
-        {/each}
-      </div>
-      <p class="meta" data-testid="markdown-editor-size">
-        {value.length.toLocaleString()} characters
-        {#if typeof maxCharacters === "number"}
-          / {maxCharacters.toLocaleString()}
-        {/if}
-        · {byteLength.toLocaleString()} bytes
-        {#if typeof maxBytes === "number"}
-          / {maxBytes.toLocaleString()}
-        {/if}
-        {#if dirty}
-          · unsaved
-        {/if}
-      </p>
+  <div class="toolbar">
+    <div class="modes" role="tablist" aria-label={`${label} editor mode`}>
+      {#each [{ id: "source", label: "Source" }, { id: "visual", label: "Visual" }, { id: "split", label: "Split" }, { id: "preview", label: "Preview" }] as tab (tab.id)}
+        <button
+          type="button"
+          role="tab"
+          aria-selected={mode === tab.id}
+          data-testid={`markdown-mode-${tab.id}`}
+          {disabled}
+          onclick={() => selectMode(tab.id as MarkdownEditorMode)}
+        >
+          {tab.label}
+        </button>
+      {/each}
     </div>
-  {/if}
+    <p class="meta" data-testid="markdown-editor-size">
+      {value.length.toLocaleString()} characters
+      {#if typeof maxCharacters === "number"}
+        / {maxCharacters.toLocaleString()}
+      {/if}
+      · {byteLength.toLocaleString()} bytes
+      {#if typeof maxBytes === "number"}
+        / {maxBytes.toLocaleString()}
+      {/if}
+      {#if dirty}
+        · unsaved
+      {/if}
+    </p>
+  </div>
 
   <div class="surfaces" class:split={showsLabeledSource && showsPreview}>
     {#if showsLabeledSource}
@@ -288,7 +278,7 @@
     </p>
   {/if}
 
-  {#if enabled && diagnostics.length > 0}
+  {#if diagnostics.length > 0}
     <ul class="diagnostics" aria-label={`${label} diagnostics`}>
       {#each diagnostics as diagnostic, index (diagnostic.code + String(index))}
         <li data-severity={diagnostic.severity}>
