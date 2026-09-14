@@ -81,7 +81,6 @@ export function developmentDatabase() {
   const productionUrls = [
     process.env.SKILLPLANE_PRODUCTION_DATABASE_URL?.trim(),
     process.env.SKILLPLANE_PRODUCTION_MIGRATION_SOURCE_DATABASE_URL?.trim(),
-    process.env.RAILWAY_DATABASE_URL?.trim(),
   ].filter(Boolean);
   if (
     productionUrls.some(
@@ -159,7 +158,6 @@ export function developmentCloudflareEnvironment() {
     "AUTHFN_SECRET",
     "OAUTH_TOKEN_PEPPER",
     "TURNSTILE_SECRET_KEY",
-    "RAILWAY_DATABASE_URL",
     "CLOUDFLARE_API_KEY",
     "CLOUDFLARE_EMAIL",
   ]) {
@@ -185,7 +183,6 @@ export function productionBundleReadEnvironment() {
     "SKILLPLANE_DEV_DATABASE_URL",
     "SKILLPLANE_PRODUCTION_DATABASE_URL",
     "SKILLPLANE_PRODUCTION_MIGRATION_SOURCE_DATABASE_URL",
-    "RAILWAY_DATABASE_URL",
     "CLOUDFLARE_API_KEY",
     "CLOUDFLARE_EMAIL",
   ]) {

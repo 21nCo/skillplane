@@ -61,13 +61,12 @@ PUBLIC_POSTHOG_KEY=phc_development_project_token
 ```
 
 The deployment rejects a database that matches
-`SKILLPLANE_PRODUCTION_DATABASE_URL` (or the temporary legacy
-`RAILWAY_DATABASE_URL`), a cache-enabled or mismatched Hyperdrive, a development
-Hyperdrive ID copied from production, a dirty source tree, a development API
-token reused from an ambient or production token, or generated configuration
-containing production identities. When production secret or Turnstile variables
-are also present in the invoking environment, the deployment additionally
-rejects copied development values.
+`SKILLPLANE_PRODUCTION_DATABASE_URL`, a cache-enabled or mismatched Hyperdrive,
+a development Hyperdrive ID copied from production, a dirty source tree, a
+development API token reused from an ambient or production token, or generated
+configuration containing production identities. When production secret or
+Turnstile variables are also present in the invoking environment, the
+deployment additionally rejects copied development values.
 
 Markdown authoring uses the shared mdfn profile documented in
 [`mdfn.md`](./mdfn.md). Leave the `PUBLIC_SKILLPLANE_MDFN_*` flags unset unless
