@@ -51,9 +51,6 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
-      - name: Unit tests
-        run: pnpm test:unit
-
       - name: Verify McpFn adoption
         run: pnpm mcpfn:verify
 
@@ -65,3 +62,6 @@ jobs:
 
       - name: Lint design system
         run: pnpm lint:design-system
+
+      - name: Unit tests
+        run: pnpm test:unit
