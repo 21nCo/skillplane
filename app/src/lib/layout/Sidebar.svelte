@@ -13,7 +13,7 @@
   import type { WorkspaceStore } from "$lib/workspaces/store.svelte.js";
   import WorkspaceSwitcher from "./WorkspaceSwitcher.svelte";
 
-  export interface NavigationItem {
+  interface NavigationItem {
     readonly href: string;
     readonly label: string;
     readonly icon: typeof SquaresFourIcon;
