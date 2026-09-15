@@ -33,8 +33,8 @@ jobs:
       - name: Build reviewed native dependencies
         run: pnpm rebuild esbuild
 
-      - name: Preflight
-        run: pnpm preflight
+      - name: Check AuthFn schema lock
+        run: pnpm authfn-schema:check
 
       - name: Lint
         run: pnpm lint
