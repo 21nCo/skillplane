@@ -3,7 +3,7 @@ import {
   type SkillplaneDatafnClient,
 } from "@skillplane/datafn/client";
 
-export class SkillplaneDatafnReadError extends Error {
+class SkillplaneDatafnReadError extends Error {
   readonly code: string;
 
   constructor(code: string, message: string) {
