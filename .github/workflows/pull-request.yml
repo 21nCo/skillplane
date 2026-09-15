@@ -6,6 +6,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   verify:
     runs-on: ubuntu-latest
@@ -32,6 +36,11 @@ jobs:
 
       - name: Build reviewed native dependencies
         run: pnpm rebuild esbuild
+
+      - name: Generate framework types
+        run: |
+          pnpm --filter @skillplane/app sync
+          pnpm --filter @skillplane/docs exec fumadocs-mdx
 
       - name: Check AuthFn schema lock
         run: pnpm authfn-schema:check
