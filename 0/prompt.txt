@@ -1,0 +1,5 @@
+perform a thorough read-only code review of all current local changes in this worktree
+
+---
+
+did you check completeness against the Linear issue>

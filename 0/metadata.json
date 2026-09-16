@@ -1,0 +1,79 @@
+{
+  "cli_version": "0.10.6",
+  "checkpoint_id": "01M2MVSE2VGEAA7WGMD9Y4FQKW",
+  "session_id": "01a0a9b0-d350-7280-93ae-c8965ef0ccf7",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-16T10:21:53.313823Z",
+  "branch": "SKI-17",
+  "checkpoints_count": 2,
+  "save_step_count": 2,
+  "files_touched": [
+    "packages/datafn/src/server.ts",
+    "packages/datafn/tests/integration/read-model.integration.test.ts",
+    "pnpm-lock.yaml",
+    "pnpm-workspace.yaml"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.6-sol",
+  "turn_id": "42e97a33e40d",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 169559,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 5390592,
+    "output_tokens": 18906,
+    "api_call_count": 52
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-09-16T10:21:53.246445Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 92,
+    "total_committed": 0,
+    "total_lines_changed": 92,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 746,
+      "user_lines_removed": 92,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.json": 90,
+        ".factory/settings.json": 85,
+        ".opencode/plugins/entire.ts": 269,
+        ".pi/extensions/entire/index.ts": 147,
+        "packages/datafn/src/server.ts": 2,
+        "packages/datafn/tests/integration/read-model.integration.test.ts": 82,
+        "pnpm-lock.yaml": 62,
+        "pnpm-workspace.yaml": 9
+      },
+      "user_removed_per_file": {
+        "packages/datafn/src/server.ts": 39,
+        "pnpm-lock.yaml": 44,
+        "pnpm-workspace.yaml": 9
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 591,
+      "user_lines_removed": 0,
+      "agent_lines_added": 155,
+      "agent_lines_removed": 92,
+      "user_added_per_file": {
+        ".claude/settings.json": 90,
+        ".factory/settings.json": 85,
+        ".opencode/plugins/entire.ts": 269,
+        ".pi/extensions/entire/index.ts": 147
+      }
+    }
+  ]
+}
