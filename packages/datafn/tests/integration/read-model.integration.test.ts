@@ -158,6 +158,51 @@ describe.each(["combined", "regional"] as const)(
         expect(serialized).not.toContain(tenantB.skillId);
       });
 
+      it("round-trips date-valued cursors across skill pages", async () => {
+        const firstResponse = await handle(
+          request(tenantA, "/datafn/query", {
+            resource: "skills",
+            version: 1,
+            select: ["id", "updatedAt"],
+            sort: ["-updatedAt", "id"],
+            limit: 1,
+          }),
+        );
+        expect(firstResponse.status).toBe(200);
+        const firstPage = (await firstResponse.json()).result;
+        expect(firstPage.data).toHaveLength(1);
+        expect(firstPage.nextCursor).toMatchObject({
+          updatedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/u),
+          id: expect.any(String),
+        });
+
+        const secondResponse = await handle(
+          request(tenantA, "/datafn/query", {
+            resource: "skills",
+            version: 1,
+            select: ["id", "updatedAt"],
+            sort: ["-updatedAt", "id"],
+            cursor: { after: firstPage.nextCursor },
+            limit: 1,
+          }),
+        );
+        expect(secondResponse.status).toBe(200);
+        const secondPage = (await secondResponse.json()).result;
+        expect(secondPage.data).toHaveLength(1);
+        expect(secondPage.data[0].id).not.toBe(firstPage.data[0].id);
+        const ordered = [firstPage.data[0], secondPage.data[0]] as {
+          id: string;
+          updatedAt: string;
+        }[];
+        expect(ordered).toEqual(
+          [...ordered].toSorted((left, right) =>
+            left.updatedAt === right.updatedAt
+              ? left.id.localeCompare(right.id)
+              : right.updatedAt.localeCompare(left.updatedAt),
+          ),
+        );
+      });
+
       it("expands current skill version metadata in one tenant-filtered query", async () => {
         const response = await handle(
           request(tenantA, "/datafn/query", {

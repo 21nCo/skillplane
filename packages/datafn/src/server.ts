@@ -7,7 +7,12 @@ import {
 } from "@datafn/server";
 import { resolveUserPrincipal, type DatabaseClient } from "@skillplane/db";
 import type { Principal } from "@skillplane/domain";
-import type { IndexedDirectoryStoreAdapter } from "@superfunctions/db";
+import type {
+  Adapter,
+  FindManyParams,
+  FindOneParams,
+  IndexedDirectoryStoreAdapter,
+} from "@superfunctions/db";
 import { collectDatafnStructuralResources } from "./resource-selectors.js";
 import { DATAFN_RESOURCE_NAMES, skillplaneDatafnSchema } from "./schema.js";
 
@@ -33,6 +38,32 @@ export interface CreateSkillplaneDatafnServerInput {
   readonly onTiming?: (event: Readonly<Record<string, unknown>>) => void;
 }
 
+function normalizeRecordDates<T>(value: T): T {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([key, field]) => [
+      key,
+      field instanceof Date ? field.toISOString() : field,
+    ]),
+  ) as T;
+}
+
+/**
+ * Keep database rows and JSON-round-tripped cursors comparable. Only direct
+ * Date fields are normalized; nested JSON and relation arrays stay untouched.
+ */
+function createCursorStableReadAdapter(adapter: Adapter): Adapter {
+  return {
+    ...adapter,
+    findOne: async <T = unknown>(params: FindOneParams) => {
+      const record = await adapter.findOne<T>(params);
+      return record ? normalizeRecordDates(record) : null;
+    },
+    findMany: async <T = unknown>(params: FindManyParams) =>
+      (await adapter.findMany<T>(params)).map(normalizeRecordDates),
+  };
+}
+
 export async function createSkillplaneDatafnServer(
   input: CreateSkillplaneDatafnServerInput,
 ): Promise<DatafnServer<SkillplaneDatafnContext>> {
@@ -47,7 +78,7 @@ export async function createSkillplaneDatafnServer(
       : null;
   return createDatafnServer<SkillplaneDatafnContext>({
     schema: skillplaneDatafnSchema,
-    database: input.database.adapter,
+    database: createCursorStableReadAdapter(input.database.adapter),
     ...(multiRegion ? { plugins: [multiRegion] } : {}),
     allowUnknownResources: false,
     debug: input.debug ?? false,
