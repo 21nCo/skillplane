@@ -1,9 +1,11 @@
 ---
 title: MCP tools
-description: The user-facing Skillplane MCP catalog, grouped by discovery, retrieval, lifecycle, context, and improvement.
+description: The user-facing Skillplane MCP catalog, grouped by discovery, retrieval, usage, composition, verification, lifecycle, context, and improvement.
 ---
 
-The hosted Streamable HTTP endpoint is `https://mcp.skillplane.dev/mcp`. Tool availability is stable, but every call is authorization-filtered.
+The hosted Streamable HTTP endpoint is `https://mcp.skillplane.dev/mcp`. The live server registers 39 tools. Tool availability is stable, but every call is authorization-filtered.
+
+Format-v2 composition writes (`skill_composition_candidate_create`, `skill_dependency_upgrade`, and creating a composed skill) remain registered when `SKILL_COMPOSITION_WRITES_ENABLED` is off; those writes fail closed until the operator enables them. Resolution, verification-plan reads, upgrade previews, and v1 skill creation stay available.
 
 ## Discover and retrieve
 
@@ -16,6 +18,30 @@ The hosted Streamable HTTP endpoint is `https://mcp.skillplane.dev/mcp`. Tool av
 | `skill_asset_retrieve` | Retrieve one safe file from an exact version                                       |
 | `skill_versions_list`  | List immutable visible version history                                             |
 | `skill_versions_diff`  | Compare two exact versions by file digest and safe text changes                    |
+
+## Observed usage
+
+| Tool                 | Purpose                                                                                         |
+| -------------------- | ----------------------------------------------------------------------------------------------- |
+| `skill_usage_report` | Report a client-observed event for an exact skill version. Deduplicated by event ID. Not proof. |
+
+## Compose and verify
+
+Format-v2 composition is MCP-native. Call `skill_resolve` for the locked dependency closure, execution modules, invocation edges, and inherited verification obligations. Do not execute only the parent while omitting dependencies. See the repository's [`docs/architecture/skill-composition.md`](https://github.com/21nCo/skillplane/blob/main/docs/architecture/skill-composition.md).
+
+| Tool                                 | Purpose                                                                                           |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------- |
+| `skill_resolve`                      | Return the exact locked DAG, namespaced modules, invocation boundaries, and verification plan     |
+| `skill_verification_plan_get`        | Retrieve verifier instructions and inherited claims without execution instructions                |
+| `skill_execution_report`             | Record repository, commit, and environment under the authenticated executor. Not proof of success |
+| `skill_composition_candidate_create` | Author dependencies and optional verifier files as a reviewable parent candidate. Gated writes.   |
+| `skill_dependency_upgrades_get`      | Preview compatible upgrades and the exact closure diff without changing published versions        |
+| `skill_dependency_upgrade`           | Resolve newer compatible dependencies into a reviewable parent candidate. Gated writes.           |
+| `skill_version_lifecycle_update`     | Deprecate or permanently revoke a published version. Revocation fails dependent retrieval closed  |
+| `skill_verification_run_start`       | Start an independent verifier run tied to the locked closure, commit, and environment             |
+| `skill_verification_run_get`         | Read workspace-private claim results and hashed evidence references                               |
+| `skill_verification_evidence_add`    | Attach redacted evidence references and SHA-256 digests to a claim in the locked plan             |
+| `skill_verification_run_complete`    | Freeze the attestation and evidence manifest                                                      |
 
 ## Skill lifecycle
 
