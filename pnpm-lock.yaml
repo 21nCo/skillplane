@@ -31,14 +31,14 @@ catalogs:
       specifier: 5.20260722.1
       version: 5.20260722.1
     '@datafn/client':
-      specifier: 0.1.0
-      version: 0.1.0
-    '@datafn/core':
-      specifier: 0.1.0
-      version: 0.1.0
-    '@datafn/server':
       specifier: 0.1.1
       version: 0.1.1
+    '@datafn/core':
+      specifier: 0.1.1
+      version: 0.1.1
+    '@datafn/server':
+      specifier: 0.1.3
+      version: 0.1.3
     '@fontsource-variable/dm-sans':
       specifier: 5.3.0
       version: 5.3.0
@@ -55,8 +55,8 @@ catalogs:
       specifier: 1.62.0
       version: 1.62.0
     '@superfunctions/db':
-      specifier: 0.2.0
-      version: 0.2.0
+      specifier: 0.2.1
+      version: 0.2.1
     '@sveltejs/adapter-cloudflare':
       specifier: 7.2.9
       version: 7.2.9
@@ -447,7 +447,7 @@ importers:
     dependencies:
       '@datafn/server':
         specifier: 'catalog:'
-        version: 0.1.1(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
+        version: 0.1.3(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
       '@skillplane/auth':
         specifier: workspace:*
         version: link:../auth
@@ -557,7 +557,7 @@ importers:
         version: link:../observability
       '@superfunctions/db':
         specifier: 'catalog:'
-        version: 0.2.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
+        version: 0.2.1(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
       authfn:
         specifier: 'catalog:'
         version: 0.2.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
@@ -595,10 +595,10 @@ importers:
     dependencies:
       '@datafn/server':
         specifier: 'catalog:'
-        version: 0.1.1(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
+        version: 0.1.3(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
       '@superfunctions/db':
         specifier: 'catalog:'
-        version: 0.2.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
+        version: 0.2.1(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
       zod:
         specifier: 'catalog:'
         version: 4.4.3
@@ -614,13 +614,13 @@ importers:
     dependencies:
       '@datafn/client':
         specifier: 'catalog:'
-        version: 0.1.0
+        version: 0.1.1
       '@datafn/core':
         specifier: 'catalog:'
-        version: 0.1.0
+        version: 0.1.1
       '@datafn/server':
         specifier: 'catalog:'
-        version: 0.1.1(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
+        version: 0.1.3(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
       '@skillplane/db':
         specifier: workspace:*
         version: link:../db
@@ -629,7 +629,7 @@ importers:
         version: link:../domain
       '@superfunctions/db':
         specifier: 'catalog:'
-        version: 0.2.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
+        version: 0.2.1(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
       authfn:
         specifier: 'catalog:'
         version: 0.2.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
@@ -672,7 +672,7 @@ importers:
         version: link:../domain
       '@superfunctions/db':
         specifier: 'catalog:'
-        version: 0.2.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
+        version: 0.2.1(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
       authfn:
         specifier: 'catalog:'
         version: 0.2.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
@@ -1201,10 +1201,6 @@ packages:
     resolution: {integrity: sha512-TaWbfYCwnuOSvDSrgs7QgoaoXse49E7LzUkVOUhoezwB7bkmhp+iojADm7UepCEu4021SquD7NG1xA+WCvmldA==}
     engines: {node: '>=20.0.0'}
 
-  '@aws-sdk/signature-v4-multi-region@3.996.42':
-    resolution: {integrity: sha512-DBV4naZP6HYBlAvPpoQzOP12Wvfou/5rN8yJPXjBTBylU5qwCbh/tXr2MddHoIjgoRkEl/eS+IljiUqvmwey1Q==}
-    engines: {node: '>=20.0.0'}
-
   '@aws-sdk/signature-v4-multi-region@3.996.43':
     resolution: {integrity: sha512-lKekx8bLBXSv4O+cslk9Zfnw2XKSkWBs3uWL5QGhH2ZAQfNS7FE0vcSSN2vD/AhxX54ZTywWxR4STThoeOXlBA==}
     engines: {node: '>=20.0.0'}
@@ -1345,15 +1341,15 @@ packages:
     resolution: {integrity: sha512-IchNf6dN4tHoMFIn/7OE8LWZ19Y6q/67Bmf6vnGREv8RSbBVb9LPJxEcnwrcwX6ixSvaiGoomAUvu4YSxXrVgw==}
     engines: {node: '>=12'}
 
-  '@datafn/client@0.1.0':
-    resolution: {integrity: sha512-ITYg9/lfK+jnHiZ8NNdo4ocsdsyAbQnAFPb8EZr5zr8MxyNpXuq5Eo6DuGnWw8uT6nWvVXM3DepRRKXDrtg8LA==}
+  '@datafn/client@0.1.1':
+    resolution: {integrity: sha512-mVGIyvGiF/gbnWObFDVtc/3nUYqOp+hyCKrKvGo+yXPmbZNSoAMWsbgmTxFgPNm5CyN152DghUv5dagFYuRBqw==}
 
-  '@datafn/core@0.1.0':
-    resolution: {integrity: sha512-23m5c1bqkATc8IdqS6BIHktClkNcSHW+9pTcanov4q++GKx6gOQ09oIA1DHToqDD9fPyFK3iW0Nh5syaM3aDgA==}
+  '@datafn/core@0.1.1':
+    resolution: {integrity: sha512-1RjCenK82p6PTbEUTwyjbDJXLtguIZNQVxc7rDonnPkeSjuVSADk7rdr/fcjqTBsJtHJIu/4OklHyDlL6VjxGQ==}
     engines: {node: '>=18.18.0'}
 
-  '@datafn/server@0.1.1':
-    resolution: {integrity: sha512-09T6sA5s96D5Oj4wHyW2VHr7bkuVUD3omZTv5Tf22/xtmmMcX+aisES4LMopPbqTjaMQSFNV6oDfasUJlzM81g==}
+  '@datafn/server@0.1.3':
+    resolution: {integrity: sha512-hX+x1eDLsHtPBbRKyy52KBTtcVEOfbk8y/KC+2TemPwm6AJiyzcqU5bFZgNFJqkPzMA9ctf5sJ7mXSpN3ozvog==}
     engines: {node: '>=18.18.0'}
 
   '@dotenvx/dotenvx@1.31.0':
@@ -3492,6 +3488,21 @@ packages:
       mongodb:
         optional: true
 
+  '@superfunctions/db@0.2.1':
+    resolution: {integrity: sha512-1ZOzy437yoX/2mQTjN00B0nolHRDCCvoMFuuEzJXOG6+/ft2vFPk4aQexKcC/f2Cj/lxjp2kBr/wqSQfCwTBRw==}
+    peerDependencies:
+      '@prisma/client': '>=6.0.0'
+      drizzle-orm: '>=0.35.0'
+      kysely: '>=0.28.0'
+      mongodb: '>=6.0.0'
+    peerDependenciesMeta:
+      '@prisma/client':
+        optional: true
+      kysely:
+        optional: true
+      mongodb:
+        optional: true
+
   '@superfunctions/delivery@0.1.0':
     resolution: {integrity: sha512-ZszY8CArsOgl36eWLHUPMT12o3Q9gaOoFK70vG8cqXqt3GIxPG+YJNRu9hA3Eq8e0hVjbVSqrD0zXGxtTo0wLA==}
 
@@ -3509,6 +3520,9 @@ packages:
 
   '@superfunctions/http@0.2.0':
     resolution: {integrity: sha512-t4vDDXGu+h0/Yjn0KiEYuNsNB84JyOAJToZaYodDtAHIT3HVAIT6GbSxMOQJV83gw8XxyuCE8JqhFqKXFGfmog==}
+
+  '@superfunctions/http@0.3.0':
+    resolution: {integrity: sha512-G1JFyzfWGpAgTlnfDVMMJ8tT/g207WN5CyfhQL2kOwaBWlYOkF+qUkQ2zS2mB1N5/IhDpQ8Qdf5e0Ot+ssIJmg==}
 
   '@superfunctions/oauth-core@0.0.1':
     resolution: {integrity: sha512-rInZ3CdZ5oGmV5FuZ/lqJm6SPj8nSRW+qqKq1PWgTOtd0mLCQzQBAiDxhRnfofetQjCHA/8KKTCbjYz0B2sPTA==}
@@ -7372,7 +7386,7 @@ snapshots:
     dependencies:
       '@aws-sdk/core': 3.977.9
       '@aws-sdk/nested-clients': 3.997.35
-      '@aws-sdk/types': 3.974.2
+      '@aws-sdk/types': 3.974.5
       '@smithy/core': 3.33.3
       '@smithy/types': 4.17.2
       tslib: 2.8.1
@@ -7511,8 +7525,8 @@ snapshots:
   '@aws-sdk/nested-clients@3.997.35':
     dependencies:
       '@aws-sdk/core': 3.977.9
-      '@aws-sdk/signature-v4-multi-region': 3.996.42
-      '@aws-sdk/types': 3.974.2
+      '@aws-sdk/signature-v4-multi-region': 3.996.43
+      '@aws-sdk/types': 3.974.5
       '@smithy/core': 3.33.3
       '@smithy/fetch-http-handler': 5.6.11
       '@smithy/node-http-handler': 4.9.11
@@ -7530,13 +7544,6 @@ snapshots:
       '@aws-sdk/types': 3.974.5
       '@smithy/protocol-http': 5.5.16
       '@smithy/signature-v4': 5.6.10
-      '@smithy/types': 4.16.1
-      tslib: 2.8.1
-
-  '@aws-sdk/signature-v4-multi-region@3.996.42':
-    dependencies:
-      '@aws-sdk/types': 3.974.2
-      '@smithy/signature-v4': 5.6.12
       '@smithy/types': 4.17.2
       tslib: 2.8.1
 
@@ -7551,7 +7558,7 @@ snapshots:
     dependencies:
       '@aws-sdk/core': 3.977.9
       '@aws-sdk/nested-clients': 3.997.35
-      '@aws-sdk/types': 3.974.2
+      '@aws-sdk/types': 3.974.5
       '@smithy/core': 3.33.3
       '@smithy/types': 4.17.2
       tslib: 2.8.1
@@ -7727,19 +7734,19 @@ snapshots:
     dependencies:
       '@jridgewell/trace-mapping': 0.3.9
 
-  '@datafn/client@0.1.0':
+  '@datafn/client@0.1.1':
     dependencies:
-      '@datafn/core': 0.1.0
+      '@datafn/core': 0.1.1
       '@superfunctions/http': 0.2.0
       minisearch: 7.2.0
 
-  '@datafn/core@0.1.0': {}
+  '@datafn/core@0.1.1': {}
 
-  '@datafn/server@0.1.1(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))':
+  '@datafn/server@0.1.3(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))':
     dependencies:
-      '@datafn/core': 0.1.0
-      '@superfunctions/db': 0.2.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
-      '@superfunctions/http': 0.2.0
+      '@datafn/core': 0.1.1
+      '@superfunctions/db': 0.2.1(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
+      '@superfunctions/http': 0.3.0
       '@superfunctions/observability': 0.0.1
     transitivePeerDependencies:
       - '@prisma/client'
@@ -9597,6 +9604,13 @@ snapshots:
       '@superfunctions/observability': 0.0.1
       drizzle-orm: 0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0)
 
+  '@superfunctions/db@0.2.1(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))':
+    dependencies:
+      '@aws-sdk/client-dynamodb': 3.984.0
+      '@aws-sdk/lib-dynamodb': 3.1120.0(@aws-sdk/client-dynamodb@3.984.0)
+      '@superfunctions/observability': 0.0.1
+      drizzle-orm: 0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0)
+
   '@superfunctions/delivery@0.1.0': {}
 
   '@superfunctions/http-openapi@0.0.1':
@@ -9612,6 +9626,10 @@ snapshots:
   '@superfunctions/http@0.1.3': {}
 
   '@superfunctions/http@0.2.0':
+    dependencies:
+      '@superfunctions/observability': 0.0.1
+
+  '@superfunctions/http@0.3.0':
     dependencies:
       '@superfunctions/observability': 0.0.1
 
