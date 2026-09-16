@@ -1,0 +1,1 @@
+fix any still valid findings and merge the PR and publish the npm pakcge
