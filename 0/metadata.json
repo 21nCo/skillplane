@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.10.6",
+  "checkpoint_id": "155c347a82f2",
+  "session_id": "53b5e45e-9d51-46dc-995c-c638259427c4",
+  "strategy": "import",
+  "created_at": "2026-09-16T09:47:59.266658097Z",
+  "commit_sha": "3fe6828ad58e3583707ccc9b2a37150d77b2c75a",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "agent": "Factory AI Droid",
+  "model": "claude-opus-4-8",
+  "checkpoint_transcript_start": 7,
+  "transcript_lines_at_start": 7,
+  "compact_transcript_start": 6,
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0
+  },
+  "kind": "imported"
+}
