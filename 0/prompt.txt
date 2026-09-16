@@ -1,0 +1,3 @@
+<send_user_message_question_reply>
+[{"questionItemId":"[\"request_user_input_async\",\"REDACTED\",0]","question":"The SonarQube listing skill requires its CLI, but `sonar` is not installed. May I run sonar-integrate to install/configure it and verify authentication? That skill also configures the MCP integration and secrets-scanning hooks. This confirmation is required by `/Users/serro/.codex/plugins/cache/openai-curated-remote/sonarqube/2.5.0/skills/sonar-list-issues/SKILL.md`: “Then ask the user (yes/no) whether to run the sonar-integrate skill now.” I’ll continue the PR fixes meanwhile.","answer":"use sonarqube MCP if available - otherwise ignore"}]
+</send_user_message_question_reply>
