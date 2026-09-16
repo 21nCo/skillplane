@@ -1,6 +1,6 @@
 <script lang="ts">
+  import { ErrorState } from "@skillplane/ui";
   import { apiRequest, jsonBody, SkillplaneApiError } from "$lib/api/client.js";
-  import AsyncState from "$lib/components/AsyncState.svelte";
   import {
     useWorkspaceStore,
     type WorkspaceRole,
@@ -253,9 +253,9 @@
       <div class="skeleton"></div>
     </section>
   {:else if error}
-    <AsyncState
+    <ErrorState
       title="Member access could not be loaded"
-      message={error}
+      description={error}
       retry={() => void load()}
     />
   {:else}

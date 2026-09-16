@@ -1,6 +1,7 @@
 <script lang="ts">
+  import { ErrorState } from "@skillplane/ui";
   import { apiRequest, jsonBody, SkillplaneApiError } from "$lib/api/client.js";
-  import AsyncState from "$lib/components/AsyncState.svelte";
+  import SkillState from "$lib/skills/SkillState.svelte";
   import { useWorkspaceStore } from "$lib/workspaces/store.svelte.js";
   import {
     BuildingsIcon as Buildings,
@@ -207,13 +208,14 @@
       <span></span><span></span><span></span>
     </div>
   {:else if store.error}
-    <AsyncState
+    <ErrorState
       title="Workspaces could not be loaded"
-      message={store.error}
+      description={store.error}
       retry={() => void store.load()}
     />
   {:else if store.workspaces.length === 0}
-    <AsyncState
+    <SkillState
+      kind="empty"
       title="No workspace is available"
       message="Retry personal workspace setup. If this continues, contact support with the request reference."
       retry={() => void store.load()}
