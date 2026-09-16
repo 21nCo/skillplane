@@ -1,4 +1,4 @@
-import { stableJson, type CanonicalBundle } from "@skillplane/storage";
+import type { CanonicalBundle } from "@skillplane/storage";
 import { hash } from "./files.js";
 
 /** Conservative envelope: all frontmatter, script bytes, and declared network
@@ -63,5 +63,3 @@ export function trustExpands(previous: TrustEnvelope, next: TrustEnvelope): bool
     )
   );
 }
-export const trustDigest = (envelope: TrustEnvelope): string =>
-  hash(stableJson(envelope));
