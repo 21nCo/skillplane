@@ -207,26 +207,54 @@ cloud-hosted client can connect to it.
 
 ### Exposed tools
 
-Skillplane currently exposes:
+Skillplane currently exposes 39 tools on the live MCP server.
+
+Discover and retrieve:
 
 - `workspaces_list`
 - `skills_list`
 - `skills_search`
 - `skill_retrieve`
-- `skill_usage_report`
 - `skill_asset_retrieve`
 - `skill_versions_list`
 - `skill_versions_diff`
+
+Observed usage:
+
+- `skill_usage_report`
+
+Native composition and verification (format-v2 is MCP-native; do not stitch only the parent skill):
+
+- `skill_resolve`
+- `skill_verification_plan_get`
+- `skill_execution_report`
+- `skill_composition_candidate_create`
+- `skill_dependency_upgrades_get`
+- `skill_dependency_upgrade`
+- `skill_version_lifecycle_update`
+- `skill_verification_run_start`
+- `skill_verification_run_get`
+- `skill_verification_evidence_add`
+- `skill_verification_run_complete`
+
+Skill lifecycle:
+
 - `skill_create`
 - `skill_visibility_update`
 - `skill_archive`
 - `skill_restore`
+
+Improve and review:
+
 - `skill_amend`
 - `skill_candidates_list`
 - `skill_candidate_approve`
 - `skill_candidate_reject`
 - `skill_amendment_policy_get`
 - `skill_amendment_policy_update`
+
+Contexts:
+
 - `contexts_list`
 - `context_get`
 - `context_create`
@@ -237,6 +265,10 @@ Skillplane currently exposes:
 - `context_notes_list`
 - `context_knowledge_update`
 - `context_note_upsert`
+
+For a composed (format-v2) skill, call `skill_resolve` for the locked dependency
+closure and verification plan rather than executing only the parent. See
+`docs/architecture/skill-composition.md`.
 
 To retrieve all of the authenticated principal's skills without already knowing
 a workspace ID, call `workspaces_list`, then call `skills_list` for each returned
