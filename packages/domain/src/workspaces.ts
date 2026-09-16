@@ -47,12 +47,3 @@ export function normalizeWorkspaceSlug(value: unknown): string {
   }
   return slug;
 }
-
-export function personalWorkspaceSlug(userId: string): string {
-  const stable = userId
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-|-$/g, "")
-    .slice(-32);
-  return `personal-${stable || "workspace"}`;
-}
