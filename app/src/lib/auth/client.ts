@@ -4,7 +4,7 @@ import {
   type AuthFnSession,
 } from "@authfn/client";
 
-export type OtpPurpose = "sign-up";
+type OtpPurpose = "sign-up";
 export interface OtpContext {
   readonly email: string;
   readonly purpose: OtpPurpose;

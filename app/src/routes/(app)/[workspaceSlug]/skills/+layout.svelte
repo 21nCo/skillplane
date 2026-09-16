@@ -1,22 +1,17 @@
 <script lang="ts">
   import { useWorkspaceStore } from "$lib/workspaces/store.svelte.js";
   import { resolve } from "$app/paths";
+  import { page } from "$app/state";
   import { Button } from "@skillplane/ui";
   import { WarningCircleIcon } from "phosphor-svelte";
   import type { Snippet } from "svelte";
-  import type { LayoutData } from "./$types";
 
-  let {
-    data,
-    children,
-  }: {
-    data: LayoutData;
-    children: Snippet;
-  } = $props();
+  let { children }: { children: Snippet } = $props();
   const workspaces = useWorkspaceStore();
   const workspace = $derived(
-    workspaces.workspaces.find((candidate) => candidate.slug === data.workspaceSlug) ??
-      null,
+    workspaces.workspaces.find(
+      (candidate) => candidate.slug === page.params.workspaceSlug,
+    ) ?? null,
   );
 
   $effect(() => {
