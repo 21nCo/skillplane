@@ -1,0 +1,1 @@
+Error: 400 Invalid schema for function 'Skillplane___skills_search': '^[\\p{L}\\p{N}._:-]+$' is not a 'regex'.
