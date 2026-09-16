@@ -3,7 +3,7 @@
   import { LockKeyIcon, MagnifyingGlassIcon, WarningCircleIcon } from "phosphor-svelte";
   import type { Snippet } from "svelte";
 
-  type StateKind = "loading" | "empty" | "error" | "authorization" | "conflict";
+  type StateKind = "loading" | "empty" | "error" | "authorization";
 
   let {
     kind,
@@ -29,8 +29,8 @@
 {:else}
   <section
     class="state"
-    class:error={kind === "error" || kind === "conflict"}
-    role={kind === "error" || kind === "conflict" ? "alert" : "status"}
+    class:error={kind === "error"}
+    role={kind === "error" ? "alert" : "status"}
   >
     <span class="icon" aria-hidden="true">
       {#if kind === "authorization"}
