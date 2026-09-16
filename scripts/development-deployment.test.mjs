@@ -120,7 +120,6 @@ describe("development deployment isolation", () => {
         SKILLPLANE_DEV_DATABASE_URL: developmentUrl,
         SKILLPLANE_PRODUCTION_DATABASE_URL:
           "postgresql://skillplane:prod-secret@new.provider.example/skillplane",
-        RAILWAY_DATABASE_URL: undefined,
       },
       () => assert.equal(developmentDatabase().identity.host, "old.provider.example"),
     );
@@ -128,26 +127,17 @@ describe("development deployment isolation", () => {
       {
         SKILLPLANE_DEV_DATABASE_URL: developmentUrl,
         SKILLPLANE_PRODUCTION_DATABASE_URL: developmentUrl,
-        RAILWAY_DATABASE_URL: undefined,
       },
       () => assert.throws(() => developmentDatabase(), /identities must be different/u),
     );
-    for (const productionVariable of [
-      "SKILLPLANE_PRODUCTION_MIGRATION_SOURCE_DATABASE_URL",
-      "RAILWAY_DATABASE_URL",
-    ]) {
-      withEnvironment(
-        {
-          SKILLPLANE_DEV_DATABASE_URL: developmentUrl,
-          SKILLPLANE_PRODUCTION_DATABASE_URL: undefined,
-          SKILLPLANE_PRODUCTION_MIGRATION_SOURCE_DATABASE_URL: undefined,
-          RAILWAY_DATABASE_URL: undefined,
-          [productionVariable]: developmentUrl,
-        },
-        () =>
-          assert.throws(() => developmentDatabase(), /identities must be different/u),
-      );
-    }
+    withEnvironment(
+      {
+        SKILLPLANE_DEV_DATABASE_URL: developmentUrl,
+        SKILLPLANE_PRODUCTION_DATABASE_URL: undefined,
+        SKILLPLANE_PRODUCTION_MIGRATION_SOURCE_DATABASE_URL: developmentUrl,
+      },
+      () => assert.throws(() => developmentDatabase(), /identities must be different/u),
+    );
   });
 
   it("requires the development bundle bucket to remain private", () => {

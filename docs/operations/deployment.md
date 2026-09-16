@@ -5,19 +5,14 @@ failure behavior, workspace moves, outages, and key rotation, see
 [`global-control-plane.md`](./global-control-plane.md). The topology manifest
 must be validated and every private cell deployed before enabling gateway mode.
 
-The checked-in transition deployment still deploys the single-cell Skillplane
-app and MCP Workers backed by one PostgreSQL database and one private R2 bucket.
-The multi-cell renderer in `scripts/lib/topology-deployment.mjs` generates the
-next-stage canonical app/MCP gateways plus private app/MCP workers for every
-cell in `deployment/topology.production.json`. It requires separate control and
-cell Hyperdrive IDs and separate public/regional bucket names. Generated cell
-workers have no route, no `workers.dev` exposure, no downstream service
-bindings, and no Email Service binding. Promotion of those generated configs is
-an explicit rollout step after the cells and projection drainer are provisioned;
-it is not an automatic side effect of the legacy `deploy:all` command.
+Production deploys through `scripts/deploy-topology.mjs`. The renderer in
+`scripts/lib/topology-deployment.mjs` generates canonical app/MCP gateways plus
+private app/MCP workers for every cell in `deployment/topology.production.json`.
+It requires separate control and cell Hyperdrive IDs and separate public/regional
+bucket names. Generated cell workers have no route, no `workers.dev` exposure,
+no downstream service bindings, and no Email Service binding.
 
-The
-landing Worker is maintained and deployed independently from the 21n monorepo's
+The landing Worker is maintained and deployed independently from the 21n monorepo's
 `landing/skillplane` workspace. The production hosts are
 `skillplane.dev`, `app.skillplane.dev`, `mcp.skillplane.dev`, and the PostHog
 reverse proxy at `user.skillplane.dev`.
@@ -45,11 +40,11 @@ Before the first release:
    Hyperdrive read, R2 read/write, and Email Sending permissions. The zone must
    be active in the same Cloudflare account.
 
-`pnpm deploy:all` creates `skillplane-skill-bundles` only when it is absent. If
-the bucket has no lifecycle action, it adds only a seven-day incomplete
-multipart upload abort rule. It then refuses deployment if the bucket has an
-object-expiration or storage transition rule, an enabled `r2.dev` URL, or a
-custom domain. Published skill bundles never receive age-based deletion.
+`pnpm deploy:all` verifies every public and regional R2 bucket already exists
+with private access and a safe lifecycle. It refuses deployment if a bucket is
+missing, has an object-expiration or storage transition rule, an enabled
+`r2.dev` URL, or a custom domain. Published skill bundles never receive
+age-based deletion.
 
 ## Required process inputs
 
@@ -110,10 +105,6 @@ Provider URLs using PostgreSQL 17's `sslrootcert=system` hint are normalized for
 TLS evidence accepts either a certificate-authorized client socket or the
 server's `pg_stat_ssl` confirmation, so providers that terminate TLS at a
 PostgreSQL proxy remain verifiable without weakening transport security.
-
-`RAILWAY_DATABASE_URL` remains a temporary compatibility alias. New setups must
-use `SKILLPLANE_PRODUCTION_DATABASE_URL`; if both are present they must resolve
-to the same database identity.
 
 The production Hyperdrive configuration must have SQL response caching disabled.
 Skillplane is an authorization and mutation control plane, so stale cached reads
