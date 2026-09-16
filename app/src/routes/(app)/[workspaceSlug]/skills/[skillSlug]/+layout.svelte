@@ -110,7 +110,8 @@
       kind="error"
       title="Skill could not be loaded"
       message={detail.error ?? "The skill does not exist or access was removed."}
-      retry={() => workspace && skillSlug && void detail.load(workspace.id, skillSlug, true)}
+      retry={() =>
+        workspace && skillSlug && void detail.load(workspace.id, skillSlug, true)}
     />
   </main>
 {:else}
