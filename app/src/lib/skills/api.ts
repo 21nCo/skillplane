@@ -168,20 +168,6 @@ export async function getSkillFile(options: {
   );
 }
 
-export async function getSkillBundle(options: {
-  readonly workspaceId: string;
-  readonly skillId: string;
-  readonly versionId: string;
-}): Promise<Uint8Array> {
-  const response = await rawFileRequest(
-    `/api/v1/skills/${encodeURIComponent(
-      options.skillId,
-    )}/versions/${encodeURIComponent(options.versionId)}/bundle`,
-    options.workspaceId,
-  );
-  return new Uint8Array(await response.arrayBuffer());
-}
-
 export async function getSkillRepairBundle(options: {
   readonly workspaceId: string;
   readonly skillId: string;
