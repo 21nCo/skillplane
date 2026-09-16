@@ -1,0 +1,25 @@
+.claude/settings.json
+  s_85aec2585b9146::t_5f8c1964b434e0 1-90
+.factory/settings.json
+  s_85aec2585b9146::t_d62810b26be346 1-85
+.opencode/plugins/entire.ts
+  s_85aec2585b9146::t_cf8fc9f4f8b738 1-269
+.pi/extensions/entire/index.ts
+  s_85aec2585b9146::t_bc0a63238c1734 1-147
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a332f1418fd4d0ef64f60c8fc702357dab1cc2f1",
+  "prompts": {},
+  "sessions": {
+    "s_85aec2585b9146": {
+      "agent_id": {
+        "tool": "droid",
+        "id": "53b5e45e-9d51-46dc-995c-c638259427c4",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
