@@ -46,6 +46,7 @@
 
   async function createWorkspace(event: SubmitEvent) {
     event.preventDefault();
+    if (createState === "saving") return;
     createState = "saving";
     createError = null;
     try {
@@ -78,7 +79,7 @@
   async function updateWorkspace(event: SubmitEvent) {
     event.preventDefault();
     const active = store.active;
-    if (!active) return;
+    if (!active || editState === "saving") return;
     editState = "saving";
     editError = null;
     try {
@@ -189,7 +190,12 @@
         </div>
         <div class="actions">
           <Button onclick={() => (createOpen = false)}>Cancel</Button>
-          <Button type="submit" variant="primary" loading={createState === "saving"}>
+          <Button
+            type="submit"
+            variant="primary"
+            loading={createState === "saving"}
+            disabled={createState === "saving"}
+          >
             Create workspace
           </Button>
         </div>
@@ -276,7 +282,12 @@
           </div>
           {#if ["admin", "owner"].includes(store.active.role)}
             <div class="actions end">
-              <Button type="submit" variant="primary" loading={editState === "saving"}>
+              <Button
+                type="submit"
+                variant="primary"
+                loading={editState === "saving"}
+                disabled={editState === "saving"}
+              >
                 Save changes
               </Button>
             </div>

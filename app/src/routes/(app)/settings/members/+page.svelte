@@ -100,7 +100,7 @@
   async function invite(event: SubmitEvent) {
     event.preventDefault();
     const workspaceId = store.activeId;
-    if (!workspaceId) return;
+    if (!workspaceId || sending) return;
     sending = true;
     inviteError = null;
     try {
@@ -164,7 +164,7 @@
 
   async function revoke(invitation: Invitation) {
     const workspaceId = store.activeId;
-    if (!workspaceId) return;
+    if (!workspaceId || revokingId) return;
     revokingId = invitation.id;
     try {
       await apiRequest(
@@ -243,7 +243,7 @@
         <div class="field">
           <Select label="Role" options={inviteRoleOptions} bind:value={inviteRole} />
         </div>
-        <Button type="submit" variant="primary" loading={sending}>
+        <Button type="submit" variant="primary" loading={sending} disabled={sending}>
           Send invitation
         </Button>
       </form>
@@ -346,6 +346,7 @@
                   <Button
                     size="sm"
                     loading={revokingId === invitation.id}
+                    disabled={revokingId === invitation.id}
                     onclick={() => void revoke(invitation)}
                   >
                     Revoke

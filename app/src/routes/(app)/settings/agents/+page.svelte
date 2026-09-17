@@ -121,7 +121,7 @@
   async function createAgent(event: SubmitEvent) {
     event.preventDefault();
     const workspaceId = store.activeId;
-    if (!workspaceId) return;
+    if (!workspaceId || saving) return;
     saving = true;
     formError = null;
     try {
@@ -277,7 +277,7 @@
             type="submit"
             variant="primary"
             loading={saving}
-            disabled={scopes.length === 0}
+            disabled={saving || scopes.length === 0}
           >
             Create credential
           </Button>
