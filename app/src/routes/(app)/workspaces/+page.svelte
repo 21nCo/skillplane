@@ -139,15 +139,17 @@
         <h2 id="create-title">A dedicated workspace for your team</h2>
       </div>
       <form onsubmit={createWorkspace}>
-        <Input
-          label="Name"
-          required
-          maxlength={120}
-          autocomplete="organization"
-          bind:value={createName}
-          oninput={slugFromName}
-          error={createError ?? undefined}
-        />
+        <div class="field">
+          <Input
+            label="Name"
+            required
+            maxlength={120}
+            autocomplete="organization"
+            bind:value={createName}
+            oninput={slugFromName}
+            error={createError ?? undefined}
+          />
+        </div>
         <fieldset>
           <legend>Data region</legend>
           <p class="field-help">
@@ -175,14 +177,16 @@
             {/each}
           </div>
         </fieldset>
-        <Input
-          label="Workspace URL"
-          required
-          minlength={2}
-          maxlength={63}
-          bind:value={createSlug}
-          description={"Appears in the URL as skillplane.dev/{slug}."}
-        />
+        <div class="field">
+          <Input
+            label="Workspace URL"
+            required
+            minlength={2}
+            maxlength={63}
+            bind:value={createSlug}
+            description={"Appears in the URL as skillplane.dev/{slug}."}
+          />
+        </div>
         <div class="actions">
           <Button onclick={() => (createOpen = false)}>Cancel</Button>
           <Button type="submit" variant="primary" loading={createState === "saving"}>
@@ -249,23 +253,27 @@
           <span class="role-badge">{store.active.role}</span>
         </div>
         <form onsubmit={updateWorkspace}>
-          <Input
-            label="Name"
-            required
-            maxlength={120}
-            bind:value={editName}
-            disabled={!["admin", "owner"].includes(store.active.role)}
-            error={editError ?? undefined}
-          />
-          <Input
-            label="Workspace URL"
-            required
-            minlength={2}
-            maxlength={63}
-            bind:value={editSlug}
-            disabled={!["admin", "owner"].includes(store.active.role)}
-            description={"Appears in the URL as skillplane.dev/{slug}."}
-          />
+          <div class="field">
+            <Input
+              label="Name"
+              required
+              maxlength={120}
+              bind:value={editName}
+              disabled={!["admin", "owner"].includes(store.active.role)}
+              error={editError ?? undefined}
+            />
+          </div>
+          <div class="field">
+            <Input
+              label="Workspace URL"
+              required
+              minlength={2}
+              maxlength={63}
+              bind:value={editSlug}
+              disabled={!["admin", "owner"].includes(store.active.role)}
+              description={"Appears in the URL as skillplane.dev/{slug}."}
+            />
+          </div>
           {#if ["admin", "owner"].includes(store.active.role)}
             <div class="actions end">
               <Button type="submit" variant="primary" loading={editState === "saving"}>
@@ -464,6 +472,10 @@
   form {
     display: grid;
     gap: 0.9rem;
+  }
+
+  .field {
+    min-width: 0;
   }
 
   label > span,

@@ -228,17 +228,21 @@
         </IconButton>
       </div>
       <form class="invite-form" onsubmit={invite}>
-        <Input
-          label="Email address"
-          type="email"
-          required
-          maxlength={254}
-          autocomplete="email"
-          placeholder="teammate@company.com"
-          bind:value={inviteEmail}
-          error={inviteError ?? undefined}
-        />
-        <Select label="Role" options={inviteRoleOptions} bind:value={inviteRole} />
+        <div class="field">
+          <Input
+            label="Email address"
+            type="email"
+            required
+            maxlength={254}
+            autocomplete="email"
+            placeholder="teammate@company.com"
+            bind:value={inviteEmail}
+            error={inviteError ?? undefined}
+          />
+        </div>
+        <div class="field">
+          <Select label="Role" options={inviteRoleOptions} bind:value={inviteRole} />
+        </div>
         <Button type="submit" variant="primary" loading={sending}>
           Send invitation
         </Button>
@@ -279,17 +283,19 @@
               {#if member.displayName && member.email}<span>{member.email}</span>{/if}
             </div>
             {#if canManage}
-              <Select
-                label="Role"
-                options={memberRoleOptions}
-                value={member.role}
-                aria-label={`Role for ${member.email ?? member.userId}`}
-                onchange={(event) =>
-                  void changeRole(
-                    member.userId,
-                    event.currentTarget.value as WorkspaceRole,
-                  )}
-              />
+              <div class="role-field">
+                <Select
+                  label="Role"
+                  options={memberRoleOptions}
+                  value={member.role}
+                  aria-label={`Role for ${member.email ?? member.userId}`}
+                  onchange={(event) =>
+                    void changeRole(
+                      member.userId,
+                      event.currentTarget.value as WorkspaceRole,
+                    )}
+                />
+              </div>
               <IconButton
                 variant="danger"
                 label={`Remove ${member.email ?? "member"}`}
@@ -500,6 +506,11 @@
     align-items: end;
   }
 
+  .field,
+  .role-field {
+    min-width: 0;
+  }
+
   .panel {
     overflow: hidden;
     margin-bottom: 1rem;
@@ -566,7 +577,7 @@
     text-transform: capitalize;
   }
 
-  .member-row :global(.select-wrap) {
+  .role-field {
     width: 7.5rem;
   }
 
@@ -607,7 +618,7 @@
       grid-template-columns: auto minmax(0, 1fr) auto;
     }
 
-    .member-row :global(.select-wrap) {
+    .member-row .role-field {
       grid-column: 2 / 3;
       width: 100%;
     }

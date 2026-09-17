@@ -235,16 +235,22 @@
       </div>
       <form onsubmit={createAgent}>
         <div class="form-grid">
-          <Input
-            label="Name"
-            required
-            maxlength={120}
-            placeholder="PR review bot"
-            bind:value={name}
-            error={formError ?? undefined}
-          />
-          <Select label="Workspace role" options={roleOptions} bind:value={role} />
-          <Input label="Expires on (optional)" type="date" bind:value={expiresAt} />
+          <div class="field">
+            <Input
+              label="Name"
+              required
+              maxlength={120}
+              placeholder="PR review bot"
+              bind:value={name}
+              error={formError ?? undefined}
+            />
+          </div>
+          <div class="field">
+            <Select label="Workspace role" options={roleOptions} bind:value={role} />
+          </div>
+          <div class="field">
+            <Input label="Expires on (optional)" type="date" bind:value={expiresAt} />
+          </div>
         </div>
         <fieldset>
           <legend>Scopes</legend>
@@ -550,6 +556,10 @@
     display: grid;
     grid-template-columns: minmax(12rem, 1fr) 10rem 11rem;
     gap: 0.75rem;
+  }
+
+  .field {
+    min-width: 0;
   }
 
   legend {
