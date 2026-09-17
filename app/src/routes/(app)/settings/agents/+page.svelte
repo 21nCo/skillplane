@@ -1,7 +1,16 @@
 <script lang="ts">
   import { apiRequest, jsonBody, SkillplaneApiError } from "$lib/api/client.js";
-  import AsyncState from "$lib/components/AsyncState.svelte";
   import { useWorkspaceStore } from "$lib/workspaces/store.svelte.js";
+  import {
+    Button,
+    Dialog,
+    EmptyState,
+    ErrorState,
+    IconButton,
+    Input,
+    Select,
+    Skeleton,
+  } from "@skillplane/ui";
   import {
     CheckIcon as Check,
     CopyIcon as Copy,
@@ -9,7 +18,6 @@
     PlusIcon as Plus,
     RobotIcon as Robot,
     ShieldCheckIcon as ShieldCheck,
-    WarningCircleIcon as WarningCircle,
     XIcon as X,
   } from "phosphor-svelte";
 
@@ -74,6 +82,11 @@
   const canManage = $derived(
     store.active?.role === "owner" || store.active?.role === "admin",
   );
+  const roleOptions = [
+    { value: "viewer", label: "Viewer" },
+    { value: "editor", label: "Editor" },
+    { value: "admin", label: "Admin" },
+  ] as const;
 
   $effect(() => {
     if (store.activeId) void load();
@@ -191,9 +204,10 @@
       <p>Scoped identities for non-interactive AI agents and automation.</p>
     </div>
     {#if canManage}
-      <button class="primary" type="button" onclick={() => (createOpen = true)}>
-        <Plus size={16} weight="bold" aria-hidden="true" /> New credential
-      </button>
+      <Button variant="primary" onclick={() => (createOpen = true)}>
+        {#snippet leading()}<Plus size={16} weight="bold" />{/snippet}
+        New credential
+      </Button>
     {/if}
   </header>
 
@@ -215,38 +229,22 @@
           <p class="section-label">Service principal</p>
           <h2 id="create-agent-title">Create an agent credential</h2>
         </div>
-        <button
-          class="icon-button"
-          type="button"
-          aria-label="Close credential form"
-          onclick={() => (createOpen = false)}
-          ><X size={16} weight="bold" aria-hidden="true" /></button
-        >
+        <IconButton label="Close credential form" onclick={() => (createOpen = false)}>
+          <X size={16} weight="bold" />
+        </IconButton>
       </div>
       <form onsubmit={createAgent}>
         <div class="form-grid">
-          <label>
-            <span>Name</span>
-            <input
-              required
-              maxlength="120"
-              placeholder="PR review bot"
-              bind:value={name}
-              aria-describedby={formError ? "agent-form-error" : undefined}
-            />
-          </label>
-          <label>
-            <span>Workspace role</span>
-            <select bind:value={role}>
-              <option value="viewer">Viewer</option>
-              <option value="editor">Editor</option>
-              <option value="admin">Admin</option>
-            </select>
-          </label>
-          <label>
-            <span>Expires on <small>(optional)</small></span>
-            <input type="date" bind:value={expiresAt} />
-          </label>
+          <Input
+            label="Name"
+            required
+            maxlength={120}
+            placeholder="PR review bot"
+            bind:value={name}
+            error={formError ?? undefined}
+          />
+          <Select label="Workspace role" options={roleOptions} bind:value={role} />
+          <Input label="Expires on (optional)" type="date" bind:value={expiresAt} />
         </div>
         <fieldset>
           <legend>Scopes</legend>
@@ -267,23 +265,16 @@
             {/each}
           </div>
         </fieldset>
-        {#if formError}
-          <p class="form-error" id="agent-form-error" role="alert">
-            <WarningCircle size={16} weight="fill" aria-hidden="true" />
-            {formError}
-          </p>
-        {/if}
         <div class="actions">
-          <button class="secondary" type="button" onclick={() => (createOpen = false)}
-            >Cancel</button
-          >
-          <button
-            class="primary"
+          <Button onclick={() => (createOpen = false)}>Cancel</Button>
+          <Button
             type="submit"
-            disabled={saving || scopes.length === 0}
+            variant="primary"
+            loading={saving}
+            disabled={scopes.length === 0}
           >
-            {saving ? "Creating…" : "Create credential"}
-          </button>
+            Create credential
+          </Button>
         </div>
       </form>
     </section>
@@ -291,30 +282,31 @@
 
   {#if loading}
     <section class="list-card" aria-label="Loading agent credentials" aria-busy="true">
-      <div class="skeleton"></div>
-      <div class="skeleton"></div>
-      <div class="skeleton"></div>
+      <Skeleton height="5.2rem" />
+      <Skeleton height="5.2rem" />
+      <Skeleton height="5.2rem" />
     </section>
   {:else if error}
-    <AsyncState
+    <ErrorState
       title="Agent credentials could not be loaded"
-      message={error}
+      description={error}
       retry={() => void load()}
     />
   {:else if agents.length === 0}
-    <section class="empty">
-      <div><Robot size={26} weight="duotone" aria-hidden="true" /></div>
-      <h2>No agent credentials yet</h2>
-      <p>
-        Create a scoped identity when an agent needs API or MCP access without an
-        interactive user session.
-      </p>
-      {#if canManage}
-        <button class="secondary" type="button" onclick={() => (createOpen = true)}>
-          <Plus size={15} weight="bold" aria-hidden="true" /> Create the first credential
-        </button>
-      {/if}
-    </section>
+    <EmptyState
+      title="No agent credentials yet"
+      description="Create a scoped identity when an agent needs API or MCP access without an interactive user session."
+    >
+      {#snippet icon()}<Robot size={26} weight="duotone" />{/snippet}
+      {#snippet action()}
+        {#if canManage}
+          <Button onclick={() => (createOpen = true)}>
+            {#snippet leading()}<Plus size={15} weight="bold" />{/snippet}
+            Create the first credential
+          </Button>
+        {/if}
+      {/snippet}
+    </EmptyState>
   {:else}
     <section class="list-card" aria-label="Service principals">
       <div class="list-heading">
@@ -352,18 +344,19 @@
           </div>
           {#if canManage && !agent.revokedAt}
             <div class="row-actions">
-              <button
-                class="secondary"
-                type="button"
+              <Button
+                size="sm"
                 onclick={() => (actionTarget = { agent, action: "rotate" })}
-                >Rotate</button
               >
-              <button
-                class="secondary danger-text"
-                type="button"
+                Rotate
+              </Button>
+              <Button
+                size="sm"
+                variant="danger"
                 onclick={() => (actionTarget = { agent, action: "revoke" })}
-                >Revoke</button
               >
+                Revoke
+              </Button>
             </div>
           {/if}
         </article>
@@ -373,79 +366,78 @@
 </main>
 
 {#if credential}
-  <div class="dialog-backdrop">
-    <dialog open class="dialog credential-dialog" aria-labelledby="credential-title">
-      <div class="success-icon">
-        <Key size={20} weight="duotone" aria-hidden="true" />
-      </div>
-      <p class="section-label">One-time secret</p>
-      <h2 id="credential-title">Save the credential for {credentialFor}</h2>
-      <p>
-        This secret will not be shown again. Store it in your agent’s encrypted secret
-        manager. Only a secure hash is retained.
-      </p>
-      <div class="secret">
-        <code>{credential}</code>
-        <button type="button" onclick={() => void copyCredential()}>
-          {#if copied}<Check size={16} weight="bold" aria-hidden="true" /> Copied{:else}<Copy
-              size={16}
-              weight="bold"
-              aria-hidden="true"
-            /> Copy{/if}
-        </button>
-      </div>
-      <button
-        class="primary done"
-        type="button"
+  <Dialog
+    open
+    title="Save the credential for {credentialFor}"
+    description="This secret will not be shown again. Store it in your agent’s encrypted secret manager. Only a secure hash is retained."
+    onOpenChange={(open) => {
+      if (!open) {
+        credential = null;
+        credentialFor = null;
+        copied = false;
+      }
+    }}
+  >
+    <p class="section-label">One-time secret</p>
+    <div class="secret">
+      <code>{credential}</code>
+      {#if copied}
+        <Button size="sm" variant="ghost" onclick={() => void copyCredential()}>
+          {#snippet leading()}<Check size={16} weight="bold" />{/snippet}
+          Copied
+        </Button>
+      {:else}
+        <Button size="sm" variant="ghost" onclick={() => void copyCredential()}>
+          {#snippet leading()}<Copy size={16} weight="bold" />{/snippet}
+          Copy
+        </Button>
+      {/if}
+    </div>
+    {#snippet footer()}
+      <Button
+        variant="primary"
         onclick={() => {
           credential = null;
           credentialFor = null;
           copied = false;
-        }}>I have saved it</button
+        }}
       >
-    </dialog>
-  </div>
+        I have saved it
+      </Button>
+    {/snippet}
+  </Dialog>
 {/if}
 
 {#if actionTarget}
-  <div class="dialog-backdrop">
-    <dialog
-      open
-      class="dialog"
-      aria-labelledby="action-title"
-      aria-describedby="action-description"
-    >
-      <div class="warning-icon">
-        <WarningCircle size={20} weight="duotone" aria-hidden="true" />
-      </div>
-      <h2 id="action-title">
-        {actionTarget.action === "rotate"
-          ? "Rotate this credential?"
-          : "Revoke this credential?"}
-      </h2>
-      <p id="action-description">
-        {#if actionTarget.action === "rotate"}
-          The current secret for {actionTarget.agent.name} will stop working immediately.
-          A replacement will be displayed once.
-        {:else}
-          {actionTarget.agent.name} will immediately lose access. Existing audit history and
-          attribution will be preserved.
-        {/if}
-      </p>
-      <div class="actions">
-        <button class="secondary" type="button" onclick={() => (actionTarget = null)}
-          >Cancel</button
-        >
-        <button
-          class={actionTarget.action === "revoke" ? "danger-button" : "primary"}
-          type="button"
-          onclick={() => void completeAction()}
-        >
-          {actionTarget.action === "rotate" ? "Rotate credential" : "Revoke access"}
-        </button>
-      </div>
-    </dialog>
-  </div>
+  {@const target = actionTarget}
+  <Dialog
+    open
+    title={target.action === "rotate"
+      ? "Rotate this credential?"
+      : "Revoke this credential?"}
+    onOpenChange={(open) => {
+      if (!open) actionTarget = null;
+    }}
+  >
+    <p class="dialog-copy">
+      {#if target.action === "rotate"}
+        The current secret for {target.agent.name} will stop working immediately. A replacement
+        will be displayed once.
+      {:else}
+        {target.agent.name} will immediately lose access. Existing audit history and attribution
+        will be preserved.
+      {/if}
+    </p>
+    {#snippet footer()}
+      <Button onclick={() => (actionTarget = null)}>Cancel</Button>
+      <Button
+        variant={target.action === "revoke" ? "danger" : "primary"}
+        onclick={() => void completeAction()}
+      >
+        {target.action === "rotate" ? "Rotate credential" : "Revoke access"}
+      </Button>
+    {/snippet}
+  </Dialog>
 {/if}
 
 <style>
@@ -509,47 +501,6 @@
     font-size: 0.78rem;
   }
 
-  button {
-    cursor: pointer;
-  }
-
-  .primary,
-  .secondary,
-  .danger-button {
-    display: inline-flex;
-    min-height: 2.3rem;
-    gap: 0.4rem;
-    align-items: center;
-    justify-content: center;
-    padding: 0 0.85rem;
-    border-radius: 0.45rem;
-    font-size: 0.75rem;
-    font-weight: 650;
-  }
-
-  .primary {
-    border: 1px solid var(--accent);
-    background: var(--accent);
-    color: var(--sp-color-surface);
-  }
-
-  .secondary {
-    border: 1px solid var(--border);
-    background: var(--surface-subtle);
-    color: var(--text);
-  }
-
-  .danger-button {
-    border: 1px solid var(--danger);
-    background: var(--danger);
-    color: var(--sp-color-surface);
-  }
-
-  button:disabled {
-    cursor: not-allowed;
-    opacity: 0.55;
-  }
-
   .security-note {
     gap: 0.7rem;
     margin-bottom: 1rem;
@@ -572,8 +523,7 @@
   }
 
   .create-card,
-  .list-card,
-  .empty {
+  .list-card {
     margin-bottom: 1rem;
     border: 1px solid var(--border);
     border-radius: 0.7rem;
@@ -591,21 +541,6 @@
     border-bottom: 1px solid var(--border);
   }
 
-  .icon-button {
-    display: grid;
-    width: 2rem;
-    height: 2rem;
-    place-items: center;
-    border: 0;
-    border-radius: 0.4rem;
-    background: transparent;
-    color: var(--text-secondary);
-  }
-
-  .icon-button:hover {
-    background: var(--surface-subtle);
-  }
-
   form {
     display: grid;
     gap: 1rem;
@@ -617,37 +552,12 @@
     gap: 0.75rem;
   }
 
-  label > span,
   legend {
     display: block;
     margin-bottom: 0.35rem;
     color: var(--text-secondary);
     font-size: 0.7rem;
     font-weight: 620;
-  }
-
-  label small {
-    color: var(--text-tertiary);
-    font-weight: 500;
-  }
-
-  input,
-  select {
-    width: 100%;
-    height: 2.3rem;
-    border: 1px solid var(--border);
-    border-radius: 0.45rem;
-    outline: 0;
-    background: var(--background);
-    color: var(--text);
-    padding: 0 0.65rem;
-    font-size: 0.75rem;
-  }
-
-  input:focus,
-  select:focus {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 3px var(--accent-soft);
   }
 
   fieldset {
@@ -709,14 +619,6 @@
     font-size: 0.58rem;
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-
-  .form-error {
-    display: flex;
-    gap: 0.4rem;
-    align-items: center;
-    color: var(--danger);
-    font-size: 0.73rem;
   }
 
   .actions {
@@ -814,112 +716,10 @@
     gap: 0.4rem;
   }
 
-  .row-actions .secondary {
-    min-height: 2rem;
-    padding: 0 0.65rem;
-    font-size: 0.68rem;
-  }
-
-  .danger-text {
-    color: var(--danger);
-  }
-
-  .empty {
-    display: grid;
-    justify-items: center;
-    padding: 3rem 1rem;
-    text-align: center;
-  }
-
-  .empty > div,
-  .success-icon,
-  .warning-icon {
-    display: grid;
-    width: 2.6rem;
-    height: 2.6rem;
-    place-items: center;
-    border-radius: 0.6rem;
-  }
-
-  .empty > div,
-  .success-icon {
-    background: var(--accent-soft);
-    color: var(--accent-text);
-  }
-
-  .empty h2 {
-    margin-top: 0.75rem;
-  }
-
-  .empty p {
-    max-width: 31rem;
-    margin-top: 0.4rem;
+  .dialog-copy {
     color: var(--text-secondary);
-    font-size: 0.73rem;
+    font-size: 0.76rem;
     line-height: 1.6;
-  }
-
-  .empty button {
-    margin-top: 1rem;
-  }
-
-  .skeleton {
-    height: 5.2rem;
-    border-bottom: 1px solid var(--border);
-    background: linear-gradient(
-      90deg,
-      var(--surface) 20%,
-      var(--surface-subtle) 50%,
-      var(--surface) 80%
-    );
-    background-size: 200% 100%;
-    animation: shimmer 1.3s infinite linear;
-  }
-
-  .dialog-backdrop {
-    position: fixed;
-    z-index: 50;
-    inset: 0;
-    display: grid;
-    padding: 1rem;
-    place-items: center;
-    background: rgba(0, 0, 0, 0.68);
-  }
-
-  .dialog {
-    position: static;
-    width: min(100%, 27rem);
-    margin: 0;
-    padding: 1.25rem;
-    border: 1px solid var(--border-strong);
-    border-radius: 0.75rem;
-    background: var(--surface-raised);
-    box-shadow: 0 2rem 6rem rgba(0, 0, 0, 0.45);
-  }
-
-  .dialog h2 {
-    font-size: 1rem;
-  }
-
-  .dialog > p:not(.section-label) {
-    margin-top: 0.55rem;
-    color: var(--text-secondary);
-    font-size: 0.75rem;
-    line-height: 1.6;
-  }
-
-  .warning-icon {
-    margin-bottom: 0.9rem;
-    background: var(--danger-soft);
-    color: var(--danger);
-  }
-
-  .credential-dialog {
-    width: min(100%, 34rem);
-  }
-
-  .credential-dialog .success-icon {
-    margin-bottom: 0.9rem;
   }
 
   .secret {
@@ -942,31 +742,6 @@
     white-space: nowrap;
   }
 
-  .secret button {
-    display: inline-flex;
-    gap: 0.35rem;
-    align-items: center;
-    border: 0;
-    background: transparent;
-    color: var(--text-secondary);
-    font-size: 0.68rem;
-  }
-
-  .done {
-    width: 100%;
-    margin-top: 1rem;
-  }
-
-  .dialog .actions {
-    margin-top: 1.2rem;
-  }
-
-  @keyframes shimmer {
-    to {
-      background-position: -200% 0;
-    }
-  }
-
   @media (max-width: 760px) {
     .page {
       width: min(100% - 1.5rem, 72rem);
@@ -977,10 +752,6 @@
       display: grid;
       gap: 1rem;
       align-items: start;
-    }
-
-    .page-header .primary {
-      width: max-content;
     }
 
     .form-grid,
@@ -996,12 +767,6 @@
     .row-actions {
       width: 100%;
       padding-left: 2.95rem;
-    }
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .skeleton {
-      animation: none;
     }
   }
 </style>

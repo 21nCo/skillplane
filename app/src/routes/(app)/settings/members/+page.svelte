@@ -1,17 +1,25 @@
 <script lang="ts">
   import { apiRequest, jsonBody, SkillplaneApiError } from "$lib/api/client.js";
-  import AsyncState from "$lib/components/AsyncState.svelte";
   import {
     useWorkspaceStore,
     type WorkspaceRole,
   } from "$lib/workspaces/store.svelte.js";
+  import {
+    Button,
+    Dialog,
+    EmptyState,
+    ErrorState,
+    IconButton,
+    Input,
+    Select,
+    Skeleton,
+  } from "@skillplane/ui";
   import {
     CheckCircleIcon as CheckCircle,
     EnvelopeSimpleIcon as EnvelopeSimple,
     TrashIcon as Trash,
     UserPlusIcon as UserPlus,
     UsersThreeIcon as UsersThree,
-    WarningCircleIcon as WarningCircle,
     XIcon as X,
   } from "phosphor-svelte";
 
@@ -49,6 +57,16 @@
 
   const canManage = $derived(
     store.active?.role === "owner" || store.active?.role === "admin",
+  );
+  const inviteRoleOptions = [
+    { value: "viewer", label: "Viewer" },
+    { value: "editor", label: "Editor" },
+    { value: "admin", label: "Admin" },
+  ] as const;
+  const memberRoleOptions = $derived(
+    store.active?.role === "owner"
+      ? [...inviteRoleOptions, { value: "owner", label: "Owner" }]
+      : [...inviteRoleOptions],
   );
 
   $effect(() => {
@@ -178,9 +196,10 @@
       <p>Manage access, roles, and pending invitations for {store.active?.name}.</p>
     </div>
     {#if canManage && store.active?.kind === "organization"}
-      <button class="primary" type="button" onclick={() => (inviteOpen = true)}>
-        <UserPlus size={16} weight="bold" aria-hidden="true" /> Invite member
-      </button>
+      <Button variant="primary" onclick={() => (inviteOpen = true)}>
+        {#snippet leading()}<UserPlus size={16} weight="bold" />{/snippet}
+        Invite member
+      </Button>
     {/if}
   </header>
 
@@ -204,58 +223,39 @@
           <h2 id="invite-title">Invite to {store.active?.name}</h2>
           <p>The link expires in seven days and works only for this email.</p>
         </div>
-        <button
-          class="icon-button"
-          type="button"
-          aria-label="Close invitation form"
-          onclick={() => (inviteOpen = false)}
-          ><X size={16} weight="bold" aria-hidden="true" /></button
-        >
+        <IconButton label="Close invitation form" onclick={() => (inviteOpen = false)}>
+          <X size={16} weight="bold" />
+        </IconButton>
       </div>
-      <form onsubmit={invite}>
-        <label>
-          <span>Email address</span>
-          <input
-            type="email"
-            required
-            maxlength="254"
-            autocomplete="email"
-            placeholder="teammate@company.com"
-            bind:value={inviteEmail}
-            aria-describedby={inviteError ? "invite-error" : undefined}
-          />
-        </label>
-        <label>
-          <span>Role</span>
-          <select bind:value={inviteRole}>
-            <option value="viewer">Viewer</option>
-            <option value="editor">Editor</option>
-            <option value="admin">Admin</option>
-          </select>
-        </label>
-        <button class="primary" type="submit" disabled={sending}>
-          {sending ? "Sending…" : "Send invitation"}
-        </button>
+      <form class="invite-form" onsubmit={invite}>
+        <Input
+          label="Email address"
+          type="email"
+          required
+          maxlength={254}
+          autocomplete="email"
+          placeholder="teammate@company.com"
+          bind:value={inviteEmail}
+          error={inviteError ?? undefined}
+        />
+        <Select label="Role" options={inviteRoleOptions} bind:value={inviteRole} />
+        <Button type="submit" variant="primary" loading={sending}>
+          Send invitation
+        </Button>
       </form>
-      {#if inviteError}
-        <p class="form-error" id="invite-error" role="alert">
-          <WarningCircle size={16} weight="fill" aria-hidden="true" />
-          {inviteError}
-        </p>
-      {/if}
     </section>
   {/if}
 
   {#if loading}
     <section class="panel" aria-label="Loading workspace members" aria-busy="true">
-      <div class="skeleton"></div>
-      <div class="skeleton"></div>
-      <div class="skeleton"></div>
+      <Skeleton height="3.8rem" />
+      <Skeleton height="3.8rem" />
+      <Skeleton height="3.8rem" />
     </section>
   {:else if error}
-    <AsyncState
+    <ErrorState
       title="Member access could not be loaded"
-      message={error}
+      description={error}
       retry={() => void load()}
     />
   {:else}
@@ -279,7 +279,9 @@
               {#if member.displayName && member.email}<span>{member.email}</span>{/if}
             </div>
             {#if canManage}
-              <select
+              <Select
+                label="Role"
+                options={memberRoleOptions}
                 value={member.role}
                 aria-label={`Role for ${member.email ?? member.userId}`}
                 onchange={(event) =>
@@ -287,22 +289,14 @@
                     member.userId,
                     event.currentTarget.value as WorkspaceRole,
                   )}
-              >
-                <option value="viewer">Viewer</option>
-                <option value="editor">Editor</option>
-                <option value="admin">Admin</option>
-                {#if store.active?.role === "owner"}
-                  <option value="owner">Owner</option>
-                {/if}
-              </select>
-              <button
-                class="icon-button danger"
-                type="button"
-                aria-label={`Remove ${member.email ?? "member"}`}
+              />
+              <IconButton
+                variant="danger"
+                label={`Remove ${member.email ?? "member"}`}
                 onclick={() => (removeTarget = member)}
               >
-                <Trash size={15} weight="bold" aria-hidden="true" />
-              </button>
+                <Trash size={15} weight="bold" />
+              </IconButton>
             {:else}
               <span class="role">{member.role}</span>
             {/if}
@@ -321,10 +315,14 @@
           <EnvelopeSimple size={20} weight="duotone" aria-hidden="true" />
         </div>
         {#if invitations.filter((item) => !item.acceptedAt && !item.revokedAt).length === 0}
-          <div class="empty">
-            <EnvelopeSimple size={24} weight="duotone" aria-hidden="true" />
-            <strong>No pending invitations</strong>
-            <span>New invitations will appear here until accepted or revoked.</span>
+          <div class="empty-wrap">
+            <EmptyState
+              compact
+              title="No pending invitations"
+              description="New invitations will appear here until accepted or revoked."
+            >
+              {#snippet icon()}<EnvelopeSimple size={24} weight="duotone" />{/snippet}
+            </EmptyState>
           </div>
         {:else}
           <div class="rows">
@@ -339,14 +337,13 @@
                   </span>
                 </div>
                 {#if canManage}
-                  <button
-                    class="secondary danger-text"
-                    type="button"
-                    disabled={revokingId === invitation.id}
+                  <Button
+                    size="sm"
+                    loading={revokingId === invitation.id}
                     onclick={() => void revoke(invitation)}
                   >
-                    {revokingId === invitation.id ? "Revoking…" : "Revoke"}
-                  </button>
+                    Revoke
+                  </Button>
                 {/if}
               </article>
             {/each}
@@ -358,31 +355,23 @@
 </main>
 
 {#if removeTarget}
-  <div class="dialog-backdrop" role="presentation">
-    <dialog
-      open
-      class="dialog"
-      aria-labelledby="remove-title"
-      aria-describedby="remove-description"
-    >
-      <div class="danger-icon">
-        <Trash size={20} weight="duotone" aria-hidden="true" />
-      </div>
-      <h2 id="remove-title">Remove this member?</h2>
-      <p id="remove-description">
-        {removeTarget.email ?? "This member"} will immediately lose workspace access. Their
-        historical activity and attribution will be preserved.
-      </p>
-      <div class="dialog-actions">
-        <button class="secondary" type="button" onclick={() => (removeTarget = null)}
-          >Cancel</button
-        >
-        <button class="danger-button" type="button" onclick={() => void removeMember()}
-          >Remove member</button
-        >
-      </div>
-    </dialog>
-  </div>
+  <Dialog
+    open
+    title="Remove this member?"
+    onOpenChange={(open) => {
+      if (!open) removeTarget = null;
+    }}
+  >
+    <p class="dialog-copy">
+      {removeTarget.email ?? "This member"} will immediately lose workspace access. Their
+      historical activity and attribution will be preserved.
+    </p>
+    {#snippet footer()}
+      <Button onclick={() => (removeTarget = null)}>Cancel</Button>
+      <Button variant="danger" onclick={() => void removeMember()}>Remove member</Button
+      >
+    {/snippet}
+  </Dialog>
 {/if}
 
 <style>
@@ -449,43 +438,6 @@
     cursor: pointer;
   }
 
-  .primary,
-  .secondary,
-  .danger-button {
-    display: inline-flex;
-    min-height: 2.3rem;
-    gap: 0.45rem;
-    align-items: center;
-    justify-content: center;
-    padding: 0 0.85rem;
-    border-radius: 0.45rem;
-    font-size: 0.76rem;
-    font-weight: 650;
-  }
-
-  .primary {
-    border: 1px solid var(--accent);
-    background: var(--accent);
-    color: var(--sp-color-surface);
-  }
-
-  .secondary {
-    border: 1px solid var(--border);
-    background: var(--surface-subtle);
-    color: var(--text);
-  }
-
-  .danger-button {
-    border: 1px solid var(--danger);
-    background: var(--danger);
-    color: var(--sp-color-surface);
-  }
-
-  button:disabled {
-    cursor: not-allowed;
-    opacity: 0.55;
-  }
-
   .notice {
     gap: 0.5rem;
     margin-bottom: 1rem;
@@ -528,8 +480,7 @@
   }
 
   .icon,
-  .avatar,
-  .danger-icon {
+  .avatar {
     display: grid;
     place-items: center;
     border-radius: 0.5rem;
@@ -542,47 +493,11 @@
     color: var(--accent-text);
   }
 
-  form {
+  .invite-form {
     display: grid;
     grid-template-columns: minmax(12rem, 1fr) 9rem auto;
     gap: 0.65rem;
     align-items: end;
-  }
-
-  label > span {
-    display: block;
-    margin-bottom: 0.35rem;
-    color: var(--text-secondary);
-    font-size: 0.7rem;
-    font-weight: 620;
-  }
-
-  input,
-  select {
-    width: 100%;
-    height: 2.3rem;
-    border: 1px solid var(--border);
-    border-radius: 0.45rem;
-    outline: 0;
-    background: var(--background);
-    color: var(--text);
-    padding: 0 0.65rem;
-    font-size: 0.75rem;
-  }
-
-  input:focus,
-  select:focus {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 3px var(--accent-soft);
-  }
-
-  .form-error {
-    display: flex;
-    gap: 0.4rem;
-    align-items: center;
-    margin-top: 0.7rem;
-    color: var(--danger);
-    font-size: 0.73rem;
   }
 
   .panel {
@@ -651,28 +566,8 @@
     text-transform: capitalize;
   }
 
-  .member-row select {
+  .member-row :global(.select-wrap) {
     width: 7.5rem;
-  }
-
-  .icon-button {
-    display: grid;
-    width: 2rem;
-    height: 2rem;
-    place-items: center;
-    border: 0;
-    border-radius: 0.4rem;
-    background: transparent;
-    color: var(--text-secondary);
-  }
-
-  .icon-button:hover {
-    background: var(--surface-subtle);
-  }
-
-  .icon-button.danger:hover,
-  .danger-text {
-    color: var(--danger);
   }
 
   .role {
@@ -681,89 +576,14 @@
     text-transform: capitalize;
   }
 
-  .empty {
-    display: grid;
-    justify-items: center;
-    padding: 2.5rem 1rem;
-    color: var(--text-tertiary);
-    text-align: center;
+  .empty-wrap {
+    padding: 0.75rem;
   }
 
-  .empty strong {
-    margin-top: 0.65rem;
-    color: var(--text-secondary);
-    font-size: 0.78rem;
-  }
-
-  .empty span {
-    margin-top: 0.3rem;
-    font-size: 0.7rem;
-  }
-
-  .skeleton {
-    height: 3.8rem;
-    border-bottom: 1px solid var(--border);
-    background: linear-gradient(
-      90deg,
-      var(--surface) 20%,
-      var(--surface-subtle) 50%,
-      var(--surface) 80%
-    );
-    background-size: 200% 100%;
-    animation: shimmer 1.3s infinite linear;
-  }
-
-  .dialog-backdrop {
-    position: fixed;
-    z-index: 50;
-    inset: 0;
-    display: grid;
-    padding: 1rem;
-    place-items: center;
-    background: rgba(0, 0, 0, 0.65);
-  }
-
-  .dialog {
-    position: static;
-    width: min(100%, 26rem);
-    margin: 0;
-    padding: 1.25rem;
-    border: 1px solid var(--border-strong);
-    border-radius: 0.75rem;
-    background: var(--surface-raised);
-    box-shadow: 0 2rem 6rem rgba(0, 0, 0, 0.4);
-  }
-
-  .danger-icon {
-    width: 2.4rem;
-    height: 2.4rem;
-    margin-bottom: 0.9rem;
-    background: var(--danger-soft);
-    color: var(--danger);
-  }
-
-  .dialog h2 {
-    font-size: 1rem;
-  }
-
-  .dialog p {
-    margin-top: 0.55rem;
+  .dialog-copy {
     color: var(--text-secondary);
     font-size: 0.76rem;
     line-height: 1.6;
-  }
-
-  .dialog-actions {
-    display: flex;
-    gap: 0.6rem;
-    justify-content: flex-end;
-    margin-top: 1.25rem;
-  }
-
-  @keyframes shimmer {
-    to {
-      background-position: -200% 0;
-    }
   }
 
   @media (max-width: 760px) {
@@ -778,11 +598,7 @@
       align-items: start;
     }
 
-    .page-header .primary {
-      width: max-content;
-    }
-
-    form {
+    .invite-form {
       grid-template-columns: 1fr;
     }
 
@@ -791,20 +607,14 @@
       grid-template-columns: auto minmax(0, 1fr) auto;
     }
 
-    .member-row select {
+    .member-row :global(.select-wrap) {
       grid-column: 2 / 3;
       width: 100%;
     }
 
-    .member-row .danger {
+    .member-row :global(button[data-variant="danger"]) {
       grid-row: 1;
       grid-column: 3;
-    }
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .skeleton {
-      animation: none;
     }
   }
 </style>

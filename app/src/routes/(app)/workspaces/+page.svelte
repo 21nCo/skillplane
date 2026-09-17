@@ -1,13 +1,12 @@
 <script lang="ts">
   import { apiRequest, jsonBody, SkillplaneApiError } from "$lib/api/client.js";
-  import AsyncState from "$lib/components/AsyncState.svelte";
   import { useWorkspaceStore } from "$lib/workspaces/store.svelte.js";
+  import { Button, EmptyState, ErrorState, Input, Skeleton } from "@skillplane/ui";
   import {
     BuildingsIcon as Buildings,
     CheckCircleIcon as CheckCircle,
     PlusIcon as Plus,
     UserCircleIcon as UserCircle,
-    WarningCircleIcon as WarningCircle,
   } from "phosphor-svelte";
 
   const store = useWorkspaceStore();
@@ -113,9 +112,10 @@
       <h1>Workspaces</h1>
       <p>Separate personal skills from shared organization knowledge.</p>
     </div>
-    <button class="primary" type="button" onclick={() => (createOpen = !createOpen)}>
-      <Plus size={16} weight="bold" aria-hidden="true" /> New workspace
-    </button>
+    <Button variant="primary" onclick={() => (createOpen = !createOpen)}>
+      {#snippet leading()}<Plus size={16} weight="bold" />{/snippet}
+      New workspace
+    </Button>
   </header>
 
   {#if savedMessage}
@@ -139,17 +139,15 @@
         <h2 id="create-title">A dedicated workspace for your team</h2>
       </div>
       <form onsubmit={createWorkspace}>
-        <label>
-          <span>Name</span>
-          <input
-            required
-            maxlength="120"
-            autocomplete="organization"
-            bind:value={createName}
-            oninput={slugFromName}
-            aria-describedby={createError ? "create-error" : undefined}
-          />
-        </label>
+        <Input
+          label="Name"
+          required
+          maxlength={120}
+          autocomplete="organization"
+          bind:value={createName}
+          oninput={slugFromName}
+          error={createError ?? undefined}
+        />
         <fieldset>
           <legend>Data region</legend>
           <p class="field-help">
@@ -177,26 +175,19 @@
             {/each}
           </div>
         </fieldset>
-        <label>
-          <span>Workspace URL</span>
-          <div class="slug-input">
-            <small>skillplane.dev/</small>
-            <input required minlength="2" maxlength="63" bind:value={createSlug} />
-          </div>
-        </label>
-        {#if createError}
-          <p class="form-error" id="create-error" role="alert">
-            <WarningCircle size={16} weight="fill" aria-hidden="true" />
-            {createError}
-          </p>
-        {/if}
+        <Input
+          label="Workspace URL"
+          required
+          minlength={2}
+          maxlength={63}
+          bind:value={createSlug}
+          description={"Appears in the URL as skillplane.dev/{slug}."}
+        />
         <div class="actions">
-          <button class="secondary" type="button" onclick={() => (createOpen = false)}
-            >Cancel</button
-          >
-          <button class="primary" type="submit" disabled={createState === "saving"}>
-            {createState === "saving" ? "Creating…" : "Create workspace"}
-          </button>
+          <Button onclick={() => (createOpen = false)}>Cancel</Button>
+          <Button type="submit" variant="primary" loading={createState === "saving"}>
+            Create workspace
+          </Button>
         </div>
       </form>
     </section>
@@ -204,20 +195,25 @@
 
   {#if store.loading}
     <div class="skeleton-grid" aria-label="Loading workspaces" aria-busy="true">
-      <span></span><span></span><span></span>
+      <Skeleton height="4.2rem" radius="0.65rem" />
+      <Skeleton height="4.2rem" radius="0.65rem" />
+      <Skeleton height="4.2rem" radius="0.65rem" />
     </div>
   {:else if store.error}
-    <AsyncState
+    <ErrorState
       title="Workspaces could not be loaded"
-      message={store.error}
+      description={store.error}
       retry={() => void store.load()}
     />
   {:else if store.workspaces.length === 0}
-    <AsyncState
+    <EmptyState
       title="No workspace is available"
-      message="Retry personal workspace setup. If this continues, contact support with the request reference."
-      retry={() => void store.load()}
-    />
+      description="Retry personal workspace setup. If this continues, contact support with the request reference."
+    >
+      {#snippet action()}
+        <Button variant="secondary" onclick={() => void store.load()}>Retry</Button>
+      {/snippet}
+    </EmptyState>
   {:else}
     <section class="workspace-grid" aria-label="Your workspaces">
       {#each store.workspaces as workspace (workspace.id)}
@@ -253,40 +249,28 @@
           <span class="role-badge">{store.active.role}</span>
         </div>
         <form onsubmit={updateWorkspace}>
-          <label>
-            <span>Name</span>
-            <input
-              required
-              maxlength="120"
-              bind:value={editName}
-              disabled={!["admin", "owner"].includes(store.active.role)}
-              aria-describedby={editError ? "edit-error" : undefined}
-            />
-          </label>
-          <label>
-            <span>Workspace URL</span>
-            <div class="slug-input">
-              <small>skillplane.dev/</small>
-              <input
-                required
-                minlength="2"
-                maxlength="63"
-                bind:value={editSlug}
-                disabled={!["admin", "owner"].includes(store.active.role)}
-              />
-            </div>
-          </label>
-          {#if editError}
-            <p class="form-error" id="edit-error" role="alert">
-              <WarningCircle size={16} weight="fill" aria-hidden="true" />
-              {editError}
-            </p>
-          {/if}
+          <Input
+            label="Name"
+            required
+            maxlength={120}
+            bind:value={editName}
+            disabled={!["admin", "owner"].includes(store.active.role)}
+            error={editError ?? undefined}
+          />
+          <Input
+            label="Workspace URL"
+            required
+            minlength={2}
+            maxlength={63}
+            bind:value={editSlug}
+            disabled={!["admin", "owner"].includes(store.active.role)}
+            description={"Appears in the URL as skillplane.dev/{slug}."}
+          />
           {#if ["admin", "owner"].includes(store.active.role)}
             <div class="actions end">
-              <button class="primary" type="submit" disabled={editState === "saving"}>
-                {editState === "saving" ? "Saving…" : "Save changes"}
-              </button>
+              <Button type="submit" variant="primary" loading={editState === "saving"}>
+                Save changes
+              </Button>
             </div>
           {:else}
             <p class="permission-note">
@@ -355,40 +339,6 @@
 
   button {
     cursor: pointer;
-  }
-
-  .primary,
-  .secondary {
-    display: inline-flex;
-    min-height: 2.3rem;
-    gap: 0.45rem;
-    align-items: center;
-    justify-content: center;
-    padding: 0 0.85rem;
-    border-radius: 0.45rem;
-    font-size: 0.78rem;
-    font-weight: 650;
-  }
-
-  .primary {
-    border: 1px solid var(--accent);
-    background: var(--accent);
-    color: var(--sp-color-surface);
-  }
-
-  .primary:hover {
-    background: var(--accent-hover);
-  }
-
-  .secondary {
-    border: 1px solid var(--border);
-    background: var(--surface-subtle);
-    color: var(--text);
-  }
-
-  button:disabled {
-    cursor: not-allowed;
-    opacity: 0.55;
   }
 
   .notice {
@@ -485,19 +435,6 @@
   button.active .selected-dot {
     background: var(--accent);
     box-shadow: 0 0 0 3px var(--accent-soft);
-  }
-
-  .skeleton-grid span {
-    height: 4.2rem;
-    border-radius: 0.65rem;
-    background: linear-gradient(
-      90deg,
-      var(--surface) 20%,
-      var(--surface-subtle) 50%,
-      var(--surface) 80%
-    );
-    background-size: 200% 100%;
-    animation: shimmer 1.3s infinite linear;
   }
 
   .panel {
@@ -613,60 +550,6 @@
     font-weight: 680;
   }
 
-  input {
-    width: 100%;
-    height: 2.35rem;
-    border: 1px solid var(--border);
-    border-radius: 0.45rem;
-    outline: 0;
-    background: var(--background);
-    color: var(--text);
-    padding: 0 0.65rem;
-    font-size: 0.78rem;
-  }
-
-  input:focus {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 3px var(--accent-soft);
-  }
-
-  input:disabled {
-    color: var(--text-tertiary);
-  }
-
-  .slug-input {
-    display: flex;
-    align-items: center;
-    border: 1px solid var(--border);
-    border-radius: 0.45rem;
-    background: var(--background);
-  }
-
-  .slug-input:focus-within {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 3px var(--accent-soft);
-  }
-
-  .slug-input small {
-    padding-left: 0.65rem;
-    color: var(--text-tertiary);
-    font-size: 0.72rem;
-  }
-
-  .slug-input input {
-    border: 0;
-    box-shadow: none;
-  }
-
-  .form-error {
-    display: flex;
-    gap: 0.45rem;
-    align-items: flex-start;
-    margin: 0;
-    color: var(--danger);
-    font-size: 0.75rem;
-  }
-
   .actions {
     justify-content: flex-start;
     margin-top: 0.25rem;
@@ -691,12 +574,6 @@
     font-size: 0.76rem;
   }
 
-  @keyframes shimmer {
-    to {
-      background-position: -200% 0;
-    }
-  }
-
   @media (max-width: 760px) {
     .page {
       width: min(100% - 1.5rem, 72rem);
@@ -706,10 +583,6 @@
     .page-header {
       display: grid;
       align-items: start;
-    }
-
-    .page-header .primary {
-      width: max-content;
     }
 
     .workspace-grid,
@@ -724,12 +597,6 @@
 
     .region-options {
       grid-template-columns: 1fr;
-    }
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .skeleton-grid span {
-      animation: none;
     }
   }
 </style>
