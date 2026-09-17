@@ -83,6 +83,7 @@
   const canManage = $derived(
     store.active?.role === "owner" || store.active?.role === "admin",
   );
+  const secretPending = $derived(Boolean(credential));
   const roleOptions = [
     { value: "viewer", label: "Viewer" },
     { value: "editor", label: "Editor" },
@@ -119,10 +120,23 @@
       : [...scopes, scope];
   }
 
+  function openCreateForm() {
+    if (credential) return;
+    createOpen = true;
+  }
+
+  function requestAction(
+    agent: ServicePrincipal,
+    action: "rotate" | "revoke",
+  ) {
+    if (action === "rotate" && credential) return;
+    actionTarget = { agent, action };
+  }
+
   async function createAgent(event: SubmitEvent) {
     event.preventDefault();
     const workspaceId = store.activeId;
-    if (!workspaceId || saving) return;
+    if (!workspaceId || saving || credential) return;
     saving = true;
     formError = null;
     try {
@@ -145,6 +159,7 @@
       copied = false;
       secretOpen = true;
       createOpen = false;
+      actionTarget = null;
       name = "";
       await load();
     } catch (caught) {
@@ -161,6 +176,10 @@
     const target = actionTarget;
     const workspaceId = store.activeId;
     if (!target || !workspaceId) return;
+    if (target.action === "rotate" && credential) {
+      actionTarget = null;
+      return;
+    }
     actionTarget = null;
     try {
       if (target.action === "rotate") {
@@ -214,7 +233,12 @@
       <p>Scoped identities for non-interactive AI agents and automation.</p>
     </div>
     {#if canManage}
-      <Button variant="primary" onclick={() => (createOpen = true)}>
+      <Button
+        variant="primary"
+        disabled={secretPending}
+        title={secretPending ? "Save the pending credential first" : undefined}
+        onclick={openCreateForm}
+      >
         {#snippet leading()}<Plus size={16} weight="bold" />{/snippet}
         New credential
       </Button>
@@ -232,7 +256,7 @@
     </div>
   </section>
 
-  {#if createOpen}
+  {#if createOpen && !secretPending}
     <section class="create-card" aria-labelledby="create-agent-title">
       <div class="card-heading">
         <div>
@@ -287,7 +311,7 @@
             type="submit"
             variant="primary"
             loading={saving}
-            disabled={saving || scopes.length === 0}
+            disabled={saving || secretPending || scopes.length === 0}
           >
             Create credential
           </Button>
@@ -316,7 +340,11 @@
       {#snippet icon()}<Robot size={26} weight="duotone" />{/snippet}
       {#snippet action()}
         {#if canManage}
-          <Button onclick={() => (createOpen = true)}>
+          <Button
+            disabled={secretPending}
+            title={secretPending ? "Save the pending credential first" : undefined}
+            onclick={openCreateForm}
+          >
             {#snippet leading()}<Plus size={15} weight="bold" />{/snippet}
             Create the first credential
           </Button>
@@ -362,14 +390,16 @@
             <div class="row-actions">
               <Button
                 size="sm"
-                onclick={() => (actionTarget = { agent, action: "rotate" })}
+                disabled={secretPending}
+                title={secretPending ? "Save the pending credential first" : undefined}
+                onclick={() => requestAction(agent, "rotate")}
               >
                 Rotate
               </Button>
               <Button
                 size="sm"
                 variant="danger"
-                onclick={() => (actionTarget = { agent, action: "revoke" })}
+                onclick={() => requestAction(agent, "revoke")}
               >
                 Revoke
               </Button>
@@ -426,7 +456,7 @@
   {/if}
 {/if}
 
-{#if actionTarget}
+{#if actionTarget && !(secretPending && actionTarget.action === "rotate")}
   {@const target = actionTarget}
   <Dialog
     open
