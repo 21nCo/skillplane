@@ -74,6 +74,7 @@
   let credential = $state<string | null>(null);
   let credentialFor = $state<string | null>(null);
   let copied = $state(false);
+  let secretOpen = $state(false);
   let actionTarget = $state<{
     agent: ServicePrincipal;
     action: "rotate" | "revoke";
@@ -142,6 +143,7 @@
       credential = data.credential;
       credentialFor = data.servicePrincipal.name;
       copied = false;
+      secretOpen = true;
       createOpen = false;
       name = "";
       await load();
@@ -172,6 +174,7 @@
         credential = data.credential;
         credentialFor = data.servicePrincipal.name;
         copied = false;
+        secretOpen = true;
       } else {
         await apiRequest(
           `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/service-principals/${encodeURIComponent(target.agent.id)}`,
@@ -189,6 +192,13 @@
     if (!credential) return;
     await navigator.clipboard.writeText(credential);
     copied = true;
+  }
+
+  function acknowledgeSecret() {
+    credential = null;
+    credentialFor = null;
+    copied = false;
+    secretOpen = false;
   }
 </script>
 
@@ -372,18 +382,7 @@
 </main>
 
 {#if credential}
-  <Dialog
-    open
-    title="Save the credential for {credentialFor}"
-    description="This secret will not be shown again. Store it in your agent’s encrypted secret manager. Only a secure hash is retained."
-    onOpenChange={(open) => {
-      if (!open) {
-        credential = null;
-        credentialFor = null;
-        copied = false;
-      }
-    }}
-  >
+  {#snippet secretBody()}
     <p class="section-label">One-time secret</p>
     <div class="secret">
       <code>{credential}</code>
@@ -399,19 +398,32 @@
         </Button>
       {/if}
     </div>
+  {/snippet}
+
+  <Dialog
+    bind:open={secretOpen}
+    title="Save the credential for {credentialFor}"
+    description="This secret will not be shown again. Store it in your agent’s encrypted secret manager. Only a secure hash is retained."
+  >
+    {@render secretBody()}
     {#snippet footer()}
-      <Button
-        variant="primary"
-        onclick={() => {
-          credential = null;
-          credentialFor = null;
-          copied = false;
-        }}
-      >
-        I have saved it
-      </Button>
+      <Button variant="primary" onclick={acknowledgeSecret}>I have saved it</Button>
     {/snippet}
   </Dialog>
+
+  {#if !secretOpen}
+    <section class="create-card" role="status" aria-labelledby="credential-title">
+      <h2 id="credential-title">Save the credential for {credentialFor}</h2>
+      <p class="dialog-copy">
+        The dialog was closed, but this secret is still shown once. Store it before
+        continuing. Only a secure hash is retained.
+      </p>
+      {@render secretBody()}
+      <div class="actions">
+        <Button variant="primary" onclick={acknowledgeSecret}>I have saved it</Button>
+      </div>
+    </section>
+  {/if}
 {/if}
 
 {#if actionTarget}
