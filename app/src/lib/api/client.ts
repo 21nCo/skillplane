@@ -79,6 +79,12 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}): Promi
   return envelope.data;
 }
 
+export function apiErrorField(error: unknown): string | undefined {
+  const field =
+    error instanceof SkillplaneApiError ? error.details?.field : undefined;
+  return typeof field === "string" ? field : undefined;
+}
+
 export function jsonBody(value: unknown): Pick<RequestInit, "body"> {
   return { body: JSON.stringify(value) };
 }

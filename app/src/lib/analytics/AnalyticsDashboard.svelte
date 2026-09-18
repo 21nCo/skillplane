@@ -1,5 +1,12 @@
 <script lang="ts">
-  import { Badge, Button, Select, Skeleton } from "@skillplane/ui";
+  import {
+    Badge,
+    Button,
+    EmptyState,
+    ErrorState,
+    Select,
+    Skeleton,
+  } from "@skillplane/ui";
   import {
     ArrowClockwiseIcon,
     ChartLineUpIcon,
@@ -140,25 +147,18 @@
       <Skeleton width="12rem" /><Skeleton height="13rem" />
     </section>
   {:else if error}
-    <section class="state error-state" role="alert">
-      <WarningCircleIcon weight="duotone" aria-hidden="true" />
-      <div>
-        <h2>Analytics could not be loaded</h2>
-        <p>{error}</p>
-        <Button onclick={() => void load()}>Retry</Button>
-      </div>
-    </section>
+    <ErrorState
+      title="Analytics could not be loaded"
+      description={error}
+      retry={() => void load()}
+    />
   {:else if analytics?.points.length === 0}
-    <section class="state empty-state">
-      <ChartLineUpIcon weight="duotone" aria-hidden="true" />
-      <div>
-        <h2>No observed activity in this range</h2>
-        <p>
-          Retrievals, amendments, approvals, and failures will appear after the daily
-          UTC rollup.
-        </p>
-      </div>
-    </section>
+    <EmptyState
+      title="No observed activity in this range"
+      description="Retrievals, amendments, approvals, and failures will appear after the daily UTC rollup."
+    >
+      {#snippet icon()}<ChartLineUpIcon weight="duotone" />{/snippet}
+    </EmptyState>
   {:else if analytics}
     <div class="metrics" aria-label="Analytics totals">
       <section class="metric">
@@ -309,8 +309,7 @@
     font-size: var(--sp-font-size-7);
     letter-spacing: -0.035em;
   }
-  .page-heading > div:first-child > p:last-child,
-  .state p {
+  .page-heading > div:first-child > p:last-child {
     margin-top: var(--sp-space-1);
     color: var(--sp-color-text-muted);
   }
@@ -334,8 +333,7 @@
     gap: var(--sp-space-3);
   }
   .metric,
-  .panel,
-  .state {
+  .panel {
     border: 1px solid var(--sp-color-border);
     border-radius: var(--sp-radius-lg);
     background: var(--sp-color-surface);
@@ -451,27 +449,6 @@
   }
   .muted {
     color: var(--sp-color-text-subtle);
-  }
-  .state {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
-    gap: var(--sp-space-4);
-    align-items: start;
-    padding: var(--sp-space-6);
-  }
-  .state > :global(svg) {
-    width: 2rem;
-    height: 2rem;
-    color: var(--sp-color-accent-text);
-  }
-  .state h2 {
-    font-size: var(--sp-font-size-5);
-  }
-  .state :global(button) {
-    margin-top: var(--sp-space-3);
-  }
-  .error-state > :global(svg) {
-    color: var(--sp-color-danger);
   }
   @media (max-width: 62rem) {
     .metrics {

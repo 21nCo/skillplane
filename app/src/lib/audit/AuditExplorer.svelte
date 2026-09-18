@@ -1,5 +1,13 @@
 <script lang="ts">
-  import { Badge, Button, Input, Select, Skeleton } from "@skillplane/ui";
+  import {
+    Badge,
+    Button,
+    EmptyState,
+    ErrorState,
+    Input,
+    Select,
+    Skeleton,
+  } from "@skillplane/ui";
   import {
     ArrowClockwiseIcon,
     DownloadSimpleIcon,
@@ -218,25 +226,25 @@
       {/each}
     </section>
   {:else if error && events.length === 0}
-    <section class="state" role="alert">
-      <WarningCircleIcon weight="duotone" aria-hidden="true" />
-      <div>
-        <h2>Audit history could not be loaded</h2>
-        <p>{error}</p>
-        <Button onclick={() => void load()}>Retry</Button>
-      </div>
-    </section>
+    <div class="feedback">
+      <ErrorState
+        title="Audit history could not be loaded"
+        description={error}
+        retry={() => void load()}
+      />
+    </div>
   {:else if events.length === 0}
-    <section class="state">
-      <ShieldCheckIcon weight="duotone" aria-hidden="true" />
-      <div>
-        <h2>No events match these filters</h2>
-        <p>
-          Broaden the date range or remove a caller, context, tool, or outcome filter.
-        </p>
-        <Button variant="secondary" onclick={resetFilters}>Clear filters</Button>
-      </div>
-    </section>
+    <div class="feedback">
+      <EmptyState
+        title="No events match these filters"
+        description="Broaden the date range or remove a caller, context, tool, or outcome filter."
+      >
+        {#snippet icon()}<ShieldCheckIcon weight="duotone" />{/snippet}
+        {#snippet action()}
+          <Button variant="secondary" onclick={resetFilters}>Clear filters</Button>
+        {/snippet}
+      </EmptyState>
+    </div>
   {:else}
     <section class="results" aria-labelledby="results-title">
       <header>
@@ -392,8 +400,7 @@
     font-size: var(--sp-font-size-7);
     letter-spacing: -0.035em;
   }
-  .page-heading p:last-child,
-  .state p {
+  .page-heading p:last-child {
     margin-top: var(--sp-space-1);
     color: var(--sp-color-text-muted);
   }
@@ -405,8 +412,7 @@
     text-transform: uppercase;
   }
   .filters,
-  .results,
-  .state {
+  .results {
     border: 1px solid var(--sp-color-border);
     border-radius: var(--sp-radius-lg);
     background: var(--sp-color-surface);
@@ -454,15 +460,14 @@
     gap: var(--sp-space-2);
   }
   .results,
-  .state {
+  .feedback {
     margin-top: var(--sp-space-4);
   }
   .results > header {
     padding: var(--sp-space-4);
     border-bottom: 1px solid var(--sp-color-border);
   }
-  .results h2,
-  .state h2 {
+  .results h2 {
     margin-top: var(--sp-space-1);
     font-size: var(--sp-font-size-5);
   }
@@ -540,20 +545,6 @@
     display: flex;
     justify-content: center;
     padding: var(--sp-space-4);
-  }
-  .state {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
-    gap: var(--sp-space-4);
-    padding: var(--sp-space-6);
-  }
-  .state > :global(svg) {
-    width: 2rem;
-    height: 2rem;
-    color: var(--sp-color-accent-text);
-  }
-  .state :global(button) {
-    margin-top: var(--sp-space-3);
   }
   .inline-error {
     gap: var(--sp-space-2);
