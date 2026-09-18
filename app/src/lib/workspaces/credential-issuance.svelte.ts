@@ -2,6 +2,7 @@ export class CredentialIssuance {
   issuing = $state(false);
   credential = $state<string | null>(null);
   credentialFor = $state<string | null>(null);
+  #generation = 0;
 
   get blocked(): boolean {
     return this.issuing || Boolean(this.credential);
@@ -13,19 +14,22 @@ export class CredentialIssuance {
     return undefined;
   }
 
-  begin(): boolean {
+  begin(): number | false {
     if (this.blocked) return false;
     this.issuing = true;
-    return true;
+    this.#generation += 1;
+    return this.#generation;
   }
 
-  succeed(credential: string, name: string): void {
+  succeed(token: number, credential: string, name: string): void {
+    if (token !== this.#generation) return;
     this.credential = credential;
     this.credentialFor = name;
     this.issuing = false;
   }
 
-  fail(): void {
+  fail(token: number): void {
+    if (token !== this.#generation || !this.issuing) return;
     this.issuing = false;
   }
 

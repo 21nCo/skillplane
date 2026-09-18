@@ -136,7 +136,9 @@
   async function createAgent(event: SubmitEvent) {
     event.preventDefault();
     const workspaceId = store.activeId;
-    if (!workspaceId || !issuance.begin()) return;
+    if (!workspaceId) return;
+    const issue = issuance.begin();
+    if (issue === false) return;
     actionTarget = null;
     formError = null;
     try {
@@ -154,7 +156,7 @@
             : null,
         }),
       });
-      issuance.succeed(data.credential, data.servicePrincipal.name);
+      issuance.succeed(issue, data.credential, data.servicePrincipal.name);
       copied = false;
       secretOpen = true;
       createOpen = false;
@@ -167,7 +169,7 @@
           ? caught.message
           : "The agent credential could not be created.";
     } finally {
-      if (issuance.issuing) issuance.fail();
+      issuance.fail(issue);
     }
   }
 
@@ -175,13 +177,17 @@
     const target = actionTarget;
     const workspaceId = store.activeId;
     if (!target || !workspaceId) return;
-    if (target.action === "rotate" && !issuance.begin()) {
-      actionTarget = null;
-      return;
+    let issue: number | false = false;
+    if (target.action === "rotate") {
+      issue = issuance.begin();
+      if (issue === false) {
+        actionTarget = null;
+        return;
+      }
     }
     actionTarget = null;
     try {
-      if (target.action === "rotate") {
+      if (target.action === "rotate" && issue !== false) {
         const data = await apiRequest<{
           servicePrincipal: ServicePrincipal;
           credential: string;
@@ -189,7 +195,7 @@
           `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/service-principals/${encodeURIComponent(target.agent.id)}/rotate`,
           { method: "POST", ...jsonBody({}) },
         );
-        issuance.succeed(data.credential, data.servicePrincipal.name);
+        issuance.succeed(issue, data.credential, data.servicePrincipal.name);
         copied = false;
         secretOpen = true;
       } else {
@@ -203,7 +209,7 @@
       error =
         caught instanceof Error ? caught.message : "The credential action failed.";
     } finally {
-      if (target.action === "rotate" && issuance.issuing) issuance.fail();
+      if (issue !== false) issuance.fail(issue);
     }
   }
 
