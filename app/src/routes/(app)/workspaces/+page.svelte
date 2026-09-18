@@ -1,5 +1,10 @@
 <script lang="ts">
-  import { apiRequest, jsonBody, SkillplaneApiError } from "$lib/api/client.js";
+  import {
+    apiErrorField,
+    apiRequest,
+    jsonBody,
+    SkillplaneApiError,
+  } from "$lib/api/client.js";
   import { useWorkspaceStore } from "$lib/workspaces/store.svelte.js";
   import { Button, EmptyState, ErrorState, Input, Skeleton } from "@skillplane/ui";
   import {
@@ -16,16 +21,19 @@
   let createRegionId = $state("");
   let createState = $state<"idle" | "saving">("idle");
   let createError = $state<string | null>(null);
+  let createErrorField = $state<string | null>(null);
   let savedMessage = $state<string | null>(null);
   let editName = $state("");
   let editSlug = $state("");
   let editState = $state<"idle" | "saving">("idle");
   let editError = $state<string | null>(null);
+  let editErrorField = $state<string | null>(null);
 
   $effect(() => {
     editName = store.active?.name ?? "";
     editSlug = store.active?.slug ?? "";
     editError = null;
+    editErrorField = null;
   });
 
   $effect(() => {
@@ -49,6 +57,7 @@
     if (createState === "saving") return;
     createState = "saving";
     createError = null;
+    createErrorField = null;
     try {
       const data = await apiRequest<{
         workspace: { id: string; name: string };
@@ -71,6 +80,7 @@
         error instanceof SkillplaneApiError
           ? error.message
           : "The workspace could not be created.";
+      createErrorField = apiErrorField(error) ?? null;
     } finally {
       createState = "idle";
     }
@@ -82,6 +92,7 @@
     if (!active || editState === "saving") return;
     editState = "saving";
     editError = null;
+    editErrorField = null;
     try {
       const data = await apiRequest<{
         workspace: { id: string; name: string };
@@ -96,6 +107,7 @@
         error instanceof SkillplaneApiError
           ? error.message
           : "The workspace could not be updated.";
+      editErrorField = apiErrorField(error) ?? null;
     } finally {
       editState = "idle";
     }
@@ -148,7 +160,7 @@
             autocomplete="organization"
             bind:value={createName}
             oninput={slugFromName}
-            error={createError ?? undefined}
+            error={createErrorField === "name" ? (createError ?? undefined) : undefined}
           />
         </div>
         <fieldset>
@@ -186,8 +198,12 @@
             maxlength={63}
             bind:value={createSlug}
             description={"Appears in the URL as skillplane.dev/{slug}."}
+            error={createErrorField === "slug" ? (createError ?? undefined) : undefined}
           />
         </div>
+        {#if createError && createErrorField !== "name" && createErrorField !== "slug"}
+          <p class="form-error" id="create-error" role="alert">{createError}</p>
+        {/if}
         <div class="actions">
           <Button onclick={() => (createOpen = false)}>Cancel</Button>
           <Button
@@ -266,7 +282,7 @@
               maxlength={120}
               bind:value={editName}
               disabled={!["admin", "owner"].includes(store.active.role)}
-              error={editError ?? undefined}
+              error={editErrorField === "name" ? (editError ?? undefined) : undefined}
             />
           </div>
           <div class="field">
@@ -278,8 +294,12 @@
               bind:value={editSlug}
               disabled={!["admin", "owner"].includes(store.active.role)}
               description={"Appears in the URL as skillplane.dev/{slug}."}
+              error={editErrorField === "slug" ? (editError ?? undefined) : undefined}
             />
           </div>
+          {#if editError && editErrorField !== "name" && editErrorField !== "slug"}
+            <p class="form-error" id="edit-error" role="alert">{editError}</p>
+          {/if}
           {#if ["admin", "owner"].includes(store.active.role)}
             <div class="actions end">
               <Button
@@ -595,6 +615,12 @@
     margin: 0;
     color: var(--text-tertiary);
     font-size: 0.76rem;
+  }
+
+  .form-error {
+    margin: 0;
+    color: var(--danger);
+    font-size: 0.75rem;
   }
 
   @media (max-width: 760px) {

@@ -1,5 +1,10 @@
 <script lang="ts">
-  import { apiRequest, jsonBody, SkillplaneApiError } from "$lib/api/client.js";
+  import {
+    apiErrorField,
+    apiRequest,
+    jsonBody,
+    SkillplaneApiError,
+  } from "$lib/api/client.js";
   import {
     useWorkspaceStore,
     type WorkspaceRole,
@@ -50,6 +55,7 @@
   let inviteEmail = $state("");
   let inviteRole = $state<Exclude<WorkspaceRole, "owner">>("editor");
   let inviteError = $state<string | null>(null);
+  let inviteErrorField = $state<string | null>(null);
   let sending = $state(false);
   let notice = $state<string | null>(null);
   let removeTarget = $state<Member | null>(null);
@@ -103,6 +109,7 @@
     if (!workspaceId || sending) return;
     sending = true;
     inviteError = null;
+    inviteErrorField = null;
     try {
       await apiRequest(
         `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/invitations`,
@@ -120,6 +127,7 @@
         caught instanceof SkillplaneApiError
           ? caught.message
           : "The invitation could not be sent.";
+      inviteErrorField = apiErrorField(caught) ?? null;
     } finally {
       sending = false;
     }
@@ -237,7 +245,7 @@
             autocomplete="email"
             placeholder="teammate@company.com"
             bind:value={inviteEmail}
-            error={inviteError ?? undefined}
+            error={inviteErrorField === "email" ? (inviteError ?? undefined) : undefined}
           />
         </div>
         <div class="field">
@@ -247,6 +255,9 @@
           Send invitation
         </Button>
       </form>
+      {#if inviteError && inviteErrorField !== "email"}
+        <p class="form-error" id="invite-error" role="alert">{inviteError}</p>
+      {/if}
     </section>
   {/if}
 
@@ -365,14 +376,11 @@
   <Dialog
     open
     title="Remove this member?"
+    description={`${removeTarget.email ?? "This member"} will immediately lose workspace access. Their historical activity and attribution will be preserved.`}
     onOpenChange={(open) => {
       if (!open) removeTarget = null;
     }}
   >
-    <p class="dialog-copy">
-      {removeTarget.email ?? "This member"} will immediately lose workspace access. Their
-      historical activity and attribution will be preserved.
-    </p>
     {#snippet footer()}
       <Button onclick={() => (removeTarget = null)}>Cancel</Button>
       <Button variant="danger" onclick={() => void removeMember()}>Remove member</Button
@@ -592,10 +600,10 @@
     padding: 0.75rem;
   }
 
-  .dialog-copy {
-    color: var(--text-secondary);
-    font-size: 0.76rem;
-    line-height: 1.6;
+  .form-error {
+    margin: 0.7rem 0 0;
+    color: var(--danger);
+    font-size: 0.73rem;
   }
 
   @media (max-width: 760px) {
