@@ -14,6 +14,7 @@
 <main>
   <p class="status">{page.status}</p>
   <ErrorState
+    headingLevel={1}
     title="The page could not be rendered."
     description={page.error?.message ?? "An unexpected application error occurred."}
     {retry}

@@ -69,7 +69,7 @@
   let role = $state<ServiceRole>("editor");
   let scopes = $state<Scope[]>(["skills:read", "skills:amend", "contexts:read"]);
   let expiresAt = $state("");
-  let saving = $state(false);
+  let issuing = $state(false);
   let formError = $state<string | null>(null);
   let credential = $state<string | null>(null);
   let credentialFor = $state<string | null>(null);
@@ -84,6 +84,14 @@
     store.active?.role === "owner" || store.active?.role === "admin",
   );
   const secretPending = $derived(Boolean(credential));
+  const issueBlocked = $derived(secretPending || issuing);
+  const issueBlockedReason = $derived(
+    secretPending
+      ? "Save the pending credential first"
+      : issuing
+        ? "A credential is already being issued"
+        : undefined,
+  );
   const roleOptions = [
     { value: "viewer", label: "Viewer" },
     { value: "editor", label: "Editor" },
@@ -121,7 +129,8 @@
   }
 
   function openCreateForm() {
-    if (credential) return;
+    if (credential || issuing) return;
+    actionTarget = null;
     createOpen = true;
   }
 
@@ -129,15 +138,17 @@
     agent: ServicePrincipal,
     action: "rotate" | "revoke",
   ) {
-    if (action === "rotate" && credential) return;
+    if (action === "rotate" && (credential || issuing)) return;
+    if (action === "rotate") createOpen = false;
     actionTarget = { agent, action };
   }
 
   async function createAgent(event: SubmitEvent) {
     event.preventDefault();
     const workspaceId = store.activeId;
-    if (!workspaceId || saving || credential) return;
-    saving = true;
+    if (!workspaceId || issuing || credential) return;
+    issuing = true;
+    actionTarget = null;
     formError = null;
     try {
       const data = await apiRequest<{
@@ -168,7 +179,7 @@
           ? caught.message
           : "The agent credential could not be created.";
     } finally {
-      saving = false;
+      issuing = false;
     }
   }
 
@@ -176,10 +187,11 @@
     const target = actionTarget;
     const workspaceId = store.activeId;
     if (!target || !workspaceId) return;
-    if (target.action === "rotate" && credential) {
+    if (target.action === "rotate" && (credential || issuing)) {
       actionTarget = null;
       return;
     }
+    if (target.action === "rotate") issuing = true;
     actionTarget = null;
     try {
       if (target.action === "rotate") {
@@ -204,6 +216,8 @@
     } catch (caught) {
       error =
         caught instanceof Error ? caught.message : "The credential action failed.";
+    } finally {
+      if (target.action === "rotate") issuing = false;
     }
   }
 
@@ -235,8 +249,8 @@
     {#if canManage}
       <Button
         variant="primary"
-        disabled={secretPending}
-        title={secretPending ? "Save the pending credential first" : undefined}
+        disabled={issueBlocked}
+        title={issueBlockedReason}
         onclick={openCreateForm}
       >
         {#snippet leading()}<Plus size={16} weight="bold" />{/snippet}
@@ -310,8 +324,8 @@
           <Button
             type="submit"
             variant="primary"
-            loading={saving}
-            disabled={saving || scopes.length === 0}
+            loading={issuing}
+            disabled={issuing || scopes.length === 0}
           >
             Create credential
           </Button>
@@ -341,8 +355,8 @@
       {#snippet action()}
         {#if canManage}
           <Button
-            disabled={secretPending}
-            title={secretPending ? "Save the pending credential first" : undefined}
+            disabled={issueBlocked}
+            title={issueBlockedReason}
             onclick={openCreateForm}
           >
             {#snippet leading()}<Plus size={15} weight="bold" />{/snippet}
@@ -390,8 +404,8 @@
             <div class="row-actions">
               <Button
                 size="sm"
-                disabled={secretPending}
-                title={secretPending ? "Save the pending credential first" : undefined}
+                disabled={issueBlocked}
+                title={issueBlockedReason}
                 onclick={() => requestAction(agent, "rotate")}
               >
                 Rotate
@@ -456,7 +470,7 @@
   {/if}
 {/if}
 
-{#if actionTarget && !(secretPending && actionTarget.action === "rotate")}
+{#if actionTarget && !(issueBlocked && actionTarget.action === "rotate")}
   {@const target = actionTarget}
   <Dialog
     open
