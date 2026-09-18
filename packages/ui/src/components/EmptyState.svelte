@@ -19,7 +19,7 @@
   const titleId = `${componentId}-title`;
 </script>
 
-<section class:compact aria-labelledby={titleId}>
+<section class:compact role="status" aria-labelledby={titleId}>
   <div class="icon" aria-hidden="true">
     {#if icon}{@render icon()}{:else}<FolderOpenIcon weight="duotone" />{/if}
   </div>

@@ -46,6 +46,7 @@
   />
 {:else if kind === "error" || kind === "conflict"}
   <ErrorState {title} description={message} {retry} />
+  {#if children}<div class="actions">{@render children()}</div>{/if}
 {:else}
   <section class="authorization" role="status">
     <span class="icon" aria-hidden="true">
