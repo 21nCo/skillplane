@@ -1,5 +1,6 @@
 <script lang="ts">
   import { apiRequest, jsonBody, SkillplaneApiError } from "$lib/api/client.js";
+  import { CredentialIssuance } from "$lib/workspaces/credential-issuance.svelte.js";
   import { useWorkspaceStore } from "$lib/workspaces/store.svelte.js";
   import {
     Button,
@@ -61,6 +62,7 @@
   ];
 
   const store = useWorkspaceStore();
+  const issuance = new CredentialIssuance();
   let agents = $state<ServicePrincipal[]>([]);
   let loading = $state(true);
   let error = $state<string | null>(null);
@@ -69,10 +71,7 @@
   let role = $state<ServiceRole>("editor");
   let scopes = $state<Scope[]>(["skills:read", "skills:amend", "contexts:read"]);
   let expiresAt = $state("");
-  let issuing = $state(false);
   let formError = $state<string | null>(null);
-  let credential = $state<string | null>(null);
-  let credentialFor = $state<string | null>(null);
   let copied = $state(false);
   let secretOpen = $state(false);
   let actionTarget = $state<{
@@ -82,15 +81,6 @@
 
   const canManage = $derived(
     store.active?.role === "owner" || store.active?.role === "admin",
-  );
-  const secretPending = $derived(Boolean(credential));
-  const issueBlocked = $derived(secretPending || issuing);
-  const issueBlockedReason = $derived(
-    secretPending
-      ? "Save the pending credential first"
-      : issuing
-        ? "A credential is already being issued"
-        : undefined,
   );
   const roleOptions = [
     { value: "viewer", label: "Viewer" },
@@ -129,7 +119,7 @@
   }
 
   function openCreateForm() {
-    if (credential || issuing) return;
+    if (issuance.blocked) return;
     actionTarget = null;
     createOpen = true;
   }
@@ -138,7 +128,7 @@
     agent: ServicePrincipal,
     action: "rotate" | "revoke",
   ) {
-    if (action === "rotate" && (credential || issuing)) return;
+    if (action === "rotate" && issuance.blocked) return;
     if (action === "rotate") createOpen = false;
     actionTarget = { agent, action };
   }
@@ -146,8 +136,7 @@
   async function createAgent(event: SubmitEvent) {
     event.preventDefault();
     const workspaceId = store.activeId;
-    if (!workspaceId || issuing || credential) return;
-    issuing = true;
+    if (!workspaceId || !issuance.begin()) return;
     actionTarget = null;
     formError = null;
     try {
@@ -165,8 +154,7 @@
             : null,
         }),
       });
-      credential = data.credential;
-      credentialFor = data.servicePrincipal.name;
+      issuance.succeed(data.credential, data.servicePrincipal.name);
       copied = false;
       secretOpen = true;
       createOpen = false;
@@ -179,7 +167,7 @@
           ? caught.message
           : "The agent credential could not be created.";
     } finally {
-      issuing = false;
+      if (issuance.issuing) issuance.fail();
     }
   }
 
@@ -187,11 +175,10 @@
     const target = actionTarget;
     const workspaceId = store.activeId;
     if (!target || !workspaceId) return;
-    if (target.action === "rotate" && (credential || issuing)) {
+    if (target.action === "rotate" && !issuance.begin()) {
       actionTarget = null;
       return;
     }
-    if (target.action === "rotate") issuing = true;
     actionTarget = null;
     try {
       if (target.action === "rotate") {
@@ -202,8 +189,7 @@
           `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/service-principals/${encodeURIComponent(target.agent.id)}/rotate`,
           { method: "POST", ...jsonBody({}) },
         );
-        credential = data.credential;
-        credentialFor = data.servicePrincipal.name;
+        issuance.succeed(data.credential, data.servicePrincipal.name);
         copied = false;
         secretOpen = true;
       } else {
@@ -217,19 +203,18 @@
       error =
         caught instanceof Error ? caught.message : "The credential action failed.";
     } finally {
-      if (target.action === "rotate") issuing = false;
+      if (target.action === "rotate" && issuance.issuing) issuance.fail();
     }
   }
 
   async function copyCredential() {
-    if (!credential) return;
-    await navigator.clipboard.writeText(credential);
+    if (!issuance.credential) return;
+    await navigator.clipboard.writeText(issuance.credential);
     copied = true;
   }
 
   function acknowledgeSecret() {
-    credential = null;
-    credentialFor = null;
+    issuance.acknowledge();
     copied = false;
     secretOpen = false;
   }
@@ -249,8 +234,8 @@
     {#if canManage}
       <Button
         variant="primary"
-        disabled={issueBlocked}
-        title={issueBlockedReason}
+        disabled={issuance.blocked}
+        title={issuance.blockedReason}
         onclick={openCreateForm}
       >
         {#snippet leading()}<Plus size={16} weight="bold" />{/snippet}
@@ -270,7 +255,7 @@
     </div>
   </section>
 
-  {#if createOpen && !secretPending}
+  {#if createOpen && !issuance.credential}
     <section class="create-card" aria-labelledby="create-agent-title">
       <div class="card-heading">
         <div>
@@ -324,8 +309,8 @@
           <Button
             type="submit"
             variant="primary"
-            loading={issuing}
-            disabled={issuing || scopes.length === 0}
+            loading={issuance.issuing}
+            disabled={issuance.issuing || scopes.length === 0}
           >
             Create credential
           </Button>
@@ -355,8 +340,8 @@
       {#snippet action()}
         {#if canManage}
           <Button
-            disabled={issueBlocked}
-            title={issueBlockedReason}
+            disabled={issuance.blocked}
+            title={issuance.blockedReason}
             onclick={openCreateForm}
           >
             {#snippet leading()}<Plus size={15} weight="bold" />{/snippet}
@@ -404,8 +389,8 @@
             <div class="row-actions">
               <Button
                 size="sm"
-                disabled={issueBlocked}
-                title={issueBlockedReason}
+                disabled={issuance.blocked}
+                title={issuance.blockedReason}
                 onclick={() => requestAction(agent, "rotate")}
               >
                 Rotate
@@ -425,11 +410,11 @@
   {/if}
 </main>
 
-{#if credential}
+{#if issuance.credential}
   {#snippet secretBody()}
     <p class="section-label">One-time secret</p>
     <div class="secret">
-      <code>{credential}</code>
+      <code>{issuance.credential}</code>
       {#if copied}
         <Button size="sm" variant="ghost" onclick={() => void copyCredential()}>
           {#snippet leading()}<Check size={16} weight="bold" />{/snippet}
@@ -446,7 +431,7 @@
 
   <Dialog
     bind:open={secretOpen}
-    title="Save the credential for {credentialFor}"
+    title="Save the credential for {issuance.credentialFor}"
     description="This secret will not be shown again. Store it in your agent’s encrypted secret manager. Only a secure hash is retained."
   >
     {@render secretBody()}
@@ -457,7 +442,7 @@
 
   {#if !secretOpen}
     <section class="create-card" role="status" aria-labelledby="credential-title">
-      <h2 id="credential-title">Save the credential for {credentialFor}</h2>
+      <h2 id="credential-title">Save the credential for {issuance.credentialFor}</h2>
       <p class="dialog-copy">
         The dialog was closed, but this secret is still shown once. Store it before
         continuing. Only a secure hash is retained.
@@ -470,7 +455,7 @@
   {/if}
 {/if}
 
-{#if actionTarget && !(issueBlocked && actionTarget.action === "rotate")}
+{#if actionTarget && !(issuance.blocked && actionTarget.action === "rotate")}
   {@const target = actionTarget}
   <Dialog
     open
