@@ -311,7 +311,7 @@
             type="submit"
             variant="primary"
             loading={saving}
-            disabled={saving || secretPending || scopes.length === 0}
+            disabled={saving || scopes.length === 0}
           >
             Create credential
           </Button>
