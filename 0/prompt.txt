@@ -1,0 +1,9 @@
+deploy to dev and verify end to end
+
+---
+
+<environment_context>
+  <current_date>2026-09-21</current_date>
+  <timezone>Asia/Kolkata</timezone>
+  <filesystem><workspace_roots><root>/Users/serro/orca/workspaces/skillplane/ski-16-adopt-ticket-protected-direct-regional-da</root></workspace_roots><permission_profile type="disabled"><file_system type="unrestricted" /></permission_profile></filesystem>
+</environment_context>
