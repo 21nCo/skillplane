@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { renderDevelopmentTopologyConfigs } from "./render-development-topology-config.mjs";
 import { assertDevelopmentControlDatabaseShape } from "./prepare-development-topology-databases.mjs";
+import { selectDevelopmentTopologyOutputs } from "./lib/development-topology-deployment.mjs";
 
 const ids = {
   control: "1".repeat(32),
@@ -35,6 +36,16 @@ describe("multi-cell development deployment", () => {
     });
 
     assert.equal(rendered.outputs.length, 14);
+    const canary = selectDevelopmentTopologyOutputs(rendered.outputs, [
+      "app",
+      "datafn",
+    ]);
+    assert.equal(canary.length, 7);
+    assert.deepEqual(
+      canary.map((output) => output.kind),
+      ["app", "datafn", "app", "datafn", "app", "datafn", "app"],
+    );
+    assert.equal(canary.at(-1)?.id, "gateway:app");
     const gatewayApp = rendered.outputs.find((output) => output.id === "gateway:app");
     const gatewayMcp = rendered.outputs.find((output) => output.id === "gateway:mcp");
     assert.equal(gatewayApp.config.name, "skillplane-app-dev");
