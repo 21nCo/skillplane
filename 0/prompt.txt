@@ -1,0 +1,38 @@
+$use-skillplane work linear issue
+ https://linear.app/21n/issue/SKI-16/adopt-ticket-protected-direct-regional-datafn-transport-in-skillplane
+
+---
+
+explain me the approaches in detail and consequences in simple terms
+
+---
+
+if we have to take the two crendential approach - how can we acheive it? upstream changes needed?
+
+---
+
+why aren't we simply using the session cookie issued by auth server? and probably use the same private key used by auth server in regional endpoints as well to verify the signature?
+
+---
+
+okay ignore this idea... come back the first recommendation of ticket only... now explain me in simple terms how it works? how is it verified in regional servers that auth server is the one who issued it and verified?
+
+---
+
+alright this sounds good.. before we make upstream fixes... explain what do you mean by shared secret? private key is accessible by regional servers as well?
+
+---
+
+alright go ahead and make all necessary upstream changes and create a PR - use public/private key pair approach
+
+---
+
+quickly check whether publishing latest (merged 202) datafn on origin/dev of super-functions is enough for continuing ski-16 task
+
+---
+
+check now
+
+---
+
+resume
