@@ -1,0 +1,25 @@
+scripts/development-topology-deployment.test.mjs
+  s_c97ce47fb19027::t_7734fff4151e97 43,46,48
+  s_c97ce47fb19027::t_581c2d281385c2 5,44-45,47
+  s_c97ce47fb19027::t_94642516a3e2d6 39-42
+scripts/lib/development-topology-deployment.mjs
+  s_c97ce47fb19027::t_581c2d281385c2 137-154,202
+scripts/deploy-development-topology.mjs
+  s_c97ce47fb19027::t_581c2d281385c2 9-11,13
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0058ebf7ce23fde999cb14b695746e336a818e0d",
+  "prompts": {},
+  "sessions": {
+    "s_c97ce47fb19027": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0bd2d-fcd8-75d3-8666-348633042463",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
