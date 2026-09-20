@@ -64,8 +64,7 @@ describe("first-party regional DataFn read boundary", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    await listSkills({ workspaceId });
-    await listSkills({ workspaceId });
+    await Promise.all([listSkills({ workspaceId }), listSkills({ workspaceId })]);
     expect(bootstrapCount).toBe(1);
     expect(oldRegionReads).toBe(2);
     expect(

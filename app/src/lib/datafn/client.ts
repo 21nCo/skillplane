@@ -81,6 +81,7 @@ function createCanonicalClient(workspaceId: string): SkillplaneDatafnClient {
 }
 
 function createRegionalClient(workspaceId: string): SkillplaneDatafnClient {
+  let pendingBootstrap: Promise<Response> | null = null;
   const bootstrap = createDatafnHttpRouteProvider({
     bootstrapUrl: new URL("/api/v1/datafn/route", window.location.origin).href,
     credentials: "include",
@@ -92,10 +93,18 @@ function createRegionalClient(workspaceId: string): SkillplaneDatafnClient {
       };
     },
     fetch: async (input, init) => {
-      const started = performance.now();
-      const response = await fetch(input, init);
-      report("bootstrap", "gateway", started, response.status);
-      return response;
+      if (!pendingBootstrap) {
+        const started = performance.now();
+        pendingBootstrap = fetch(input, init)
+          .then((response) => {
+            report("bootstrap", "gateway", started, response.status);
+            return response;
+          })
+          .finally(() => {
+            pendingBootstrap = null;
+          });
+      }
+      return (await pendingBootstrap).clone();
     },
   });
   return createSkillplaneDatafnClient({
