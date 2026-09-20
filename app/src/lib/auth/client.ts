@@ -3,6 +3,7 @@ import {
   type AuthFnErrorEnvelope,
   type AuthFnSession,
 } from "@authfn/client";
+import { resetWorkspaceDatafnClients } from "$lib/datafn/client.js";
 
 export type OtpPurpose = "sign-up";
 export interface OtpContext {
@@ -71,6 +72,7 @@ export async function verifyOtp(input: {
       sessionMode: "cookie",
     }),
   );
+  await resetWorkspaceDatafnClients();
 }
 
 export async function getSession(): Promise<BrowserSession | null> {
@@ -78,7 +80,11 @@ export async function getSession(): Promise<BrowserSession | null> {
 }
 
 export async function signOut(): Promise<void> {
-  unwrap(await client.signOut());
+  try {
+    unwrap(await client.signOut());
+  } finally {
+    await resetWorkspaceDatafnClients();
+  }
 }
 
 export function saveOtpContext(context: OtpContext): void {

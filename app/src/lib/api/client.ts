@@ -32,7 +32,7 @@ export class SkillplaneApiError extends Error {
   }
 }
 
-function csrfToken(): string | undefined {
+export function csrfToken(): string | undefined {
   if (typeof document === "undefined") return undefined;
   const value = document.cookie
     .split(";")

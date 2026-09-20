@@ -38,6 +38,8 @@ describe("multi-cell Cloudflare topology adapter", () => {
       publicTurnstileSiteKey: "0x4AAAAAAAAAA-production-site-key",
       controlHyperdriveId: ids.control,
       publicBucketName: "skillplane-public-bundles",
+      directDatafnEnabled: true,
+      directDatafnWorkspaceIds: "workspace:canary",
       mcpVariables: { POSTHOG_HOST: "https://analytics.example.test" },
       cells: {
         "in-south": {
@@ -55,11 +57,26 @@ describe("multi-cell Cloudflare topology adapter", () => {
     assert.deepEqual(Object.keys(configs.cells).sort(), ["in-south", "us-east"]);
     for (const [regionId, pair] of Object.entries(configs.cells)) {
       for (const [kind, worker] of Object.entries(pair)) {
+        if (kind === "datafn") {
+          assert.equal(worker.routes[0].pattern, `datafn-${regionId}.skillplane.dev`);
+          assert.deepEqual(worker.services, [
+            { binding: "CELL_APP", service: pair.app.name },
+          ]);
+          assert.equal(worker.hyperdrive, undefined);
+          assert.equal(worker.r2_buckets, undefined);
+          assert.equal(worker.ratelimits[0].name, "DATAFN_EDGE_LIMIT");
+          assert.equal(worker.vars.DATAFN_DIRECT_ENABLED, "true");
+          continue;
+        }
         assert.equal(worker.routes, undefined);
         assert.equal(worker.services, undefined);
         assert.equal(worker.workers_dev, false);
         assert.equal(worker.vars.SKILLPLANE_ROLE, "cell");
         assert.equal(worker.vars.SKILLPLANE_REGION_ID, regionId);
+        assert.equal(
+          worker.vars.DATAFN_DIRECT_ENABLED,
+          kind === "app" ? "true" : undefined,
+        );
         assert.equal(worker.hyperdrive.length, 2);
         assert.equal(worker.r2_buckets.length, kind === "projection" ? 2 : 1);
         assert.equal(worker.send_email, undefined);
@@ -75,6 +92,8 @@ describe("multi-cell Cloudflare topology adapter", () => {
       assert.equal(config.vars.POSTHOG_HOST, "https://analytics.example.test");
     }
     assert.equal(configs.gateway.app.vars.AUTH_MODE, "otp");
+    assert.equal(configs.gateway.app.vars.DATAFN_DIRECT_WORKSPACES, "workspace:canary");
+    assert.equal(configs.gateway.mcp.vars.DATAFN_DIRECT_ENABLED, undefined);
     assert.equal(configs.gateway.app.vars.EMAIL_PROVIDER, "cloudflare-email");
     assert.equal(configs.gateway.app.send_email[0].name, "SEND_EMAIL");
     assert.deepEqual(configs.gateway.mcp.compatibility_flags, [
@@ -147,12 +166,16 @@ it("reports bucket identities matching every generated Worker binding", async ()
     ),
   );
   for (const output of rendered.outputs) {
-    const names = output.config.r2_buckets.map((binding) => binding.bucket_name).sort();
+    const names = (output.config.r2_buckets ?? [])
+      .map((binding) => binding.bucket_name)
+      .sort();
     const expected = output.id.startsWith("gateway:")
       ? [rendered.buckets.public]
-      : output.kind === "projection"
-        ? [rendered.buckets.public, rendered.buckets.cells[output.regionId]]
-        : [rendered.buckets.cells[output.regionId]];
+      : output.kind === "datafn"
+        ? []
+        : output.kind === "projection"
+          ? [rendered.buckets.public, rendered.buckets.cells[output.regionId]]
+          : [rendered.buckets.cells[output.regionId]];
     assert.deepEqual(names, expected.sort());
   }
 });

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { validateDatafnTicketKeys } from "./lib/datafn-ticket-keys.mjs";
 import {
   activeWorkerVersion,
   capture,
@@ -60,16 +61,40 @@ export function routingKeys(manifest) {
 }
 
 export function secretsFor(output, manifest) {
-  if (output.kind === "projection") return null;
+  if (output.kind === "projection" || output.kind === "datafn") return null;
   const shared = {
     OAUTH_TOKEN_PEPPER: requireSecretEnvironment("OAUTH_TOKEN_PEPPER"),
     WORKSPACE_ROUTING_KEYS: routingKeys(manifest),
   };
-  if (output.id === "gateway:app") return { ...productionSecrets(), ...shared };
+  const direct = output.config?.vars?.DATAFN_DIRECT_ENABLED === "true";
+  const ticketKeys = direct
+    ? validateDatafnTicketKeys({
+        activeKeyId: requireEnvironment("DATAFN_ROUTE_ACTIVE_KEY_ID"),
+        privateKey: requireSecretEnvironment("DATAFN_ROUTE_PRIVATE_KEY_PEM"),
+        publicKeysJson: requireEnvironment("DATAFN_ROUTE_PUBLIC_KEYS"),
+      })
+    : null;
+  if (output.id === "gateway:app")
+    return {
+      ...productionSecrets(),
+      ...shared,
+      ...(direct
+        ? {
+            DATAFN_ROUTE_ACTIVE_KEY_ID: ticketKeys.activeKeyId,
+            DATAFN_ROUTE_PRIVATE_KEY_PEM: ticketKeys.privateKey,
+            AUTHFN_PLACEMENT_SUBJECT_SECRET: requireSecretEnvironment(
+              "AUTHFN_PLACEMENT_SUBJECT_SECRET",
+            ),
+          }
+        : {}),
+    };
   if (output.kind === "mcp") {
     return { ...shared, POSTHOG_PROJECT_TOKEN: requirePostHogProjectToken() };
   }
-  return shared;
+  return {
+    ...shared,
+    ...(direct ? { DATAFN_ROUTE_PUBLIC_KEYS: ticketKeys.publicKeysJson } : {}),
+  };
 }
 
 function worker(output) {
@@ -270,8 +295,8 @@ export async function deployTopology(options = {}) {
 if (isMain(import.meta.url)) {
   const onlyIndex = process.argv.indexOf("--only");
   const only = onlyIndex >= 0 ? process.argv[onlyIndex + 1] : undefined;
-  if (only && !["app", "mcp", "projection"].includes(only)) {
-    throw new Error("--only must be app, mcp, or projection");
+  if (only && !["app", "mcp", "projection", "datafn"].includes(only)) {
+    throw new Error("--only must be app, mcp, projection, or datafn");
   }
   process.stdout.write(`${JSON.stringify(await deployTopology({ only }), null, 2)}\n`);
 }

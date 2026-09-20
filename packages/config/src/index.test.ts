@@ -55,6 +55,11 @@ function topology() {
         objectStorageBinding: "CELL_IN_SOUTH_BUNDLES",
         appServiceBinding: "CELL_IN_SOUTH_APP",
         mcpServiceBinding: "CELL_IN_SOUTH_MCP",
+        datafnEndpoint: {
+          httpUrl: "https://datafn-in-south.skillplane.dev/datafn",
+          wsUrl: "wss://datafn-in-south.skillplane.dev/datafn",
+          audience: "skillplane-datafn-in-south",
+        },
         publiclyRoutable: false,
       },
       {
@@ -63,6 +68,11 @@ function topology() {
         objectStorageBinding: "CELL_US_EAST_BUNDLES",
         appServiceBinding: "CELL_US_EAST_APP",
         mcpServiceBinding: "CELL_US_EAST_MCP",
+        datafnEndpoint: {
+          httpUrl: "https://datafn-us-east.skillplane.dev/datafn",
+          wsUrl: "wss://datafn-us-east.skillplane.dev/datafn",
+          audience: "skillplane-datafn-us-east",
+        },
         publiclyRoutable: false,
       },
     ],
@@ -101,6 +111,72 @@ function productionBindings(overrides: Partial<RuntimeBindings> = {}): RuntimeBi
 }
 
 describe("parseRuntimeConfig", () => {
+  it("separates the gateway signing secret from regional verification keys", () => {
+    const common = {
+      HYPERDRIVE: undefined,
+      SKILL_BUNDLES: undefined,
+      SKILLPLANE_TOPOLOGY: JSON.stringify(topology()),
+      CONTROL_HYPERDRIVE: {
+        connectionString:
+          "postgresql://fixture:fixture@control.invalid:5432/skillplane",
+      },
+      PUBLIC_SKILL_BUNDLES: objectStorage,
+      WORKSPACE_ROUTING_KEYS: JSON.stringify({ current: routingSecret }),
+      DATAFN_DIRECT_ENABLED: "true",
+      DATAFN_DIRECT_WORKSPACES: "workspace:canary",
+    } satisfies Partial<RuntimeBindings>;
+    const gateway = parseRuntimeConfig(
+      productionBindings({
+        ...common,
+        SKILLPLANE_ROLE: "gateway",
+        DATAFN_ROUTE_ACTIVE_KEY_ID: "ticket-1",
+        DATAFN_ROUTE_PRIVATE_KEY_PEM:
+          "-----BEGIN PRIVATE KEY-----\nfixture\n-----END PRIVATE KEY-----",
+        AUTHFN_PLACEMENT_SUBJECT_SECRET:
+          "independent-placement-subject-secret-32-bytes",
+      }),
+      { authentication: "oauth-only" },
+    );
+    expect(gateway.directDatafn).toMatchObject({
+      enabled: true,
+      workspaceIds: ["workspace:canary"],
+      activeKeyId: "ticket-1",
+    });
+    expect(gateway.directDatafn.publicKeys).toBeUndefined();
+
+    const cell = parseRuntimeConfig(
+      productionBindings({
+        ...common,
+        SKILLPLANE_ROLE: "cell",
+        SKILLPLANE_REGION_ID: "in-south",
+        CELL_IN_SOUTH_HYPERDRIVE: {
+          connectionString:
+            "postgresql://fixture:fixture@regional.invalid:5432/skillplane",
+        },
+        CELL_IN_SOUTH_BUNDLES: objectStorage,
+        DATAFN_ROUTE_PUBLIC_KEYS: JSON.stringify({
+          "ticket-1": "-----BEGIN PUBLIC KEY-----\nfixture\n-----END PUBLIC KEY-----",
+        }),
+      }),
+      { authentication: "oauth-only" },
+    );
+    expect(cell.directDatafn.publicKeys).toHaveProperty("ticket-1");
+    expect(cell.directDatafn.privateKey).toBeUndefined();
+    expect(() =>
+      parseRuntimeConfig(
+        productionBindings({
+          ...common,
+          SKILLPLANE_ROLE: "gateway",
+          DATAFN_ROUTE_ACTIVE_KEY_ID: "ticket-1",
+          DATAFN_ROUTE_PRIVATE_KEY_PEM:
+            "-----BEGIN PRIVATE KEY-----\nfixture\n-----END PRIVATE KEY-----",
+          AUTHFN_PLACEMENT_SUBJECT_SECRET: fixtureSecret,
+        }),
+        { authentication: "oauth-only" },
+      ),
+    ).toThrowError(expect.objectContaining({ code: "CONFIG_INVALID" }));
+  });
+
   it("accepts a complete local Postgres and R2 runtime", () => {
     const config = parseRuntimeConfig({
       RUNTIME_ENV: "local",

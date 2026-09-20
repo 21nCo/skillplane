@@ -2,6 +2,7 @@ import {
   CloudflareTurnstileVerifier,
   createSkillplaneAuthFnMultiRegionConfig,
   createPostgresOtpRateLimiter,
+  createPostgresAuthFnPlacementDirectory,
   createSkillplaneAuthServer,
 } from "@skillplane/auth";
 import { parseRuntimeConfig, type RuntimeBindings } from "@skillplane/config";
@@ -13,7 +14,18 @@ import {
   logWorkspaceRoutingEvent,
 } from "@skillplane/control-plane";
 import { createSkillplaneDatafnServer } from "@skillplane/datafn";
-import { createDatabaseClient } from "@skillplane/db";
+import {
+  createDatafnEd25519RouteTicketSigner,
+  createDatafnEd25519RouteTicketVerifier,
+  createDatafnRouteBootstrap,
+  type DatafnNamespacePlacement,
+  type DatafnRegionalTicketRuntime,
+} from "@datafn/server";
+import {
+  consumeRateLimit,
+  createDatabaseClient,
+  resolveUserPrincipal,
+} from "@skillplane/db";
 import { createSkillplaneSendFn } from "@skillplane/email";
 import {
   VersionLifecycleService,
@@ -42,11 +54,37 @@ export interface BuildApiServicesOptions {
   readonly authentication?: "full" | "oauth-only";
 }
 
+function requireConfigured<T>(value: T | undefined, name: string): T {
+  if (value === undefined) throw new Error(`${name} is required`);
+  return value;
+}
+
 export async function buildApiServices(
   bindings: RuntimeBindings,
   options: BuildApiServicesOptions = {},
 ): Promise<ApiServices> {
   const runtime = parseRuntimeConfig(bindings, options);
+  const gatewayTickets =
+    runtime.deployment.role === "gateway" && runtime.directDatafn.enabled
+      ? {
+          subjectSecret: requireConfigured(
+            runtime.directDatafn.subjectSecret,
+            "AUTHFN_PLACEMENT_SUBJECT_SECRET",
+          ),
+          activeKeyId: requireConfigured(
+            runtime.directDatafn.activeKeyId,
+            "DATAFN_ROUTE_ACTIVE_KEY_ID",
+          ),
+          privateKey: requireConfigured(
+            runtime.directDatafn.privateKey,
+            "DATAFN_ROUTE_PRIVATE_KEY_PEM",
+          ),
+        }
+      : null;
+  const cellTicketKeys =
+    runtime.deployment.role === "cell" && runtime.directDatafn.enabled
+      ? requireConfigured(runtime.directDatafn.publicKeys, "DATAFN_ROUTE_PUBLIC_KEYS")
+      : null;
   const single = runtime.deployment.role === "single";
   const controlDatabase = createDatabaseClient({
     connectionString: runtime.controlDatabase.connectionString,
@@ -73,6 +111,9 @@ export async function buildApiServices(
       })
     : null;
   try {
+    const authPlacementDirectory = createPostgresAuthFnPlacementDirectory(
+      controlDatabase.pool,
+    );
     const auth = createSkillplaneAuthServer({
       database: controlDatabase,
       oauth: {
@@ -86,6 +127,16 @@ export async function buildApiServices(
               issuer: runtime.oauth.issuer,
               resource: runtime.oauth.resource,
             }),
+          }
+        : {}),
+      ...(gatewayTickets
+        ? {
+            placementContext: {
+              regionId: runtime.deployment.topology.controlPlane.regionId,
+              subjectSecret: gatewayTickets.subjectSecret,
+              directory: authPlacementDirectory,
+              identityKeyForUserId: (userId: string) => `user:${userId}`,
+            },
           }
         : {}),
       ...(email ? { delivery: email.delivery } : {}),
@@ -111,6 +162,116 @@ export async function buildApiServices(
     const placementDirectory = createPostgresWorkspacePlacementDirectory(
       controlDatabase.pool,
     );
+    const regionalEndpoint = runtime.deployment.topology.cells.find(
+      (cell) => cell.regionId === runtime.deployment.regionId,
+    )?.datafnEndpoint;
+    const routeTickets: DatafnRegionalTicketRuntime | undefined =
+      runtime.deployment.role === "cell" && cellTicketKeys && regionalEndpoint
+        ? {
+            verifier: createDatafnEd25519RouteTicketVerifier({
+              publicKeys: { ...cellTicketKeys },
+            }),
+            issuer: runtime.oauth.issuer,
+            audience: regionalEndpoint.audience,
+            allowedOrigins: [runtime.oauth.issuer],
+            allowRequest: async (claims) =>
+              (
+                await consumeRateLimit(
+                  controlDatabase.pool,
+                  `datafn-direct:${claims.namespace}:${claims.subject}`,
+                  120,
+                  60,
+                )
+              ).allowed,
+            onEvent: (event) =>
+              console.info(
+                JSON.stringify({
+                  event: "datafn.ticket",
+                  ...event,
+                  regionId: runtime.deployment.regionId,
+                }),
+              ),
+          }
+        : undefined;
+    const datafnSigner = gatewayTickets
+      ? createDatafnEd25519RouteTicketSigner({
+          activeKeyId: gatewayTickets.activeKeyId,
+          privateKey: gatewayTickets.privateKey,
+        })
+      : null;
+    const datafnBootstrap = datafnSigner
+      ? async (request: Request) => {
+          const observed: { placement: DatafnNamespacePlacement | null } = {
+            placement: null,
+          };
+          const issue = createDatafnRouteBootstrap({
+            directory: {
+              ...placementDirectory,
+              get: async (namespace) => {
+                observed.placement = await placementDirectory.get(namespace);
+                return observed.placement;
+              },
+            },
+            signer: datafnSigner,
+            issuer: runtime.oauth.issuer,
+            ttlMs: 60_000,
+            authenticate: async (request) => {
+              const workspaceId =
+                request.headers.get("x-skillplane-workspace-id") ?? undefined;
+              if (
+                !workspaceId ||
+                !(
+                  runtime.directDatafn.workspaceIds.includes("*") ||
+                  runtime.directDatafn.workspaceIds.includes(workspaceId)
+                )
+              )
+                throw new Error("DATAFN_DIRECT_DISABLED");
+              const session = await auth.provider.authenticate(request);
+              if (!session) throw new Error("AUTHENTICATION_REQUIRED");
+              await resolveUserPrincipal(controlDatabase.pool, session, workspaceId);
+              const identityKey = `user:${session.actorId}`;
+              await authPlacementDirectory.putIfAbsent({
+                identityKey,
+                regionId: runtime.deployment.topology.controlPlane.regionId,
+                epoch: 1,
+                state: "active",
+                updatedAt: new Date(),
+              });
+              if (!auth.derivePlacementContext)
+                throw new Error("DATAFN_AUTH_CONTEXT_UNAVAILABLE");
+              const context = await auth.derivePlacementContext(request);
+              if (context.actorType !== "user" || context.userId !== session.actorId) {
+                throw new Error("DATAFN_AUTH_CONTEXT_INVALID");
+              }
+              return {
+                subject: context.userId,
+                namespace: workspaceId,
+                sessionBinding: context.sessionBinding,
+                expiresAt: Date.parse(context.expiresAt),
+              };
+            },
+            authorize: () => ["query", "search"],
+            resolveEndpoint: (placement) => {
+              const endpoint = runtime.deployment.topology.cells.find(
+                (cell) => cell.regionId === placement.regionId,
+              )?.datafnEndpoint;
+              if (!endpoint) throw new Error("DATAFN_ENDPOINT_UNAVAILABLE");
+              // The current Skillplane DataFn schema is read only and does not
+              // admit WebSocket sync. Do not advertise an unusable WS route.
+              return { httpUrl: endpoint.httpUrl, audience: endpoint.audience };
+            },
+            onEvent: (event) =>
+              console.info(JSON.stringify({ event: "datafn.bootstrap", ...event })),
+          });
+          const response = await issue(request);
+          if (!response.ok || !observed.placement) return response;
+          const descriptor = (await response.json()) as Record<string, unknown>;
+          return Response.json(
+            { ...descriptor, regionEpoch: observed.placement.epoch },
+            { headers: response.headers },
+          );
+        }
+      : null;
     const datafn = await createSkillplaneDatafnServer({
       database,
       controlDatabase,
@@ -124,12 +285,14 @@ export async function buildApiServices(
             placement: {
               directory: placementDirectory,
               requireRoutingAssertion: true,
+              ...(routeTickets ? { routeTickets } : {}),
               assertionVerifier: assertions,
               replayStore: createPostgresRoutingReplayStore(controlDatabase.pool),
               assertionAudience: runtime.routing.audience,
               onEvent: (event) => logWorkspaceRoutingEvent("datafn", event),
             },
             trustDirectWorkspaceHeader: false,
+            ...(routeTickets ? { routeTickets } : {}),
           }
         : {}),
       debug: runtime.environment === "local",
@@ -234,6 +397,7 @@ export async function buildApiServices(
       deploymentRole: runtime.deployment.role,
       auth,
       datafn,
+      datafnBootstrap,
       email,
       tenancySecret,
       bundleStorage,

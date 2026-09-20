@@ -50,6 +50,14 @@ export function authorizationMiddleware(): MiddlewareHandler<ApiEnvironment> {
       throw new AuthenticationRequiredError();
     }
     if (context.req.path.startsWith("/datafn/")) {
+      if (
+        context.get("services")?.deploymentRole === "cell" &&
+        context.req.header("x-datafn-route-ticket") !== undefined
+      ) {
+        // The DataFn context and placement plugin both verify the ticket.
+        await next();
+        return;
+      }
       const principal = await resolveWorkspaceRequestContext(context);
       context.set("principal", principal);
       await next();

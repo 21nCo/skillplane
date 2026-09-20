@@ -48,6 +48,39 @@ const mcpResource = z.url().refine((value) => {
     parsed.pathname === "/mcp"
   );
 }, "must be a secure or loopback /mcp resource URL");
+const datafnEndpoint = z
+  .object({
+    httpUrl: z.url().refine((value) => {
+      const parsed = new URL(value);
+      return (
+        secureOrLoopback(parsed) &&
+        !parsed.username &&
+        !parsed.password &&
+        !parsed.search &&
+        !parsed.hash &&
+        parsed.pathname === "/datafn"
+      );
+    }, "must be a secure or loopback /datafn URL"),
+    wsUrl: z.url().refine((value) => {
+      const parsed = new URL(value);
+      return (
+        (parsed.protocol === "wss:" ||
+          (parsed.protocol === "ws:" &&
+            ["localhost", "127.0.0.1", "::1"].includes(parsed.hostname))) &&
+        !parsed.username &&
+        !parsed.password &&
+        !parsed.search &&
+        !parsed.hash &&
+        parsed.pathname === "/datafn"
+      );
+    }, "must be a secure or loopback WebSocket /datafn URL"),
+    audience: identifier,
+  })
+  .strict()
+  .refine(
+    ({ httpUrl, wsUrl }) => new URL(httpUrl).host === new URL(wsUrl).host,
+    "HTTP and WebSocket endpoints must share one host",
+  );
 
 const cellSchema = z
   .object({
@@ -64,6 +97,7 @@ const cellSchema = z
     objectStorageBinding: bindingName,
     appServiceBinding: bindingName,
     mcpServiceBinding: bindingName,
+    datafnEndpoint: datafnEndpoint.optional(),
     publiclyRoutable: z.literal(false),
   })
   .strict();

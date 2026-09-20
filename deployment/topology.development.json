@@ -24,6 +24,11 @@
       "objectStorageBinding": "CELL_IN_SOUTH_BUNDLES",
       "appServiceBinding": "CELL_IN_SOUTH_APP",
       "mcpServiceBinding": "CELL_IN_SOUTH_MCP",
+      "datafnEndpoint": {
+        "httpUrl": "https://datafn-in-south-dev.skillplane.dev/datafn",
+        "wsUrl": "wss://datafn-in-south-dev.skillplane.dev/datafn",
+        "audience": "skillplane-datafn-dev-in-south"
+      },
       "publiclyRoutable": false
     },
     {
@@ -37,6 +42,11 @@
       "objectStorageBinding": "CELL_US_EAST_BUNDLES",
       "appServiceBinding": "CELL_US_EAST_APP",
       "mcpServiceBinding": "CELL_US_EAST_MCP",
+      "datafnEndpoint": {
+        "httpUrl": "https://datafn-us-east-dev.skillplane.dev/datafn",
+        "wsUrl": "wss://datafn-us-east-dev.skillplane.dev/datafn",
+        "audience": "skillplane-datafn-dev-us-east"
+      },
       "publiclyRoutable": false
     },
     {
@@ -50,6 +60,11 @@
       "objectStorageBinding": "CELL_EU_WEST_BUNDLES",
       "appServiceBinding": "CELL_EU_WEST_APP",
       "mcpServiceBinding": "CELL_EU_WEST_MCP",
+      "datafnEndpoint": {
+        "httpUrl": "https://datafn-eu-west-dev.skillplane.dev/datafn",
+        "wsUrl": "wss://datafn-eu-west-dev.skillplane.dev/datafn",
+        "audience": "skillplane-datafn-dev-eu-west"
+      },
       "publiclyRoutable": false
     }
   ],

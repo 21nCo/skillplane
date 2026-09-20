@@ -22,6 +22,11 @@ const config = {
         "font-src": ["self"],
         "connect-src": [
           "self",
+          "https://datafn-in-south.skillplane.dev",
+          "https://datafn-us-east.skillplane.dev",
+          "https://datafn-in-south-dev.skillplane.dev",
+          "https://datafn-us-east-dev.skillplane.dev",
+          "https://datafn-eu-west-dev.skillplane.dev",
           "https://challenges.cloudflare.com",
           // posthog.config.ts restricts PUBLIC_POSTHOG_HOST to these HTTPS domains.
           "https://user.skillplane.dev",

@@ -93,6 +93,11 @@ export async function renderDevelopmentTopologyConfigs(options = {}) {
     controlHyperdriveId,
     publicBucketName,
     cells,
+    directDatafnEnabled:
+      (options.directDatafnEnabled ?? process.env.DATAFN_DIRECT_ENABLED) === true ||
+      (options.directDatafnEnabled ?? process.env.DATAFN_DIRECT_ENABLED) === "true",
+    directDatafnWorkspaceIds:
+      options.directDatafnWorkspaceIds ?? process.env.DATAFN_DIRECT_WORKSPACES,
     publicTurnstileSiteKey: options.publicTurnstileSiteKey ?? developmentSiteKey(),
     runtimeEnvironment: "preview",
     otpFrom: "Skillplane Dev <no-reply@auth-dev.skillplane.dev>",
@@ -108,6 +113,7 @@ export async function renderDevelopmentTopologyConfigs(options = {}) {
       appCell: (regionId) => `skillplane-app-dev-${regionId}`,
       mcpCell: (regionId) => `skillplane-mcp-dev-${regionId}`,
       projection: (regionId) => `skillplane-projection-dev-${regionId}`,
+      datafn: (regionId) => `skillplane-datafn-dev-${regionId}`,
     },
   });
   const outputs = [
@@ -126,18 +132,22 @@ export async function renderDevelopmentTopologyConfigs(options = {}) {
       kind: "mcp",
     },
     ...manifest.cells.flatMap((cell) =>
-      ["app", "mcp", "projection"].map((kind) => ({
-        id: `${cell.regionId}:${kind}`,
-        regionId: cell.regionId,
-        directory: resolve(root, kind),
-        path: resolve(
-          root,
+      ["app", "mcp", "projection", ...(cell.datafnEndpoint ? ["datafn"] : [])].map(
+        (kind) => ({
+          id: `${cell.regionId}:${kind}`,
+          regionId: cell.regionId,
+          directory: resolve(root, kind === "datafn" ? "app" : kind),
+          path: resolve(
+            root,
+            kind === "datafn" ? "app" : kind,
+            kind === "datafn"
+              ? `wrangler.development.datafn.${cell.regionId}.generated.json`
+              : `wrangler.development.${cell.regionId}.generated.json`,
+          ),
+          config: configs.cells[cell.regionId][kind],
           kind,
-          `wrangler.development.${cell.regionId}.generated.json`,
-        ),
-        config: configs.cells[cell.regionId][kind],
-        kind,
-      })),
+        }),
+      ),
     ),
   ];
   if (options.write !== false) {

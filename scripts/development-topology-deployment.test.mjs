@@ -34,7 +34,7 @@ describe("multi-cell development deployment", () => {
       write: false,
     });
 
-    assert.equal(rendered.outputs.length, 11);
+    assert.equal(rendered.outputs.length, 14);
     const gatewayApp = rendered.outputs.find((output) => output.id === "gateway:app");
     const gatewayMcp = rendered.outputs.find((output) => output.id === "gateway:mcp");
     assert.equal(gatewayApp.config.name, "skillplane-app-dev");
@@ -50,7 +50,14 @@ describe("multi-cell development deployment", () => {
     assert.equal(gatewayMcp.config.routes[0].pattern, "mcp-dev.skillplane.dev");
 
     for (const output of rendered.outputs.filter((item) => item.regionId)) {
-      assert.equal(output.config.routes, undefined);
+      if (output.kind === "datafn") {
+        assert.equal(
+          output.config.routes[0].pattern,
+          `datafn-${output.regionId}-dev.skillplane.dev`,
+        );
+      } else {
+        assert.equal(output.config.routes, undefined);
+      }
       assert.equal(output.config.workers_dev, false);
       assert.equal(output.config.vars.RUNTIME_ENV, "preview");
       assert.equal(output.config.vars.SKILLPLANE_REGION_ID, output.regionId);

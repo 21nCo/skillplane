@@ -23,6 +23,16 @@ export async function resolveUserPrincipal(
   if (!session) {
     throw new AuthenticationRequiredError();
   }
+  return resolveUserPrincipalByUserId(pool, session.actorId, workspaceId, session.id);
+}
+
+/** Recheck live membership for a user whose identity came from a verified route ticket. */
+export async function resolveUserPrincipalByUserId(
+  pool: Pool,
+  userId: string,
+  workspaceId: string | undefined,
+  sessionId = "regional-ticket",
+): Promise<Principal> {
   if (!workspaceId) {
     throw new WorkspaceAccessError();
   }
@@ -32,7 +42,7 @@ export async function resolveUserPrincipal(
        JOIN authfn_users u ON u.id = m.user_id
       WHERE m.workspace_id = $1 AND m.user_id = $2
       LIMIT 1`,
-    [workspaceId, session.actorId],
+    [workspaceId, userId],
   );
   const membership = result.rows[0];
   if (!membership || !isWorkspaceRole(membership.role)) {
@@ -42,7 +52,7 @@ export async function resolveUserPrincipal(
     kind: "user",
     actorId: membership.user_id,
     userId: membership.user_id,
-    sessionId: session.id,
+    sessionId,
     workspaceId: membership.workspace_id,
     role: membership.role,
     ...(membership.email ? { email: membership.email } : {}),

@@ -29,6 +29,8 @@ function productionTopology() {
         objectStorageBinding: "CELL_IN_SOUTH_BUNDLES",
         appServiceBinding: "CELL_IN_SOUTH_APP",
         mcpServiceBinding: "CELL_IN_SOUTH_MCP",
+        datafnEndpoint: undefined as
+          { httpUrl: string; wsUrl: string; audience: string } | undefined,
         publiclyRoutable: false,
       },
       {
@@ -67,6 +69,22 @@ describe("Skillplane topology manifest", () => {
     expect(parsed.mode).toBe("single-cell");
     expect(parsed.cells).toHaveLength(1);
     expect(parsed.cells[0]?.regionId).toBe("legacy");
+  });
+
+  it("accepts a DataFn-only regional endpoint without exposing the cell", () => {
+    const topology = productionTopology();
+    const cell = topology.cells[0];
+    if (!cell) throw new Error("Expected a regional cell");
+    cell.datafnEndpoint = {
+      httpUrl: "https://datafn-in.skillplane.dev/datafn",
+      wsUrl: "wss://datafn-in.skillplane.dev/datafn",
+      audience: "skillplane-datafn-in",
+    };
+    expect(parseTopologyManifest(topology).cells[0]?.datafnEndpoint).toEqual(
+      cell.datafnEndpoint,
+    );
+    cell.datafnEndpoint.wsUrl = "wss://app.skillplane.dev/datafn";
+    expect(() => parseTopologyManifest(topology)).toThrow(TopologyError);
   });
 
   it("rejects issuer drift, public cells, and duplicate bindings", () => {
