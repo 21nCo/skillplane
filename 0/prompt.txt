@@ -31,7 +31,3 @@ When executing a skill retrieved from Skillplane, use the tools referenced withi
 4. Via Rex CLI if available and authenticated
 
 </skill>
-
----
-
-$use-skillplane pr-refetch-fix
