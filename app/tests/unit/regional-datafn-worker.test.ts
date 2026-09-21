@@ -81,6 +81,8 @@ describe("public regional DataFn ingress", () => {
     );
 
     expect(response.status).toBe(204);
+    expect(response.headers.get("access-control-allow-origin")).toBe(authority);
+    expect(response.headers.get("access-control-allow-methods")).toContain("POST");
     expect(response.headers.get("access-control-allow-headers")).toContain(
       "x-datafn-route-ticket",
     );

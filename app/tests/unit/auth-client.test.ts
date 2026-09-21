@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const authfn = vi.hoisted(() => ({
   signOut: vi.fn(),
@@ -19,6 +19,10 @@ beforeEach(() => {
   resetWorkspaceDatafnClients.mockReset();
 });
 
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 describe("authentication client cleanup", () => {
   it("preserves a successful sign-out when cached DataFn teardown fails", async () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
@@ -29,11 +33,10 @@ describe("authentication client cleanup", () => {
     expect(consoleError).toHaveBeenCalledWith(
       JSON.stringify({ component: "app", event: "datafn.clients.reset.failed" }),
     );
-    consoleError.mockRestore();
   });
 
   it("preserves the authentication error when cleanup also fails", async () => {
-    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
     authfn.signOut.mockResolvedValue({
       ok: false,
       error: {
@@ -45,6 +48,5 @@ describe("authentication client cleanup", () => {
     resetWorkspaceDatafnClients.mockRejectedValue(new Error("teardown failed"));
 
     await expect(signOut()).rejects.toBeInstanceOf(AuthClientError);
-    consoleError.mockRestore();
   });
 });

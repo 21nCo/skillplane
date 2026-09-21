@@ -161,12 +161,12 @@ describe("first-party regional DataFn read boundary", () => {
   ])("falls back canonically after %s", async (_label, regionalFailure) => {
     vi.stubGlobal("window", { location: { origin: appOrigin } });
     vi.stubGlobal("document", { cookie: "skillplane.csrf=csrf-token" });
-    const requests: string[] = [];
+    const requests: { url: string; headers: Headers }[] = [];
     vi.stubGlobal(
       "fetch",
-      vi.fn<typeof fetch>(async (input) => {
+      vi.fn<typeof fetch>(async (input, init) => {
         const url = new URL(String(input), appOrigin);
-        requests.push(url.href);
+        requests.push({ url: url.href, headers: new Headers(init?.headers) });
         if (url.pathname === "/api/v1/datafn/route") {
           const now = Date.now();
           return Response.json({
@@ -187,7 +187,17 @@ describe("first-party regional DataFn read boundary", () => {
 
     await listSkills({ workspaceId });
 
-    expect(requests.at(-1)).toBe(`${appOrigin}/datafn/query`);
+    const regionalRequestIndex = requests.findIndex(
+      (request) =>
+        new URL(request.url).hostname === "datafn-in-south-dev.skillplane.dev" &&
+        request.headers.get("x-datafn-route-ticket") === "ticket.1.signature",
+    );
+    const canonicalRequestIndex = requests.findIndex(
+      (request) => request.url === `${appOrigin}/datafn/query`,
+    );
+    expect(regionalRequestIndex).toBeGreaterThan(-1);
+    expect(canonicalRequestIndex).toBeGreaterThan(regionalRequestIndex);
+    expect(requests.at(-1)?.url).toBe(`${appOrigin}/datafn/query`);
   });
 
   it("does not bypass regional policy denials through the canonical transport", async () => {
