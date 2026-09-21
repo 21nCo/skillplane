@@ -1,4 +1,4 @@
-$use-skillplane pr review fixes
+$use-skillplane pr-refetch-fix
 
 ---
 
@@ -31,25 +31,3 @@ When executing a skill retrieved from Skillplane, use the tools referenced withi
 4. Via Rex CLI if available and authenticated
 
 </skill>
-
----
-
-https://linear.app/21n/issue/SKI-18/fix-cloudflare-dev-mcp-worker-upload-failure what is this?
-
----
-
-investigate the root cause
-
----
-
-does the fix belong upstream in mcpfn or in skillplane?
-
----
-
-$use-skillplane add to backlog - 2 separate issues 1 in mcpfn for upstream changes/fixes and another for skillplane to upgrade, remove obsolete things
-
-then close the linear issue https://linear.app/21n/issue/SKI-18/fix-cloudflare-dev-mcp-worker-upload-failure - marking as superseded by the newly created issues
-
----
-
-$use-skillplane pr-refetch-fix
