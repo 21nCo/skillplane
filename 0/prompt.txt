@@ -1,0 +1,37 @@
+$use-skillplane pr-refetch-fix
+
+---
+
+<skill>
+<name>use-skillplane</name>
+<path>/Users/serro/.agents/skills/skillplane/SKILL.md</path>
+---
+name: use-skillplane
+description: Use skillplane to resolve skill
+---
+
+# Skillplane
+
+Skillplane is user's hosted skills platform. Retrieve user's skill using the slug or skill name provided and use that to execute the requested task.
+
+NOTE: Always retrieve and read the hosted skill first before working on the task. If the skill is not found, return an error message indicating the skill could not be located.
+
+## Using skillplane
+Try these in this order to communicate with user's Skillplane for skill retrieval, creation, amend etc.
+1. Direct Skillplane MCP if available and authenticated
+2. Direct Skillplane CLI if available and authenticated
+3. Via Composio CLI if available and authenticated
+4. Via Rex CLI if available and authenticated
+
+## Using tools mentioned in skillplane skills
+When executing a skill retrieved from Skillplane, use the tools referenced within the skill's definition to complete the task. Example tools: Linear, Notion, etc. Tool/Integrations resolution order:
+1. Direct integrations or MCP if available and authenticated
+2. Via Orca CLI if available and authenticated
+3. Via Composio CLI if available and authenticated
+4. Via Rex CLI if available and authenticated
+
+</skill>
+
+---
+
+$use-skillplane pr-refetch-fix
