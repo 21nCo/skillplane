@@ -1,4 +1,4 @@
-import { withDatafnRegionalCors } from "@datafn/server";
+import { routeTicketError, withDatafnRegionalCors } from "@datafn/server";
 import type { SkillplaneTopologyManifest } from "@skillplane/control-plane";
 
 interface RegionalDatafnBindings {
@@ -50,16 +50,16 @@ export default {
     ) {
       return new Response(null, { status: 503 });
     }
-    if (
-      !(
-        await env.DATAFN_EDGE_LIMIT.limit({
-          key: `${env.SKILLPLANE_REGION_ID}:${request.headers.get("cf-connecting-ip") ?? "unknown"}`,
-        })
-      ).success
-    )
-      return new Response(null, { status: 429 });
     const handle = withDatafnRegionalCors(
       async (admitted) => {
+        if (
+          !(
+            await env.DATAFN_EDGE_LIMIT.limit({
+              key: `${env.SKILLPLANE_REGION_ID}:${admitted.headers.get("cf-connecting-ip") ?? "unknown"}`,
+            })
+          ).success
+        )
+          return routeTicketError("DATAFN_ROUTE_RATE_LIMITED").toResponse();
         if (
           forbiddenHeaders.some((header) => admitted.headers.has(header)) ||
           !admitted.headers.has("x-datafn-route-ticket")

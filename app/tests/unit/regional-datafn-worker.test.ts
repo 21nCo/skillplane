@@ -160,14 +160,15 @@ describe("public regional DataFn ingress", () => {
       (await regionalDatafn.fetch(request, { ...env, DATAFN_DIRECT_ENABLED: "false" }))
         .status,
     ).toBe(404);
-    expect(
-      (
-        await regionalDatafn.fetch(request, {
-          ...env,
-          DATAFN_EDGE_LIMIT: { limit: async () => ({ success: false }) },
-        })
-      ).status,
-    ).toBe(429);
+    const limited = await regionalDatafn.fetch(request, {
+      ...env,
+      DATAFN_EDGE_LIMIT: { limit: async () => ({ success: false }) },
+    });
+    expect(limited.status).toBe(429);
+    expect(limited.headers.get("access-control-allow-origin")).toBe(authority);
+    await expect(limited.json()).resolves.toMatchObject({
+      error: { code: "DATAFN_ROUTE_RATE_LIMITED" },
+    });
     expect(
       (await regionalDatafn.fetch(request, { ...env, SKILLPLANE_REGION_ID: "us-east" }))
         .status,

@@ -102,6 +102,42 @@ describe("Skillplane topology manifest", () => {
     );
   });
 
+  it("rejects DataFn custom-domain hosts reused by a gateway or another cell", () => {
+    const gatewayCollision = productionTopology();
+    const firstGatewayCell = gatewayCollision.cells[0];
+    if (!firstGatewayCell) throw new Error("topology fixture has no first cell");
+    firstGatewayCell.datafnEndpoint = {
+      httpUrl: `${PRODUCTION_APP_AUTHORITY}/datafn`,
+      wsUrl: "wss://app.skillplane.dev/datafn",
+      audience: "skillplane-datafn-in",
+    };
+    expect(() => parseTopologyManifest(gatewayCollision)).toThrow(
+      expect.objectContaining({ code: "TOPOLOGY_PUBLIC_HOST_CONFLICT" }),
+    );
+
+    const cellCollision = productionTopology();
+    const firstCell = cellCollision.cells[0];
+    const secondCell = cellCollision.cells[1];
+    if (!firstCell || !secondCell) {
+      throw new Error("topology fixture requires two cells");
+    }
+    const sharedEndpoint = {
+      httpUrl: "https://datafn-shared.skillplane.dev/datafn",
+      wsUrl: "wss://datafn-shared.skillplane.dev/datafn",
+    };
+    firstCell.datafnEndpoint = {
+      ...sharedEndpoint,
+      audience: "skillplane-datafn-in",
+    };
+    secondCell.datafnEndpoint = {
+      ...sharedEndpoint,
+      audience: "skillplane-datafn-us",
+    };
+    expect(() => parseTopologyManifest(cellCollision)).toThrow(
+      expect.objectContaining({ code: "TOPOLOGY_PUBLIC_HOST_CONFLICT" }),
+    );
+  });
+
   it("rejects issuer drift, public cells, and duplicate bindings", () => {
     const issuerDrift = productionTopology();
     issuerDrift.controlPlane.issuer = "https://identity.example.test";

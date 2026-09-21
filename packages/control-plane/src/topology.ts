@@ -141,6 +141,7 @@ export type TopologyErrorCode =
   | "TOPOLOGY_INVALID"
   | "TOPOLOGY_DUPLICATE_REGION"
   | "TOPOLOGY_DUPLICATE_BINDING"
+  | "TOPOLOGY_PUBLIC_HOST_CONFLICT"
   | "TOPOLOGY_REGION_COUNT_INVALID"
   | "TOPOLOGY_RESERVED_REGION"
   | "TOPOLOGY_ISSUER_DRIFT"
@@ -243,6 +244,20 @@ function parseTopologyManifestInternal(
       "TOPOLOGY_DUPLICATE_BINDING",
       "Every database, storage, and service binding must have one owner",
       ["controlPlane", "cells"],
+    );
+  }
+  const publicHosts = [
+    new URL(manifest.public.appAuthority).host,
+    new URL(manifest.public.mcpResource).host,
+  ];
+  const datafnHosts = manifest.cells.flatMap((cell) =>
+    cell.datafnEndpoint ? [new URL(cell.datafnEndpoint.httpUrl).host] : [],
+  );
+  if (duplicates([...publicHosts, ...datafnHosts]).length > 0) {
+    throw new TopologyError(
+      "TOPOLOGY_PUBLIC_HOST_CONFLICT",
+      "Every public gateway and regional DataFn custom domain must have a distinct host",
+      ["public", "cells.datafnEndpoint"],
     );
   }
   if (

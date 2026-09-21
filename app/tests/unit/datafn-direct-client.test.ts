@@ -133,6 +133,36 @@ describe("first-party regional DataFn read boundary", () => {
     ]);
   });
 
+  it("falls back canonically when a workspace is outside the direct-routing canary", async () => {
+    vi.stubGlobal("window", { location: { origin: appOrigin } });
+    vi.stubGlobal("document", { cookie: "skillplane.csrf=csrf-token" });
+    const requests: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async (input) => {
+        const url = new URL(String(input), appOrigin);
+        requests.push(url.pathname);
+        if (url.pathname === "/api/v1/datafn/route") {
+          return Response.json(
+            {
+              ok: false,
+              error: {
+                code: "DATAFN_ROUTE_FORBIDDEN",
+                message: "Regional routing is unavailable for this workspace",
+              },
+            },
+            { status: 403 },
+          );
+        }
+        return Response.json({ ok: true, result: { data: [], nextCursor: null } });
+      }),
+    );
+
+    await listSkills({ workspaceId });
+
+    expect(requests).toEqual(["/api/v1/datafn/route", "/datafn/query"]);
+  });
+
   it("uses only the canonical transport when the rollout flag is withdrawn", async () => {
     publicEnv.PUBLIC_DATAFN_DIRECT_ENABLED = "false";
     vi.stubGlobal("window", { location: { origin: appOrigin } });
