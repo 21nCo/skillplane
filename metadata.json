@@ -1,0 +1,46 @@
+{
+  "cli_version": "0.10.6",
+  "checkpoint_id": "01M31HJ2CQ2SEKNAP7ENJ8KF2D",
+  "strategy": "manual-commit",
+  "branch": "aravink/ski-16-adopt-ticket-protected-direct-regional-datafn-transport-in",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "app/src/lib/auth/client.ts",
+    "app/src/lib/datafn/client.ts",
+    "app/svelte.config.js",
+    "app/tests/unit/auth-client.test.ts",
+    "app/tests/unit/datafn-direct-client.test.ts",
+    "app/tests/unit/regional-datafn-worker.test.ts",
+    "app/vite.config.ts",
+    "docs/operations/data-operation-ownership.md",
+    "docs/operations/development.md",
+    "packages/api/src/middleware/rate-limit.test.ts",
+    "packages/api/src/middleware/rate-limit.ts",
+    "packages/config/src/index.test.ts",
+    "packages/control-plane/src/topology.test.ts",
+    "packages/control-plane/src/topology.ts",
+    "scripts/datafn-ticket-keys.test.mjs",
+    "scripts/deploy-development-topology.mjs",
+    "scripts/development-topology-deployment.test.mjs",
+    "scripts/lib/datafn-ticket-keys.mjs",
+    "scripts/lib/topology-deployment.mjs",
+    "scripts/run-unit-tests.mjs",
+    "scripts/topology-deployment.test.mjs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 215029,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 6973312,
+    "output_tokens": 28000,
+    "api_call_count": 62
+  }
+}
