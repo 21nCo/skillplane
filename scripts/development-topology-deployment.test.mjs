@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { renderDevelopmentTopologyConfigs } from "./render-development-topology-config.mjs";
 import { assertDevelopmentControlDatabaseShape } from "./prepare-development-topology-databases.mjs";
+import { parseOnlyKinds } from "./deploy-development-topology.mjs";
 import { selectDevelopmentTopologyOutputs } from "./lib/development-topology-deployment.mjs";
 
 const ids = {
@@ -12,6 +13,14 @@ const ids = {
 };
 
 describe("multi-cell development deployment", () => {
+  it("rejects invalid deployment selections before starting deployment", () => {
+    assert.throws(
+      () => parseOnlyKinds(["--only", "app,ap"]),
+      /--only must contain app, mcp, projection, or datafn/u,
+    );
+    assert.deepEqual(parseOnlyKinds(["--only", "app,datafn"]), ["app", "datafn"]);
+  });
+
   it("renders isolated gateways and three private regional cells", async () => {
     const rendered = await renderDevelopmentTopologyConfigs({
       controlHyperdriveId: ids.control,

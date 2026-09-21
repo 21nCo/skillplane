@@ -18,16 +18,24 @@ export function validateDatafnTicketKeys(input) {
       typeof ring[activeKeyId] !== "string"
     )
       throw new Error();
-    const derived = createPublicKey(createPrivateKey(privateKey)).export({
+    const parsedPrivateKey = createPrivateKey(privateKey);
+    if (parsedPrivateKey.asymmetricKeyType !== "ed25519") throw new Error();
+    const derivedPublicKey = createPublicKey(parsedPrivateKey);
+    if (derivedPublicKey.asymmetricKeyType !== "ed25519") throw new Error();
+    const derived = derivedPublicKey.export({
       type: "spki",
       format: "der",
     });
-    const configured = createPublicKey(ring[activeKeyId]).export({
+    const configuredPublicKey = createPublicKey(ring[activeKeyId]);
+    if (configuredPublicKey.asymmetricKeyType !== "ed25519") throw new Error();
+    const configured = configuredPublicKey.export({
       type: "spki",
       format: "der",
     });
     if (!derived.equals(configured)) throw new Error();
-    for (const publicKey of Object.values(ring)) createPublicKey(publicKey);
+    for (const publicKey of Object.values(ring)) {
+      if (createPublicKey(publicKey).asymmetricKeyType !== "ed25519") throw new Error();
+    }
   } catch {
     throw new Error(
       "The DataFn gateway private key does not match the regional public keyring",

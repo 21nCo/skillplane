@@ -170,9 +170,9 @@ describe("parseRuntimeConfig", () => {
           DATAFN_ROUTE_ACTIVE_KEY_ID: "ticket-1",
           DATAFN_ROUTE_PRIVATE_KEY_PEM:
             "-----BEGIN PRIVATE KEY-----\nfixture\n-----END PRIVATE KEY-----",
+          OAUTH_TOKEN_PEPPER: "independent-oauth-pepper-32-bytes",
           AUTHFN_PLACEMENT_SUBJECT_SECRET: fixtureSecret,
         }),
-        { authentication: "oauth-only" },
       ),
     ).toThrowError(expect.objectContaining({ code: "CONFIG_INVALID" }));
   });

@@ -32,3 +32,28 @@ test("the gateway ticket signer matches the regional verification key", () => {
     /does not match/u,
   );
 });
+
+test("the gateway and every rotation key must use Ed25519", () => {
+  const active = generateKeyPairSync("ed25519");
+  const rsa = generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const activeInput = {
+    activeKeyId: "current",
+    privateKey: active.privateKey.export({ type: "pkcs8", format: "pem" }),
+    publicKeysJson: JSON.stringify({
+      current: active.publicKey.export({ type: "spki", format: "pem" }),
+      previous: rsa.publicKey.export({ type: "spki", format: "pem" }),
+    }),
+  };
+  assert.throws(() => validateDatafnTicketKeys(activeInput), /does not match/u);
+  assert.throws(
+    () =>
+      validateDatafnTicketKeys({
+        activeKeyId: "current",
+        privateKey: rsa.privateKey.export({ type: "pkcs8", format: "pem" }),
+        publicKeysJson: JSON.stringify({
+          current: rsa.publicKey.export({ type: "spki", format: "pem" }),
+        }),
+      }),
+    /does not match/u,
+  );
+});

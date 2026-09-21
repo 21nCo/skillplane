@@ -57,9 +57,57 @@ describe("public regional DataFn ingress", () => {
       const forwarded = cell.mock.calls[0]?.[0];
       expect(forwarded).toBeDefined();
       expect(forwarded && new URL(forwarded.url).pathname).toBe("/datafn/query");
+      expect(forwarded && (await forwarded.clone().text())).toBe(
+        JSON.stringify({ resource: "skills", version: 1 }),
+      );
+      expect(forwarded?.headers.get("x-skillplane-workspace-id")).toBe("workspace:one");
       expect(limit).toHaveBeenCalledWith({ key: `${regionId}:192.0.2.1` });
     },
   );
+
+  it("allows the browser preflight headers required by direct reads", async () => {
+    const { env, url, cell } = fixture("in-south");
+    const response = await regionalDatafn.fetch(
+      new Request(url, {
+        method: "OPTIONS",
+        headers: {
+          origin: authority,
+          "access-control-request-method": "POST",
+          "access-control-request-headers":
+            "content-type, x-datafn-route-ticket, x-skillplane-workspace-id",
+        },
+      }),
+      env,
+    );
+
+    expect(response.status).toBe(204);
+    expect(response.headers.get("access-control-allow-headers")).toContain(
+      "x-datafn-route-ticket",
+    );
+    expect(response.headers.get("access-control-allow-headers")).toContain(
+      "content-type",
+    );
+    expect(cell).not.toHaveBeenCalled();
+  });
+
+  it("rejects a regional request without a route ticket before forwarding", async () => {
+    const { env, url, cell } = fixture("in-south");
+    const response = await regionalDatafn.fetch(
+      new Request(url, {
+        method: "POST",
+        headers: {
+          origin: authority,
+          "content-type": "application/json",
+          "x-skillplane-workspace-id": "workspace:one",
+        },
+        body: JSON.stringify({ resource: "skills", version: 1 }),
+      }),
+      env,
+    );
+
+    expect(response.status).toBe(401);
+    expect(cell).not.toHaveBeenCalled();
+  });
 
   it("never exposes application paths or accepts cookies, bearer headers, or foreign origins", async () => {
     const { env, url, cell } = fixture("in-south");

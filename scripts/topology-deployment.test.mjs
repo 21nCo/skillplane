@@ -134,6 +134,30 @@ describe("multi-cell Cloudflare topology adapter", () => {
       /must be distinct/u,
     );
   });
+
+  it("rejects an empty direct-routing workspace list", async () => {
+    await assert.rejects(
+      createCloudflareTopologyConfigs({
+        manifest: await readProductionTopology(),
+        publicTurnstileSiteKey: "0x4AAAAAAAAAA-production-site-key",
+        controlHyperdriveId: ids.control,
+        publicBucketName: "skillplane-public-bundles",
+        directDatafnEnabled: true,
+        directDatafnWorkspaceIds: " ,  , ",
+        cells: {
+          "in-south": {
+            hyperdriveId: ids.inSouth,
+            bucketName: "skillplane-in-south-bundles",
+          },
+          "us-east": {
+            hyperdriveId: ids.usEast,
+            bucketName: "skillplane-us-east-bundles",
+          },
+        },
+      }),
+      /Direct DataFn needs workspace IDs/u,
+    );
+  });
 });
 
 it("reports bucket identities matching every generated Worker binding", async () => {

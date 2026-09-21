@@ -87,6 +87,21 @@ describe("Skillplane topology manifest", () => {
     expect(() => parseTopologyManifest(topology)).toThrow(TopologyError);
   });
 
+  it("accepts bracketed IPv6 loopback DataFn endpoints", () => {
+    const topology = productionTopology();
+    const cell = topology.cells[0];
+    if (!cell) throw new Error("Expected a regional cell");
+    cell.datafnEndpoint = {
+      httpUrl: "http://[::1]/datafn",
+      wsUrl: "ws://[::1]/datafn",
+      audience: "skillplane-datafn-local",
+    };
+
+    expect(parseTopologyManifest(topology).cells[0]?.datafnEndpoint).toEqual(
+      cell.datafnEndpoint,
+    );
+  });
+
   it("rejects issuer drift, public cells, and duplicate bindings", () => {
     const issuerDrift = productionTopology();
     issuerDrift.controlPlane.issuer = "https://identity.example.test";

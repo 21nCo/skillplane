@@ -166,8 +166,9 @@ pnpm test:dev:oauth
 
 To roll out only selected Worker kinds during a canary, pass `--only` to the
 deployment script with a comma-separated list of `app`, `datafn`, `mcp`, and
-`projection`. The script still deploys regional cells before the gateway. For
-example, to update app cells and public regional DataFn Workers:
+`projection`. The script still deploys regional cells before the gateway. The
+`app` kind includes both regional app cells and the gateway app Worker. For
+example, to update all app Workers and public regional DataFn Workers:
 
 ```bash
 node --env-file=.env.development.local scripts/deploy-development-topology.mjs --only app,datafn

@@ -1,8 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("$env/dynamic/public", () => ({
-  env: { PUBLIC_DATAFN_DIRECT_ENABLED: "true" },
+const publicEnv = vi.hoisted(() => ({
+  PUBLIC_DATAFN_DIRECT_ENABLED: "true",
+  PUBLIC_DATAFN_TRANSPORT_CONSOLE: "false",
 }));
+const capturePostHog = vi.hoisted(() => vi.fn());
+
+vi.mock("$env/dynamic/public", () => ({
+  env: publicEnv,
+}));
+vi.mock("$lib/analytics/posthog.client.js", () => ({ capturePostHog }));
 
 import { resetWorkspaceDatafnClients } from "../../src/lib/datafn/client.js";
 import { listSkills } from "../../src/lib/skills/api.js";
@@ -12,6 +19,8 @@ const workspaceId = "workspace:one";
 
 afterEach(async () => {
   await resetWorkspaceDatafnClients();
+  publicEnv.PUBLIC_DATAFN_DIRECT_ENABLED = "true";
+  capturePostHog.mockReset();
   vi.unstubAllGlobals();
 });
 
@@ -86,9 +95,21 @@ describe("first-party regional DataFn read boundary", () => {
     expect(requests.at(-1)?.headers.get("x-datafn-route-ticket")).toBe(
       "ticket.2.signature",
     );
+    expect(capturePostHog).toHaveBeenCalledWith(
+      "datafn.transport",
+      expect.objectContaining({ phase: "bootstrap", route: "gateway", status: 200 }),
+    );
+    expect(capturePostHog).toHaveBeenCalledWith(
+      "datafn.transport",
+      expect.objectContaining({ phase: "datafn", route: "regional", status: 200 }),
+    );
+    expect(capturePostHog).toHaveBeenCalledWith(
+      "datafn.transport",
+      expect.objectContaining({ phase: "total", route: "regional", status: 200 }),
+    );
   });
 
-  it("falls back to canonical reads when the rollout flag is withdrawn", async () => {
+  it("falls back to canonical reads when route bootstrap is unavailable", async () => {
     vi.stubGlobal("window", { location: { origin: appOrigin } });
     vi.stubGlobal("document", { cookie: "skillplane.csrf=csrf-token" });
     const requests: string[] = [];
@@ -110,5 +131,102 @@ describe("first-party regional DataFn read boundary", () => {
       "/datafn/query",
       "/datafn/query",
     ]);
+  });
+
+  it("uses only the canonical transport when the rollout flag is withdrawn", async () => {
+    publicEnv.PUBLIC_DATAFN_DIRECT_ENABLED = "false";
+    vi.stubGlobal("window", { location: { origin: appOrigin } });
+    const requests: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async (input) => {
+        requests.push(new URL(String(input), appOrigin).pathname);
+        return Response.json({ ok: true, result: { data: [], nextCursor: null } });
+      }),
+    );
+
+    await listSkills({ workspaceId });
+
+    expect(requests).toEqual(["/datafn/query"]);
+    expect(capturePostHog).toHaveBeenCalledWith(
+      "datafn.transport",
+      expect.objectContaining({ phase: "total", route: "gateway", status: 200 }),
+    );
+  });
+
+  it.each([
+    ["network failure", new TypeError("Failed to fetch")],
+    ["regional 502", new Response(null, { status: 502 })],
+    ["regional 504", new Response(null, { status: 504 })],
+  ])("falls back canonically after %s", async (_label, regionalFailure) => {
+    vi.stubGlobal("window", { location: { origin: appOrigin } });
+    vi.stubGlobal("document", { cookie: "skillplane.csrf=csrf-token" });
+    const requests: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async (input) => {
+        const url = new URL(String(input), appOrigin);
+        requests.push(url.href);
+        if (url.pathname === "/api/v1/datafn/route") {
+          const now = Date.now();
+          return Response.json({
+            version: 1,
+            httpUrl: "https://datafn-in-south-dev.skillplane.dev/datafn",
+            ticket: "ticket.1.signature",
+            expiresAt: now + 60_000,
+            renewAfter: now + 45_000,
+          });
+        }
+        if (url.hostname === "datafn-in-south-dev.skillplane.dev") {
+          if (regionalFailure instanceof Response) return regionalFailure.clone();
+          throw regionalFailure;
+        }
+        return Response.json({ ok: true, result: { data: [], nextCursor: null } });
+      }),
+    );
+
+    await listSkills({ workspaceId });
+
+    expect(requests.at(-1)).toBe(`${appOrigin}/datafn/query`);
+  });
+
+  it("does not bypass regional policy denials through the canonical transport", async () => {
+    vi.stubGlobal("window", { location: { origin: appOrigin } });
+    vi.stubGlobal("document", { cookie: "skillplane.csrf=csrf-token" });
+    const requests: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async (input) => {
+        const url = new URL(String(input), appOrigin);
+        requests.push(url.href);
+        if (url.pathname === "/api/v1/datafn/route") {
+          const now = Date.now();
+          return Response.json({
+            version: 1,
+            httpUrl: "https://datafn-in-south-dev.skillplane.dev/datafn",
+            ticket: "ticket.1.signature",
+            expiresAt: now + 60_000,
+            renewAfter: now + 45_000,
+          });
+        }
+        return Response.json(
+          {
+            ok: false,
+            error: {
+              code: "DATAFN_ROUTE_RATE_LIMITED",
+              message: "Regional request limit exceeded",
+            },
+          },
+          { status: 429 },
+        );
+      }),
+    );
+
+    await expect(listSkills({ workspaceId })).rejects.toMatchObject({
+      code: "DATAFN_ROUTE_RATE_LIMITED",
+    });
+    expect(requests.filter((url) => url === `${appOrigin}/datafn/query`)).toHaveLength(
+      0,
+    );
   });
 });

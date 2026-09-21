@@ -145,6 +145,9 @@ export async function createCloudflareTopologyConfigs(input) {
   if (
     directDatafnEnabled &&
     (!directDatafnVariables.DATAFN_DIRECT_WORKSPACES ||
+      !directDatafnVariables.DATAFN_DIRECT_WORKSPACES.split(",").some((value) =>
+        value.trim(),
+      ) ||
       manifest.cells.some((cell) => !cell.datafnEndpoint))
   )
     throw new Error("Direct DataFn needs workspace IDs and regional endpoints");

@@ -1,4 +1,5 @@
 import { env as publicEnv } from "$env/dynamic/public";
+import { capturePostHog } from "$lib/analytics/posthog.client.js";
 import { csrfToken } from "$lib/api/client.js";
 import {
   createDatafnHttpRouteProvider,
@@ -18,6 +19,20 @@ export class SkillplaneDatafnReadError extends Error {
 
 const browserClients = new Map<string, SkillplaneDatafnClient>();
 const canonicalUntil = new Map<string, number>();
+const recoverableRouteCodes = new Set([
+  "DATAFN_ROUTE_BOOTSTRAP_UNAVAILABLE",
+  "DATAFN_ROUTE_DESCRIPTOR_INVALID",
+  "DATAFN_ROUTE_TICKET_INVALID",
+  "DATAFN_ROUTE_TICKET_EXPIRED",
+  "DATAFN_REGIONAL_ENDPOINT_UNAVAILABLE",
+  "DATAFN_PLACEMENT_NOT_FOUND",
+  "DATAFN_PLACEMENT_UNAVAILABLE",
+  "DATAFN_REGION_MISMATCH",
+  "DATAFN_NAMESPACE_MOVING",
+  "DATAFN_CELL_UNAVAILABLE",
+  "DATAFN_ROUTING_RETRY_EXHAUSTED",
+  "TRANSPORT_ERROR",
+]);
 
 function datafnError(cause: unknown): Error {
   if (cause instanceof Error) return cause;
@@ -39,15 +54,10 @@ function datafnError(cause: unknown): Error {
 function routeFailure(cause: unknown): boolean {
   const error = datafnError(cause) as Error & { code?: string };
   return (
-    error.code?.startsWith("DATAFN_ROUTE_") === true ||
-    [
-      "DATAFN_REGION_MISMATCH",
-      "DATAFN_NAMESPACE_MOVING",
-      "DATAFN_REGIONAL_ENDPOINT_UNAVAILABLE",
-      "DATAFN_PLACEMENT_UNAVAILABLE",
-      "AUTHENTICATION_REQUIRED",
-    ].includes(error.code ?? "") ||
-    /^HTTP Error (?:404|503):/u.test(error.message)
+    recoverableRouteCodes.has(error.code ?? "") ||
+    /^HTTP Error (?:404|502|503|504):/u.test(error.message) ||
+    (error instanceof TypeError &&
+      /(?:fetch|network|load failed)/iu.test(error.message))
   );
 }
 
@@ -57,15 +67,16 @@ function report(
   started: number,
   status: number,
 ) {
-  console.info(
-    JSON.stringify({
-      event: "datafn.transport",
-      phase,
-      route,
-      status,
-      durationMs: Math.round(performance.now() - started),
-    }),
-  );
+  const properties = {
+    phase,
+    route,
+    status,
+    duration_ms: Math.round(performance.now() - started),
+  };
+  capturePostHog("datafn.transport", properties);
+  if (publicEnv.PUBLIC_DATAFN_TRANSPORT_CONSOLE === "true") {
+    console.info(JSON.stringify({ event: "datafn.transport", ...properties }));
+  }
 }
 
 function createCanonicalClient(workspaceId: string): SkillplaneDatafnClient {

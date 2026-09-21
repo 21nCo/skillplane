@@ -18,11 +18,13 @@ const bindingName = z
   .min(1)
   .max(64)
   .regex(/^[A-Z][A-Z0-9_]*$/u);
+function loopbackHostname(hostname: string): boolean {
+  return ["localhost", "127.0.0.1", "[::1]"].includes(hostname);
+}
 function secureOrLoopback(parsed: URL): boolean {
   return (
     parsed.protocol === "https:" ||
-    (parsed.protocol === "http:" &&
-      ["localhost", "127.0.0.1", "::1"].includes(parsed.hostname))
+    (parsed.protocol === "http:" && loopbackHostname(parsed.hostname))
   );
 }
 
@@ -65,8 +67,7 @@ const datafnEndpoint = z
       const parsed = new URL(value);
       return (
         (parsed.protocol === "wss:" ||
-          (parsed.protocol === "ws:" &&
-            ["localhost", "127.0.0.1", "::1"].includes(parsed.hostname))) &&
+          (parsed.protocol === "ws:" && loopbackHostname(parsed.hostname))) &&
         !parsed.username &&
         !parsed.password &&
         !parsed.search &&
