@@ -55,6 +55,37 @@ function requireResource(value, pattern, label) {
   return value;
 }
 
+function cloudflareCustomDomainHostname(value, owner) {
+  const parsed = new URL(value);
+  if (parsed.port) {
+    throw new Error(`Cloudflare ${owner} custom domain must not include a port`);
+  }
+  return parsed.hostname;
+}
+
+function resolveCloudflareCustomDomains(manifest) {
+  const entries = [
+    ["app gateway", manifest.public.appAuthority],
+    ["MCP gateway", manifest.public.mcpResource],
+    ...manifest.cells.flatMap((cell) =>
+      cell.datafnEndpoint
+        ? [[`DataFn ${cell.regionId}`, cell.datafnEndpoint.httpUrl]]
+        : [],
+    ),
+  ].map(([owner, url]) => [owner, cloudflareCustomDomainHostname(url, owner)]);
+  const ownersByHostname = new Map();
+  for (const [owner, hostname] of entries) {
+    const existing = ownersByHostname.get(hostname);
+    if (existing) {
+      throw new Error(
+        `Cloudflare custom domain ${hostname} cannot be assigned to both ${existing} and ${owner}`,
+      );
+    }
+    ownersByHostname.set(hostname, owner);
+  }
+  return new Map(entries);
+}
+
 function workerBase(name, kind, variables) {
   return {
     $schema: "../node_modules/wrangler/config-schema.json",
@@ -109,11 +140,9 @@ export async function createCloudflareTopologyConfigs(input) {
   if (!["production", "preview"].includes(runtimeEnvironment)) {
     throw new Error("The topology runtime environment is invalid");
   }
-  const appHost = new URL(manifest.public.appAuthority).host;
-  const mcpHost = new URL(manifest.public.mcpResource).host;
-  if (appHost === mcpHost) {
-    throw new Error("Cloudflare app and MCP custom domains must be distinct");
-  }
+  const customDomains = resolveCloudflareCustomDomains(manifest);
+  const appHost = customDomains.get("app gateway");
+  const mcpHost = customDomains.get("MCP gateway");
   const names = {
     appGateway: input.workerNames?.appGateway ?? "skillplane-app",
     mcpGateway: input.workerNames?.mcpGateway ?? "skillplane-mcp",
@@ -277,7 +306,7 @@ export async function createCloudflareTopologyConfigs(input) {
                   ],
                   routes: [
                     {
-                      pattern: new URL(cell.datafnEndpoint.httpUrl).host,
+                      pattern: customDomains.get(`DataFn ${cell.regionId}`),
                       custom_domain: true,
                     },
                   ],

@@ -92,6 +92,28 @@ describe("public regional DataFn ingress", () => {
     expect(cell).not.toHaveBeenCalled();
   });
 
+  it("canonicalizes a trailing-slash app authority for browser CORS", async () => {
+    const { env, url, cell } = fixture("in-south");
+    const parsed = JSON.parse(env.SKILLPLANE_TOPOLOGY);
+    parsed.public.appAuthority = `${authority}/`;
+    const response = await regionalDatafn.fetch(
+      new Request(url, {
+        method: "OPTIONS",
+        headers: {
+          origin: authority,
+          "access-control-request-method": "POST",
+          "access-control-request-headers":
+            "content-type, x-datafn-route-ticket, x-skillplane-workspace-id",
+        },
+      }),
+      { ...env, SKILLPLANE_TOPOLOGY: JSON.stringify(parsed) },
+    );
+
+    expect(response.status).toBe(204);
+    expect(response.headers.get("access-control-allow-origin")).toBe(authority);
+    expect(cell).not.toHaveBeenCalled();
+  });
+
   it("rejects a regional request without a route ticket before forwarding", async () => {
     const { env, url, cell } = fixture("in-south");
     const response = await regionalDatafn.fetch(

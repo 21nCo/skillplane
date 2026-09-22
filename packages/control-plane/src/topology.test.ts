@@ -112,6 +112,17 @@ describe("Skillplane topology manifest", () => {
     expect(parseTopologyManifest(topology).public).toEqual(topology.public);
   });
 
+  it("canonicalizes equivalent authority spellings to URL origins", () => {
+    const topology = productionTopology();
+    topology.public.appAuthority = "https://app-preview.example.test/";
+    topology.controlPlane.issuer = "https://app-preview.example.test";
+
+    const parsed = parseTopologyManifest(topology);
+
+    expect(parsed.public.appAuthority).toBe("https://app-preview.example.test");
+    expect(parsed.controlPlane.issuer).toBe("https://app-preview.example.test");
+  });
+
   it("rejects DataFn custom-domain hosts reused by a gateway or another cell", () => {
     const gatewayCollision = productionTopology();
     const firstGatewayCell = gatewayCollision.cells[0];

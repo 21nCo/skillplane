@@ -227,7 +227,7 @@ describe("parseRuntimeConfig", () => {
     const config = parseRuntimeConfig(
       productionBindings({
         RUNTIME_ENV: "preview",
-        OAUTH_ISSUER: "https://app-dev.skillplane.dev",
+        OAUTH_ISSUER: "https://app-dev.skillplane.dev/",
         OAUTH_RESOURCE: "https://mcp-dev.skillplane.dev/mcp",
         TURNSTILE_ALLOWED_HOSTNAMES: "app-dev.skillplane.dev",
       }),

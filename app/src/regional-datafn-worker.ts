@@ -50,6 +50,7 @@ export default {
     ) {
       return new Response(null, { status: 503 });
     }
+    const appOrigin = new URL(topology.public.appAuthority).origin;
     const handle = withDatafnRegionalCors(
       async (admitted) => {
         if (
@@ -66,14 +67,11 @@ export default {
         ) {
           return new Response(null, { status: 401 });
         }
-        const forwarded = new Request(
-          new URL(url.pathname, topology.public.appAuthority),
-          admitted,
-        );
+        const forwarded = new Request(new URL(url.pathname, appOrigin), admitted);
         return env.CELL_APP.fetch(forwarded);
       },
       {
-        origins: [topology.public.appAuthority],
+        origins: [appOrigin],
         headers: ["x-skillplane-workspace-id"],
       },
     );

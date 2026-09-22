@@ -28,17 +28,20 @@ function secureOrLoopback(parsed: URL): boolean {
   );
 }
 
-const authority = z.url().refine((value) => {
-  const parsed = new URL(value);
-  return (
-    secureOrLoopback(parsed) &&
-    !parsed.username &&
-    !parsed.password &&
-    !parsed.search &&
-    !parsed.hash &&
-    parsed.pathname === "/"
-  );
-}, "must be a secure or loopback origin without credentials, path, query, or fragment");
+const authority = z
+  .url()
+  .refine((value) => {
+    const parsed = new URL(value);
+    return (
+      secureOrLoopback(parsed) &&
+      !parsed.username &&
+      !parsed.password &&
+      !parsed.search &&
+      !parsed.hash &&
+      parsed.pathname === "/"
+    );
+  }, "must be a secure or loopback origin without credentials, path, query, or fragment")
+  .transform((value) => new URL(value).origin);
 const mcpResource = z.url().refine((value) => {
   const parsed = new URL(value);
   return (

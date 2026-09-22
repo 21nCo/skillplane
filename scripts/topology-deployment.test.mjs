@@ -160,8 +160,54 @@ describe("multi-cell Cloudflare topology adapter", () => {
           },
         },
       }),
-      /app and MCP custom domains must be distinct/u,
+      /cannot be assigned to both app gateway and MCP gateway/u,
     );
+  });
+
+  it("rejects ports before emitting Cloudflare custom domains", async () => {
+    for (const owner of ["app", "mcp", "datafn"]) {
+      const manifest = await readProductionTopology();
+      if (owner === "app") {
+        manifest.public.appAuthority = "https://app-preview.skillplane.dev:8443";
+        manifest.controlPlane.issuer = manifest.public.appAuthority;
+      } else if (owner === "mcp") {
+        manifest.public.mcpResource = "https://mcp-preview.skillplane.dev:8443/mcp";
+        manifest.controlPlane.oauthResource = manifest.public.mcpResource;
+      } else {
+        manifest.cells[0].datafnEndpoint = {
+          httpUrl: "https://datafn-shared.skillplane.dev:8443/datafn",
+          wsUrl: "wss://datafn-shared.skillplane.dev:8443/datafn",
+          audience: "skillplane-datafn-in",
+        };
+        manifest.cells[1].datafnEndpoint = {
+          httpUrl: "https://datafn-shared.skillplane.dev:9443/datafn",
+          wsUrl: "wss://datafn-shared.skillplane.dev:9443/datafn",
+          audience: "skillplane-datafn-us",
+        };
+      }
+
+      await assert.rejects(
+        createCloudflareTopologyConfigs({
+          manifest,
+          runtimeEnvironment: "preview",
+          publicTurnstileSiteKey: "0x4AAAAAAAAAA-preview-site-key",
+          controlHyperdriveId: ids.control,
+          publicBucketName: "skillplane-public-bundles",
+          cells: {
+            "in-south": {
+              hyperdriveId: ids.inSouth,
+              bucketName: "skillplane-in-south-bundles",
+            },
+            "us-east": {
+              hyperdriveId: ids.usEast,
+              bucketName: "skillplane-us-east-bundles",
+            },
+          },
+        }),
+        /custom domain must not include a port/u,
+        owner,
+      );
+    }
   });
 
   it("rejects an empty direct-routing workspace list", async () => {
