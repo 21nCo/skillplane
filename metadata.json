@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.10.6",
+  "checkpoint_id": "01M348Y2F8KVTPRS04AW7ABJ0P",
+  "strategy": "manual-commit",
+  "branch": "aravink/ski-16-adopt-ticket-protected-direct-regional-datafn-transport-in",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "app/src/regional-datafn-worker.ts",
+    "app/tests/unit/regional-datafn-worker.test.ts",
+    "packages/config/src/index.test.ts",
+    "packages/control-plane/src/topology.test.ts",
+    "packages/control-plane/src/topology.ts",
+    "scripts/lib/topology-deployment.mjs",
+    "scripts/topology-deployment.test.mjs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1603555,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 35937024,
+    "output_tokens": 158406,
+    "api_call_count": 318
+  }
+}

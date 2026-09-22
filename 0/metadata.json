@@ -1,0 +1,54 @@
+{
+  "cli_version": "0.10.6",
+  "checkpoint_id": "01M348Y2F8KVTPRS04AW7ABJ0P",
+  "session_id": "01a0c30c-478d-7a03-957d-9a521dfa26a9",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-22T10:00:15.526938Z",
+  "branch": "aravink/ski-16-adopt-ticket-protected-direct-regional-datafn-transport-in",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    "app/src/regional-datafn-worker.ts",
+    "app/tests/unit/regional-datafn-worker.test.ts",
+    "packages/config/src/index.test.ts",
+    "packages/control-plane/src/topology.test.ts",
+    "packages/control-plane/src/topology.ts",
+    "scripts/lib/topology-deployment.mjs",
+    "scripts/topology-deployment.test.mjs"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.6-sol",
+  "turn_id": "9b99bea12727",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 1603555,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 35937024,
+    "output_tokens": 158406,
+    "api_call_count": 318
+  },
+  "session_metrics": {
+    "turn_count": 10
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-09-22T10:00:14.863611Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 109,
+    "human_modified": 24,
+    "human_removed": 0,
+    "total_committed": 109,
+    "total_lines_changed": 133,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    }
+  ]
+}
