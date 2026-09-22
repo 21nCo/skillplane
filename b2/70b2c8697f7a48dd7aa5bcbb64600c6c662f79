@@ -1,0 +1,25 @@
+packages/control-plane/src/topology.ts
+  s_ba56058519ffbc::t_323380f8a33c8a 256-259
+packages/control-plane/src/topology.test.ts
+  s_ba56058519ffbc::t_323380f8a33c8a 105-114
+scripts/lib/topology-deployment.mjs
+  s_ba56058519ffbc::t_323380f8a33c8a 114-116
+scripts/topology-deployment.test.mjs
+  s_ba56058519ffbc::t_323380f8a33c8a 138-166
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b270b2c8697f7a48dd7aa5bcbb64600c6c662f79",
+  "prompts": {},
+  "sessions": {
+    "s_ba56058519ffbc": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0c30c-478d-7a03-957d-9a521dfa26a9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
