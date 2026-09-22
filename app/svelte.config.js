@@ -1,5 +1,21 @@
 import adapter from "@sveltejs/adapter-cloudflare";
 import { vitePreprocess } from "@sveltejs/vite-plugin-svelte";
+import { readFileSync } from "node:fs";
+
+const topologyFiles = [
+  new URL("../deployment/topology.production.json", import.meta.url),
+  new URL("../deployment/topology.development.json", import.meta.url),
+];
+const datafnOrigins = [
+  ...new Set(
+    topologyFiles.flatMap((path) => {
+      const topology = JSON.parse(readFileSync(path, "utf8"));
+      return topology.cells.flatMap((cell) =>
+        cell.datafnEndpoint ? [new URL(cell.datafnEndpoint.httpUrl).origin] : [],
+      );
+    }),
+  ),
+];
 
 /** @type {import("@sveltejs/kit").Config} */
 const config = {
@@ -22,6 +38,7 @@ const config = {
         "font-src": ["self"],
         "connect-src": [
           "self",
+          ...datafnOrigins,
           "https://challenges.cloudflare.com",
           // posthog.config.ts restricts PUBLIC_POSTHOG_HOST to these HTTPS domains.
           "https://user.skillplane.dev",

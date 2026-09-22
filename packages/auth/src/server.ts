@@ -4,11 +4,14 @@ import {
 } from "@authfn/multi-region";
 import {
   authfn,
+  createAuthFnPlacementContextIssuer,
   type AuthFnDeliveryProvider,
   type AuthFnEvent,
+  type AuthFnPlacementBoundAuthContext,
   type AuthFnServer,
   type AuthFnSession,
 } from "authfn";
+import type { AuthFnIdentityPlacementDirectoryAdapter } from "@authfn/multi-region";
 import {
   authenticateApiKey,
   createApiKey,
@@ -55,12 +58,20 @@ export interface CreateSkillplaneAuthServerInput {
    * the control plane is deployed separately from its public edge.
    */
   readonly multiRegion?: MultiRegionPluginRuntimeConfig;
+  readonly placementContext?: {
+    readonly subjectSecret: string;
+    readonly directory: AuthFnIdentityPlacementDirectoryAdapter;
+    readonly identityKeyForUserId: (userId: string) => Promise<string> | string;
+    readonly regionId: string;
+  };
 }
 
 export interface SkillplaneAuthServer {
   readonly authfn: AuthFnServer;
   readonly provider: AuthFnServer["provider"];
   readonly oauth: OAuthRuntime;
+  /** Trusted server-side AuthFn context; never expose this on an AuthFn route. */
+  derivePlacementContext?(request: Request): Promise<AuthFnPlacementBoundAuthContext>;
   readonly apiKeys: {
     create(input: {
       readonly ownerUserId: string;
@@ -151,7 +162,7 @@ export function createSkillplaneAuthServer(
         canonicalOAuth: { resource: input.oauth.resource },
       },
     } satisfies MultiRegionPluginRuntimeConfig);
-  const authfnServer = declaration.createServer({
+  const serverConfig = {
     database: input.database.adapter,
     environment: authFnMultiRegionEnvironment(multiRegion),
     pluginRuntime: {
@@ -178,12 +189,39 @@ export function createSkillplaneAuthServer(
     observability: {
       events: (event) => emit(safeEvent(event)),
     },
-  });
+  } satisfies Parameters<typeof declaration.createServer>[0];
+  const authfnServer = declaration.createServer(serverConfig);
+  const placementContext = input.placementContext
+    ? createAuthFnPlacementContextIssuer({
+        config: {
+          ...declaration.config,
+          plugins: [...declaration.config.plugins],
+          database: serverConfig.database,
+          environment: serverConfig.environment,
+          pluginRuntime: serverConfig.pluginRuntime,
+          hooks: serverConfig.hooks,
+        },
+        regionId: input.placementContext.regionId,
+        subjectSecret: input.placementContext.subjectSecret,
+        audiences: ["skillplane-datafn"],
+        publicAuthority: input.oauth.issuer,
+        placementDirectory: input.placementContext.directory,
+        identityKeyForUserId: input.placementContext.identityKeyForUserId,
+        includeUserId: true,
+        ttlSeconds: 60,
+      })
+    : null;
   const app = createAuthApplication({ authfn: authfnServer });
   return {
     authfn: authfnServer,
     provider: authfnServer.provider,
     oauth: oauth.runtime,
+    ...(placementContext
+      ? {
+          derivePlacementContext: (request: Request) =>
+            placementContext.derive(request),
+        }
+      : {}),
     apiKeys: {
       async create(options) {
         const created = await createApiKey(

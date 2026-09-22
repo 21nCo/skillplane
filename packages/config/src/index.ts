@@ -50,6 +50,12 @@ export interface RuntimeBindings {
   readonly SKILLPLANE_REGION_ID?: string;
   readonly SKILLPLANE_TOPOLOGY?: string;
   readonly WORKSPACE_ROUTING_KEYS?: string;
+  readonly DATAFN_DIRECT_ENABLED?: string;
+  readonly DATAFN_DIRECT_WORKSPACES?: string;
+  readonly DATAFN_ROUTE_ACTIVE_KEY_ID?: string;
+  readonly DATAFN_ROUTE_PRIVATE_KEY_PEM?: string;
+  readonly DATAFN_ROUTE_PUBLIC_KEYS?: string;
+  readonly AUTHFN_PLACEMENT_SUBJECT_SECRET?: string;
   readonly POSTHOG_HOST?: string;
   readonly POSTHOG_PROJECT_TOKEN?: string;
   readonly TURNSTILE_SECRET_KEY?: string;
@@ -119,6 +125,14 @@ export interface RuntimeConfig {
     readonly keys: Readonly<Record<string, string>>;
     readonly audience: string;
     readonly ttlMs: number;
+  };
+  readonly directDatafn: {
+    readonly enabled: boolean;
+    readonly workspaceIds: readonly string[];
+    readonly activeKeyId?: string;
+    readonly privateKey?: string;
+    readonly publicKeys?: Readonly<Record<string, string>>;
+    readonly subjectSecret?: string;
   };
   readonly email: {
     readonly provider: "cloudflare-email";
@@ -500,7 +514,101 @@ type RuntimeBaseConfig = Omit<
   | "publicObjectStorage"
   | "regionalObjectStorage"
   | "routing"
+  | "directDatafn"
 >;
+
+function directDatafnConfig(
+  bindings: RuntimeBindings,
+  base: RuntimeBaseConfig,
+  topology: SkillplaneTopologyManifest,
+  role: RuntimeConfig["deployment"]["role"],
+): RuntimeConfig["directDatafn"] {
+  if (
+    bindings.DATAFN_DIRECT_ENABLED !== undefined &&
+    !["true", "false"].includes(bindings.DATAFN_DIRECT_ENABLED)
+  ) {
+    throw new ConfigError("CONFIG_INVALID", "Direct DataFn flag is invalid", [
+      "DATAFN_DIRECT_ENABLED",
+    ]);
+  }
+  if (bindings.DATAFN_DIRECT_ENABLED !== "true")
+    return { enabled: false, workspaceIds: [] };
+  if (role !== "gateway" && role !== "cell") {
+    throw new ConfigError(
+      "CONFIG_INVALID",
+      "Direct DataFn requires a gateway or cell",
+      ["SKILLPLANE_ROLE"],
+    );
+  }
+  const workspaceIds = [
+    ...new Set(
+      (bindings.DATAFN_DIRECT_WORKSPACES ?? "")
+        .split(",")
+        .map((value) => value.trim())
+        .filter(Boolean),
+    ),
+  ];
+  if (
+    workspaceIds.length === 0 ||
+    topology.cells.some((cell) => !cell.datafnEndpoint)
+  ) {
+    throw new ConfigError(
+      "CONFIG_INVALID",
+      "Direct DataFn rollout requires workspace IDs and regional endpoints",
+      ["DATAFN_DIRECT_WORKSPACES", "SKILLPLANE_TOPOLOGY"],
+    );
+  }
+  if (role === "gateway") {
+    const activeKeyId = bindings.DATAFN_ROUTE_ACTIVE_KEY_ID?.trim();
+    const privateKey = bindings.DATAFN_ROUTE_PRIVATE_KEY_PEM;
+    const subjectSecret = requireSecret(
+      bindings.AUTHFN_PLACEMENT_SUBJECT_SECRET,
+      "AUTHFN_PLACEMENT_SUBJECT_SECRET",
+      [],
+    );
+    if (!activeKeyId || !privateKey?.includes("BEGIN PRIVATE KEY") || !subjectSecret) {
+      throw new ConfigError(
+        "PRODUCTION_BINDING_MISSING",
+        "Gateway DataFn ticket credentials are unavailable",
+        [
+          "DATAFN_ROUTE_ACTIVE_KEY_ID",
+          "DATAFN_ROUTE_PRIVATE_KEY_PEM",
+          "AUTHFN_PLACEMENT_SUBJECT_SECRET",
+        ],
+      );
+    }
+    if (subjectSecret === base.secrets.authfn || subjectSecret === base.secrets.oauth) {
+      throw new ConfigError(
+        "CONFIG_INVALID",
+        "Placement subject secret must be independent",
+        ["AUTHFN_PLACEMENT_SUBJECT_SECRET"],
+      );
+    }
+    return { enabled: true, workspaceIds, activeKeyId, privateKey, subjectSecret };
+  }
+  let publicKeys: Record<string, string>;
+  try {
+    const parsed: unknown = JSON.parse(bindings.DATAFN_ROUTE_PUBLIC_KEYS ?? "");
+    if (
+      !parsed ||
+      typeof parsed !== "object" ||
+      Array.isArray(parsed) ||
+      Object.keys(parsed).length === 0 ||
+      Object.values(parsed).some(
+        (key) => typeof key !== "string" || !key.includes("BEGIN PUBLIC KEY"),
+      )
+    )
+      throw new Error();
+    publicKeys = parsed as Record<string, string>;
+  } catch {
+    throw new ConfigError(
+      "PRODUCTION_BINDING_MISSING",
+      "Regional DataFn public keys are unavailable",
+      ["DATAFN_ROUTE_PUBLIC_KEYS"],
+    );
+  }
+  return { enabled: true, workspaceIds, publicKeys };
+}
 
 function databaseFromBinding(
   value: unknown,
@@ -690,6 +798,12 @@ function attachTopology(
     publicObjectStorage: publicStorage,
     regionalObjectStorage: regionalStorage,
     routing: routingKeys(bindings, base, topology),
+    directDatafn: directDatafnConfig(
+      bindings,
+      base,
+      topology,
+      role as RuntimeConfig["deployment"]["role"],
+    ),
   };
 }
 

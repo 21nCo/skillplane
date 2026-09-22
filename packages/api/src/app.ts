@@ -139,6 +139,21 @@ export function createApiApp(options: ApiOptions = {}) {
   registerContextRoutes(app);
   registerContextNoteRoutes(app);
 
+  app.post("/api/v1/datafn/route", async (context) => {
+    const bootstrap = context.get("services")?.datafnBootstrap;
+    if (!bootstrap) {
+      return context.json(
+        failure(
+          context,
+          "DATAFN_DIRECT_DISABLED",
+          "Direct DataFn transport is unavailable",
+        ),
+        404,
+      );
+    }
+    return bootstrap(context.req.raw);
+  });
+
   app.all("/auth/*", async (context) => {
     const services = context.get("services");
     if (!services) {

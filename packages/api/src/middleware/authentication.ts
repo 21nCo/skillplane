@@ -58,6 +58,17 @@ export function authenticationMiddleware(
     const services = await getServices(context.env);
     try {
       context.set("services", services);
+      if (
+        services.deploymentRole === "cell" &&
+        context.req.path.startsWith("/datafn/") &&
+        context.req.header("x-datafn-route-ticket") !== undefined
+      ) {
+        // DataFn verifies the ticket before deriving identity or executing a request.
+        context.set("servicePrincipal", null);
+        context.set("session", null);
+        await next();
+        return;
+      }
       const serviceAuthentication = await authenticateServicePrincipalRequest(
         context.req.raw,
         services,

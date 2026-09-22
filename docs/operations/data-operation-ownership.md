@@ -10,7 +10,7 @@ This matrix is the architecture decision for first-party Skillplane application 
 | Authenticated skill detail by ID or workspace-local slug             | `@skillplane/datafn` to `/datafn/query` | Tenant-filtered regional metadata read.                                   |
 | Authenticated skill version metadata and history                     | `@skillplane/datafn` to `/datafn/query` | Immutable regional metadata read.                                         |
 
-The SvelteKit app must use the shared `withWorkspaceDatafnClient` boundary for every operation above. The client sends the selected workspace as a requested namespace, but that value is not an authorization grant: the gateway authenticates the AuthFn session, checks membership in the control-plane directory, resolves placement, and sends a signed assertion to the owning cell. The regional DataFn server derives its principal again and applies mandatory row-level namespace filtering.
+The SvelteKit app must use the shared `withWorkspaceDatafnReadClient` boundary for every operation above. When direct routing is enabled, that boundary authenticates one ticket-bootstrap request through the canonical gateway, caches the short-lived route grant in memory, and sends read traffic without cookies to the ticket-authorized regional DataFn endpoint. The selected workspace remains only a requested namespace: the gateway verifies the AuthFn session, membership, and placement before issuing the grant, while the regional DataFn server verifies the ticket and derives the principal again before applying mandatory row-level namespace filtering. Recoverable transport, expiry, or placement failures temporarily fall back to canonical `/datafn`; policy denials remain terminal.
 
 ## Hono reads retained by design
 
@@ -32,6 +32,6 @@ The approved DataFn mutation set is currently empty. Generic DataFn mutations re
 
 ## Transport evolution
 
-The current client uses the canonical `/datafn` gateway so AuthFn session cookies and workspace membership remain authoritative. After AUTH-2 and DATA-4 provide placement-bound auth context and gateway-issued direct-regional tickets, the same client boundary can switch its query transport without changing feature code. Authentication/bootstrap and domain commands will continue through the canonical gateway.
+The current client can route approved reads directly with AUTH-2 placement-bound context and DATA-4 gateway-issued regional tickets. Authentication, ticket bootstrap, placement, public projections, and domain commands continue through the canonical gateway. Disabling the rollout flag switches the shared boundary back to canonical `/datafn` without feature-level changes.
 
 List cursors bind the workspace, normalized query, archive state and visibility set. Reusing a cursor with different filters returns `CURSOR_FILTER_MISMATCH` before sending a query. Authenticated skill detail reads continue to include archived skills, matching the existing detail endpoints.

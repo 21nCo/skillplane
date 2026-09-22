@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { renderDevelopmentTopologyConfigs } from "./render-development-topology-config.mjs";
 import { assertDevelopmentControlDatabaseShape } from "./prepare-development-topology-databases.mjs";
+import { parseOnlyKinds } from "./deploy-development-topology.mjs";
+import { selectDevelopmentTopologyOutputs } from "./lib/development-topology-deployment.mjs";
 
 const ids = {
   control: "1".repeat(32),
@@ -11,6 +13,14 @@ const ids = {
 };
 
 describe("multi-cell development deployment", () => {
+  it("rejects invalid deployment selections before starting deployment", () => {
+    assert.throws(
+      () => parseOnlyKinds(["--only", "app,ap"]),
+      /--only must contain app, mcp, projection, or datafn/u,
+    );
+    assert.deepEqual(parseOnlyKinds(["--only", "app,datafn"]), ["app", "datafn"]);
+  });
+
   it("renders isolated gateways and three private regional cells", async () => {
     const rendered = await renderDevelopmentTopologyConfigs({
       controlHyperdriveId: ids.control,
@@ -34,7 +44,17 @@ describe("multi-cell development deployment", () => {
       write: false,
     });
 
-    assert.equal(rendered.outputs.length, 11);
+    assert.equal(rendered.outputs.length, 14);
+    const canary = selectDevelopmentTopologyOutputs(rendered.outputs, [
+      "app",
+      "datafn",
+    ]);
+    assert.equal(canary.length, 7);
+    assert.deepEqual(
+      canary.map((output) => output.kind),
+      ["app", "datafn", "app", "datafn", "app", "datafn", "app"],
+    );
+    assert.equal(canary.at(-1)?.id, "gateway:app");
     const gatewayApp = rendered.outputs.find((output) => output.id === "gateway:app");
     const gatewayMcp = rendered.outputs.find((output) => output.id === "gateway:mcp");
     assert.equal(gatewayApp.config.name, "skillplane-app-dev");
@@ -50,7 +70,14 @@ describe("multi-cell development deployment", () => {
     assert.equal(gatewayMcp.config.routes[0].pattern, "mcp-dev.skillplane.dev");
 
     for (const output of rendered.outputs.filter((item) => item.regionId)) {
-      assert.equal(output.config.routes, undefined);
+      if (output.kind === "datafn") {
+        assert.equal(
+          output.config.routes[0].pattern,
+          `datafn-${output.regionId}-dev.skillplane.dev`,
+        );
+      } else {
+        assert.equal(output.config.routes, undefined);
+      }
       assert.equal(output.config.workers_dev, false);
       assert.equal(output.config.vars.RUNTIME_ENV, "preview");
       assert.equal(output.config.vars.SKILLPLANE_REGION_ID, output.regionId);

@@ -40,6 +40,7 @@ export interface ApiServices {
   readonly auth: SkillplaneAuthServer;
   readonly email: SkillplaneSendFn | null;
   readonly datafn: DatafnServer<SkillplaneDatafnContext>;
+  readonly datafnBootstrap?: ((request: Request) => Promise<Response>) | null;
   readonly tenancySecret: string;
   readonly bundleStorage: R2BundleRepository;
   readonly publicProjectionService: PublicSkillProjectionService | null;

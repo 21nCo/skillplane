@@ -29,6 +29,8 @@ function productionTopology() {
         objectStorageBinding: "CELL_IN_SOUTH_BUNDLES",
         appServiceBinding: "CELL_IN_SOUTH_APP",
         mcpServiceBinding: "CELL_IN_SOUTH_MCP",
+        datafnEndpoint: undefined as
+          { httpUrl: string; wsUrl: string; audience: string } | undefined,
         publiclyRoutable: false,
       },
       {
@@ -67,6 +69,94 @@ describe("Skillplane topology manifest", () => {
     expect(parsed.mode).toBe("single-cell");
     expect(parsed.cells).toHaveLength(1);
     expect(parsed.cells[0]?.regionId).toBe("legacy");
+  });
+
+  it("accepts a DataFn-only regional endpoint without exposing the cell", () => {
+    const topology = productionTopology();
+    const cell = topology.cells[0];
+    if (!cell) throw new Error("Expected a regional cell");
+    cell.datafnEndpoint = {
+      httpUrl: "https://datafn-in.skillplane.dev/datafn",
+      wsUrl: "wss://datafn-in.skillplane.dev/datafn",
+      audience: "skillplane-datafn-in",
+    };
+    expect(parseTopologyManifest(topology).cells[0]?.datafnEndpoint).toEqual(
+      cell.datafnEndpoint,
+    );
+    cell.datafnEndpoint.wsUrl = "wss://app.skillplane.dev/datafn";
+    expect(() => parseTopologyManifest(topology)).toThrow(TopologyError);
+  });
+
+  it("accepts bracketed IPv6 loopback DataFn endpoints", () => {
+    const topology = productionTopology();
+    const cell = topology.cells[0];
+    if (!cell) throw new Error("Expected a regional cell");
+    cell.datafnEndpoint = {
+      httpUrl: "http://[::1]/datafn",
+      wsUrl: "ws://[::1]/datafn",
+      audience: "skillplane-datafn-local",
+    };
+
+    expect(parseTopologyManifest(topology).cells[0]?.datafnEndpoint).toEqual(
+      cell.datafnEndpoint,
+    );
+  });
+
+  it("accepts app and MCP paths on one provider-neutral gateway origin", () => {
+    const topology = productionTopology();
+    topology.public.appAuthority = "https://gateway.example.test";
+    topology.public.mcpResource = "https://gateway.example.test/mcp";
+    topology.controlPlane.issuer = topology.public.appAuthority;
+    topology.controlPlane.oauthResource = topology.public.mcpResource;
+
+    expect(parseTopologyManifest(topology).public).toEqual(topology.public);
+  });
+
+  it("canonicalizes equivalent authority spellings to URL origins", () => {
+    const topology = productionTopology();
+    topology.public.appAuthority = "https://app-preview.example.test/";
+    topology.controlPlane.issuer = "https://app-preview.example.test";
+
+    const parsed = parseTopologyManifest(topology);
+
+    expect(parsed.public.appAuthority).toBe("https://app-preview.example.test");
+    expect(parsed.controlPlane.issuer).toBe("https://app-preview.example.test");
+  });
+
+  it("rejects DataFn custom-domain hosts reused by a gateway or another cell", () => {
+    const gatewayCollision = productionTopology();
+    const firstGatewayCell = gatewayCollision.cells[0];
+    if (!firstGatewayCell) throw new Error("topology fixture has no first cell");
+    firstGatewayCell.datafnEndpoint = {
+      httpUrl: `${PRODUCTION_APP_AUTHORITY}/datafn`,
+      wsUrl: "wss://app.skillplane.dev/datafn",
+      audience: "skillplane-datafn-in",
+    };
+    expect(() => parseTopologyManifest(gatewayCollision)).toThrow(
+      expect.objectContaining({ code: "TOPOLOGY_PUBLIC_HOST_CONFLICT" }),
+    );
+
+    const cellCollision = productionTopology();
+    const firstCell = cellCollision.cells[0];
+    const secondCell = cellCollision.cells[1];
+    if (!firstCell || !secondCell) {
+      throw new Error("topology fixture requires two cells");
+    }
+    const sharedEndpoint = {
+      httpUrl: "https://datafn-shared.skillplane.dev/datafn",
+      wsUrl: "wss://datafn-shared.skillplane.dev/datafn",
+    };
+    firstCell.datafnEndpoint = {
+      ...sharedEndpoint,
+      audience: "skillplane-datafn-in",
+    };
+    secondCell.datafnEndpoint = {
+      ...sharedEndpoint,
+      audience: "skillplane-datafn-us",
+    };
+    expect(() => parseTopologyManifest(cellCollision)).toThrow(
+      expect.objectContaining({ code: "TOPOLOGY_PUBLIC_HOST_CONFLICT" }),
+    );
   });
 
   it("rejects issuer drift, public cells, and duplicate bindings", () => {

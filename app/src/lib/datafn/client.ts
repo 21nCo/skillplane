@@ -1,4 +1,8 @@
+import { env as publicEnv } from "$env/dynamic/public";
+import { capturePostHog } from "$lib/analytics/posthog.client.js";
+import { csrfToken } from "$lib/api/client.js";
 import {
+  createDatafnHttpRouteProvider,
   createSkillplaneDatafnClient,
   type SkillplaneDatafnClient,
 } from "@skillplane/datafn/client";
@@ -12,6 +16,23 @@ export class SkillplaneDatafnReadError extends Error {
     this.code = code;
   }
 }
+
+const browserClients = new Map<string, SkillplaneDatafnClient>();
+const canonicalUntil = new Map<string, number>();
+const recoverableRouteCodes = new Set([
+  "DATAFN_ROUTE_BOOTSTRAP_UNAVAILABLE",
+  "DATAFN_ROUTE_DESCRIPTOR_INVALID",
+  "DATAFN_ROUTE_TICKET_INVALID",
+  "DATAFN_ROUTE_TICKET_EXPIRED",
+  "DATAFN_REGIONAL_ENDPOINT_UNAVAILABLE",
+  "DATAFN_PLACEMENT_NOT_FOUND",
+  "DATAFN_PLACEMENT_UNAVAILABLE",
+  "DATAFN_REGION_MISMATCH",
+  "DATAFN_NAMESPACE_MOVING",
+  "DATAFN_CELL_UNAVAILABLE",
+  "DATAFN_ROUTING_RETRY_EXHAUSTED",
+  "TRANSPORT_ERROR",
+]);
 
 function datafnError(cause: unknown): Error {
   if (cause instanceof Error) return cause;
@@ -30,16 +51,36 @@ function datafnError(cause: unknown): Error {
   );
 }
 
-/**
- * Canonical first-party DataFn boundary. The workspace header selects the
- * requested namespace, while AuthFn and the server-side membership directory
- * remain authoritative and reject any workspace the session cannot access.
- */
-export async function withWorkspaceDatafnClient<T>(
-  workspaceId: string,
-  operation: (client: SkillplaneDatafnClient) => Promise<T>,
-): Promise<T> {
-  const client = createSkillplaneDatafnClient({
+function routeFailure(cause: unknown): boolean {
+  const error = datafnError(cause) as Error & { code?: string };
+  return (
+    recoverableRouteCodes.has(error.code ?? "") ||
+    /^HTTP Error (?:404|502|503|504):/u.test(error.message) ||
+    (error instanceof TypeError &&
+      /(?:fetch|network|load failed)/iu.test(error.message))
+  );
+}
+
+function report(
+  phase: "bootstrap" | "datafn" | "total",
+  route: "gateway" | "regional",
+  started: number,
+  status: number,
+) {
+  const properties = {
+    phase,
+    route,
+    status,
+    duration_ms: Math.round(performance.now() - started),
+  };
+  capturePostHog("datafn.transport", properties);
+  if (publicEnv.PUBLIC_DATAFN_TRANSPORT_CONSOLE === "true") {
+    console.info(JSON.stringify({ event: "datafn.transport", ...properties }));
+  }
+}
+
+function createCanonicalClient(workspaceId: string): SkillplaneDatafnClient {
+  return createSkillplaneDatafnClient({
     clientId: `skillplane-app:${workspaceId}`,
     namespace: workspaceId,
     remote: "/datafn",
@@ -48,11 +89,107 @@ export async function withWorkspaceDatafnClient<T>(
       headers: { "x-skillplane-workspace-id": workspaceId },
     },
   });
+}
+
+function createRegionalClient(workspaceId: string): SkillplaneDatafnClient {
+  let pendingBootstrap: Promise<Response> | null = null;
+  const bootstrap = createDatafnHttpRouteProvider({
+    bootstrapUrl: new URL("/api/v1/datafn/route", window.location.origin).href,
+    credentials: "include",
+    headers: () => {
+      const token = csrfToken();
+      return {
+        "x-skillplane-workspace-id": workspaceId,
+        ...(token ? { "x-authfn-csrf": token } : {}),
+      };
+    },
+    fetch: async (input, init) => {
+      if (!pendingBootstrap) {
+        const started = performance.now();
+        pendingBootstrap = fetch(input, init)
+          .then((response) => {
+            report("bootstrap", "gateway", started, response.status);
+            return response;
+          })
+          .finally(() => {
+            pendingBootstrap = null;
+          });
+      }
+      return (await pendingBootstrap).clone();
+    },
+  });
+  return createSkillplaneDatafnClient({
+    clientId: `skillplane-app:${workspaceId}`,
+    namespace: workspaceId,
+    remote: "/datafn",
+    routeProvider: bootstrap,
+    http: {
+      credentials: "omit",
+      headers: { "x-skillplane-workspace-id": workspaceId },
+      fetch: async (input, init) => {
+        const started = performance.now();
+        const inputUrl =
+          typeof input === "string"
+            ? input
+            : input instanceof URL
+              ? input.href
+              : input.url;
+        const route =
+          new URL(inputUrl, window.location.origin).origin === window.location.origin
+            ? "gateway"
+            : "regional";
+        const response = await fetch(input, init);
+        report("datafn", route, started, response.status);
+        return response;
+      },
+    },
+  });
+}
+
+export async function resetWorkspaceDatafnClients(): Promise<void> {
+  const clients = [...browserClients.values()];
+  browserClients.clear();
+  canonicalUntil.clear();
+  await Promise.all(clients.map((client) => client.destroy()));
+}
+
+/** Only first-party reads use this boundary, so a failed regional read can be retried canonically. */
+export async function withWorkspaceDatafnReadClient<T>(
+  workspaceId: string,
+  operation: (client: SkillplaneDatafnClient) => Promise<T>,
+): Promise<T> {
+  const direct =
+    typeof window !== "undefined" &&
+    publicEnv.PUBLIC_DATAFN_DIRECT_ENABLED === "true" &&
+    (canonicalUntil.get(workspaceId) ?? 0) <= Date.now();
+  const started = performance.now();
+  const client = direct
+    ? (browserClients.get(workspaceId) ?? createRegionalClient(workspaceId))
+    : createCanonicalClient(workspaceId);
+  if (direct && !browserClients.has(workspaceId))
+    browserClients.set(workspaceId, client);
   try {
-    return await operation(client);
+    const result = await operation(client);
+    report("total", direct ? "regional" : "gateway", started, 200);
+    return result;
   } catch (cause) {
+    if (direct && routeFailure(cause)) {
+      browserClients.delete(workspaceId);
+      canonicalUntil.set(workspaceId, Date.now() + 30_000);
+      await client.destroy();
+      const canonical = createCanonicalClient(workspaceId);
+      try {
+        const result = await operation(canonical);
+        report("total", "gateway", started, 200);
+        return result;
+      } catch (fallbackCause) {
+        throw datafnError(fallbackCause);
+      } finally {
+        await canonical.destroy();
+      }
+    }
     throw datafnError(cause);
   } finally {
-    await client.destroy();
+    if (!direct) await client.destroy();
   }
 }

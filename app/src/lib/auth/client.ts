@@ -3,6 +3,7 @@ import {
   type AuthFnErrorEnvelope,
   type AuthFnSession,
 } from "@authfn/client";
+import { resetWorkspaceDatafnClients } from "$lib/datafn/client.js";
 
 export type OtpPurpose = "sign-up";
 export interface OtpContext {
@@ -28,6 +29,19 @@ export class AuthClientError extends Error {
 const client = createAuthFnClient({ baseUrl: "/auth", credentials: "include" });
 const OTP_CONTEXT_KEY = "skillplane.auth.otp";
 const RETURN_TO_KEY = "skillplane.auth.return-to";
+
+async function resetDatafnClientsBestEffort(): Promise<void> {
+  try {
+    await resetWorkspaceDatafnClients();
+  } catch {
+    console.error(
+      JSON.stringify({
+        component: "app",
+        event: "datafn.clients.reset.failed",
+      }),
+    );
+  }
+}
 
 function isErrorEnvelope(result: unknown): result is AuthFnErrorEnvelope {
   return (
@@ -71,6 +85,7 @@ export async function verifyOtp(input: {
       sessionMode: "cookie",
     }),
   );
+  await resetDatafnClientsBestEffort();
 }
 
 export async function getSession(): Promise<BrowserSession | null> {
@@ -78,7 +93,11 @@ export async function getSession(): Promise<BrowserSession | null> {
 }
 
 export async function signOut(): Promise<void> {
-  unwrap(await client.signOut());
+  try {
+    unwrap(await client.signOut());
+  } finally {
+    await resetDatafnClientsBestEffort();
+  }
 }
 
 export function saveOtpContext(context: OtpContext): void {

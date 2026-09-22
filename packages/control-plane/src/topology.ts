@@ -18,25 +18,30 @@ const bindingName = z
   .min(1)
   .max(64)
   .regex(/^[A-Z][A-Z0-9_]*$/u);
+function loopbackHostname(hostname: string): boolean {
+  return ["localhost", "127.0.0.1", "[::1]"].includes(hostname);
+}
 function secureOrLoopback(parsed: URL): boolean {
   return (
     parsed.protocol === "https:" ||
-    (parsed.protocol === "http:" &&
-      ["localhost", "127.0.0.1", "::1"].includes(parsed.hostname))
+    (parsed.protocol === "http:" && loopbackHostname(parsed.hostname))
   );
 }
 
-const authority = z.url().refine((value) => {
-  const parsed = new URL(value);
-  return (
-    secureOrLoopback(parsed) &&
-    !parsed.username &&
-    !parsed.password &&
-    !parsed.search &&
-    !parsed.hash &&
-    parsed.pathname === "/"
-  );
-}, "must be a secure or loopback origin without credentials, path, query, or fragment");
+const authority = z
+  .url()
+  .refine((value) => {
+    const parsed = new URL(value);
+    return (
+      secureOrLoopback(parsed) &&
+      !parsed.username &&
+      !parsed.password &&
+      !parsed.search &&
+      !parsed.hash &&
+      parsed.pathname === "/"
+    );
+  }, "must be a secure or loopback origin without credentials, path, query, or fragment")
+  .transform((value) => new URL(value).origin);
 const mcpResource = z.url().refine((value) => {
   const parsed = new URL(value);
   return (
@@ -48,6 +53,38 @@ const mcpResource = z.url().refine((value) => {
     parsed.pathname === "/mcp"
   );
 }, "must be a secure or loopback /mcp resource URL");
+const datafnEndpoint = z
+  .object({
+    httpUrl: z.url().refine((value) => {
+      const parsed = new URL(value);
+      return (
+        secureOrLoopback(parsed) &&
+        !parsed.username &&
+        !parsed.password &&
+        !parsed.search &&
+        !parsed.hash &&
+        parsed.pathname === "/datafn"
+      );
+    }, "must be a secure or loopback /datafn URL"),
+    wsUrl: z.url().refine((value) => {
+      const parsed = new URL(value);
+      return (
+        (parsed.protocol === "wss:" ||
+          (parsed.protocol === "ws:" && loopbackHostname(parsed.hostname))) &&
+        !parsed.username &&
+        !parsed.password &&
+        !parsed.search &&
+        !parsed.hash &&
+        parsed.pathname === "/datafn"
+      );
+    }, "must be a secure or loopback WebSocket /datafn URL"),
+    audience: identifier,
+  })
+  .strict()
+  .refine(
+    ({ httpUrl, wsUrl }) => new URL(httpUrl).host === new URL(wsUrl).host,
+    "HTTP and WebSocket endpoints must share one host",
+  );
 
 const cellSchema = z
   .object({
@@ -64,6 +101,7 @@ const cellSchema = z
     objectStorageBinding: bindingName,
     appServiceBinding: bindingName,
     mcpServiceBinding: bindingName,
+    datafnEndpoint: datafnEndpoint.optional(),
     publiclyRoutable: z.literal(false),
   })
   .strict();
@@ -106,6 +144,7 @@ export type TopologyErrorCode =
   | "TOPOLOGY_INVALID"
   | "TOPOLOGY_DUPLICATE_REGION"
   | "TOPOLOGY_DUPLICATE_BINDING"
+  | "TOPOLOGY_PUBLIC_HOST_CONFLICT"
   | "TOPOLOGY_REGION_COUNT_INVALID"
   | "TOPOLOGY_RESERVED_REGION"
   | "TOPOLOGY_ISSUER_DRIFT"
@@ -208,6 +247,23 @@ function parseTopologyManifestInternal(
       "TOPOLOGY_DUPLICATE_BINDING",
       "Every database, storage, and service binding must have one owner",
       ["controlPlane", "cells"],
+    );
+  }
+  const publicHosts = [
+    new URL(manifest.public.appAuthority).host,
+    new URL(manifest.public.mcpResource).host,
+  ];
+  const datafnHosts = manifest.cells.flatMap((cell) =>
+    cell.datafnEndpoint ? [new URL(cell.datafnEndpoint.httpUrl).host] : [],
+  );
+  if (
+    duplicates(datafnHosts).length > 0 ||
+    datafnHosts.some((host) => publicHosts.includes(host))
+  ) {
+    throw new TopologyError(
+      "TOPOLOGY_PUBLIC_HOST_CONFLICT",
+      "Every public gateway and regional DataFn custom domain must have a distinct host",
+      ["public", "cells.datafnEndpoint"],
     );
   }
   if (

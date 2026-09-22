@@ -55,11 +55,47 @@ function requireResource(value, pattern, label) {
   return value;
 }
 
+function cloudflareCustomDomainHostname(value, owner) {
+  const parsed = new URL(value);
+  if (parsed.port) {
+    throw new Error(`Cloudflare ${owner} custom domain must not include a port`);
+  }
+  return parsed.hostname;
+}
+
+function resolveCloudflareCustomDomains(manifest) {
+  const entries = [
+    ["app gateway", manifest.public.appAuthority],
+    ["MCP gateway", manifest.public.mcpResource],
+    ...manifest.cells.flatMap((cell) =>
+      cell.datafnEndpoint
+        ? [[`DataFn ${cell.regionId}`, cell.datafnEndpoint.httpUrl]]
+        : [],
+    ),
+  ].map(([owner, url]) => [owner, cloudflareCustomDomainHostname(url, owner)]);
+  const ownersByHostname = new Map();
+  for (const [owner, hostname] of entries) {
+    const existing = ownersByHostname.get(hostname);
+    if (existing) {
+      throw new Error(
+        `Cloudflare custom domain ${hostname} cannot be assigned to both ${existing} and ${owner}`,
+      );
+    }
+    ownersByHostname.set(hostname, owner);
+  }
+  return new Map(entries);
+}
+
 function workerBase(name, kind, variables) {
   return {
     $schema: "../node_modules/wrangler/config-schema.json",
     name,
-    main: kind === "app" ? ".svelte-kit/cloudflare/_worker.js" : "src/index.ts",
+    main:
+      kind === "app"
+        ? ".svelte-kit/cloudflare/_worker.js"
+        : kind === "datafn"
+          ? "src/regional-datafn-worker.ts"
+          : "src/index.ts",
     compatibility_date: "2026-05-03",
     compatibility_flags:
       kind === "mcp"
@@ -104,8 +140,9 @@ export async function createCloudflareTopologyConfigs(input) {
   if (!["production", "preview"].includes(runtimeEnvironment)) {
     throw new Error("The topology runtime environment is invalid");
   }
-  const appHost = new URL(manifest.public.appAuthority).host;
-  const mcpHost = new URL(manifest.public.mcpResource).host;
+  const customDomains = resolveCloudflareCustomDomains(manifest);
+  const appHost = customDomains.get("app gateway");
+  const mcpHost = customDomains.get("MCP gateway");
   const names = {
     appGateway: input.workerNames?.appGateway ?? "skillplane-app",
     mcpGateway: input.workerNames?.mcpGateway ?? "skillplane-mcp",
@@ -114,6 +151,8 @@ export async function createCloudflareTopologyConfigs(input) {
     projection:
       input.workerNames?.projection ??
       ((regionId) => `skillplane-projection-${regionId}`),
+    datafn:
+      input.workerNames?.datafn ?? ((regionId) => `skillplane-datafn-${regionId}`),
   };
   if (
     typeof input.publicTurnstileSiteKey !== "string" ||
@@ -128,6 +167,22 @@ export async function createCloudflareTopologyConfigs(input) {
     OAUTH_RESOURCE: manifest.public.mcpResource,
     SKILLPLANE_TOPOLOGY: topology,
   };
+  const directDatafnEnabled = input.directDatafnEnabled === true;
+  const directDatafnVariables = {
+    DATAFN_DIRECT_ENABLED: String(directDatafnEnabled),
+    DATAFN_DIRECT_WORKSPACES: directDatafnEnabled
+      ? (input.directDatafnWorkspaceIds ?? "")
+      : "",
+  };
+  if (
+    directDatafnEnabled &&
+    (!directDatafnVariables.DATAFN_DIRECT_WORKSPACES ||
+      !directDatafnVariables.DATAFN_DIRECT_WORKSPACES.split(",").some((value) =>
+        value.trim(),
+      ) ||
+      manifest.cells.some((cell) => !cell.datafnEndpoint))
+  )
+    throw new Error("Direct DataFn needs workspace IDs and regional endpoints");
   const controlId = requireResource(
     input.controlHyperdriveId,
     hyperdriveId,
@@ -141,6 +196,8 @@ export async function createCloudflareTopologyConfigs(input) {
   const appGateway = {
     ...workerBase(names.appGateway, "app", {
       ...sharedVariables,
+      ...directDatafnVariables,
+      PUBLIC_DATAFN_DIRECT_ENABLED: String(directDatafnEnabled),
       SKILLPLANE_ROLE: "gateway",
       AUTH_MODE: "otp",
       EMAIL_PROVIDER: "cloudflare-email",
@@ -222,9 +279,43 @@ export async function createCloudflareTopologyConfigs(input) {
         cell.regionId,
         {
           app: {
-            ...workerBase(names.appCell(cell.regionId), "app", variables),
+            ...workerBase(names.appCell(cell.regionId), "app", {
+              ...variables,
+              ...directDatafnVariables,
+              PUBLIC_DATAFN_DIRECT_ENABLED: String(directDatafnEnabled),
+            }),
             ...bindings,
           },
+          ...(cell.datafnEndpoint
+            ? {
+                datafn: {
+                  ...workerBase(names.datafn(cell.regionId), "datafn", {
+                    SKILLPLANE_TOPOLOGY: topology,
+                    SKILLPLANE_REGION_ID: cell.regionId,
+                    SKILLPLANE_ROLE: "cell",
+                    DATAFN_DIRECT_ENABLED: String(directDatafnEnabled),
+                    RUNTIME_ENV: runtimeEnvironment,
+                  }),
+                  ratelimits: [
+                    {
+                      name: "DATAFN_EDGE_LIMIT",
+                      namespace_id:
+                        runtimeEnvironment === "production" ? "21016" : "21017",
+                      simple: { limit: 300, period: 10 },
+                    },
+                  ],
+                  routes: [
+                    {
+                      pattern: customDomains.get(`DataFn ${cell.regionId}`),
+                      custom_domain: true,
+                    },
+                  ],
+                  services: [
+                    { binding: "CELL_APP", service: names.appCell(cell.regionId) },
+                  ],
+                },
+              }
+            : {}),
           mcp: {
             ...workerBase(names.mcpCell(cell.regionId), "mcp", {
               ...(input.mcpVariables ?? {}),
