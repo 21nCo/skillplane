@@ -253,7 +253,10 @@ function parseTopologyManifestInternal(
   const datafnHosts = manifest.cells.flatMap((cell) =>
     cell.datafnEndpoint ? [new URL(cell.datafnEndpoint.httpUrl).host] : [],
   );
-  if (duplicates([...publicHosts, ...datafnHosts]).length > 0) {
+  if (
+    duplicates(datafnHosts).length > 0 ||
+    datafnHosts.some((host) => publicHosts.includes(host))
+  ) {
     throw new TopologyError(
       "TOPOLOGY_PUBLIC_HOST_CONFLICT",
       "Every public gateway and regional DataFn custom domain must have a distinct host",

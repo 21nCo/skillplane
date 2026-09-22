@@ -102,6 +102,16 @@ describe("Skillplane topology manifest", () => {
     );
   });
 
+  it("accepts app and MCP paths on one provider-neutral gateway origin", () => {
+    const topology = productionTopology();
+    topology.public.appAuthority = "https://gateway.example.test";
+    topology.public.mcpResource = "https://gateway.example.test/mcp";
+    topology.controlPlane.issuer = topology.public.appAuthority;
+    topology.controlPlane.oauthResource = topology.public.mcpResource;
+
+    expect(parseTopologyManifest(topology).public).toEqual(topology.public);
+  });
+
   it("rejects DataFn custom-domain hosts reused by a gateway or another cell", () => {
     const gatewayCollision = productionTopology();
     const firstGatewayCell = gatewayCollision.cells[0];

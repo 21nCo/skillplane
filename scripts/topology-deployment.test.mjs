@@ -135,6 +135,35 @@ describe("multi-cell Cloudflare topology adapter", () => {
     );
   });
 
+  it("rejects one custom-domain host assigned to separate app and MCP Workers", async () => {
+    const manifest = await readProductionTopology();
+    manifest.public.appAuthority = "https://gateway-preview.skillplane.dev";
+    manifest.public.mcpResource = "https://gateway-preview.skillplane.dev/mcp";
+    manifest.controlPlane.issuer = manifest.public.appAuthority;
+    manifest.controlPlane.oauthResource = manifest.public.mcpResource;
+
+    await assert.rejects(
+      createCloudflareTopologyConfigs({
+        manifest,
+        runtimeEnvironment: "preview",
+        publicTurnstileSiteKey: "0x4AAAAAAAAAA-preview-site-key",
+        controlHyperdriveId: ids.control,
+        publicBucketName: "skillplane-public-bundles",
+        cells: {
+          "in-south": {
+            hyperdriveId: ids.inSouth,
+            bucketName: "skillplane-in-south-bundles",
+          },
+          "us-east": {
+            hyperdriveId: ids.usEast,
+            bucketName: "skillplane-us-east-bundles",
+          },
+        },
+      }),
+      /app and MCP custom domains must be distinct/u,
+    );
+  });
+
   it("rejects an empty direct-routing workspace list", async () => {
     await assert.rejects(
       createCloudflareTopologyConfigs({

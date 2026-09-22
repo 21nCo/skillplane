@@ -111,6 +111,9 @@ export async function createCloudflareTopologyConfigs(input) {
   }
   const appHost = new URL(manifest.public.appAuthority).host;
   const mcpHost = new URL(manifest.public.mcpResource).host;
+  if (appHost === mcpHost) {
+    throw new Error("Cloudflare app and MCP custom domains must be distinct");
+  }
   const names = {
     appGateway: input.workerNames?.appGateway ?? "skillplane-app",
     mcpGateway: input.workerNames?.mcpGateway ?? "skillplane-mcp",
