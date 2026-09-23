@@ -3,6 +3,7 @@ import { explicitProductAnalyticsConfig } from "../../src/lib/analytics/posthog.
 
 const posthog = vi.hoisted(() => ({
   capture: vi.fn(),
+  identify: vi.fn(),
   init: vi.fn(),
   reset: vi.fn(),
 }));
@@ -60,15 +61,19 @@ describe("PostHog browser configuration", () => {
     ).toBe("https://user-dev.skillplane.dev");
   });
 
-  it("queues event capture and reset while the browser SDK initializes", async () => {
-    const { capturePostHog, resetPostHog } =
+  it("queues identify, capture, and reset while the browser SDK initializes", async () => {
+    const { capturePostHog, identifyPostHog, resetPostHog } =
       await import("../../src/lib/analytics/posthog.client.js");
 
+    identifyPostHog("actor:one", { email: "one@example.test" });
     capturePostHog("workspace_switched");
     expect(resetPostHog()).toBeUndefined();
 
     await vi.waitFor(() => {
       expect(posthog.init).toHaveBeenCalledOnce();
+      expect(posthog.identify).toHaveBeenCalledWith("actor:one", {
+        email: "one@example.test",
+      });
       expect(posthog.capture).toHaveBeenCalledWith("workspace_switched", undefined);
       expect(posthog.reset).toHaveBeenCalledOnce();
       expect(posthog.reset).toHaveBeenCalledWith(true);
