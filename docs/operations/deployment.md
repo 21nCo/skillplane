@@ -318,7 +318,8 @@ pnpm test:mcp:production
 ```
 
 The gate rejects service-principal credentials. It negotiates Streamable HTTP,
-checks all nine tool contracts, and executes `skills_search`. Successful
+checks all 39 registered tool contracts (including composition and
+verification), and executes `skills_search`. Successful
 execution proves the OAuth token was accepted for the production MCP resource
 audience. Caller metadata is audited while user identity is derived only from
 the verified token.

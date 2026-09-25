@@ -7,7 +7,14 @@ import {
 } from "../../src/index.js";
 import { isPostHogSessionId } from "../../src/analytics.js";
 import type { McpIdentity } from "../../src/auth.js";
-import { SKILLPLANE_MCP_SERVER_INFO } from "../../src/server.js";
+import {
+  SKILLPLANE_MCP_SERVER_INFO,
+  skillplaneMcpDeclaration,
+} from "../../src/server.js";
+import {
+  SKILLPLANE_MCP_TOOL_COUNT,
+  SKILLPLANE_MCP_TOOL_NAMES,
+} from "../../src/tool-catalog.js";
 import {
   parseStructured,
   startMcpTestEnvironment,
@@ -98,13 +105,18 @@ describe("MCP Streamable HTTP conformance", () => {
     await expect(connection.client.ping()).resolves.toEqual({});
   });
 
-  it("advertises thirty-nine complete tool contracts as JSON Schema", async () => {
+  it("advertises the live registered tool contracts as JSON Schema", async () => {
     const result = await connection.client.listTools();
-    expect(result.tools).toHaveLength(39);
+    const declaredByName = new Map(
+      skillplaneMcpDeclaration.registry.definitions().map((tool) => [tool.name, tool]),
+    );
+    expect(result.tools).toHaveLength(SKILLPLANE_MCP_TOOL_COUNT);
+    expect(result.tools.map((tool) => tool.name).toSorted()).toEqual([
+      ...SKILLPLANE_MCP_TOOL_NAMES,
+    ]);
     for (const tool of result.tools) {
-      expect(tool.name).toMatch(
-        /^(skill_usage_report|skill_execution_report|skill_composition_candidate_create|skill_dependency_upgrades_get|skill_dependency_upgrade|skill_version_lifecycle_update|skill_resolve|skill_verification_plan_get|skill_verification_run_start|skill_verification_run_get|skill_verification_evidence_add|skill_verification_run_complete|workspaces_list|skills_list|skills_search|skill_retrieve|skill_asset_retrieve|skill_versions_list|skill_versions_diff|skill_candidates_list|skill_amendment_policy_get|contexts_list|context_get|context_knowledge_history|context_notes_list|skill_amend|skill_create|skill_visibility_update|skill_archive|skill_restore|skill_candidate_approve|skill_candidate_reject|skill_amendment_policy_update|context_create|context_update|context_archive|context_restore|context_knowledge_update|context_note_upsert)$/u,
-      );
+      const declared = declaredByName.get(tool.name);
+      expect(declared).toBeDefined();
       expect(tool.description?.length).toBeGreaterThan(40);
       expect(tool.inputSchema).toMatchObject({
         type: "object",
@@ -115,36 +127,7 @@ describe("MCP Streamable HTTP conformance", () => {
         expect.stringContaining("analytics and user intent tracking"),
       );
       expect(tool.outputSchema).toMatchObject({ type: "object" });
-      const mutating = [
-        "skill_usage_report",
-        "skill_execution_report",
-        "skill_composition_candidate_create",
-        "skill_dependency_upgrade",
-        "skill_version_lifecycle_update",
-        "skill_verification_run_start",
-        "skill_verification_evidence_add",
-        "skill_verification_run_complete",
-        "skill_amend",
-        "skill_create",
-        "skill_visibility_update",
-        "skill_archive",
-        "skill_restore",
-        "skill_candidate_approve",
-        "skill_candidate_reject",
-        "skill_amendment_policy_update",
-        "context_create",
-        "context_update",
-        "context_archive",
-        "context_restore",
-        "context_knowledge_update",
-        "context_note_upsert",
-      ].includes(tool.name);
-      expect(tool.annotations).toEqual({
-        readOnlyHint: !mutating,
-        destructiveHint: tool.name === "skill_version_lifecycle_update",
-        idempotentHint: true,
-        openWorldHint: false,
-      });
+      expect(tool.annotations).toEqual(declared?.annotations);
     }
   });
 
@@ -160,7 +143,7 @@ describe("MCP Streamable HTTP conformance", () => {
     };
 
     expect(Buffer.byteLength(body)).toBeLessThan(32 * 1_024);
-    expect(compacted.result.tools).toHaveLength(39);
+    expect(compacted.result.tools).toHaveLength(SKILLPLANE_MCP_TOOL_COUNT);
     for (const tool of compacted.result.tools) {
       expect(tool).not.toHaveProperty("outputSchema");
       expect(tool).not.toHaveProperty("execution");
