@@ -59,7 +59,6 @@ catalog:
   fumadocs-mdx: 15.2.2
   fumadocs-ui: 16.14.0
   hono: 4.12.32
-  marked: 18.0.7
   next: 16.3.0
   pg: 8.22.0
   phosphor-svelte: 3.1.0

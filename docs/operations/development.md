@@ -70,8 +70,7 @@ are also present in the invoking environment, the deployment additionally
 rejects copied development values.
 
 Markdown authoring uses the shared mdfn profile documented in
-[`mdfn.md`](./mdfn.md). Leave the `PUBLIC_SKILLPLANE_MDFN_*` flags unset unless
-you are exercising per-surface rollback.
+[`mdfn.md`](./mdfn.md).
 
 The development renderer exposes `PUBLIC_POSTHOG_KEY` and
 `https://user-dev.skillplane.dev` to the browser app. It supplies the same
