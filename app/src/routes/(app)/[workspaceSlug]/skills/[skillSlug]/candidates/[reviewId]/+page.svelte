@@ -228,9 +228,7 @@
         <ReviewDecision review={detail.review} {canDecide} {busy} ondecide={decide} />
         {#if actionError}
           <SkillState
-            kind={actionError.toLocaleLowerCase().includes("conflict")
-              ? "conflict"
-              : "error"}
+            kind="error"
             title={decisionSaved
               ? "Review decision was saved"
               : "Review state was not changed"}

@@ -5,7 +5,7 @@ import {
 } from "@authfn/client";
 import { resetWorkspaceDatafnClients } from "$lib/datafn/client.js";
 
-export type OtpPurpose = "sign-up";
+type OtpPurpose = "sign-up";
 export interface OtpContext {
   readonly email: string;
   readonly purpose: OtpPurpose;

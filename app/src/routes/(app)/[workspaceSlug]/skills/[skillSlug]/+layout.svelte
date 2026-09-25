@@ -7,21 +7,16 @@
   import { useWorkspaceStore } from "$lib/workspaces/store.svelte.js";
   import { ArrowLeftIcon, ArchiveIcon, GlobeHemisphereWestIcon } from "phosphor-svelte";
   import type { Snippet } from "svelte";
-  import type { LayoutData } from "./$types";
 
-  let {
-    data,
-    children,
-  }: {
-    data: LayoutData;
-    children: Snippet;
-  } = $props();
+  let { children }: { children: Snippet } = $props();
   const workspaces = useWorkspaceStore();
   const detail = provideSkillDetailStore();
   const workspace = $derived(
-    workspaces.workspaces.find((candidate) => candidate.slug === data.workspaceSlug) ??
-      null,
+    workspaces.workspaces.find(
+      (candidate) => candidate.slug === page.params.workspaceSlug,
+    ) ?? null,
   );
+  const skillSlug = $derived(page.params.skillSlug ?? "");
   const navigation = $derived(
     workspace
       ? [
@@ -29,42 +24,42 @@
             label: "Overview",
             href: resolve("/(app)/[workspaceSlug]/skills/[skillSlug]", {
               workspaceSlug: workspace.slug,
-              skillSlug: data.skillSlug,
+              skillSlug,
             }),
           },
           {
             label: "Content",
             href: resolve("/(app)/[workspaceSlug]/skills/[skillSlug]/content", {
               workspaceSlug: workspace.slug,
-              skillSlug: data.skillSlug,
+              skillSlug,
             }),
           },
           {
             label: "Contexts",
             href: resolve("/(app)/[workspaceSlug]/skills/[skillSlug]/contexts", {
               workspaceSlug: workspace.slug,
-              skillSlug: data.skillSlug,
+              skillSlug,
             }),
           },
           {
             label: "Candidates",
             href: resolve("/(app)/[workspaceSlug]/skills/[skillSlug]/candidates", {
               workspaceSlug: workspace.slug,
-              skillSlug: data.skillSlug,
+              skillSlug,
             }),
           },
           {
             label: "Versions",
             href: resolve("/(app)/[workspaceSlug]/skills/[skillSlug]/versions", {
               workspaceSlug: workspace.slug,
-              skillSlug: data.skillSlug,
+              skillSlug,
             }),
           },
           {
             label: "Analytics",
             href: resolve("/(app)/[workspaceSlug]/skills/[skillSlug]/analytics", {
               workspaceSlug: workspace.slug,
-              skillSlug: data.skillSlug,
+              skillSlug,
             }),
           },
           ...(workspace.role === "admin" || workspace.role === "owner"
@@ -73,7 +68,7 @@
                   label: "Audit",
                   href: resolve("/(app)/[workspaceSlug]/skills/[skillSlug]/audit", {
                     workspaceSlug: workspace.slug,
-                    skillSlug: data.skillSlug,
+                    skillSlug,
                   }),
                 },
               ]
@@ -82,7 +77,7 @@
             label: "Settings",
             href: resolve("/(app)/[workspaceSlug]/skills/[skillSlug]/settings", {
               workspaceSlug: workspace.slug,
-              skillSlug: data.skillSlug,
+              skillSlug,
             }),
           },
         ]
@@ -90,11 +85,11 @@
   );
 
   $effect(() => {
-    if (workspace) void detail.load(workspace.id, data.skillSlug);
+    if (workspace && skillSlug) void detail.load(workspace.id, skillSlug);
   });
 
   function isActive(href: string): boolean {
-    if (href.endsWith(`/${data.skillSlug}`)) {
+    if (href.endsWith(`/${skillSlug}`)) {
       return page.url.pathname === href;
     }
     return page.url.pathname === href || page.url.pathname.startsWith(`${href}/`);
@@ -115,7 +110,8 @@
       kind="error"
       title="Skill could not be loaded"
       message={detail.error ?? "The skill does not exist or access was removed."}
-      retry={() => workspace && void detail.load(workspace.id, data.skillSlug, true)}
+      retry={() =>
+        workspace && skillSlug && void detail.load(workspace.id, skillSlug, true)}
     />
   </main>
 {:else}
