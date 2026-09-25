@@ -1,13 +1,6 @@
 import { DomainError } from "./errors.js";
 import { WORKSPACE_ROLES, type WorkspaceRole, isWorkspaceRole } from "./principal.js";
 
-const rank: Readonly<Record<WorkspaceRole, number>> = {
-  viewer: 0,
-  editor: 1,
-  admin: 2,
-  owner: 3,
-};
-
 export function parseWorkspaceRole(
   value: unknown,
   options: { readonly allowOwner?: boolean } = {},
@@ -56,10 +49,6 @@ export function assertOwnerRemains(ownerCount: number, removingOwner: boolean): 
       403,
     );
   }
-}
-
-export function roleAtLeast(role: WorkspaceRole, required: WorkspaceRole): boolean {
-  return rank[role] >= rank[required];
 }
 
 export { WORKSPACE_ROLES };

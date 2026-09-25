@@ -9,11 +9,6 @@
       "types": "./src/index.ts",
       "development": "./src/index.ts",
       "default": "./dist/index.js"
-    },
-    "./health": {
-      "types": "./src/health.ts",
-      "development": "./src/health.ts",
-      "default": "./dist/health.js"
     }
   },
   "files": [

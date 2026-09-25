@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  actionsForRole,
   authorize,
   canPerform,
   type Principal,
@@ -20,16 +19,18 @@ function user(role: "viewer" | "editor" | "admin" | "owner"): Principal {
 
 describe("workspace authorization matrix", () => {
   it("grants monotonically broader role capabilities", () => {
-    expect(actionsForRole("viewer")).toEqual([
-      "workspace:read",
-      "members:read",
-      "skills:read",
-      "contexts:read",
-      "analytics:read",
-    ]);
-    expect(actionsForRole("editor")).toContain("skills:write");
-    expect(actionsForRole("admin")).toContain("members:write");
-    expect(actionsForRole("owner")).toEqual(WORKSPACE_ACTIONS);
+    const viewer = user("viewer");
+    expect(canPerform(viewer, "workspace:read")).toBe(true);
+    expect(canPerform(viewer, "members:read")).toBe(true);
+    expect(canPerform(viewer, "skills:read")).toBe(true);
+    expect(canPerform(viewer, "contexts:read")).toBe(true);
+    expect(canPerform(viewer, "analytics:read")).toBe(true);
+    expect(canPerform(viewer, "skills:write")).toBe(false);
+    expect(canPerform(user("editor"), "skills:write")).toBe(true);
+    expect(canPerform(user("admin"), "members:write")).toBe(true);
+    for (const action of WORKSPACE_ACTIONS) {
+      expect(canPerform(user("owner"), action)).toBe(true);
+    }
   });
 
   it("prevents non-owner workspace deletion", () => {

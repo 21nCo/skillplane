@@ -97,7 +97,3 @@ export function authorize(principal: Principal, action: WorkspaceAction): void {
     throw new AuthorizationError();
   }
 }
-
-export function actionsForRole(role: WorkspaceRole): readonly WorkspaceAction[] {
-  return WORKSPACE_ACTIONS.filter((action) => roleActions[role].has(action));
-}
