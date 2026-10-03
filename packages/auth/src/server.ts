@@ -227,9 +227,8 @@ export function createSkillplaneAuthServer(
         const created = await createApiKey(
           apiKeyConfig,
           {
-            // AuthFn's persisted schema permits unowned keys, but its current
-            // create input type is narrower than that database contract.
-            userId: null as unknown as string,
+            // Service credentials have no user owner.
+            userId: null,
             name: options.name,
             scopes: [...options.scopes],
             metadata: { ...options.metadata },

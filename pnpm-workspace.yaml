@@ -13,6 +13,9 @@ allowBuilds:
   workerd: true
 
 overrides:
+  # AuthFn plugins pin the older core. Share one runtime so error classes and
+  # explicitly unowned API-key issuance use the same published implementation.
+  authfn: "catalog:"
   # sendfn's APNs transport is not used by Skillplane, but it remains in the
   # production dependency graph. Pin its JWT implementation above all known
   # algorithm/cache/empty-secret advisories.
@@ -31,7 +34,7 @@ catalog:
   "@axe-core/playwright": 4.12.1
   "@authfn/core": 0.1.1
   "@authfn/client": 0.2.1
-  authfn: 0.3.0
+  authfn: 0.4.0
   "@authfn/api-keys": 0.1.2
   "@authfn/email-otp": 0.1.2
   "@authfn/multi-region": 0.1.2
@@ -79,7 +82,7 @@ catalog:
 minimumReleaseAgeExclude:
   - "@authfn/core@0.1.1"
   - "@authfn/client@0.2.1"
-  - "authfn@0.3.0"
+  - "authfn@0.4.0"
   - "@authfn/api-keys@0.1.2"
   - "@authfn/email-otp@0.1.2"
   - "@authfn/multi-region@0.1.2"
@@ -109,10 +112,10 @@ minimumReleaseAgeExclude:
   - "@next/swc-win32-arm64-msvc@16.3.0"
   - "@next/swc-win32-x64-msvc@16.3.0"
   - next@16.3.0
-  - "@mcpfn/auth@0.0.3 || 0.0.4"
-  - "@mcpfn/client@0.0.3"
-  - "@mcpfn/core@0.0.4"
-  - "@mcpfn/testing@0.0.4"
+  - "@mcpfn/auth@0.0.5"
+  - "@mcpfn/client@0.0.4"
+  - "@mcpfn/core@0.0.5"
+  - "@mcpfn/testing@0.0.5"
   - "@mdfn/core@0.1.0"
   - "@mdfn/dom@0.1.0"
   - "@mdfn/extensions@0.1.0"

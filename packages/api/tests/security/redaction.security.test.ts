@@ -22,6 +22,7 @@ let app: ReturnType<typeof createApiApp>;
 const suffix = `redaction-${crypto.randomUUID().replaceAll("-", "").slice(0, 12)}`;
 const viewerSuffix = `${suffix}-viewer`;
 const outsiderSuffix = `${suffix}-outsider`;
+const auditDay = new Date().toISOString().slice(0, 10);
 
 function headers(
   tenant: TenantFixture,
@@ -88,6 +89,8 @@ beforeAll(async () => {
     latencyMs: 17.4,
     channel: "mcp",
     retentionClass: "detailed_read_90d",
+    // Exercise the UTC day edge even when Postgres uses a non-UTC timezone.
+    occurredAt: new Date(`${auditDay}T23:59:59.999Z`),
     metadata: {
       prompt: "Never persist this prompt",
       skillBody: "# Never persist this skill body",
@@ -130,7 +133,7 @@ beforeAll(async () => {
     metadata: { nextRole: "viewer" },
   });
   await rollupUtcDay(services.database.pool, {
-    day: new Date().toISOString().slice(0, 10),
+    day: auditDay,
     workspaceId: owner.workspaceId,
   });
 });
@@ -194,7 +197,7 @@ describe("audit redaction and role isolation", () => {
   });
 
   it("allows owner filtering/export, allows viewer aggregates, and denies detailed audit without leakage", async () => {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = auditDay;
     const filter = new URLSearchParams({
       from: today,
       to: today,

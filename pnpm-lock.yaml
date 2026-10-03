@@ -84,9 +84,6 @@ catalogs:
     '@types/react-dom':
       specifier: 19.2.3
       version: 19.2.3
-    authfn:
-      specifier: 0.3.0
-      version: 0.3.0
     diff:
       specifier: 9.0.0
       version: 9.0.0
@@ -164,6 +161,7 @@ catalogs:
       version: 4.4.3
 
 overrides:
+  authfn: 0.4.0
   fast-jwt: 6.2.4
   fast-uri: 3.1.5
   nanoid: 3.3.18
@@ -180,7 +178,7 @@ importers:
         version: 10.0.1(eslint@10.8.0(jiti@2.7.0))
       '@modelcontextprotocol/sdk':
         specifier: 'catalog:'
-        version: 1.29.0(zod@4.4.3)
+        version: 1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3)
       '@playwright/test':
         specifier: 'catalog:'
         version: 1.62.0
@@ -379,17 +377,17 @@ importers:
   mcp:
     dependencies:
       '@mcpfn/auth':
-        specifier: 0.0.4
-        version: 0.0.4(@superfunctions/auth@0.2.0)(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))(zod@4.4.3)
+        specifier: 0.0.5
+        version: 0.0.5(@cfworker/json-schema@4.1.1)(@superfunctions/auth@0.2.0)(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))(zod@4.4.3)
       '@mcpfn/core':
-        specifier: 0.0.4
-        version: 0.0.4(zod@4.4.3)
+        specifier: 0.0.5
+        version: 0.0.5(zod@4.4.3)
       '@modelcontextprotocol/sdk':
         specifier: 'catalog:'
-        version: 1.29.0(zod@4.4.3)
+        version: 1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3)
       '@posthog/mcp':
         specifier: 0.10.9
-        version: 0.10.9(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(posthog-node@5.48.1)
+        version: 0.10.9(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(posthog-node@5.48.1)
       '@skillplane/api':
         specifier: workspace:*
         version: link:../packages/api
@@ -428,8 +426,8 @@ importers:
         version: 4.4.3
     devDependencies:
       '@mcpfn/testing':
-        specifier: 0.0.4
-        version: 0.0.4(@playwright/test@1.62.0)(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))(zod@4.4.3)
+        specifier: 0.0.5
+        version: 0.0.5(@cfworker/json-schema@4.1.1)(@playwright/test@1.62.0)(@superfunctions/auth@0.2.0)(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))(zod@4.4.3)
       '@skillplane/db':
         specifier: workspace:*
         version: link:../packages/db
@@ -485,8 +483,8 @@ importers:
         specifier: workspace:*
         version: link:../storage
       authfn:
-        specifier: 'catalog:'
-        version: 0.3.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
+        specifier: 0.4.0
+        version: 0.4.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
       hono:
         specifier: 'catalog:'
         version: 4.12.32
@@ -525,8 +523,8 @@ importers:
         specifier: workspace:*
         version: link:../db
       authfn:
-        specifier: 'catalog:'
-        version: 0.3.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
+        specifier: 0.4.0
+        version: 0.4.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
       hono:
         specifier: 'catalog:'
         version: 4.12.32
@@ -553,8 +551,8 @@ importers:
         specifier: 'catalog:'
         version: 0.1.1(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
       '@mcpfn/auth':
-        specifier: 0.0.4
-        version: 0.0.4(@superfunctions/auth@0.2.0)(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))(zod@4.4.3)
+        specifier: 0.0.5
+        version: 0.0.5(@cfworker/json-schema@4.1.1)(@superfunctions/auth@0.2.0)(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))(zod@4.4.3)
       '@skillplane/db':
         specifier: workspace:*
         version: link:../db
@@ -565,8 +563,8 @@ importers:
         specifier: 'catalog:'
         version: 0.2.1(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
       authfn:
-        specifier: 'catalog:'
-        version: 0.3.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
+        specifier: 0.4.0
+        version: 0.4.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
       pg:
         specifier: 'catalog:'
         version: 8.22.0
@@ -637,8 +635,8 @@ importers:
         specifier: 'catalog:'
         version: 0.2.1(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
       authfn:
-        specifier: 'catalog:'
-        version: 0.3.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
+        specifier: 0.4.0
+        version: 0.4.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
       pg:
         specifier: 'catalog:'
         version: 8.22.0
@@ -680,8 +678,8 @@ importers:
         specifier: 'catalog:'
         version: 0.2.1(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
       authfn:
-        specifier: 'catalog:'
-        version: 0.3.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
+        specifier: 0.4.0
+        version: 0.4.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
       drizzle-orm:
         specifier: 'catalog:'
         version: 0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0)
@@ -736,8 +734,8 @@ importers:
   packages/email:
     dependencies:
       authfn:
-        specifier: 'catalog:'
-        version: 0.3.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
+        specifier: 0.4.0
+        version: 0.4.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
       sendfn:
         specifier: 'catalog:'
         version: 0.0.2(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
@@ -753,7 +751,7 @@ importers:
     devDependencies:
       '@modelcontextprotocol/sdk':
         specifier: 'catalog:'
-        version: 1.29.0(zod@4.4.3)
+        version: 1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3)
       '@skillplane/domain':
         specifier: workspace:*
         version: link:../domain
@@ -854,8 +852,8 @@ importers:
         specifier: workspace:*
         version: link:../storage
       authfn:
-        specifier: 'catalog:'
-        version: 0.3.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
+        specifier: 0.4.0
+        version: 0.4.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
       fflate:
         specifier: 'catalog:'
         version: 0.8.3
@@ -1260,6 +1258,9 @@ packages:
     resolution: {integrity: sha512-rMd7xriptqKpP+w5265i4Hdkv2X5kbu6uiBi/B2I7uf3hieRBM3qDCfaKPtxfiYb2mKXfF+yLODJwIx+Jv1GDw==}
     peerDependencies:
       playwright-core: '>= 1.0.0'
+
+  '@cfworker/json-schema@4.1.1':
+    resolution: {integrity: sha512-gAmrUZSGtKc3AiBL71iNWxDsyUC5uMaKKGdvzYsBoTW/xi42JQHl7eKV2OYzCUqvc+D2RCcf7EXY2iCyFIk6og==}
 
   '@cloudflare/kv-asset-handler@0.5.0':
     resolution: {integrity: sha512-jxQYkj8dSIzc0cD6cMMNdOc1UVjqSqu8BZdor5s8cGjW2I8BjODt/kWPVdY+u9zj3ms75Q5qaZgnxUad83+eAg==}
@@ -2527,8 +2528,8 @@ packages:
   '@marijn/find-cluster-break@1.0.4':
     resolution: {integrity: sha512-Wy0V7+SGUjnF9/TkiM1hKVDPj7jKXduPNboMVtHTA8dySMURWqfg/JZ9E2Sq8JgSJmkl7k7Qe9FLeMSrSraWmQ==}
 
-  '@mcpfn/auth@0.0.4':
-    resolution: {integrity: sha512-9vwa47X+y/vWroY/tW/ankdBgehqP6zvk6ncBdHAPtf/PGWQuKK+94n/BQnmrx0Adk4Ju4nRBP5RUDWzOtHqjQ==}
+  '@mcpfn/auth@0.0.5':
+    resolution: {integrity: sha512-e1aTpCCR719HHsE5HYj9jrKRd1Rn7VXqf12Q9d9nVdv7jjg7xVSEUoyIJryXgqhTqA9rv7cA6jirmnxWjec4zQ==}
     engines: {node: '>=18.18.0'}
     peerDependencies:
       '@superfunctions/auth': '>=0.1.2'
@@ -2536,16 +2537,16 @@ packages:
       '@superfunctions/auth':
         optional: true
 
-  '@mcpfn/client@0.0.3':
-    resolution: {integrity: sha512-HT78WeSnmYTJ1kBGrFsjNdPH+A0TLK5gGcHxv7vAc/w3MzTkoheYoWGFEYP5DEe8sUULNkBCXMHi4ivuYiJ9wg==}
+  '@mcpfn/client@0.0.4':
+    resolution: {integrity: sha512-g2eWp3ajjuMDx7Y72qXXmylQ6QKkHAx3z8wks8LKJM4tBOrJTbVfftM566ul3obSthIS/EtaBdUMlyROBI+xPA==}
     engines: {node: '>=18.18.0'}
 
-  '@mcpfn/core@0.0.4':
-    resolution: {integrity: sha512-Mhd1rBmdNS5hMStruaHRzihqKj5nwykkcrPMrbiDGQxRig/pFZZIWkjZI3Sgs4U0ysD8d73IiDkk0dSHJ9YMiw==}
+  '@mcpfn/core@0.0.5':
+    resolution: {integrity: sha512-0gBf+lIv7cL2UKyB/PpWONZT5ch/laCVcgb0+4+S8ZCoExeNhDo4KJsKo5Sb/uL+9ZOxJRuBbgJk9LqDNcnlOw==}
     engines: {node: '>=18.18.0'}
 
-  '@mcpfn/testing@0.0.4':
-    resolution: {integrity: sha512-ganCRtvWHOqvMGT+BcVbcDuzUSrLQKgoDSFlJhB9Qlib0ptBAseZxeKz4sAet8yg+apE4QBPAZLSxRcUOSHOBA==}
+  '@mcpfn/testing@0.0.5':
+    resolution: {integrity: sha512-ewhjIL4FCkAKLPv73YVwV4ayxE8izHezsEfs2GcVKQxgr3BBhwTd+ScF0Dfhh7ujW65kphjyf9Bkc1/zzhaugg==}
     engines: {node: '>=18.18.0'}
     peerDependencies:
       '@playwright/test': '>=1.40.0'
@@ -4082,8 +4083,8 @@ packages:
   asynckit@0.4.0:
     resolution: {integrity: sha512-Oei9OH4tRh0YqU3GxhX79dM/mwVgvbZJaSNaRk+bshkj0S5cfHcgYakreBjrHwatXKbz+IoIdYLxrKim2MjW0Q==}
 
-  authfn@0.3.0:
-    resolution: {integrity: sha512-B7ICjs06cSgpBkGhpdZSWs0U75q5BNZLCvbHyYiO0m+KXrHvEnI7Gq5RjeuIvV+2jNUcGngS0Rf+WYW/0vYTAQ==}
+  authfn@0.4.0:
+    resolution: {integrity: sha512-4b8uuvL9kFM/uqb/nD92Tr/VLSDEe8L5wvLLPJ4/SVMV5s2k6EfBwYqY/9nU3AghgV8An7sNuOkzs/vD2jKw1w==}
 
   aws4fetch@1.0.20:
     resolution: {integrity: sha512-/djoAN709iY65ETD6LKCtyyEI04XIBP5xVvfmNxsEP0uJB5tyaGBztSryRr4HqMStr9R06PisQE7m9zDTXKu6g==}
@@ -6985,7 +6986,7 @@ snapshots:
   '@authfn/api-keys@0.1.2(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))':
     dependencies:
       '@superfunctions/http': 0.2.0
-      authfn: 0.3.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
+      authfn: 0.4.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
     transitivePeerDependencies:
       - '@prisma/client'
       - drizzle-orm
@@ -6995,7 +6996,7 @@ snapshots:
   '@authfn/client@0.2.1(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))':
     dependencies:
       '@superfunctions/http': 0.2.0
-      authfn: 0.3.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
+      authfn: 0.4.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
     transitivePeerDependencies:
       - '@prisma/client'
       - drizzle-orm
@@ -7022,7 +7023,7 @@ snapshots:
   '@authfn/email-otp@0.1.2(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))':
     dependencies:
       '@superfunctions/http': 0.2.0
-      authfn: 0.3.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
+      authfn: 0.4.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
     transitivePeerDependencies:
       - '@prisma/client'
       - drizzle-orm
@@ -7033,7 +7034,7 @@ snapshots:
     dependencies:
       '@superfunctions/http': 0.2.0
       '@superfunctions/observability': 0.0.1
-      authfn: 0.3.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
+      authfn: 0.4.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
     transitivePeerDependencies:
       - '@prisma/client'
       - drizzle-orm
@@ -7622,6 +7623,8 @@ snapshots:
     dependencies:
       axe-core: 4.12.1
       playwright-core: 1.62.0
+
+  '@cfworker/json-schema@4.1.1': {}
 
   '@cloudflare/kv-asset-handler@0.5.0': {}
 
@@ -8583,9 +8586,9 @@ snapshots:
 
   '@marijn/find-cluster-break@1.0.4': {}
 
-  '@mcpfn/auth@0.0.4(@superfunctions/auth@0.2.0)(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))(zod@4.4.3)':
+  '@mcpfn/auth@0.0.5(@cfworker/json-schema@4.1.1)(@superfunctions/auth@0.2.0)(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))(zod@4.4.3)':
     dependencies:
-      '@modelcontextprotocol/sdk': 1.29.0(zod@4.4.3)
+      '@modelcontextprotocol/sdk': 1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3)
       '@superfunctions/oauth-core': 0.1.1(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
       '@superfunctions/oauth-storage': 0.1.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
     optionalDependencies:
@@ -8599,9 +8602,9 @@ snapshots:
       - supports-color
       - zod
 
-  '@mcpfn/client@0.0.3(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))(zod@4.4.3)':
+  '@mcpfn/client@0.0.4(@cfworker/json-schema@4.1.1)(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))(zod@4.4.3)':
     dependencies:
-      '@modelcontextprotocol/sdk': 1.29.0(zod@4.4.3)
+      '@modelcontextprotocol/sdk': 1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3)
       '@superfunctions/oauth-core': 0.1.1(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
     transitivePeerDependencies:
       - '@cfworker/json-schema'
@@ -8612,27 +8615,31 @@ snapshots:
       - supports-color
       - zod
 
-  '@mcpfn/core@0.0.4(zod@4.4.3)':
+  '@mcpfn/core@0.0.5(zod@4.4.3)':
     dependencies:
-      '@modelcontextprotocol/sdk': 1.29.0(zod@4.4.3)
+      '@cfworker/json-schema': 4.1.1
+      '@modelcontextprotocol/sdk': 1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3)
       ajv: 8.20.0
       ajv-formats: 3.0.1(ajv@8.20.0)
+      fast-uri: 3.1.5
     transitivePeerDependencies:
-      - '@cfworker/json-schema'
       - supports-color
       - zod
 
-  '@mcpfn/testing@0.0.4(@playwright/test@1.62.0)(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))(zod@4.4.3)':
+  '@mcpfn/testing@0.0.5(@cfworker/json-schema@4.1.1)(@playwright/test@1.62.0)(@superfunctions/auth@0.2.0)(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))(zod@4.4.3)':
     dependencies:
-      '@mcpfn/client': 0.0.3(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))(zod@4.4.3)
-      '@mcpfn/core': 0.0.4(zod@4.4.3)
-      '@modelcontextprotocol/sdk': 1.29.0(zod@4.4.3)
+      '@mcpfn/auth': 0.0.5(@cfworker/json-schema@4.1.1)(@superfunctions/auth@0.2.0)(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))(zod@4.4.3)
+      '@mcpfn/client': 0.0.4(@cfworker/json-schema@4.1.1)(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))(zod@4.4.3)
+      '@mcpfn/core': 0.0.5(zod@4.4.3)
+      '@modelcontextprotocol/sdk': 1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3)
       '@superfunctions/oauth-core': 0.1.1(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))
+      ajv: 8.20.0
     optionalDependencies:
       '@playwright/test': 1.62.0
     transitivePeerDependencies:
       - '@cfworker/json-schema'
       - '@prisma/client'
+      - '@superfunctions/auth'
       - drizzle-orm
       - kysely
       - mongodb
@@ -8735,7 +8742,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@modelcontextprotocol/sdk@1.29.0(zod@4.4.3)':
+  '@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3)':
     dependencies:
       '@hono/node-server': 1.19.15(hono@4.12.32)
       ajv: 8.20.0
@@ -8754,6 +8761,8 @@ snapshots:
       raw-body: 3.0.2
       zod: 4.4.3
       zod-to-json-schema: 3.25.2(zod@4.4.3)
+    optionalDependencies:
+      '@cfworker/json-schema': 4.1.1
     transitivePeerDependencies:
       - supports-color
 
@@ -8898,9 +8907,9 @@ snapshots:
     dependencies:
       '@posthog/types': 1.402.2
 
-  '@posthog/mcp@0.10.9(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(posthog-node@5.48.1)':
+  '@posthog/mcp@0.10.9(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(posthog-node@5.48.1)':
     dependencies:
-      '@modelcontextprotocol/sdk': 1.29.0(zod@4.4.3)
+      '@modelcontextprotocol/sdk': 1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3)
       '@posthog/core': 1.46.9
       posthog-node: 5.48.1
 
@@ -10220,7 +10229,7 @@ snapshots:
 
   asynckit@0.4.0: {}
 
-  authfn@0.3.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0)):
+  authfn@0.4.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0)):
     dependencies:
       '@superfunctions/auth': 0.2.0
       '@superfunctions/db': 0.2.0(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260722.1)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0))

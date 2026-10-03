@@ -45,8 +45,8 @@ async function insertSummary(
               ) AS is_retrieval
          FROM audit_events event
         WHERE event.workspace_id = $1
-          AND event.occurred_at >= $2::date
-          AND event.occurred_at < $2::date + interval '1 day'
+          AND event.occurred_at >= ($2::date::timestamp AT TIME ZONE 'UTC')
+          AND event.occurred_at < (($2::date + 1)::timestamp AT TIME ZONE 'UTC')
      ),
      grouped AS (
        SELECT COALESCE(event_skill_id, $3) AS skill_id,
@@ -178,8 +178,8 @@ async function insertDimensions(
          SELECT event.*, COALESCE(event.metadata->>'skillId', $4) AS skill_id
            FROM audit_events event
           WHERE event.workspace_id = $1
-            AND event.occurred_at >= $2::date
-            AND event.occurred_at < $2::date + interval '1 day'
+            AND event.occurred_at >= ($2::date::timestamp AT TIME ZONE 'UTC')
+            AND event.occurred_at < (($2::date + 1)::timestamp AT TIME ZONE 'UTC')
             AND ${column} IS NOT NULL
             AND ${column} <> ''
        ),
@@ -216,8 +216,8 @@ async function insertDimensions(
               event.metadata->>'versionId' AS dimension_value
          FROM audit_events event
         WHERE event.workspace_id = $1
-          AND event.occurred_at >= $2::date
-          AND event.occurred_at < $2::date + interval '1 day'
+          AND event.occurred_at >= ($2::date::timestamp AT TIME ZONE 'UTC')
+          AND event.occurred_at < (($2::date + 1)::timestamp AT TIME ZONE 'UTC')
           AND event.metadata->>'versionId' IS NOT NULL
      ),
      rows AS (
@@ -266,8 +266,8 @@ async function rollupWorkspace(
       `SELECT count(*)::text AS event_count, max(occurred_at) AS latest_event_at
          FROM audit_events
         WHERE workspace_id = $1
-          AND occurred_at >= $2::date
-          AND occurred_at < $2::date + interval '1 day'`,
+          AND occurred_at >= ($2::date::timestamp AT TIME ZONE 'UTC')
+          AND occurred_at < (($2::date + 1)::timestamp AT TIME ZONE 'UTC')`,
       [workspaceId, day],
     );
     const row = source.rows[0];
@@ -334,8 +334,8 @@ export async function rollupUtcDay(
              FROM (
                SELECT DISTINCT workspace_id
                  FROM audit_events
-                WHERE occurred_at >= $1::date
-                  AND occurred_at < $1::date + interval '1 day'
+                WHERE occurred_at >= ($1::date::timestamp AT TIME ZONE 'UTC')
+                  AND occurred_at < (($1::date + 1)::timestamp AT TIME ZONE 'UTC')
                UNION
                SELECT workspace_id
                  FROM analytics_rollup_runs

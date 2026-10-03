@@ -23,9 +23,9 @@ body fields never establish identity or authorization.
 
 Skillplane consumes the reviewed stable npm releases directly:
 
-- `@mcpfn/auth@0.0.3`
-- `@mcpfn/core@0.0.4`
-- `@mcpfn/testing@0.0.4`
+- `@mcpfn/auth@0.0.5`
+- `@mcpfn/core@0.0.5`
+- `@mcpfn/testing@0.0.5`
 
 Consumer manifests use exact versions and `pnpm-lock.yaml` records the registry
 artifacts and integrity hashes. Run:
@@ -40,6 +40,29 @@ registration-management routes return; or if Skillplane resumes local Client ID
 Metadata Document hydration. Package upgrades must update the exact manifest
 versions and frozen lockfile together, then pass the same gates below. Do not
 introduce a compatibility shim or dual runtime.
+
+The 0.0.5 release contains the Cloudflare Worker packaging correction from
+MCP-4 and selects a code-generation-free schema validator under workerd.
+Skillplane keeps its direct MCP SDK and Zod pins unchanged and needs no
+consumer-side `zod/v4` alias. Local, development, production, and rendered
+regional MCP configurations retain only `nodejs_compat` with compatibility
+date `2026-05-03`; startup evaluation is already enabled by default for that
+date.
+
+AuthFn is pinned to `0.4.0`, which supports explicitly unowned service API
+keys. Service credentials retain `userId: null`; no user-owner workaround or
+database migration is required.
+The workspace override keeps AuthFn plugins on that same runtime so policy
+errors retain their intended HTTP status instead of crossing duplicate core
+error classes.
+
+For the SKI-19 rollout, verify real local workerd readiness in addition to
+bundling. Then run the full `pnpm deploy:dev:topology` path, including MCP,
+from an approved committed clean worktree and run `pnpm smoke:dev` to confirm
+the deployed endpoint still rejects unauthenticated access. Record local
+startup, Cloudflare development upload, and deployed authentication smoke
+results separately. A dry-run or a selective deployment does not complete
+this rollout, and production deployment requires separate authorization.
 
 ## Required release gates
 
@@ -67,10 +90,12 @@ and DNS-rebinding protection are unbaselined hard gates. A newly failing or
 newly passing scenario fails the gate until the baseline and rationale are
 reviewed.
 
-The conformance test deletes raw runner output after inspecting it and retains
-one bounded summary at
+Authenticated McpFn testing rejects raw artifact directories. The conformance
+test inspects the runner's redacted output in memory and retains one bounded summary at
 `.conduct/verification/SKI-6/official-conformance-summary.json`. It fails if the
-raw output exceeds the bound or contains the injected credential.
+captured output exceeds the bound or contains the injected credential. The
+active suite verifies the full scenario catalog and baseline; individual verbose
+runs supply the check IDs needed to verify exact failure and warning evidence.
 
 ## Controlled provider proof
 

@@ -759,7 +759,7 @@ describe("MCP context mutations", () => {
     expect(revisions.rows.map((row) => row.revision)).toEqual([1, 2]);
   });
 
-  it("binds OAuth context writes to the authenticated user while preserving declared caller fields", async () => {
+  it("binds OAuth context writes and caller attribution to the authenticated client", async () => {
     const created = parseStructured<ContextNoteMutationOutput>(
       await oauth.client.callTool({
         name: "context_note_upsert",
@@ -788,17 +788,18 @@ describe("MCP context mutations", () => {
     expect(audit.rows[0]).toMatchObject({
       actor_id: environment.owner.userId,
       user_id: environment.owner.userId,
-      agent: TEST_CALLER.agentName,
-      model: TEST_CALLER.modelName,
+      agent: "Authenticated OAuth client",
+      model: "unknown",
       metadata: {
         channel: "mcp",
         credential: { kind: "oauth_access_token" },
         caller: {
-          agentId: TEST_CALLER.agentId,
-          modelName: TEST_CALLER.modelName,
+          agentId: "authenticated-oauth-client",
+          modelName: "unknown",
           trust: "caller-declared",
         },
       },
     });
+    expect(JSON.stringify(audit.rows[0])).not.toContain(TEST_CALLER.agentId);
   });
 });

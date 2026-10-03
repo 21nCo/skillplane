@@ -220,8 +220,8 @@ describe("MCP skill lifecycle", () => {
       review: {
         id: firstAmendment.review.id,
         requestedBy: {
-          agent: TEST_CALLER.agentName,
-          model: TEST_CALLER.modelName,
+          agent: "Authenticated OAuth client",
+          model: "unknown",
         },
       },
       candidate: { id: firstAmendment.candidate.id },
@@ -428,7 +428,9 @@ describe("MCP skill lifecycle", () => {
       },
     });
     expect(parseToolError(cursorMismatch).error.code).toBe("CURSOR_FILTER_MISMATCH");
-    expect(audit.rows.every((row) => row.agent === TEST_CALLER.agentName)).toBe(true);
-    expect(audit.rows.every((row) => row.model === TEST_CALLER.modelName)).toBe(true);
+    expect(audit.rows.every((row) => row.agent === "Authenticated OAuth client")).toBe(
+      true,
+    );
+    expect(audit.rows.every((row) => row.model === "unknown")).toBe(true);
   });
 });

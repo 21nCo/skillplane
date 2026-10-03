@@ -45,6 +45,10 @@ describe("multi-cell development deployment", () => {
     });
 
     assert.equal(rendered.outputs.length, 14);
+    for (const output of rendered.outputs) {
+      assert.equal(output.config.compatibility_date, "2026-05-03");
+      assert.deepEqual(output.config.compatibility_flags, ["nodejs_compat"]);
+    }
     const canary = selectDevelopmentTopologyOutputs(rendered.outputs, [
       "app",
       "datafn",
