@@ -1,0 +1,47 @@
+{
+  "cli_version": "0.11.3",
+  "checkpoint_id": "01M412NJR5ZM8DF36XHVDCRAQZ",
+  "strategy": "manual-commit",
+  "branch": "aravink/ski-19-upgrade-mcpfn-and-clean-up-obsolete-mcp-worker-compatibility",
+  "checkpoints_count": 4,
+  "files_touched": [
+    "deployment/wrangler/mcp.development.json",
+    "deployment/wrangler/mcp.production.json",
+    "docs/operations/mcpfn.md",
+    "mcp/package.json",
+    "mcp/tests/conformance/mcp.official-conformance.test.ts",
+    "mcp/tests/integration/mcp-mutations.integration.test.ts",
+    "mcp/tests/integration/mcp-read.integration.test.ts",
+    "mcp/tests/integration/mcp-skill-lifecycle.integration.test.ts",
+    "mcp/wrangler.jsonc",
+    "packages/api/tests/integration/public-projection-current.integration.test.ts",
+    "packages/api/tests/integration/utc-rollups.integration.test.ts",
+    "packages/api/tests/security/redaction.security.test.ts",
+    "packages/auth/src/server.ts",
+    "packages/authfn-mcp-oauth/package.json",
+    "packages/observability/src/rollups.ts",
+    "pnpm-lock.yaml",
+    "pnpm-workspace.yaml",
+    "scripts/development-topology-deployment.test.mjs",
+    "scripts/lib/local-wrangler-config.test.mjs",
+    "scripts/lib/topology-deployment.mjs",
+    "scripts/topology-deployment.test.mjs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 581813,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 13925376,
+    "output_tokens": 61827,
+    "api_call_count": 119,
+    "subagent_tokens_complete": true
+  }
+}

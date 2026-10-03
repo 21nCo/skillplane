@@ -1,0 +1,124 @@
+{
+  "cli_version": "0.11.3",
+  "checkpoint_id": "01M412NJR5ZM8DF36XHVDCRAQZ",
+  "session_id": "01a0f1e3-16d3-72f2-af1e-998d62994d47",
+  "strategy": "manual-commit",
+  "created_at": "2026-10-03T14:28:42.903115Z",
+  "branch": "aravink/ski-19-upgrade-mcpfn-and-clean-up-obsolete-mcp-worker-compatibility",
+  "checkpoints_count": 4,
+  "save_step_count": 4,
+  "files_touched": [
+    "deployment/wrangler/mcp.development.json",
+    "deployment/wrangler/mcp.production.json",
+    "docs/operations/mcpfn.md",
+    "mcp/package.json",
+    "mcp/tests/conformance/mcp.official-conformance.test.ts",
+    "mcp/tests/integration/mcp-mutations.integration.test.ts",
+    "mcp/tests/integration/mcp-read.integration.test.ts",
+    "mcp/tests/integration/mcp-skill-lifecycle.integration.test.ts",
+    "mcp/wrangler.jsonc",
+    "packages/api/tests/integration/public-projection-current.integration.test.ts",
+    "packages/api/tests/integration/utc-rollups.integration.test.ts",
+    "packages/api/tests/security/redaction.security.test.ts",
+    "packages/auth/src/server.ts",
+    "packages/authfn-mcp-oauth/package.json",
+    "packages/observability/src/rollups.ts",
+    "pnpm-lock.yaml",
+    "pnpm-workspace.yaml",
+    "scripts/development-topology-deployment.test.mjs",
+    "scripts/lib/local-wrangler-config.test.mjs",
+    "scripts/lib/topology-deployment.mjs",
+    "scripts/topology-deployment.test.mjs"
+  ],
+  "agent": "Codex",
+  "model": "gpt-6.1-sol",
+  "turn_id": "8c47b0139cf9",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 581813,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 13925376,
+    "output_tokens": 61827,
+    "api_call_count": 119,
+    "subagent_tokens_complete": true
+  },
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-10-03T14:28:42.724453Z",
+    "agent_lines": 0,
+    "agent_removed": 12,
+    "human_added": 0,
+    "human_modified": 209,
+    "human_removed": 23,
+    "total_committed": 155,
+    "total_lines_changed": 244,
+    "agent_percentage": 4.918032786885246,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 83,
+      "user_lines_removed": 64,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        "deployment/wrangler/mcp.development.json": 1,
+        "deployment/wrangler/mcp.production.json": 1,
+        "docs/operations/mcpfn.md": 19,
+        "mcp/package.json": 3,
+        "mcp/wrangler.jsonc": 1,
+        "packages/authfn-mcp-oauth/package.json": 1,
+        "pnpm-lock.yaml": 45,
+        "pnpm-workspace.yaml": 4,
+        "scripts/development-topology-deployment.test.mjs": 4,
+        "scripts/lib/local-wrangler-config.test.mjs": 1,
+        "scripts/lib/topology-deployment.mjs": 1,
+        "scripts/topology-deployment.test.mjs": 2
+      },
+      "user_removed_per_file": {
+        "deployment/wrangler/mcp.development.json": 1,
+        "deployment/wrangler/mcp.production.json": 1,
+        "docs/operations/mcpfn.md": 3,
+        "mcp/package.json": 3,
+        "mcp/wrangler.jsonc": 1,
+        "packages/authfn-mcp-oauth/package.json": 1,
+        "pnpm-lock.yaml": 34,
+        "pnpm-workspace.yaml": 4,
+        "scripts/lib/local-wrangler-config.test.mjs": 4,
+        "scripts/lib/topology-deployment.mjs": 4,
+        "scripts/topology-deployment.test.mjs": 8
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 261,
+      "agent_lines_removed": 76
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 261,
+      "agent_lines_removed": 76
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 261,
+      "agent_lines_removed": 76
+    },
+    {
+      "checkpoint_number": 5,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 261,
+      "agent_lines_removed": 76
+    }
+  ]
+}
