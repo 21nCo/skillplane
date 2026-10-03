@@ -1,0 +1,46 @@
+{
+  "cli_version": "0.11.3",
+  "checkpoint_id": "01M416W72RQF3KK9VYAD90JA05",
+  "session_id": "01a10261-62ee-7cf1-9a80-ac133f186b57",
+  "strategy": "manual-commit",
+  "created_at": "2026-10-03T15:42:13.857229Z",
+  "branch": "aravink/ski-19-upgrade-mcpfn-and-clean-up-obsolete-mcp-worker-compatibility",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "packages/api/tests/integration/utc-rollups.integration.test.ts",
+    "packages/api/tests/security/redaction.security.test.ts",
+    "packages/observability/src/rollups.ts"
+  ],
+  "agent": "Codex",
+  "model": "gpt-6.1-sol",
+  "turn_id": "21455f7bc6f1",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 116142,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 2505344,
+    "output_tokens": 15981,
+    "api_call_count": 31
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-10-03T15:42:13.821836Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 44,
+    "human_modified": 28,
+    "human_removed": 0,
+    "total_committed": 44,
+    "total_lines_changed": 79,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    }
+  ]
+}

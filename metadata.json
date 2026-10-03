@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.11.3",
+  "checkpoint_id": "01M416W72RQF3KK9VYAD90JA05",
+  "strategy": "manual-commit",
+  "branch": "aravink/ski-19-upgrade-mcpfn-and-clean-up-obsolete-mcp-worker-compatibility",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "packages/api/tests/integration/utc-rollups.integration.test.ts",
+    "packages/api/tests/security/redaction.security.test.ts",
+    "packages/observability/src/rollups.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 116142,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 2505344,
+    "output_tokens": 15981,
+    "api_call_count": 31
+  }
+}
