@@ -1,0 +1,12 @@
+$use-skillplane work linear issue
+
+Linked Linear issue: SKI-19
+https://linear.app/21n/issue/SKI-19/upgrade-mcpfn-and-clean-up-obsolete-mcp-worker-compatibility
+
+---
+
+what does it take to complete SKI-20 and SKI-21 ?
+
+---
+
+ski-20 is a upstream fix?
