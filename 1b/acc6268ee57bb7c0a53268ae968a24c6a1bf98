@@ -1,0 +1,27 @@
+packages/api/tests/integration/utc-rollups.integration.test.ts
+  s_066646c6c4fa5f::t_1c49a858a41b5c 25-26,28-38,164-172
+  s_066646c6c4fa5f::t_14ad1f7f130b21 71,110-111,122-123
+packages/api/tests/integration/migrated-workspace-maintenance.integration.test.ts
+  s_066646c6c4fa5f::t_1c49a858a41b5c 15-16,18-22,65-73
+packages/api/tests/security/redaction.security.test.ts
+  s_066646c6c4fa5f::t_1504ef15311596 119,136-140
+  s_066646c6c4fa5f::t_14ad1f7f130b21 25-26
+packages/observability/src/rollups.ts
+  s_066646c6c4fa5f::t_706723d9bf45b5 30-39,46,49,58,179,185,192,229,258,279,329,347
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1bacc6268ee57bb7c0a53268ae968a24c6a1bf98",
+  "prompts": {},
+  "sessions": {
+    "s_066646c6c4fa5f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a10261-62ee-7cf1-9a80-ac133f186b57",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
