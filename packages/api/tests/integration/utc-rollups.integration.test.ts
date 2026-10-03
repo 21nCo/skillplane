@@ -22,17 +22,20 @@ it.each([
     address.searchParams.delete("options");
     address.pathname = "/postgres";
     const admin = new Pool({ connectionString: address.toString() });
-    await admin.query(`CREATE DATABASE "${name}" TEMPLATE template0`);
-    address.pathname = `/${name}`;
-    const database = new Pool({
-      connectionString: address.toString(),
-      options: `-c timezone=${timezone}`,
-      max: 2,
-    });
-    const start = new Date(`${day}T00:00:00.000Z`).getTime();
-    const end = start + 86_400_000;
-    const expectedLatest = new Date(end - 1);
+    let created = false;
+    let database: Pool | undefined;
     try {
+      await admin.query(`CREATE DATABASE "${name}" TEMPLATE template0`);
+      created = true;
+      address.pathname = `/${name}`;
+      database = new Pool({
+        connectionString: address.toString(),
+        options: `-c timezone=${timezone}`,
+        max: 2,
+      });
+      const start = new Date(`${day}T00:00:00.000Z`).getTime();
+      const end = start + 86_400_000;
+      const expectedLatest = new Date(end - 1);
       await migrateDatabase(address.toString());
       expect((await database.query("SHOW TimeZone")).rows[0]?.TimeZone).toBe(timezone);
       for (const workspaceId of ["main", "early", "late", "outside"]) {
@@ -65,6 +68,7 @@ it.each([
           agent: `agent:${label}`,
           model: `model:${label}`,
           contextId: `context:${label}`,
+          ...(label === "middle" ? { latencyMs: 12.5 } : {}),
           retentionClass: "detailed_read_90d",
           occurredAt: new Date(timestamp),
         });
@@ -103,7 +107,8 @@ it.each([
         },
       ]);
       const summary = await database.query(
-        `SELECT skill_id, event_count::text, retrieval_count::text, failure_count::text
+        `SELECT skill_id, event_count::text, retrieval_count::text, failure_count::text,
+                latency_p50_ms, latency_p95_ms
          FROM analytics_daily_summary
         WHERE workspace_id = 'main' AND day = $1::date ORDER BY skill_id`,
         [day],
@@ -114,6 +119,8 @@ it.each([
           event_count: "3",
           retrieval_count: "3",
           failure_count: "0",
+          latency_p50_ms: 12.5,
+          latency_p95_ms: 12.5,
         })),
       );
       const dimensions = await database.query(
@@ -154,9 +161,15 @@ it.each([
         }
       }
     } finally {
-      await database.end();
-      await admin.query(`DROP DATABASE "${name}" WITH (FORCE)`);
-      await admin.end();
+      try {
+        await database?.end();
+      } finally {
+        try {
+          if (created) await admin.query(`DROP DATABASE "${name}" WITH (FORCE)`);
+        } finally {
+          await admin.end();
+        }
+      }
     }
   },
   90_000,

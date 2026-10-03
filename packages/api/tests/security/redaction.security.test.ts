@@ -22,7 +22,8 @@ let app: ReturnType<typeof createApiApp>;
 const suffix = `redaction-${crypto.randomUUID().replaceAll("-", "").slice(0, 12)}`;
 const viewerSuffix = `${suffix}-viewer`;
 const outsiderSuffix = `${suffix}-outsider`;
-const auditDay = new Date().toISOString().slice(0, 10);
+// Query yesterday so unpinned wall-clock events fail, including across UTC midnight.
+const auditDay = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
 
 function headers(
   tenant: TenantFixture,
@@ -115,7 +116,7 @@ beforeAll(async () => {
     resourceId: viewer.userId,
     channel: "app",
     retentionClass: "permanent",
-    occurredAt: new Date(Date.now() - 1_000),
+    occurredAt: new Date(`${auditDay}T12:00:00.000Z`),
   });
   await writeControlPlaneAuditEvent(services.controlDatabase.pool, {
     id: `control-audit:redaction:${suffix}`,
@@ -132,6 +133,11 @@ beforeAll(async () => {
     channel: "app",
     metadata: { nextRole: "viewer" },
   });
+  // The control-plane writer uses database now(); pin this fixture explicitly.
+  await services.controlDatabase.pool.query(
+    "UPDATE control_plane_audit_events SET occurred_at = $1 WHERE id = $2",
+    [new Date(`${auditDay}T12:00:01.000Z`), `control-audit:redaction:${suffix}`],
+  );
   await rollupUtcDay(services.database.pool, {
     day: auditDay,
     workspaceId: owner.workspaceId,
