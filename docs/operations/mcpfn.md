@@ -97,6 +97,12 @@ captured output exceeds the bound or contains the injected credential. The
 active suite verifies the full scenario catalog and baseline; individual verbose
 runs supply the check IDs needed to verify exact failure and warning evidence.
 
+The UTC rollup integration gate covers half-open day boundaries in UTC,
+Asia/Kolkata, and New York across both DST transitions, including workspace
+discovery and explicit-workspace rebuilds. Distinct decimal latency samples
+check interpolated p50/p95 values for workspace and per-skill summaries rather
+than allowing mean, maximum, or swapped-percentile calculations to pass.
+
 ## Controlled provider proof
 
 Automated gates do not prove a hosted provider's current connector behavior.

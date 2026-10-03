@@ -44,16 +44,17 @@ it.each([
           [workspaceId],
         );
       }
-      for (const [workspaceId, label, timestamp] of [
-        ["main", "before", start - 1],
-        ["main", "start", start],
-        ["main", "middle", start + 12 * 3_600_000],
-        ["main", "end", end - 1],
-        ["main", "after", end],
-        ["early", "start", start],
-        ["late", "end", end - 1],
-        ["outside", "before", start - 1],
-        ["outside", "after", end],
+      // Distinct decimal samples distinguish interpolated percentiles from mean/max.
+      for (const [workspaceId, label, timestamp, latencyMs] of [
+        ["main", "before", start - 1, 1_000],
+        ["main", "start", start, 2.5],
+        ["main", "middle", start + 12 * 3_600_000, 12.5],
+        ["main", "end", end - 1, 42.5],
+        ["main", "after", end, 2_000],
+        ["early", "start", start, undefined],
+        ["late", "end", end - 1, undefined],
+        ["outside", "before", start - 1, 1_000],
+        ["outside", "after", end, 2_000],
       ] as const) {
         await writeAuditEvent(database, {
           workspaceId,
@@ -68,7 +69,7 @@ it.each([
           agent: `agent:${label}`,
           model: `model:${label}`,
           contextId: `context:${label}`,
-          ...(label === "middle" ? { latencyMs: 12.5 } : {}),
+          ...(latencyMs === undefined ? {} : { latencyMs }),
           retentionClass: "detailed_read_90d",
           occurredAt: new Date(timestamp),
         });
@@ -120,7 +121,7 @@ it.each([
           retrieval_count: "3",
           failure_count: "0",
           latency_p50_ms: 12.5,
-          latency_p95_ms: 12.5,
+          latency_p95_ms: expect.closeTo(39.5, 8),
         })),
       );
       const dimensions = await database.query(
