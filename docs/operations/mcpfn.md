@@ -96,6 +96,10 @@ test inspects the runner's redacted output in memory and retains one bounded sum
 captured output exceeds the bound or contains the injected credential. The
 active suite verifies the full scenario catalog and baseline; individual verbose
 runs supply the check IDs needed to verify exact failure and warning evidence.
+The summary uses schema version 3 and records `artifactHygiene.redactedOutputBytes`
+for the captured suite and scenario output. Regenerate the tracked summary from
+a successful suite run whenever its format changes; historical raw-artifact
+measurements must not be relabeled as redacted-output evidence.
 
 The UTC rollup integration gate covers half-open day boundaries in UTC,
 Asia/Kolkata, and New York across both DST transitions, including workspace
