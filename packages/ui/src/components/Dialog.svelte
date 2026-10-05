@@ -7,7 +7,7 @@
     open?: boolean;
     title: string;
     description?: string;
-    children: Snippet;
+    children?: Snippet;
     footer?: Snippet;
     closeLabel?: string;
     onOpenChange?: (open: boolean) => void;
@@ -74,7 +74,7 @@
         <XIcon weight="bold" />
       </IconButton>
     </header>
-    <div class="body">{@render children()}</div>
+    {#if children}<div class="body">{@render children()}</div>{/if}
     {#if footer}<footer>{@render footer()}</footer>{/if}
   </section>
 </dialog>

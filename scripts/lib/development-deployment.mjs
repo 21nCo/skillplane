@@ -79,9 +79,10 @@ export function developmentDatabase() {
     "SKILLPLANE_DEV_DATABASE_URL",
   );
   const productionUrls = [
+    // Retired configuration still identifies a production credential to reject.
+    process.env.RAILWAY_DATABASE_URL?.trim(),
     process.env.SKILLPLANE_PRODUCTION_DATABASE_URL?.trim(),
     process.env.SKILLPLANE_PRODUCTION_MIGRATION_SOURCE_DATABASE_URL?.trim(),
-    process.env.RAILWAY_DATABASE_URL?.trim(),
   ].filter(Boolean);
   if (
     productionUrls.some(
@@ -153,13 +154,13 @@ export function developmentCloudflareEnvironment() {
     "PUBLIC_POSTHOG_HOST",
     "POSTHOG_PROJECT_TOKEN",
     "POSTHOG_HOST",
+    "RAILWAY_DATABASE_URL",
     "SKILLPLANE_PRODUCTION_DATABASE_URL",
     "SKILLPLANE_PRODUCTION_MIGRATION_SOURCE_DATABASE_URL",
     "SKILLPLANE_PRODUCTION_R2_READ_TOKEN",
     "AUTHFN_SECRET",
     "OAUTH_TOKEN_PEPPER",
     "TURNSTILE_SECRET_KEY",
-    "RAILWAY_DATABASE_URL",
     "CLOUDFLARE_API_KEY",
     "CLOUDFLARE_EMAIL",
   ]) {
@@ -183,9 +184,9 @@ export function productionBundleReadEnvironment() {
     "SKILLPLANE_DEV_OAUTH_TOKEN_PEPPER",
     "SKILLPLANE_DEV_TURNSTILE_SECRET_KEY",
     "SKILLPLANE_DEV_DATABASE_URL",
+    "RAILWAY_DATABASE_URL",
     "SKILLPLANE_PRODUCTION_DATABASE_URL",
     "SKILLPLANE_PRODUCTION_MIGRATION_SOURCE_DATABASE_URL",
-    "RAILWAY_DATABASE_URL",
     "CLOUDFLARE_API_KEY",
     "CLOUDFLARE_EMAIL",
   ]) {

@@ -1,5 +1,5 @@
 import { apiRequest, SkillplaneApiError } from "$lib/api/client.js";
-import { withWorkspaceDatafnClient } from "$lib/datafn/client.js";
+import { withWorkspaceDatafnReadClient } from "$lib/datafn/client.js";
 import type {
   AmendmentPolicyDecision,
   CallerDeclaration,
@@ -241,7 +241,7 @@ export async function listSkillsWithDatafn(options: {
     return { ...page, nextCursor: encodeCursor(page.nextCursor, scope) };
   }
   const cursor = boundary === undefined ? undefined : datafnBoundary(boundary);
-  return withWorkspaceDatafnClient(options.workspaceId, async (client) => {
+  return withWorkspaceDatafnReadClient(options.workspaceId, async (client) => {
     const filters: Record<string, unknown> = archiveFilters(archive);
     if (visibility.length) filters.visibility = { in: visibility };
     const result = await client.skills.query({
@@ -262,7 +262,7 @@ async function getSkillWithDatafnFilter(
   workspaceId: string,
   filters: Record<string, unknown>,
 ): Promise<Skill> {
-  return withWorkspaceDatafnClient(workspaceId, async (client) => {
+  return withWorkspaceDatafnReadClient(workspaceId, async (client) => {
     const result = await client.skills.query({
       select: ["*", "currentVersion.*"],
       filters,
@@ -292,7 +292,7 @@ export async function listSkillVersionsWithDatafn(
   workspaceId: string,
   skillId: string,
 ): Promise<readonly SkillVersion[]> {
-  return withWorkspaceDatafnClient(workspaceId, async (client) => {
+  return withWorkspaceDatafnReadClient(workspaceId, async (client) => {
     const result = await client.skillVersions.query({
       filters: { skillId },
       sort: ["-revision"],
@@ -315,7 +315,7 @@ export async function getSkillVersionWithDatafn(
   skillId: string,
   versionId: string,
 ): Promise<SkillVersion> {
-  return withWorkspaceDatafnClient(workspaceId, async (client) => {
+  return withWorkspaceDatafnReadClient(workspaceId, async (client) => {
     const result = await client.skillVersions.query({
       filters: { id: versionId, skillId },
       limit: 1,
