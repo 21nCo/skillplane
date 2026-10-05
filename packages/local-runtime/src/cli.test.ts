@@ -72,7 +72,8 @@ describe("packaged global CLI", () => {
       bin,
     ]);
     expect(overwrite.status).not.toBe(0);
-  });
+    // This packaged-CLI flow launches multiple Node processes under concurrent CI.
+  }, 30_000);
   it("help and validation errors work without service dependencies or secret output", () => {
     expect(
       execFileSync(process.execPath, [cli, "--help"], { encoding: "utf8" }),
