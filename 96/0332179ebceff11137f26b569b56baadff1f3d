@@ -1,0 +1,19 @@
+packages/local-runtime/src/cli.test.ts
+  s_55a3fd9e5a0577::t_162a1fa7154b96 75-76
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "960332179ebceff11137f26b569b56baadff1f3d",
+  "prompts": {},
+  "sessions": {
+    "s_55a3fd9e5a0577": {
+      "agent_id": {
+        "tool": "pi",
+        "id": "01a10be1-522e-765d-9c95-775003c02c7a",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
