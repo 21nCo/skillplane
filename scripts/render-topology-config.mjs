@@ -68,6 +68,11 @@ export async function renderTopologyDeploymentConfigs(options = {}) {
     controlHyperdriveId,
     publicBucketName,
     cells,
+    directDatafnEnabled:
+      (options.directDatafnEnabled ?? process.env.DATAFN_DIRECT_ENABLED) === true ||
+      (options.directDatafnEnabled ?? process.env.DATAFN_DIRECT_ENABLED) === "true",
+    directDatafnWorkspaceIds:
+      options.directDatafnWorkspaceIds ?? process.env.DATAFN_DIRECT_WORKSPACES,
     publicTurnstileSiteKey: options.publicTurnstileSiteKey ?? publicTurnstileSiteKey(),
     appVariables: {
       PUBLIC_POSTHOG_KEY: options.postHogProjectToken ?? requirePostHogProjectToken(),
@@ -91,14 +96,22 @@ export async function renderTopologyDeploymentConfigs(options = {}) {
       kind: "mcp",
     },
     ...manifest.cells.flatMap((cell) =>
-      ["app", "mcp", "projection"].map((kind) => ({
-        id: `${cell.regionId}:${kind}`,
-        regionId: cell.regionId,
-        directory: resolve(root, kind),
-        path: resolve(root, kind, `wrangler.${cell.regionId}.generated.json`),
-        config: configs.cells[cell.regionId][kind],
-        kind,
-      })),
+      ["app", "mcp", "projection", ...(cell.datafnEndpoint ? ["datafn"] : [])].map(
+        (kind) => ({
+          id: `${cell.regionId}:${kind}`,
+          regionId: cell.regionId,
+          directory: resolve(root, kind === "datafn" ? "app" : kind),
+          path: resolve(
+            root,
+            kind === "datafn" ? "app" : kind,
+            kind === "datafn"
+              ? `wrangler.datafn.${cell.regionId}.generated.json`
+              : `wrangler.${cell.regionId}.generated.json`,
+          ),
+          config: configs.cells[cell.regionId][kind],
+          kind,
+        }),
+      ),
     ),
   ];
   if (options.write !== false) {

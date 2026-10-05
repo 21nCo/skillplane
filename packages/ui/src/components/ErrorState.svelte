@@ -7,18 +7,20 @@
     description,
     retry,
     requestId,
+    headingLevel = 2,
   }: {
     title: string;
     description: string;
     retry?: () => void;
     requestId?: string;
+    headingLevel?: 1 | 2;
   } = $props();
 </script>
 
 <section role="alert">
   <WarningCircleIcon class="icon" weight="duotone" aria-hidden="true" />
   <div>
-    <h2>{title}</h2>
+    <svelte:element this={headingLevel === 1 ? "h1" : "h2"}>{title}</svelte:element>
     <p>{description}</p>
     {#if requestId}<code>Reference {requestId}</code>{/if}
     {#if retry}
@@ -48,11 +50,13 @@
     color: var(--sp-color-danger);
   }
 
+  h1,
   h2,
   p {
     margin: 0;
   }
 
+  h1,
   h2 {
     font-size: var(--sp-font-size-4);
   }
