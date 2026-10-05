@@ -13,6 +13,9 @@ allowBuilds:
   workerd: true
 
 overrides:
+  # AuthFn plugins pin the older core. Share one runtime so error classes and
+  # explicitly unowned API-key issuance use the same published implementation.
+  authfn: "catalog:"
   # sendfn's APNs transport is not used by Skillplane, but it remains in the
   # production dependency graph. Pin its JWT implementation above all known
   # algorithm/cache/empty-secret advisories.
@@ -30,15 +33,15 @@ catalog:
   "@types/mdx": 2.0.13
   "@axe-core/playwright": 4.12.1
   "@authfn/core": 0.1.1
-  "@authfn/client": 0.2.0
-  authfn: 0.2.0
-  "@authfn/api-keys": 0.1.1
-  "@authfn/email-otp": 0.1.1
-  "@authfn/multi-region": 0.1.1
+  "@authfn/client": 0.2.1
+  authfn: 0.4.0
+  "@authfn/api-keys": 0.1.2
+  "@authfn/email-otp": 0.1.2
+  "@authfn/multi-region": 0.1.2
   "@cloudflare/workers-types": 5.20260722.1
   "@datafn/client": 0.1.1
   "@datafn/core": 0.1.1
-  "@datafn/server": 0.1.3
+  "@datafn/server": 0.2.0
   "@fontsource-variable/dm-sans": 5.3.0
   "@sveltejs/adapter-cloudflare": 7.2.9
   "@sveltejs/kit": 2.70.1
@@ -59,7 +62,6 @@ catalog:
   fumadocs-mdx: 15.2.2
   fumadocs-ui: 16.14.0
   hono: 4.12.32
-  marked: 18.0.7
   next: 16.3.0
   pg: 8.22.0
   phosphor-svelte: 3.1.0
@@ -78,14 +80,15 @@ catalog:
 
 minimumReleaseAgeExclude:
   - "@authfn/core@0.1.1"
-  - "authfn@0.2.0"
-  - "@authfn/api-keys@0.1.1"
-  - "@authfn/email-otp@0.1.1"
-  - "@authfn/multi-region@0.1.1"
+  - "@authfn/client@0.2.1"
+  - "authfn@0.4.0"
+  - "@authfn/api-keys@0.1.2"
+  - "@authfn/email-otp@0.1.2"
+  - "@authfn/multi-region@0.1.2"
   - "@cloudflare/workers-types@5.20260722.1"
   - "@datafn/client@0.1.1"
   - "@datafn/core@0.1.1"
-  - "@datafn/server@0.1.3"
+  - "@datafn/server@0.2.0"
   - "@playwright/test@1.62.0"
   - "@superfunctions/db@0.1.4 || 0.2.0 || 0.2.1"
   - "@turbo/darwin-64@2.10.7"
@@ -108,10 +111,10 @@ minimumReleaseAgeExclude:
   - "@next/swc-win32-arm64-msvc@16.3.0"
   - "@next/swc-win32-x64-msvc@16.3.0"
   - next@16.3.0
-  - "@mcpfn/auth@0.0.3 || 0.0.4"
-  - "@mcpfn/client@0.0.3"
-  - "@mcpfn/core@0.0.4"
-  - "@mcpfn/testing@0.0.4"
+  - "@mcpfn/auth@0.0.5"
+  - "@mcpfn/client@0.0.4"
+  - "@mcpfn/core@0.0.5"
+  - "@mcpfn/testing@0.0.5"
   - "@mdfn/core@0.1.0"
   - "@mdfn/dom@0.1.0"
   - "@mdfn/extensions@0.1.0"

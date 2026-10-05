@@ -47,4 +47,4 @@ Local MCP is available at `http://127.0.0.1:5701/mcp` and still requires a beare
 
 Production forces OTP authentication and uses separate production secrets. Before deployment, read `.env.example`, initialize production secrets, apply database migrations, run deployment checks, and configure the app, MCP, database, storage, OAuth, email, and Turnstile bindings for your own domains.
 
-The repository provides `deploy:app`, `deploy:mcp`, `deploy:all`, `smoke:production`, and production backup/restore scripts. Do not reuse local test credentials in production.
+The repository provides `deploy:app`, `deploy:mcp`, `deploy:all`, `smoke:production:release`, and production backup/restore scripts. Do not reuse local test credentials in production.

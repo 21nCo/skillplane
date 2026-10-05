@@ -9,6 +9,9 @@ export default tseslint.config(
       ".conduct/**",
       ".data/**",
       ".pnpm-store/**",
+      // Generated Entire agent integrations are outside the workspace TS projects.
+      ".opencode/plugins/entire.ts",
+      ".pi/extensions/entire/**",
       "**/.svelte-kit/**",
       "**/.next/**",
       "**/.open-next/**",
