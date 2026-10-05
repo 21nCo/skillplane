@@ -20,4 +20,20 @@ describe("MCP tool catalog source of truth", () => {
     expect(registered).toContain("skill_verification_plan_get");
     expect(() => assertExactSkillplaneMcpToolInventory(registered)).not.toThrow();
   });
+
+  it("accepts any ordering but rejects missing, extra, and duplicate tools", () => {
+    const names = [...SKILLPLANE_MCP_TOOL_NAMES];
+    expect(() =>
+      assertExactSkillplaneMcpToolInventory(names.toReversed()),
+    ).not.toThrow();
+    for (const invalid of [
+      names.slice(1),
+      [...names, "unexpected_tool"],
+      [...names, SKILLPLANE_MCP_TOOL_NAMES[0]],
+    ]) {
+      expect(() => assertExactSkillplaneMcpToolInventory(invalid)).toThrow(
+        "The MCP tool inventory is incomplete",
+      );
+    }
+  });
 });

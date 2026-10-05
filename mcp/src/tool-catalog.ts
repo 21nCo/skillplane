@@ -52,11 +52,15 @@ export const SKILLPLANE_MCP_TOOL_COUNT = SKILLPLANE_MCP_TOOL_NAMES.length;
 export function registeredSkillplaneMcpToolNames(
   tools: readonly { readonly name: string }[],
 ): string[] {
-  return tools.map((tool) => tool.name).toSorted();
+  return tools
+    .map((tool) => tool.name)
+    .toSorted((left, right) => left.localeCompare(right, "en"));
 }
 
 export function assertExactSkillplaneMcpToolInventory(names: readonly string[]): void {
-  const received = [...names].toSorted();
+  const received = [...names].toSorted((left, right) =>
+    left.localeCompare(right, "en"),
+  );
   const expected = [...SKILLPLANE_MCP_TOOL_NAMES];
   if (JSON.stringify(received) !== JSON.stringify(expected)) {
     throw new Error(

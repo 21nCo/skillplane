@@ -10,7 +10,6 @@ import type {
 } from "@skillplane/mcp-schema";
 import { readAnalytics, rollupUtcDay } from "@skillplane/observability";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { skillplaneMcpDeclaration } from "../../src/server.js";
 import { SKILLPLANE_MCP_TOOL_NAMES } from "../../src/tool-catalog.js";
 import {
   parseStructured,
@@ -59,13 +58,36 @@ describe("MCP read surface", () => {
     expect(listed.tools.map((tool) => tool.name).toSorted()).toEqual([
       ...SKILLPLANE_MCP_TOOL_NAMES,
     ]);
-    const declaredAnnotations = new Map(
-      skillplaneMcpDeclaration.registry
-        .definitions()
-        .map((tool) => [tool.name, tool.annotations]),
-    );
     for (const tool of listed.tools) {
-      expect(tool.annotations).toEqual(declaredAnnotations.get(tool.name));
+      expect(tool.annotations).toMatchObject({
+        readOnlyHint: ![
+          "skill_usage_report",
+          "context_knowledge_update",
+          "context_note_upsert",
+          "context_archive",
+          "context_create",
+          "context_restore",
+          "context_update",
+          "skill_amend",
+          "skill_amendment_policy_update",
+          "skill_archive",
+          "skill_candidate_approve",
+          "skill_candidate_reject",
+          "skill_create",
+          "skill_composition_candidate_create",
+          "skill_dependency_upgrade",
+          "skill_execution_report",
+          "skill_verification_evidence_add",
+          "skill_verification_run_complete",
+          "skill_verification_run_start",
+          "skill_version_lifecycle_update",
+          "skill_restore",
+          "skill_visibility_update",
+        ].includes(tool.name),
+        destructiveHint: tool.name === "skill_version_lifecycle_update",
+        idempotentHint: true,
+        openWorldHint: false,
+      });
       expect(tool.inputSchema).toMatchObject({
         type: "object",
         additionalProperties: false,
