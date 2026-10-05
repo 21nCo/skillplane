@@ -12,11 +12,14 @@ it("skips retained source data and maintains subsequent active workspaces", asyn
   const address = new URL(await resolveTestDatabaseUrl());
   address.pathname = "/postgres";
   const admin = new Pool({ connectionString: address.toString() });
-  await admin.query(`CREATE DATABASE "${name}" TEMPLATE template0`);
-  address.pathname = `/${name}`;
-  const database = new Pool({ connectionString: address.toString(), max: 4 });
-  const occurredAt = new Date(Date.now() - 100 * 86_400_000);
+  let created = false;
+  let database: Pool | undefined;
   try {
+    await admin.query(`CREATE DATABASE "${name}" TEMPLATE template0`);
+    created = true;
+    address.pathname = `/${name}`;
+    database = new Pool({ connectionString: address.toString(), max: 4 });
+    const occurredAt = new Date(Date.now() - 100 * 86_400_000);
     await migrateDatabase(address.toString());
     for (const workspaceId of ["a-moved", "z-active"]) {
       await database.query(
@@ -59,8 +62,14 @@ it("skips retained source data and maintains subsequent active workspaces", asyn
       ).rows,
     ).toEqual([{ workspace_id: "a-moved" }]);
   } finally {
-    await database.end();
-    await admin.query(`DROP DATABASE "${name}" WITH (FORCE)`);
-    await admin.end();
+    try {
+      await database?.end();
+    } finally {
+      try {
+        if (created) await admin.query(`DROP DATABASE "${name}" WITH (FORCE)`);
+      } finally {
+        await admin.end();
+      }
+    }
   }
 }, 90_000);
