@@ -18,12 +18,6 @@
     workspaces.workspaces.find((candidate) => candidate.slug === data.workspaceSlug) ??
       null,
   );
-
-  $effect(() => {
-    if (workspace && workspaces.activeId !== workspace.id) {
-      workspaces.select(workspace.id);
-    }
-  });
 </script>
 
 {#if workspace}
