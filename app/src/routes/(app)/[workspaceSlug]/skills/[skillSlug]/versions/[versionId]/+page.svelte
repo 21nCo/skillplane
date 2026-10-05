@@ -241,9 +241,7 @@
 
     {#if actionError}
       <SkillState
-        kind={actionError.toLocaleLowerCase().includes("conflict")
-          ? "conflict"
-          : "error"}
+        kind="error"
         title="Candidate state was not changed"
         message={actionError}
       />

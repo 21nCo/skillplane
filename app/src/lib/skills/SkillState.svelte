@@ -3,7 +3,7 @@
   import { LockKeyIcon, MagnifyingGlassIcon } from "phosphor-svelte";
   import type { Snippet } from "svelte";
 
-  type StateKind = "loading" | "empty" | "error" | "authorization" | "conflict";
+  type StateKind = "loading" | "empty" | "error" | "authorization";
 
   let {
     kind,
@@ -44,7 +44,7 @@
     icon={emptyIcon}
     action={retry || children ? emptyAction : undefined}
   />
-{:else if kind === "error" || kind === "conflict"}
+{:else if kind === "error"}
   <ErrorState {title} description={message} {retry} />
   {#if children}<div class="actions">{@render children()}</div>{/if}
 {:else}
