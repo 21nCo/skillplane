@@ -75,9 +75,10 @@ function productionBucketSafety(bucketName) {
     "list",
     bucketName,
   ]).stdout;
-  const actions = [...lifecycle.matchAll(/^action:\s+(.+)$/gmu)].map((match) =>
-    match[1].trim(),
-  );
+  const actions = lifecycle
+    .split(/\r?\n/u)
+    .filter((line) => line.startsWith("action:"))
+    .map((line) => line.slice("action:".length).trim());
   if (
     actions.length === 0 ||
     actions.some(

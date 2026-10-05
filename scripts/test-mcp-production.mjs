@@ -1,7 +1,8 @@
-#!/usr/bin/env node
+#!/usr/bin/env -S node --experimental-strip-types
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { assertExactSkillplaneMcpToolInventory } from "../mcp/src/tool-catalog.ts";
 import {
   isMain,
   productionResource,
@@ -74,39 +75,8 @@ export async function testProductionMcp() {
       throw new Error("The production MCP server identity is inconsistent");
     }
     const listed = await client.listTools();
-    const expected = [
-      "context_archive",
-      "context_create",
-      "context_get",
-      "context_knowledge_history",
-      "context_knowledge_update",
-      "context_note_upsert",
-      "context_notes_list",
-      "context_restore",
-      "context_update",
-      "contexts_list",
-      "skill_amend",
-      "skill_amendment_policy_get",
-      "skill_amendment_policy_update",
-      "skill_archive",
-      "skill_asset_retrieve",
-      "skill_candidate_approve",
-      "skill_candidate_reject",
-      "skill_candidates_list",
-      "skill_create",
-      "skill_restore",
-      "skill_retrieve",
-      "skill_versions_diff",
-      "skill_versions_list",
-      "skill_visibility_update",
-      "skills_list",
-      "skills_search",
-      "workspaces_list",
-    ];
-    const names = listed.tools.map((tool) => tool.name).sort();
-    if (JSON.stringify(names) !== JSON.stringify(expected)) {
-      throw new Error("The production MCP tool inventory is incomplete");
-    }
+    const names = listed.tools.map((tool) => tool.name).toSorted();
+    assertExactSkillplaneMcpToolInventory(names);
     const discovered = parseStructured(
       await client.callTool({
         name: "workspaces_list",
@@ -209,6 +179,22 @@ export async function testProductionMcp() {
           names.includes("skill_amendment_policy_get") &&
           names.includes("skill_amendment_policy_update"),
         versionDiff: names.includes("skill_versions_diff"),
+      },
+      composition: {
+        usageReport: names.includes("skill_usage_report"),
+        resolve: names.includes("skill_resolve"),
+        executionReport: names.includes("skill_execution_report"),
+        candidateCreate: names.includes("skill_composition_candidate_create"),
+        dependencyUpgrade:
+          names.includes("skill_dependency_upgrades_get") &&
+          names.includes("skill_dependency_upgrade"),
+        versionLifecycle: names.includes("skill_version_lifecycle_update"),
+        verification:
+          names.includes("skill_verification_plan_get") &&
+          names.includes("skill_verification_run_start") &&
+          names.includes("skill_verification_run_get") &&
+          names.includes("skill_verification_evidence_add") &&
+          names.includes("skill_verification_run_complete"),
       },
       search: {
         workspaceId,

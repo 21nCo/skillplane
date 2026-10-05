@@ -8,9 +8,46 @@ must be validated and every private cell deployed before enabling gateway mode.
 Production deploys through `scripts/deploy-topology.mjs`. The renderer in
 `scripts/lib/topology-deployment.mjs` generates canonical app/MCP gateways plus
 private app/MCP workers for every cell in `deployment/topology.production.json`.
-It requires separate control and cell Hyperdrive IDs and separate public/regional
-bucket names. Generated cell workers have no route, no `workers.dev` exposure,
-no downstream service bindings, and no Email Service binding.
+It also generates a separate public DataFn-only Worker for each cell. It requires
+separate control and cell Hyperdrive IDs and separate public/regional bucket names.
+Private app/MCP cell workers have no route, no `workers.dev` exposure, no downstream
+service bindings, and no Email Service binding.
+
+## Direct regional DataFn rollout
+
+The direct path is off by default. Set `DATAFN_DIRECT_ENABLED=true` and
+`DATAFN_DIRECT_WORKSPACES` to a comma-separated list of canary workspace IDs
+when rendering the multi-cell deployment. `*` enables all workspaces. The
+renderer propagates the flag to the app gateway, private app cells, and public
+DataFn Workers; it sets `PUBLIC_DATAFN_DIRECT_ENABLED` for the browser. Keep
+the flag false until all regional endpoints and signing keys are ready.
+
+Generate one Ed25519 key pair per environment. Store the PKCS#8 private PEM in
+`DATAFN_ROUTE_PRIVATE_KEY_PEM` for the **app gateway only**, its key ID in
+`DATAFN_ROUTE_ACTIVE_KEY_ID`, and a JSON map of key IDs to SPKI public PEMs in
+`DATAFN_ROUTE_PUBLIC_KEYS` for **private app cells only**. Keep the old public
+key during a rotation until all grants signed with it have expired. Supply a
+separate, random 32-byte-or-longer
+`AUTHFN_PLACEMENT_SUBJECT_SECRET` to the gateway for AuthFn placement context.
+The deployment preflight verifies that the active private key matches the
+regional public keyring before uploading Workers. Never copy the private key
+to a cell or to a public DataFn Worker.
+
+The public regional Workers accept only `POST /datafn/query` and
+`POST /datafn/search` from the canonical app origin. They reject cookies,
+bearer headers, and internal routing assertions, apply an edge rate limit,
+and forward to the private cell, where the signature, audience, region,
+workspace, placement epoch, scope, expiry, live membership, and a second
+rate limit are checked. The current Skillplane DataFn schema is read only;
+mutation and WebSocket routes are not granted or exposed.
+
+Compare `datafn.transport` bootstrap, regional, and total durations with the
+existing `datafn.timing` phases and workspace routing events for the canary.
+These events contain route and timing metadata only. To roll back, render and
+deploy with `DATAFN_DIRECT_ENABLED=false`. Browser reads then use canonical
+`/datafn`; an already loaded browser also falls back after a regional route
+failure. Leave the regional public keys in place until outstanding grants
+expire.
 
 The landing Worker is maintained and deployed independently from the 21n monorepo's
 `landing/skillplane` workspace. The production hosts are
@@ -45,6 +82,11 @@ with private access and a safe lifecycle. It refuses deployment if a bucket is
 missing, has an object-expiration or storage transition rule, an enabled
 `r2.dev` URL, or a custom domain. Published skill bundles never receive
 age-based deletion.
+
+The retired `RAILWAY_DATABASE_URL` is not accepted as production configuration.
+While operator environments may still contain it, development database isolation,
+subprocess secret scrubbing, and bundle leak detection continue treating it as a
+production safety sentinel. Remove the stale credential from operator environments.
 
 ## Required process inputs
 
@@ -272,7 +314,8 @@ pnpm test:mcp:production
 ```
 
 The gate rejects service-principal credentials. It negotiates Streamable HTTP,
-checks all nine tool contracts, and executes `skills_search`. Successful
+checks all 39 registered tool contracts (including composition and
+verification), and executes `skills_search`. Successful
 execution proves the OAuth token was accepted for the production MCP resource
 audience. Caller metadata is audited while user identity is derived only from
 the verified token.

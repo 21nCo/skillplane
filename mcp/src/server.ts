@@ -588,3 +588,11 @@ export const skillplaneMcpDeclaration = defineMcpFnServer<McpToolRuntime>({
 export function createSkillplaneMcpServer(runtime: McpToolRuntime) {
   return skillplaneMcpDeclaration.createServer({ context: () => runtime });
 }
+
+export {
+  SKILLPLANE_MCP_TOOL_COUNT,
+  SKILLPLANE_MCP_TOOL_NAMES,
+  assertExactSkillplaneMcpToolInventory,
+  registeredSkillplaneMcpToolNames,
+} from "./tool-catalog.js";
+export type { SkillplaneMcpToolName } from "./tool-catalog.js";

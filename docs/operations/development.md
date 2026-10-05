@@ -69,8 +69,7 @@ Turnstile variables are also present in the invoking environment, the
 deployment additionally rejects copied development values.
 
 Markdown authoring uses the shared mdfn profile documented in
-[`mdfn.md`](./mdfn.md). Leave the `PUBLIC_SKILLPLANE_MDFN_*` flags unset unless
-you are exercising per-surface rollback.
+[`mdfn.md`](./mdfn.md).
 
 The development renderer exposes `PUBLIC_POSTHOG_KEY` and
 `https://user-dev.skillplane.dev` to the browser app. It supplies the same
@@ -161,6 +160,16 @@ pnpm deploy:dev:topology:render
 pnpm deploy:dev:topology
 pnpm smoke:dev
 pnpm test:dev:oauth
+```
+
+To roll out only selected Worker kinds during a canary, pass `--only` to the
+deployment script with a comma-separated list of `app`, `datafn`, `mcp`, and
+`projection`. The script still deploys regional cells before the gateway. The
+`app` kind includes both regional app cells and the gateway app Worker. For
+example, to update all app Workers and public regional DataFn Workers:
+
+```bash
+node --env-file=.env.development.local scripts/deploy-development-topology.mjs --only app,datafn
 ```
 
 The old India AuthFn users, sessions, workspaces, memberships, and placement records

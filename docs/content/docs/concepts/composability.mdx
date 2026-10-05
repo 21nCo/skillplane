@@ -1,17 +1,13 @@
 ---
 title: Composability
-description: Reuse focused skills together and layer the context needed for the current task.
+description: Reuse focused skills together through native MCP resolution, verification, and layered context.
 ---
 
-Composability means an agent does not need one giant prompt for every workflow. It can discover focused skills, retrieve the useful ones, and use them together for the task at hand.
+Composability means an agent does not need one giant prompt for every workflow. It can discover focused skills and combine them for the task at hand.
 
-For example, one run might combine:
+Leaf (format-v1) skills stay independently reusable and versioned. An agent can retrieve several of them and use them together—for example a research method, a product-writing standard, and a publication checklist. Updating the writing standard does not require copying changes into the research or publication skills.
 
-- a research method;
-- a product-writing standard; and
-- a publication checklist.
-
-Each remains independently reusable and versioned. Updating the writing standard does not require copying changes into the research or publication skills.
+Composed (format-v2) skills are MCP-native. The server, not the agent, locks the dependency DAG. Call `skill_resolve` for the exact pinned closure, namespaced execution modules, invocation edges, and inherited verification obligations. Do not stitch only the parent skill while omitting its dependencies. Independent verifiers use `skill_verification_plan_get` and the `skill_verification_*` run tools. Details live in [`docs/architecture/skill-composition.md`](https://github.com/21nCo/skillplane/blob/main/docs/architecture/skill-composition.md).
 
 ## Add context without forking
 
@@ -21,8 +17,9 @@ Composition also happens between a skill and its context. A single code-review s
 
 1. Call `workspaces_list` when the workspace identifier is unknown.
 2. Use `skills_list` or `skills_search` to find each relevant skill.
-3. Retrieve the exact published version of each skill.
-4. List and retrieve a context when the task needs local knowledge.
-5. Record the versions and context revisions used in the run.
+3. For a composed skill, call `skill_resolve` (and `skill_verification_plan_get` when verifying) instead of executing only the parent.
+4. Retrieve the exact published version of a leaf skill, or of a resolved module when instructions are needed.
+5. List and retrieve a context when the task needs local knowledge.
+6. Record observed usage with `skill_usage_report`. Execution reports and verification runs are separate from usage.
 
-Skillplane provides exact artifacts and provenance; the agent or orchestration layer decides how several retrieved skills are sequenced for a particular task.
+Skillplane provides exact artifacts, pinned closures, and provenance. Format-v2 composition is resolved and verified through MCP; agents should not reconstruct a composite by retrieving the parent alone.
