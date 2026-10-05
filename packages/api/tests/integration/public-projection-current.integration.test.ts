@@ -60,6 +60,14 @@ describe("global public projection current-version selection", () => {
             revision,
             semanticVersion,
             publishedAt,
+            manifest: {
+              formatVersion: 1,
+              digest: `sha256:${String(revision).repeat(64)}`,
+              byteSize: 0,
+              expandedByteSize: 0,
+              fileCount: 0,
+              files: [],
+            },
           },
         },
       });

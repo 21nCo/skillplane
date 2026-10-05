@@ -2,10 +2,17 @@ import type { AuthFnSession } from "authfn";
 import {
   createDatafnServer,
   datafnMultiRegionPlugin,
+  routeTicketError,
+  verifyDatafnRegionalTicketIdentity,
   type DatafnPlacementRuntimeConfig,
+  type DatafnRegionalTicketRuntime,
   type DatafnServer,
 } from "@datafn/server";
-import { resolveUserPrincipal, type DatabaseClient } from "@skillplane/db";
+import {
+  resolveUserPrincipal,
+  resolveUserPrincipalByUserId,
+  type DatabaseClient,
+} from "@skillplane/db";
 import type { Principal } from "@skillplane/domain";
 import type {
   Adapter,
@@ -33,6 +40,8 @@ export interface CreateSkillplaneDatafnServerInput {
   readonly regionId?: string;
   readonly permissionDirectory?: IndexedDirectoryStoreAdapter;
   readonly placement?: DatafnPlacementRuntimeConfig;
+  /** Public regional requests derive identity from the verified ticket alone. */
+  readonly routeTickets?: DatafnRegionalTicketRuntime;
   readonly trustDirectWorkspaceHeader?: boolean;
   readonly debug?: boolean;
   readonly onTiming?: (event: Readonly<Record<string, unknown>>) => void;
@@ -84,6 +93,27 @@ export async function createSkillplaneDatafnServer(
     debug: input.debug ?? false,
     rest: false,
     context: async (request) => {
+      if (
+        input.routeTickets &&
+        input.regionId &&
+        request.headers.has("x-datafn-route-ticket")
+      ) {
+        const claims = await verifyDatafnRegionalTicketIdentity({
+          request,
+          regionId: input.regionId,
+          runtime: input.routeTickets,
+        });
+        const requestedWorkspace = request.headers.get("x-skillplane-workspace-id");
+        if (requestedWorkspace && requestedWorkspace !== claims.namespace) {
+          throw routeTicketError("DATAFN_ROUTE_TICKET_INVALID");
+        }
+        const principal = await resolveUserPrincipalByUserId(
+          (input.controlDatabase ?? input.database).pool,
+          claims.subject,
+          claims.namespace,
+        );
+        return { request, principal };
+      }
       const session = await input.auth.authenticate(request);
       const routedWorkspaceId = request.headers.get("x-skillplane-routed-workspace-id");
       const workspaceId =

@@ -164,6 +164,16 @@ pnpm smoke:dev
 pnpm test:dev:oauth
 ```
 
+To roll out only selected Worker kinds during a canary, pass `--only` to the
+deployment script with a comma-separated list of `app`, `datafn`, `mcp`, and
+`projection`. The script still deploys regional cells before the gateway. The
+`app` kind includes both regional app cells and the gateway app Worker. For
+example, to update all app Workers and public regional DataFn Workers:
+
+```bash
+node --env-file=.env.development.local scripts/deploy-development-topology.mjs --only app,datafn
+```
+
 The old India AuthFn users, sessions, workspaces, memberships, and placement records
 remain only in the encrypted pre-conversion backup. Existing regional India rows are
 intentionally not attached to newly created control-plane users or workspaces; map or

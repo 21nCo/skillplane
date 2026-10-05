@@ -22,6 +22,8 @@ let app: ReturnType<typeof createApiApp>;
 const suffix = `redaction-${crypto.randomUUID().replaceAll("-", "").slice(0, 12)}`;
 const viewerSuffix = `${suffix}-viewer`;
 const outsiderSuffix = `${suffix}-outsider`;
+// Query yesterday so unpinned wall-clock events fail, including across UTC midnight.
+const auditDay = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
 
 function headers(
   tenant: TenantFixture,
@@ -88,6 +90,8 @@ beforeAll(async () => {
     latencyMs: 17.4,
     channel: "mcp",
     retentionClass: "detailed_read_90d",
+    // Exercise the UTC day edge even when Postgres uses a non-UTC timezone.
+    occurredAt: new Date(`${auditDay}T23:59:59.999Z`),
     metadata: {
       prompt: "Never persist this prompt",
       skillBody: "# Never persist this skill body",
@@ -112,7 +116,7 @@ beforeAll(async () => {
     resourceId: viewer.userId,
     channel: "app",
     retentionClass: "permanent",
-    occurredAt: new Date(Date.now() - 1_000),
+    occurredAt: new Date(`${auditDay}T12:00:00.000Z`),
   });
   await writeControlPlaneAuditEvent(services.controlDatabase.pool, {
     id: `control-audit:redaction:${suffix}`,
@@ -129,8 +133,13 @@ beforeAll(async () => {
     channel: "app",
     metadata: { nextRole: "viewer" },
   });
+  // The control-plane writer uses database now(); pin this fixture explicitly.
+  await services.controlDatabase.pool.query(
+    "UPDATE control_plane_audit_events SET occurred_at = $1 WHERE id = $2",
+    [new Date(`${auditDay}T12:00:01.000Z`), `control-audit:redaction:${suffix}`],
+  );
   await rollupUtcDay(services.database.pool, {
-    day: new Date().toISOString().slice(0, 10),
+    day: auditDay,
     workspaceId: owner.workspaceId,
   });
 });
@@ -194,7 +203,7 @@ describe("audit redaction and role isolation", () => {
   });
 
   it("allows owner filtering/export, allows viewer aggregates, and denies detailed audit without leakage", async () => {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = auditDay;
     const filter = new URLSearchParams({
       from: today,
       to: today,

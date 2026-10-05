@@ -19,6 +19,16 @@ export function rateLimitMiddleware(): MiddlewareHandler<ApiEnvironment> {
       await next();
       return undefined;
     }
+    if (
+      services.deploymentRole === "cell" &&
+      context.req.path.startsWith("/datafn/") &&
+      context.req.header("x-datafn-route-ticket") !== undefined
+    ) {
+      // Public regional ingress already applies an IP DDoS limit. The private
+      // DataFn server verifies the ticket and applies its workspace/actor limit.
+      await next();
+      return undefined;
+    }
     const session = context.get("session");
     const servicePrincipal = context.get("servicePrincipal");
     const forwarded = context.req.header("cf-connecting-ip") ?? "unknown";

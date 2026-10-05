@@ -38,6 +38,7 @@ const localRuntimeTests = spawnSync(
     "scripts/rollback.test.mjs",
     "scripts/topology-manifest.test.mjs",
     "scripts/topology-deployment.test.mjs",
+    "scripts/datafn-ticket-keys.test.mjs",
   ],
   {
     cwd: repoRoot,

@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "runner": "@modelcontextprotocol/conformance@0.1.16",
   "suite": "active",
   "authenticated": true,
@@ -64,24 +64,8 @@
     "exitCode": 0,
     "checks": [
       {
-        "id": "completion-complete",
-        "status": "FAILURE"
-      },
-      {
-        "id": "localhost-host-rebinding-rejected",
+        "id": "server-initialize",
         "status": "SUCCESS"
-      },
-      {
-        "id": "localhost-host-valid-accepted",
-        "status": "SUCCESS"
-      },
-      {
-        "id": "elicitation-sep1034-general",
-        "status": "FAILURE"
-      },
-      {
-        "id": "elicitation-sep1330-general",
-        "status": "FAILURE"
       },
       {
         "id": "logging-set-level",
@@ -92,7 +76,91 @@
         "status": "SUCCESS"
       },
       {
-        "id": "prompts-get-embedded-resource",
+        "id": "completion-complete",
+        "status": "FAILURE"
+      },
+      {
+        "id": "tools-list",
+        "status": "SUCCESS"
+      },
+      {
+        "id": "tools-call-simple-text",
+        "status": "FAILURE"
+      },
+      {
+        "id": "tools-call-image",
+        "status": "FAILURE"
+      },
+      {
+        "id": "tools-call-audio",
+        "status": "FAILURE"
+      },
+      {
+        "id": "tools-call-embedded-resource",
+        "status": "FAILURE"
+      },
+      {
+        "id": "tools-call-mixed-content",
+        "status": "FAILURE"
+      },
+      {
+        "id": "tools-call-with-logging",
+        "status": "FAILURE"
+      },
+      {
+        "id": "tools-call-error",
+        "status": "FAILURE"
+      },
+      {
+        "id": "tools-call-with-progress",
+        "status": "FAILURE"
+      },
+      {
+        "id": "tools-call-sampling",
+        "status": "FAILURE"
+      },
+      {
+        "id": "tools-call-elicitation",
+        "status": "FAILURE"
+      },
+      {
+        "id": "elicitation-sep1034-general",
+        "status": "FAILURE"
+      },
+      {
+        "id": "server-sse-multiple-streams-session",
+        "status": "WARNING"
+      },
+      {
+        "id": "elicitation-sep1330-general",
+        "status": "FAILURE"
+      },
+      {
+        "id": "resources-list",
+        "status": "FAILURE"
+      },
+      {
+        "id": "resources-read-text",
+        "status": "FAILURE"
+      },
+      {
+        "id": "resources-read-binary",
+        "status": "FAILURE"
+      },
+      {
+        "id": "resources-templates-read",
+        "status": "FAILURE"
+      },
+      {
+        "id": "resources-subscribe",
+        "status": "FAILURE"
+      },
+      {
+        "id": "resources-unsubscribe",
+        "status": "FAILURE"
+      },
+      {
+        "id": "prompts-list",
         "status": "FAILURE"
       },
       {
@@ -104,100 +172,32 @@
         "status": "FAILURE"
       },
       {
+        "id": "prompts-get-embedded-resource",
+        "status": "FAILURE"
+      },
+      {
         "id": "prompts-get-with-image",
         "status": "FAILURE"
       },
       {
-        "id": "prompts-list",
-        "status": "FAILURE"
-      },
-      {
-        "id": "resources-list",
-        "status": "FAILURE"
-      },
-      {
-        "id": "resources-read-binary",
-        "status": "FAILURE"
-      },
-      {
-        "id": "resources-read-text",
-        "status": "FAILURE"
-      },
-      {
-        "id": "resources-subscribe",
-        "status": "FAILURE"
-      },
-      {
-        "id": "resources-templates-read",
-        "status": "FAILURE"
-      },
-      {
-        "id": "resources-unsubscribe",
-        "status": "FAILURE"
-      },
-      {
-        "id": "server-initialize",
+        "id": "localhost-host-rebinding-rejected",
         "status": "SUCCESS"
       },
       {
-        "id": "server-sse-multiple-streams-session",
-        "status": "WARNING"
-      },
-      {
-        "id": "tools-call-audio",
-        "status": "FAILURE"
-      },
-      {
-        "id": "tools-call-elicitation",
-        "status": "FAILURE"
-      },
-      {
-        "id": "tools-call-embedded-resource",
-        "status": "FAILURE"
-      },
-      {
-        "id": "tools-call-error",
-        "status": "FAILURE"
-      },
-      {
-        "id": "tools-call-image",
-        "status": "FAILURE"
-      },
-      {
-        "id": "tools-call-mixed-content",
-        "status": "FAILURE"
-      },
-      {
-        "id": "tools-call-sampling",
-        "status": "FAILURE"
-      },
-      {
-        "id": "tools-call-simple-text",
-        "status": "FAILURE"
-      },
-      {
-        "id": "tools-call-with-logging",
-        "status": "FAILURE"
-      },
-      {
-        "id": "tools-call-with-progress",
-        "status": "FAILURE"
-      },
-      {
-        "id": "tools-list",
+        "id": "localhost-host-valid-accepted",
         "status": "SUCCESS"
       }
     ],
     "statusCounts": {
-      "FAILURE": 25,
       "SUCCESS": 5,
+      "FAILURE": 25,
       "WARNING": 1
     }
   },
   "artifactHygiene": {
-    "rawArtifactBytes": 17589,
+    "redactedOutputBytes": 49624,
     "retainedRawArtifacts": false,
     "secretMaterialDetected": false
   },
-  "completedAt": "2026-08-29T06:18:44.199Z"
+  "completedAt": "2026-10-04T02:27:25.934Z"
 }
