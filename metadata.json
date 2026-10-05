@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.11.3",
+  "checkpoint_id": "01M46FBTKMFJ9RSY5B4W6HBNVS",
+  "strategy": "manual-commit",
+  "branch": "cursor/dead-public-api-cleanup-048f",
+  "checkpoints_count": 7,
+  "files_touched": [
+    "packages/local-runtime/src/cli.test.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 588613,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 15720064,
+    "output_tokens": 30183,
+    "api_call_count": 132
+  }
+}
