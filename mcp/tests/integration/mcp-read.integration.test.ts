@@ -10,6 +10,7 @@ import type {
 } from "@skillplane/mcp-schema";
 import { readAnalytics, rollupUtcDay } from "@skillplane/observability";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { SKILLPLANE_MCP_TOOL_NAMES } from "../../src/tool-catalog.js";
 import {
   parseStructured,
   startMcpTestEnvironment,
@@ -54,46 +55,8 @@ describe("MCP read surface", () => {
       version: "1.0.0",
     });
     const listed = await oauth.client.listTools();
-    expect(listed.tools.map((tool) => tool.name).sort()).toEqual([
-      "context_archive",
-      "context_create",
-      "context_get",
-      "context_knowledge_history",
-      "context_knowledge_update",
-      "context_note_upsert",
-      "context_notes_list",
-      "context_restore",
-      "context_update",
-      "contexts_list",
-      "skill_amend",
-      "skill_amendment_policy_get",
-      "skill_amendment_policy_update",
-      "skill_archive",
-      "skill_asset_retrieve",
-      "skill_candidate_approve",
-      "skill_candidate_reject",
-      "skill_candidates_list",
-      "skill_composition_candidate_create",
-      "skill_create",
-      "skill_dependency_upgrade",
-      "skill_dependency_upgrades_get",
-      "skill_execution_report",
-      "skill_resolve",
-      "skill_restore",
-      "skill_retrieve",
-      "skill_usage_report",
-      "skill_verification_evidence_add",
-      "skill_verification_plan_get",
-      "skill_verification_run_complete",
-      "skill_verification_run_get",
-      "skill_verification_run_start",
-      "skill_version_lifecycle_update",
-      "skill_versions_diff",
-      "skill_versions_list",
-      "skill_visibility_update",
-      "skills_list",
-      "skills_search",
-      "workspaces_list",
+    expect(listed.tools.map((tool) => tool.name).toSorted()).toEqual([
+      ...SKILLPLANE_MCP_TOOL_NAMES,
     ]);
     for (const tool of listed.tools) {
       expect(tool.annotations).toMatchObject({

@@ -92,7 +92,7 @@
     "smoke:production": "node --env-file-if-exists=.env.production.local scripts/production-smoke.mjs release",
     "smoke:production:release": "node --env-file-if-exists=.env.production.local scripts/production-smoke.mjs release",
     "smoke:production:topology": "node --env-file-if-exists=.env.production.local scripts/production-smoke.mjs topology",
-    "test:mcp:production": "node --env-file-if-exists=.env.production.local scripts/test-mcp-production.mjs",
+    "test:mcp:production": "node --experimental-strip-types --env-file-if-exists=.env.production.local scripts/test-mcp-production.mjs",
     "verify:email:production": "node --env-file-if-exists=.env.production.local scripts/verify-email-production.mjs",
     "verify:rollback:production": "node --env-file-if-exists=.env.production.local scripts/rollback.mjs",
     "cli:release:check": "node scripts/verify-cli-release.mjs",
