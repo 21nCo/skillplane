@@ -13,12 +13,6 @@
       (candidate) => candidate.slug === page.params.workspaceSlug,
     ) ?? null,
   );
-
-  $effect(() => {
-    if (workspace && workspaces.activeId !== workspace.id) {
-      workspaces.select(workspace.id);
-    }
-  });
 </script>
 
 {#if workspace}

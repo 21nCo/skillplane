@@ -127,25 +127,11 @@ describe("provider-neutral production database configuration", () => {
     }
   });
 
-  it("prefers the canonical URL and rejects a conflicting legacy value", () => {
+  it("uses the canonical production database URL", () => {
     const canonical = "postgresql://skillplane:new-secret@new.provider.example/live";
     withEnvironment(
       {
         SKILLPLANE_PRODUCTION_DATABASE_URL: canonical,
-        RAILWAY_DATABASE_URL:
-          "postgresql://skillplane:old-secret@old.provider.example/live",
-        MIGRATION_DATABASE_URL: undefined,
-      },
-      () =>
-        assert.throws(
-          () => productionDatabase(),
-          /conflicts with legacy RAILWAY_DATABASE_URL/u,
-        ),
-    );
-    withEnvironment(
-      {
-        SKILLPLANE_PRODUCTION_DATABASE_URL: canonical,
-        RAILWAY_DATABASE_URL: undefined,
         MIGRATION_DATABASE_URL: undefined,
       },
       () => assert.equal(productionDatabase().identity.host, "new.provider.example"),
@@ -156,11 +142,11 @@ describe("provider-neutral production database configuration", () => {
     withEnvironment(
       {
         SKILLPLANE_PRODUCTION_DATABASE_URL: "   ",
-        RAILWAY_DATABASE_URL:
-          "postgresql://skillplane:legacy-secret@legacy.provider.example/live",
-        MIGRATION_DATABASE_URL: undefined,
+        MIGRATION_DATABASE_URL:
+          "postgresql://skillplane:secret@migration.provider.example/live",
       },
-      () => assert.equal(productionDatabase().identity.host, "legacy.provider.example"),
+      () =>
+        assert.equal(productionDatabase().identity.host, "migration.provider.example"),
     );
   });
 

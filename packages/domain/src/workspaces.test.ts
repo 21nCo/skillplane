@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  normalizeWorkspaceName,
-  normalizeWorkspaceSlug,
-  personalWorkspaceSlug,
-} from "./workspaces.js";
+import { normalizeWorkspaceName, normalizeWorkspaceSlug } from "./workspaces.js";
 
 describe("workspaces", () => {
   it("normalizes organization names and slugs deterministically", () => {
@@ -11,8 +7,7 @@ describe("workspaces", () => {
     expect(normalizeWorkspaceSlug(" Acme Research ")).toBe("acme-research");
   });
 
-  it("derives a stable non-empty personal slug", () => {
-    expect(personalWorkspaceSlug("user:Example-01")).toBe("personal-user-example-01");
+  it("rejects slugs that cannot be normalized", () => {
     expect(() => normalizeWorkspaceSlug("!")).toThrow("2 to 63");
   });
 });

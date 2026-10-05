@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { topologySecrets } from "./lib/development-topology-secrets.mjs";
+import { developmentTopologyDatabases } from "./lib/development-topology-deployment.mjs";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
@@ -20,6 +21,7 @@ import {
   requireDevelopmentHyperdriveId,
 } from "./lib/development-deployment.mjs";
 import {
+  productionDatabase,
   productionIssuer,
   productionResource,
   workers,
@@ -120,7 +122,6 @@ describe("development deployment isolation", () => {
         SKILLPLANE_DEV_DATABASE_URL: developmentUrl,
         SKILLPLANE_PRODUCTION_DATABASE_URL:
           "postgresql://skillplane:prod-secret@new.provider.example/skillplane",
-        RAILWAY_DATABASE_URL: undefined,
       },
       () => assert.equal(developmentDatabase().identity.host, "old.provider.example"),
     );
@@ -128,26 +129,64 @@ describe("development deployment isolation", () => {
       {
         SKILLPLANE_DEV_DATABASE_URL: developmentUrl,
         SKILLPLANE_PRODUCTION_DATABASE_URL: developmentUrl,
-        RAILWAY_DATABASE_URL: undefined,
       },
       () => assert.throws(() => developmentDatabase(), /identities must be different/u),
     );
-    for (const productionVariable of [
-      "SKILLPLANE_PRODUCTION_MIGRATION_SOURCE_DATABASE_URL",
-      "RAILWAY_DATABASE_URL",
-    ]) {
-      withEnvironment(
-        {
-          SKILLPLANE_DEV_DATABASE_URL: developmentUrl,
-          SKILLPLANE_PRODUCTION_DATABASE_URL: undefined,
-          SKILLPLANE_PRODUCTION_MIGRATION_SOURCE_DATABASE_URL: undefined,
-          RAILWAY_DATABASE_URL: undefined,
-          [productionVariable]: developmentUrl,
-        },
-        () =>
-          assert.throws(() => developmentDatabase(), /identities must be different/u),
-      );
+    withEnvironment(
+      {
+        SKILLPLANE_DEV_DATABASE_URL: developmentUrl,
+        SKILLPLANE_PRODUCTION_DATABASE_URL: undefined,
+        SKILLPLANE_PRODUCTION_MIGRATION_SOURCE_DATABASE_URL: developmentUrl,
+      },
+      () => assert.throws(() => developmentDatabase(), /identities must be different/u),
+    );
+  });
+
+  it("keeps the retired production alias as an isolation and scrubbing sentinel", () => {
+    const databases = {
+      SKILLPLANE_DEV_DATABASE_URL: "postgresql://user:secret@dev.example/in_south",
+      SKILLPLANE_DEV_CONTROL_DATABASE_URL:
+        "postgresql://user:secret@dev.example/control",
+      SKILLPLANE_DEV_USEAST_DATABASE_URL:
+        "postgresql://user:secret@dev.example/us_east",
+      SKILLPLANE_DEV_EUWEST_DATABASE_URL:
+        "postgresql://user:secret@dev.example/eu_west",
+    };
+    const environment = {
+      ...databases,
+      SKILLPLANE_PRODUCTION_DATABASE_URL: undefined,
+      SKILLPLANE_PRODUCTION_MIGRATION_SOURCE_DATABASE_URL: undefined,
+      SKILLPLANE_DEV_CLOUDFLARE_API_TOKEN: "dev-cloudflare-token-material-1234567890",
+      SKILLPLANE_PRODUCTION_R2_READ_TOKEN: "prod-r2-token-material-1234567890",
+    };
+    for (const url of Object.values(databases)) {
+      withEnvironment({ ...environment, RAILWAY_DATABASE_URL: url }, () => {
+        assert.throws(
+          () => developmentTopologyDatabases(),
+          /must differ|must be different/u,
+        );
+        assert.throws(
+          () => productionDatabase(),
+          /SKILLPLANE_PRODUCTION_DATABASE_URL/u,
+        );
+        assert.equal(
+          developmentCloudflareEnvironment().RAILWAY_DATABASE_URL,
+          undefined,
+        );
+        assert.equal(productionBundleReadEnvironment().RAILWAY_DATABASE_URL, undefined);
+      });
     }
+    withEnvironment(
+      { ...environment, RAILWAY_DATABASE_URL: databases.SKILLPLANE_DEV_DATABASE_URL },
+      () => assert.throws(() => developmentDatabase(), /identities must be different/u),
+    );
+    withEnvironment(
+      {
+        ...environment,
+        RAILWAY_DATABASE_URL: "postgresql://user:secret@prod.example/prod",
+      },
+      () => assert.equal(Object.keys(developmentTopologyDatabases().cells).length, 3),
+    );
   });
 
   it("requires the development bundle bucket to remain private", () => {
