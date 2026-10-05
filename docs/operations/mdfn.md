@@ -35,4 +35,3 @@ artifacts and integrity hashes. Run:
 ```bash
 pnpm mdfn:verify
 ```
-

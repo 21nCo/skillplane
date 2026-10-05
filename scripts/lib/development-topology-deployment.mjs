@@ -32,9 +32,9 @@ const databaseVariables = Object.freeze({
 
 function assertNotProductionDatabase(database, name) {
   for (const productionVariable of [
+    "RAILWAY_DATABASE_URL",
     "SKILLPLANE_PRODUCTION_DATABASE_URL",
     "SKILLPLANE_PRODUCTION_MIGRATION_SOURCE_DATABASE_URL",
-    "RAILWAY_DATABASE_URL",
   ]) {
     const productionUrl = process.env[productionVariable]?.trim();
     if (
