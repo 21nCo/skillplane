@@ -20,7 +20,9 @@ import {
   validateBundleArchive,
 } from "./validate.js";
 
-const CANONICAL_MTIME = new Date("1980-01-01T00:00:00.000Z");
+// ZIP stores local calendar fields, not an instant. Preserve the original v1
+// fixture bytes (05:30, generated in Asia/Kolkata) in every runtime timezone.
+const CANONICAL_MTIME = "1980-01-01T05:30:00";
 const REGULAR_FILE_MODE = 0o100644 << 16;
 const encoder = new TextEncoder();
 

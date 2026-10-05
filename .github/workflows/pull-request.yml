@@ -63,5 +63,11 @@ jobs:
       - name: Lint design system
         run: pnpm lint:design-system
 
+      - name: Verify canonical bundles across timezones
+        run: |
+          for timezone in UTC Asia/Kolkata America/Los_Angeles; do
+            TZ="$timezone" pnpm --filter @skillplane/storage test:unit
+          done
+
       - name: Unit tests
         run: pnpm test:unit

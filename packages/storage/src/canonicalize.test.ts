@@ -28,6 +28,21 @@ describe("canonical bundle", () => {
     }).toEqual(goldenDigests);
   });
 
+  it("pins ZIP calendar fields without changing the v1 reference bytes", async () => {
+    const bundle = await canonicalizeBundle(
+      await createTestBundle({ "SKILL.md": "# Timestamp\n" }),
+    );
+    const header = new DataView(
+      bundle.bytes.buffer,
+      bundle.bytes.byteOffset,
+      bundle.bytes.byteLength,
+    );
+    expect(header.getUint32(0, true)).toBe(0x04034b50);
+    // DOS local time 05:30:00 and date 1980-01-01, regardless of TZ.
+    expect(header.getUint16(10, true)).toBe((5 << 11) | (30 << 5));
+    expect(header.getUint16(12, true)).toBe((1 << 5) | 1);
+  });
+
   it("produces byte-identical output across ordering and timestamps", async () => {
     const files = {
       "SKILL.md": "# Pull request review\n\nReview for correctness.\n",
