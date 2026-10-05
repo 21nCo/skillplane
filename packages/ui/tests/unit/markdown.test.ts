@@ -50,6 +50,18 @@ describe("Skillplane Markdown profile", () => {
     expect(html).toContain('rel="noreferrer noopener"');
   });
 
+  it("safely displays repository-valid content that exceeds the renderer token limit", () => {
+    const source = `<script>alert("x")</script>${"x".repeat(300_000)}&</pre>`;
+    expect(new TextEncoder().encode(source).byteLength).toBeLessThan(1_048_576);
+    expect(() => renderSkillplaneMarkdown(source)).toThrow();
+    const html = renderSafeMarkdown(source);
+    expect(html).toMatch(/^<pre>&lt;script&gt;/u);
+    expect(html).toContain("&lt;/script&gt;");
+    expect(html).toContain("x".repeat(300_000));
+    expect(html).toMatch(/&amp;&lt;\/pre&gt;<\/pre>$/u);
+    expect(html).not.toContain("<script");
+  });
+
   it("keeps preview and read-only rendering on the same profile", () => {
     const html = renderSafeMarkdown(SECURITY_FIXTURE);
     expect(html).toBe(renderSkillplaneMarkdown(SECURITY_FIXTURE).html);

@@ -134,7 +134,24 @@ async function withSecretFile(secrets, operation) {
   }
 }
 
-export async function deployDevelopmentTopology() {
+export function selectDevelopmentTopologyOutputs(outputs, onlyKinds) {
+  const allowed = new Set(["app", "mcp", "projection", "datafn"]);
+  if (
+    onlyKinds &&
+    (onlyKinds.length === 0 || onlyKinds.some((kind) => !allowed.has(kind)))
+  ) {
+    throw new Error("--only must contain app, mcp, projection, or datafn");
+  }
+  return outputs
+    .filter((output) => !onlyKinds || onlyKinds.includes(output.kind))
+    .sort(
+      (left, right) =>
+        Number(left.id.startsWith("gateway:")) -
+        Number(right.id.startsWith("gateway:")),
+    );
+}
+
+export async function deployDevelopmentTopology(options = {}) {
   const commit = capture("git", ["rev-parse", "HEAD"]).stdout.trim();
   const changes = capture("git", [
     "status",
@@ -182,10 +199,7 @@ export async function deployDevelopmentTopology() {
     env: buildEnvironment,
     failureMessage: "Development topology monorepo build failed",
   });
-  const outputs = [...rendered.outputs].sort(
-    (left, right) =>
-      Number(left.id.startsWith("gateway:")) - Number(right.id.startsWith("gateway:")),
-  );
+  const outputs = selectDevelopmentTopologyOutputs(rendered.outputs, options.onlyKinds);
   const workers = [];
   for (const output of outputs) {
     const deploy = (secretFile) => {
