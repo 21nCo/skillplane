@@ -14,7 +14,7 @@ export interface Workspace {
   readonly updatedAt: string;
 }
 
-export interface WorkspaceRegion {
+interface WorkspaceRegion {
   readonly id: string;
   readonly name: string;
 }

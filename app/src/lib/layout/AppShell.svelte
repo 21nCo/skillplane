@@ -7,16 +7,14 @@
     ErrorState,
     Skeleton,
     applyAppearance,
-    isDensity,
     isTheme,
     type CommandItem,
-    type Density,
     type Theme,
   } from "@skillplane/ui";
   import { RobotIcon, SquaresFourIcon, UsersThreeIcon } from "phosphor-svelte";
   import { onMount, type Snippet } from "svelte";
   import { signOut, type BrowserSession } from "$lib/auth/client.js";
-  import { initializePostHog, resetPostHog } from "$lib/analytics/posthog.client.js";
+  import { identifyPostHog, resetPostHog } from "$lib/analytics/posthog.client.js";
   import type { WorkspaceStore } from "$lib/workspaces/store.svelte.js";
   import Sidebar from "./Sidebar.svelte";
   import Topbar from "./Topbar.svelte";
@@ -34,7 +32,6 @@
   let navigationOpen = $state(false);
   let commandsOpen = $state(false);
   let theme = $state<Theme>("dark");
-  let density = $state<Density>("compact");
   let initialized = $state(false);
 
   const commands: readonly CommandItem[] = [
@@ -43,7 +40,6 @@
       label: "Open workspaces",
       group: "Navigate",
       keywords: ["organization", "workspace"],
-      shortcut: "G W",
       icon: SquaresFourIcon,
       run: () => goto(resolve("/workspaces")),
     },
@@ -52,7 +48,6 @@
       label: "Manage members",
       group: "Navigate",
       keywords: ["invitations", "roles"],
-      shortcut: "G M",
       icon: UsersThreeIcon,
       run: () => goto(resolve("/settings/members")),
     },
@@ -61,7 +56,6 @@
       label: "Manage agent credentials",
       group: "Navigate",
       keywords: ["service principal", "tokens"],
-      shortcut: "G A",
       icon: RobotIcon,
       run: () => goto(resolve("/settings/agents")),
     },
@@ -75,7 +69,7 @@
 
   function toggleTheme() {
     theme = theme === "dark" ? "light" : "dark";
-    applyAppearance(theme, density);
+    applyAppearance(theme);
   }
 
   async function loadWorkspaces() {
@@ -84,17 +78,13 @@
   }
 
   onMount(() => {
-    void initializePostHog().then((posthog) => {
-      posthog?.identify(session.actorId, {
-        ...(session.subject.email ? { email: session.subject.email } : {}),
-      });
+    identifyPostHog(session.actorId, {
+      ...(session.subject.email ? { email: session.subject.email } : {}),
     });
 
     const storedTheme = localStorage.getItem("skillplane.theme");
-    const storedDensity = localStorage.getItem("skillplane.density");
     theme = isTheme(storedTheme) ? storedTheme : "dark";
-    density = isDensity(storedDensity) ? storedDensity : "compact";
-    applyAppearance(theme, density);
+    applyAppearance(theme);
     void loadWorkspaces();
   });
 

@@ -3,13 +3,7 @@
   import { CaretDownIcon } from "phosphor-svelte";
   import type { WorkspaceStore } from "$lib/workspaces/store.svelte.js";
 
-  let {
-    store,
-    compact = false,
-  }: {
-    store: WorkspaceStore;
-    compact?: boolean;
-  } = $props();
+  let { store }: { store: WorkspaceStore } = $props();
 
   function selectWorkspace(event: Event) {
     store.select((event.currentTarget as HTMLSelectElement).value);
@@ -17,7 +11,7 @@
   }
 </script>
 
-<label class:compact>
+<label>
   <span>Active workspace</span>
   <div>
     <select
@@ -82,18 +76,5 @@
     pointer-events: none;
     color: var(--sp-color-text-subtle);
     transform: translateY(-50%);
-  }
-
-  label.compact {
-    min-width: 13rem;
-    padding: 0;
-  }
-
-  label.compact > span {
-    position: absolute;
-    overflow: hidden;
-    width: 1px;
-    height: 1px;
-    clip: rect(0 0 0 0);
   }
 </style>

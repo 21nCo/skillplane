@@ -38,6 +38,16 @@ export function initializePostHog(): Promise<PostHog | undefined> {
   return initialization;
 }
 
+export function identifyPostHog(distinctId: string, properties?: Properties): void {
+  void initializePostHog()
+    .then((posthog) => {
+      posthog?.identify(distinctId, properties);
+    })
+    .catch((cause: unknown) => {
+      console.error("PostHog identify failed.", cause);
+    });
+}
+
 export function capturePostHog(event: EventName, properties?: Properties): void {
   void initializePostHog()
     .then((posthog) => {

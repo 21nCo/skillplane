@@ -2,10 +2,17 @@ import type { AuthFnSession } from "authfn";
 import {
   createDatafnServer,
   datafnMultiRegionPlugin,
+  routeTicketError,
+  verifyDatafnRegionalTicketIdentity,
   type DatafnPlacementRuntimeConfig,
+  type DatafnRegionalTicketRuntime,
   type DatafnServer,
 } from "@datafn/server";
-import { resolveUserPrincipal, type DatabaseClient } from "@skillplane/db";
+import {
+  resolveUserPrincipal,
+  resolveUserPrincipalByUserId,
+  type DatabaseClient,
+} from "@skillplane/db";
 import type { Principal } from "@skillplane/domain";
 import type {
   Adapter,
@@ -33,40 +40,36 @@ export interface CreateSkillplaneDatafnServerInput {
   readonly regionId?: string;
   readonly permissionDirectory?: IndexedDirectoryStoreAdapter;
   readonly placement?: DatafnPlacementRuntimeConfig;
+  /** Public regional requests derive identity from the verified ticket alone. */
+  readonly routeTickets?: DatafnRegionalTicketRuntime;
   readonly trustDirectWorkspaceHeader?: boolean;
   readonly debug?: boolean;
   readonly onTiming?: (event: Readonly<Record<string, unknown>>) => void;
 }
 
-function jsonSafeValue<T>(value: T): T {
-  if (value instanceof Date) return value.toISOString() as T;
-  if (Array.isArray(value)) return value.map(jsonSafeValue) as T;
-  if (value && typeof value === "object") {
-    const prototype: unknown = Object.getPrototypeOf(value);
-    if (prototype === Object.prototype || prototype === null) {
-      const record = value as Record<string, unknown>;
-      return Object.fromEntries(
-        Object.entries(record).map(([key, nested]) => [key, jsonSafeValue(nested)]),
-      ) as T;
-    }
-  }
-  return value;
+function normalizeRecordDates<T>(value: T): T {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([key, field]) => [
+      key,
+      field instanceof Date ? field.toISOString() : field,
+    ]),
+  ) as T;
 }
 
 /**
- * DataFn 0.1.1 recursively treats every object as a record while applying
- * relation FK omissions, which reduces Date values to `{}`. Convert database
- * read values to their JSON representation until the upstream fix is released.
+ * Keep database rows and JSON-round-tripped cursors comparable. Only direct
+ * Date fields are normalized; nested JSON and relation arrays stay untouched.
  */
-function createJsonSafeReadAdapter(adapter: Adapter): Adapter {
+function createCursorStableReadAdapter(adapter: Adapter): Adapter {
   return {
     ...adapter,
     findOne: async <T = unknown>(params: FindOneParams) => {
       const record = await adapter.findOne<T>(params);
-      return record ? jsonSafeValue(record) : null;
+      return record ? normalizeRecordDates(record) : null;
     },
     findMany: async <T = unknown>(params: FindManyParams) =>
-      (await adapter.findMany<T>(params)).map(jsonSafeValue),
+      (await adapter.findMany<T>(params)).map(normalizeRecordDates),
   };
 }
 
@@ -84,12 +87,33 @@ export async function createSkillplaneDatafnServer(
       : null;
   return createDatafnServer<SkillplaneDatafnContext>({
     schema: skillplaneDatafnSchema,
-    database: createJsonSafeReadAdapter(input.database.adapter),
+    database: createCursorStableReadAdapter(input.database.adapter),
     ...(multiRegion ? { plugins: [multiRegion] } : {}),
     allowUnknownResources: false,
     debug: input.debug ?? false,
     rest: false,
     context: async (request) => {
+      if (
+        input.routeTickets &&
+        input.regionId &&
+        request.headers.has("x-datafn-route-ticket")
+      ) {
+        const claims = await verifyDatafnRegionalTicketIdentity({
+          request,
+          regionId: input.regionId,
+          runtime: input.routeTickets,
+        });
+        const requestedWorkspace = request.headers.get("x-skillplane-workspace-id");
+        if (requestedWorkspace && requestedWorkspace !== claims.namespace) {
+          throw routeTicketError("DATAFN_ROUTE_TICKET_INVALID");
+        }
+        const principal = await resolveUserPrincipalByUserId(
+          (input.controlDatabase ?? input.database).pool,
+          claims.subject,
+          claims.namespace,
+        );
+        return { request, principal };
+      }
       const session = await input.auth.authenticate(request);
       const routedWorkspaceId = request.headers.get("x-skillplane-routed-workspace-id");
       const workspaceId =
