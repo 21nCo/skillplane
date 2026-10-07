@@ -79,7 +79,9 @@
           workspaceSlug: store.active.slug,
         })}
         class:active={pathname === `/${store.active.slug}/groups`}
-        onclick={onClose}><UsersThreeIcon aria-hidden="true" />Skill groups</a
+        aria-current={pathname === `/${store.active.slug}/groups` ? "page" : undefined}
+        onclick={onClose}
+        ><UsersThreeIcon weight="duotone" aria-hidden="true" />Skill groups</a
       >
       {@const analyticsHref = resolve("/(app)/[workspaceSlug]/analytics", {
         workspaceSlug: store.active.slug,

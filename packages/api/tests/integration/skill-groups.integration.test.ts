@@ -2,17 +2,24 @@ import { afterAll, beforeAll, expect, it } from "vitest";
 import { migrateDatabase, resolveTestDatabaseUrl } from "@skillplane/db";
 import {
   seedTenantFixture,
+  purgeTenantFixture,
   TestObjectStorage,
   type TenantFixture,
 } from "@skillplane/testing";
 import { buildApiServices, createApiApp, type ApiServices } from "../../src/index.js";
+const suffixes = [
+  `groups-http-${crypto.randomUUID()}`,
+  `groups-out-${crypto.randomUUID()}`,
+] as const;
+let databaseUrl: string;
 let services: ApiServices, owner: TenantFixture, outsider: TenantFixture;
 let app: ReturnType<typeof createApiApp>;
 beforeAll(async () => {
   const url = await resolveTestDatabaseUrl();
+  databaseUrl = url;
   await migrateDatabase(url);
-  owner = await seedTenantFixture(url, `groups-http-${crypto.randomUUID()}`);
-  outsider = await seedTenantFixture(url, `groups-out-${crypto.randomUUID()}`);
+  owner = await seedTenantFixture(url, suffixes[0]);
+  outsider = await seedTenantFixture(url, suffixes[1]);
   services = await buildApiServices({
     RUNTIME_ENV: "local",
     DATABASE_ADAPTER: "postgres",
@@ -23,9 +30,15 @@ beforeAll(async () => {
   app = createApiApp({ getServices: async () => services });
 });
 afterAll(async () => {
+  for (const table of ["skill_group_members", "skill_group_skills", "skill_groups"])
+    await services.database.pool.query(
+      `DELETE FROM ${table} WHERE workspace_id=ANY($1::text[])`,
+      [[owner.workspaceId, outsider.workspaceId]],
+    );
   await services.datafn.close();
   await services.email?.close();
   await services.database.close();
+  for (const suffix of suffixes) await purgeTenantFixture(databaseUrl, suffix);
 });
 it("routes lifecycle and assignments through authenticated workspace scope", async () => {
   const headers = {

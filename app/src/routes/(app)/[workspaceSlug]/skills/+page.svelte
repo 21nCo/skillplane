@@ -204,10 +204,10 @@
   {:else if skills.length === 0}
     <SkillState
       kind="empty"
-      title={query || visibility !== "all" || archive !== "active"
+      title={query || groupId || visibility !== "all" || archive !== "active"
         ? "No skills match these filters"
         : "Create your first skill"}
-      message={query || visibility !== "all" || archive !== "active"
+      message={query || groupId || visibility !== "all" || archive !== "active"
         ? "Change the search or filters and try again."
         : canWrite
           ? "Author Markdown directly or upload a portable Skillplane bundle."
@@ -338,7 +338,7 @@
 
   .filters {
     display: grid;
-    grid-template-columns: minmax(18rem, 1fr) 11rem 12rem;
+    grid-template-columns: minmax(18rem, 1fr) repeat(3, minmax(9rem, 1fr));
     gap: var(--sp-space-3);
     align-items: end;
     margin: var(--sp-space-6) 0 var(--sp-space-4);

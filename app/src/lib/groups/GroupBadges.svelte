@@ -46,7 +46,7 @@
   });
 </script>
 
-{#if groups.length}<span aria-label="Skill groups"
+{#if groups.length}<span role="group" aria-label="Skill groups"
     >{#each groups as group (group.id)}<a
         href={resolve("/(app)/[workspaceSlug]/groups", { workspaceSlug })}
         >{group.name}</a

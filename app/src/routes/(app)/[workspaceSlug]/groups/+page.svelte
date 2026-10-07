@@ -41,21 +41,45 @@
     );
   }
   let creationKey = crypto.randomUUID();
+  let listGeneration = 0,
+    listLoaded = $state(false),
+    listLoading = $state(false);
   async function load(more = false) {
     if (!workspace) return;
-    const workspaceId = workspace.id;
-    const result = await groupRequest<{ groups: Group[]; nextCursor: string | null }>(
-      workspace.id,
-      `?${page.url.searchParams.get("memberId") ? `userId=${encodeURIComponent(page.url.searchParams.get("memberId") ?? "")}&` : ""}state=${includeArchived ? "all" : "active"}${more && groupCursor ? `&cursor=${encodeURIComponent(groupCursor)}` : ""}`,
-    );
-    if (!isCurrent(workspaceId)) return;
-    groups = more ? [...groups, ...result.groups] : result.groups;
-    groupCursor = result.nextCursor;
+    const workspaceId = workspace.id,
+      memberId = page.url.searchParams.get("memberId") ?? "",
+      archived = includeArchived,
+      generation = ++listGeneration;
+    if (!more) {
+      groupCursor = null;
+      listLoaded = false;
+    }
+    listLoading = true;
+    try {
+      const result = await groupRequest<{ groups: Group[]; nextCursor: string | null }>(
+        workspaceId,
+        `?${memberId ? `userId=${encodeURIComponent(memberId)}&` : ""}state=${archived ? "all" : "active"}${more && groupCursor ? `&cursor=${encodeURIComponent(groupCursor)}` : ""}`,
+      );
+      if (
+        !isCurrent(workspaceId) ||
+        memberId !== (page.url.searchParams.get("memberId") ?? "") ||
+        archived !== includeArchived ||
+        generation !== listGeneration
+      )
+        return;
+      groups = more ? [...groups, ...result.groups] : result.groups;
+      groupCursor = result.nextCursor;
+      listLoaded = true;
+    } finally {
+      if (generation === listGeneration) listLoading = false;
+    }
   }
   async function detail(group: Group) {
     if (!workspace) return;
     const workspaceId = workspace.id;
     selected = group;
+    targetMember = "";
+    targetSkill = "";
     name = group.name;
     description = group.description;
     skills = [];
@@ -109,18 +133,20 @@
     targetSkill = "";
   }
   async function run(fn: () => Promise<void>) {
-    if (busy) return;
+    if (busy || !workspace) return;
+    const scope = loaded;
     busy = true;
     error = "";
     try {
       await fn();
     } catch (e) {
-      error = e instanceof Error ? e.message : "The change failed";
+      if (scope === loaded)
+        error = e instanceof Error ? e.message : "The change failed";
     } finally {
-      busy = false;
+      if (scope === loaded) busy = false;
     }
   }
-  async function save(archived = Boolean(selected?.archivedAt)) {
+  async function save(archived = Boolean(selected?.archivedAt), lifecycleOnly = false) {
     if (!workspace) return;
     const workspaceId = workspace.id;
     const r = await groupRequest<{ group: Group }>(
@@ -128,16 +154,16 @@
       selected ? `/${encodeURIComponent(selected.id)}` : "",
       selected ? "PATCH" : "POST",
       {
-        name,
-        description,
+        name: lifecycleOnly && selected ? selected.name : name,
+        description: lifecycleOnly && selected ? selected.description : description,
         ...(selected ? { expectedRevision: selected.revision, archived } : {}),
       },
       creationKey,
     );
     if (!isCurrent(workspaceId)) return;
-    creationKey = crypto.randomUUID();
     await load();
     await detail(r.group);
+    creationKey = crypto.randomUUID();
   }
   async function assign(kind: "skills" | "members", id: string, add: boolean) {
     if (!workspace || !selected || !id) return;
@@ -156,10 +182,19 @@
       loaded = `${workspace.id}:${page.url.searchParams.get("memberId") ?? ""}`;
       selected = null;
       groups = [];
+      groupCursor = null;
+      listLoaded = false;
+      busy = false;
+      targetMember = "";
+      targetSkill = "";
+      name = "";
+      description = "";
       error = "";
       creationKey = crypto.randomUUID();
+      const scope = loaded;
       void load().catch((e: unknown) => {
-        error = e instanceof Error ? e.message : "Groups could not be loaded";
+        if (scope === loaded)
+          error = e instanceof Error ? e.message : "Groups could not be loaded";
       });
     }
   });
@@ -203,7 +238,7 @@
   {#if groupCursor}<Button disabled={busy} onclick={() => void run(() => load(true))}
       >Load more groups</Button
     >{/if}
-  {#if !groups.length}<EmptyState
+  {#if listLoaded && !listLoading && !error && !groups.length}<EmptyState
       title="No skill groups"
       description="Create a group such as Design, Marketing, Development, or Sales."
     />{/if}
@@ -221,7 +256,7 @@
       /><Button type="submit" disabled={busy}>Save group</Button>{#if selected}<Button
           variant="secondary"
           disabled={busy}
-          onclick={() => void run(() => save(!selected?.archivedAt))}
+          onclick={() => void run(() => save(!selected?.archivedAt, true))}
           >{selected.archivedAt ? "Restore" : "Archive"}</Button
         >{/if}
     </form>{/if}

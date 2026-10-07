@@ -24,6 +24,22 @@ describe("skill group validation and authorization", () => {
       },
     } as unknown as Pool;
     const s = new SkillGroupService(pool);
+    const servicePrincipal: Principal = {
+      kind: "service",
+      role: "admin",
+      actorId: "svc",
+      servicePrincipalId: "svc",
+      workspaceId: "w",
+      scopes: ["skills:write"],
+    };
+    await expect(
+      s.create({
+        principal: servicePrincipal,
+        name: "Design",
+        idempotencyKey: "test-service-create",
+        requestId: "r",
+      }),
+    ).rejects.toMatchObject({ code: "WORKSPACE_FORBIDDEN" });
     for (const role of ["viewer", "editor"] as const) {
       const p: Principal = {
         kind: "user",
