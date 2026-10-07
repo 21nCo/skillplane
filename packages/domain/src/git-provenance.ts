@@ -10,6 +10,12 @@ export async function assertGitSourceLease(
   workspaceId: string,
   lease: GitSourceLease,
 ) {
+  // Check time after acquiring the lock: a SELECT predicate may have been
+  // evaluated before waiting for another transaction to release this row.
+  await client.query(
+    "SELECT id FROM skill_sources WHERE workspace_id=$1 AND id=$2 FOR UPDATE",
+    [workspaceId, lease.sourceId],
+  );
   const result = await client.query(
     `SELECT id FROM skill_sources WHERE workspace_id=$1 AND id=$2 AND sync_token=$3 AND revision=$4 AND archived_at IS NULL AND sync_expires_at > clock_timestamp() FOR UPDATE`,
     [workspaceId, lease.sourceId, lease.token, lease.revision],

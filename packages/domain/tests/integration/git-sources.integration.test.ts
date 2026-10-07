@@ -1,3 +1,4 @@
+import { assertGitSourceLease } from "../../src/git-provenance.js";
 import { PublicationService } from "../../src/publication.js";
 import { beforeAll, afterAll, describe, it, expect } from "vitest";
 import { Pool } from "pg";
@@ -621,5 +622,41 @@ describe.skipIf(!url)("Git source persistence and recovery", () => {
         ])
       ).rowCount,
     ).toBe(2);
+  });
+  it("checks expiry after waiting to acquire the source row lock", async () => {
+    const source = await sources.create({
+      ...m(),
+      config: { repositoryUrl: "https://github.com/a/lock-wait" },
+      idempotencyKey: crypto.randomUUID(),
+    });
+    const blocker = await pool.connect(),
+      worker = await pool.connect();
+    try {
+      await pool.query(
+        "UPDATE skill_sources SET sync_token='lock-wait',sync_expires_at=clock_timestamp()+interval '1 second' WHERE id=$1",
+        [source.id],
+      );
+      await blocker.query("BEGIN");
+      await blocker.query("SELECT id FROM skill_sources WHERE id=$1 FOR UPDATE", [
+        source.id,
+      ]);
+      await worker.query("BEGIN");
+      const pending = assertGitSourceLease(worker, owner.workspaceId, {
+        sourceId: source.id,
+        token: "lock-wait",
+        revision: source.revision,
+      });
+      const rejection = expect(pending).rejects.toMatchObject({
+        code: "GIT_SOURCE_LEASE_LOST",
+      });
+      await blocker.query("SELECT pg_sleep(1.1)");
+      await blocker.query("COMMIT");
+      await rejection;
+    } finally {
+      await blocker.query("ROLLBACK");
+      await worker.query("ROLLBACK");
+      blocker.release();
+      worker.release();
+    }
   });
 });
