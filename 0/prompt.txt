@@ -1,3 +1,11 @@
 any issues in backlog for skillplane (check linear)
 
 also is latest code deployed to dev?
+
+---
+
+deploy the latest to dev and verify and then work and complete SKI-11, SKI-12 and open corresponding PRs
+
+---
+
+what changes are present locally?
