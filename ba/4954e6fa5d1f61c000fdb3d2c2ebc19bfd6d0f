@@ -1,0 +1,21 @@
+app/src/routes/(app)/[workspaceSlug]/skills/[skillSlug]/versions/[versionId]/+page.svelte
+  s_3d9cf2f71e25cd::t_29f70ccbe5f66e 322-326
+packages/storage/src/canonicalize.test.ts
+  s_3d9cf2f71e25cd::t_719eaddc7fba00 126-127
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ba4954e6fa5d1f61c000fdb3d2c2ebc19bfd6d0f",
+  "prompts": {},
+  "sessions": {
+    "s_3d9cf2f71e25cd": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1139c-4793-73e3-92a4-57fc99ae0685",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
