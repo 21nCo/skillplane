@@ -19,13 +19,20 @@ export function registerSkillGroupRoutes(app: Hono<ApiEnvironment>) {
   app.get(base, async (c) => {
     const principal = await workspaceUser(c),
       s = services(c);
+    const state = c.req.query("state") ?? "active";
+    if (state !== "active" && state !== "all")
+      throw new DomainError(
+        "VALIDATION_FAILED",
+        "Group state must be active or all",
+        400,
+      );
     const page = groupPage(c.req.query("limit") ?? 50, c.req.query("cursor") ?? null);
     const data = await new SkillGroupService(
       s.database.pool,
       s.controlDatabase.pool,
     ).list(principal, {
       ...page,
-      archived: c.req.query("state") === "all",
+      archived: state === "all",
       ...(c.req.query("skillId") ? { skillId: c.req.query("skillId") ?? "" } : {}),
       ...(c.req.query("userId") ? { userId: c.req.query("userId") ?? "" } : {}),
     });
@@ -83,6 +90,20 @@ export function registerSkillGroupRoutes(app: Hono<ApiEnvironment>) {
       fencingEpoch: routingEpoch(c),
     });
     return c.json(success(c, { group }));
+  });
+  app.get(`${base}/:groupId/skills`, async (c) => {
+    const principal = await workspaceUser(c),
+      s = services(c);
+    const data = await new SkillGroupService(
+      s.database.pool,
+      s.controlDatabase.pool,
+    ).skills(
+      principal,
+      c.req.param("groupId"),
+      groupPage(c.req.query("limit") ?? 20, c.req.query("cursor") ?? null),
+    );
+    c.header("Cache-Control", "private, no-store");
+    return c.json(success(c, data));
   });
   app.get(`${base}/:groupId/members`, async (c) => {
     const principal = await workspaceUser(c),

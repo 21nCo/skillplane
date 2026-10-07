@@ -63,6 +63,7 @@ describe("migration chain", () => {
       "0049_control_public_skill_lifecycle.sql",
       "0050_regional_verification_immutability.sql",
       "0051_control_composition_visibility.sql",
+      "0052_regional_skill_groups.sql",
     ]);
     expect(new Set(migrations.map((migration) => migration.sha256)).size).toBe(
       migrations.length,
@@ -72,7 +73,7 @@ describe("migration chain", () => {
       expect(migration.sql.trim().length).toBeGreaterThan(100);
       expect(migration.roles.length).toBeGreaterThan(0);
     }
-    expect(migrations.at(-1)?.roles).toEqual(["combined", "control"]);
+    expect(migrations.at(-1)?.roles).toEqual(["combined", "regional"]);
   });
 
   it("guards destructive test reset targets", () => {

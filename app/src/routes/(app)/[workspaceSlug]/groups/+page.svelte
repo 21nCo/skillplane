@@ -23,7 +23,9 @@
     error = $state(""),
     loaded = $state("");
   let groupCursor = $state<string | null>(null),
-    skills = $state<Skill[]>([]),
+    skills = $state<
+      (Pick<Skill, "id" | "name" | "slug"> & { archivedAt: string | null })[]
+    >([]),
     skillCursor = $state<string | null>(null),
     members = $state<Member[]>([]),
     memberCursor = $state<string | null>(null),
@@ -44,7 +46,7 @@
     const workspaceId = workspace.id;
     const result = await groupRequest<{ groups: Group[]; nextCursor: string | null }>(
       workspace.id,
-      `?state=${includeArchived ? "all" : "active"}${more && groupCursor ? `&cursor=${encodeURIComponent(groupCursor)}` : ""}`,
+      `?${page.url.searchParams.get("memberId") ? `userId=${encodeURIComponent(page.url.searchParams.get("memberId") ?? "")}&` : ""}state=${includeArchived ? "all" : "active"}${more && groupCursor ? `&cursor=${encodeURIComponent(groupCursor)}` : ""}`,
     );
     if (!isCurrent(workspaceId)) return;
     groups = more ? [...groups, ...result.groups] : result.groups;
@@ -74,11 +76,12 @@
     if (!workspace || !selected) return;
     const workspaceId = workspace.id,
       groupId = selected.id;
-    const q = new SvelteURLSearchParams({ groupId: selected.id, limit: "20" });
+    const q = new SvelteURLSearchParams({ limit: "20" });
     if (more && skillCursor) q.set("cursor", skillCursor);
-    const r = await apiRequest<{ skills: Skill[]; nextCursor: string | null }>(
-      `/api/v1/workspaces/${encodeURIComponent(workspace.id)}/skills?${q}`,
-    );
+    const r = await groupRequest<{
+      skills: (Pick<Skill, "id" | "name" | "slug"> & { archivedAt: string | null })[];
+      nextCursor: string | null;
+    }>(workspaceId, `/${encodeURIComponent(groupId)}/skills?${q}`);
     if (!isCurrent(workspaceId, groupId)) return;
     skills = more ? [...skills, ...r.skills] : r.skills;
     skillCursor = r.nextCursor;
@@ -146,8 +149,11 @@
     await detail(selected);
   }
   $effect(() => {
-    if (workspace && loaded !== workspace.id) {
-      loaded = workspace.id;
+    if (
+      workspace &&
+      loaded !== `${workspace.id}:${page.url.searchParams.get("memberId") ?? ""}`
+    ) {
+      loaded = `${workspace.id}:${page.url.searchParams.get("memberId") ?? ""}`;
       selected = null;
       groups = [];
       error = "";
@@ -229,7 +235,7 @@
               href={resolve("/(app)/[workspaceSlug]/skills/[skillSlug]", {
                 workspaceSlug: workspace?.slug ?? "",
                 skillSlug: skill.slug,
-              })}>{skill.name}</a
+              })}>{skill.name}{skill.archivedAt ? " (archived)" : ""}</a
             >{#if canManage && !selected.archivedAt}<Button
                 variant="ghost"
                 disabled={busy}

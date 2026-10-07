@@ -214,7 +214,7 @@ export class SkillGroupService {
     writePermission(options.principal);
     if (!options.targetId || options.targetId.length > 200)
       throw new DomainError("VALIDATION_FAILED", "A target is required", 400);
-    if (options.kind === "member") {
+    if (options.kind === "member" && options.add) {
       const member = await this.controlPool.query(
         "SELECT 1 FROM workspace_memberships WHERE workspace_id=$1 AND user_id=$2",
         [options.principal.workspaceId, options.targetId],
@@ -258,6 +258,35 @@ export class SkillGroupService {
       return { changed: Boolean(r.rowCount) };
     });
   }
+  async skills(
+    principal: Principal,
+    groupId: string,
+    options: { limit?: number; cursor?: string | null } = {},
+  ) {
+    await this.get(principal, groupId);
+    const page = groupPage(options.limit ?? 20, options.cursor ?? null);
+    const r = await this.pool.query<{
+      id: string;
+      name: string;
+      slug: string;
+      archived_at: Date | null;
+    }>(
+      "SELECT s.id,s.name,s.slug,s.archived_at FROM skill_group_skills a JOIN skills s ON s.id=a.skill_id AND s.workspace_id=a.workspace_id WHERE a.workspace_id=$1 AND a.group_id=$2 AND ($3::text IS NULL OR s.id>$3) ORDER BY s.id LIMIT $4",
+      [principal.workspaceId, groupId, page.cursor, page.limit + 1],
+    );
+    return {
+      skills: r.rows
+        .slice(0, page.limit)
+        .map((s) => ({
+          id: s.id,
+          name: s.name,
+          slug: s.slug,
+          archivedAt: s.archived_at?.toISOString() ?? null,
+        })),
+      nextCursor:
+        r.rows.length > page.limit ? (r.rows[page.limit - 1]?.id ?? null) : null,
+    };
+  }
   async members(
     principal: Principal,
     groupId: string,
@@ -281,12 +310,15 @@ export class SkillGroupService {
       [principal.workspaceId, ids],
     );
     return {
-      members: active.rows.map((i) => ({
-        userId: i.user_id,
-        role: i.role,
-        displayName: i.display_name,
-        email: i.email,
-      })),
+      members: ids.map((userId) => {
+        const i = active.rows.find((row) => row.user_id === userId);
+        return {
+          userId,
+          role: i?.role ?? "removed",
+          displayName: i?.display_name ?? null,
+          email: i?.email ?? null,
+        };
+      }),
       nextCursor: r.rows.length > page.limit ? (ids.at(-1) ?? null) : null,
     };
   }

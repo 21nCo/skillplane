@@ -26,6 +26,7 @@
   );
   const canWrite = $derived(Boolean(workspace && workspace.role !== "viewer"));
 
+  let groupsError = $state("");
   let groups = $state<Group[]>([]);
   let groupId = $state("");
   let skills = $state<Skill[]>([]);
@@ -76,6 +77,7 @@
     if (workspace && loadedWorkspaceId !== workspace.id) {
       loadedWorkspaceId = workspace.id;
       const workspaceId = workspace.id;
+      groupsError = "";
       groupId = "";
       groups = [];
       void (async () => {
@@ -95,7 +97,7 @@
         )
           groups = all;
       })().catch(() => {
-        error = "Groups could not be loaded";
+        groupsError = "Groups could not be loaded";
       });
       void load();
     }
@@ -153,6 +155,7 @@
         Search
       </Button>
     </form>
+    {#if groupsError}<p role="status">{groupsError}</p>{/if}
     <Select
       label="Skill group"
       options={[

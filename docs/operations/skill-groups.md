@@ -9,3 +9,8 @@ The authenticated API is `/api/v1/workspaces/:workspaceId/groups`. GET lists act
 Membership administration uses authenticated human owners/admins; service credentials do not gain workspace administration privileges. Every effective mutation and assignment change writes permanent actor-attributed regional audit evidence in the same transaction. New tables live in the owning workspace cell, participate in migration fencing, and are copied during workspace movement. The global membership authority validates member identities; regional data does not introduce a cross-database foreign key or an access grant.
 
 Apply migration `0052_regional_skill_groups.sql` to regional and combined databases before enabling these surfaces. No backfill is required. Rollback disables the surfaces while retaining group records and immutable audit history.
+
+Group detail lists retained skill assignments, including archived groups and skills.
+Removed workspace members show an identity-only removed marker until an admin
+removes the assignment; they receive no membership grant. Member views link to a
+member-filtered group list, avoiding per-row requests for the workspace roster.

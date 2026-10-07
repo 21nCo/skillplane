@@ -92,6 +92,15 @@ it("routes lifecycle and assignments through authenticated workspace scope", asy
     }),
   });
   expect(patch.status).toBe(200);
+  const assignments = await app.request(`${base}/${id}/skills`, { headers });
+  expect(assignments.status).toBe(200);
+  expect(
+    ((await assignments.json()) as { data: { skills: { id: string }[] } }).data
+      .skills[0]?.id,
+  ).toBe(owner.skillId);
+  expect((await app.request(`${base}?state=unsupported`, { headers })).status).toBe(
+    400,
+  );
   const filtered = await app.request(
     `/api/v1/workspaces/${owner.workspaceId}/skills?groupId=${encodeURIComponent(id)}`,
     { headers },

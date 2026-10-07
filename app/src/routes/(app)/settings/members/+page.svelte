@@ -1,5 +1,5 @@
 <script lang="ts">
-  import GroupBadges from "$lib/groups/GroupBadges.svelte";
+  import { resolve } from "$app/paths";
   import {
     apiErrorField,
     apiRequest,
@@ -294,11 +294,11 @@
             <div class="identity">
               <strong>{member.displayName ?? member.email ?? "Workspace member"}</strong
               >
-              {#if store.active}<GroupBadges
-                  workspaceId={store.active.id}
-                  userId={member.userId}
-                  workspaceSlug={store.active.slug}
-                />{/if}
+              {#if store.active}<a
+                  href={resolve(
+                    `/${store.active.slug}/groups?memberId=${encodeURIComponent(member.userId)}`,
+                  )}>View groups</a
+                >{/if}
               {#if member.displayName && member.email}<span>{member.email}</span>{/if}
             </div>
             {#if canManage}
