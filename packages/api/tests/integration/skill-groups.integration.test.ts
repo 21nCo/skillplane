@@ -122,4 +122,16 @@ it("routes lifecycle and assignments through authenticated workspace scope", asy
   expect(
     ((await filtered.json()) as { data: { skills: unknown[] } }).data.skills,
   ).toEqual([]);
+  for (const path of [
+    `/api/v1/workspaces/${owner.workspaceId}/skills?groupId=`,
+    `/api/v1/workspaces/${owner.workspaceId}/skills?q=design&groupId=`,
+    `${base}?userId=`,
+    `${base}?skillId=`,
+  ]) {
+    const response = await app.request(path, { headers });
+    expect(response.status, path).toBe(400);
+    expect(await response.json(), path).toMatchObject({
+      error: { code: "VALIDATION_FAILED" },
+    });
+  }
 });

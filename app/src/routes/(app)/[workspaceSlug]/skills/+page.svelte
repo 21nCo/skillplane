@@ -97,7 +97,11 @@
         )
           groups = all;
       })().catch(() => {
-        groupsError = "Groups could not be loaded";
+        if (
+          workspaces.workspaces.find((w) => w.slug === page.params.workspaceSlug)
+            ?.id === workspaceId
+        )
+          groupsError = "Groups could not be loaded";
       });
       void load();
     }

@@ -4,6 +4,7 @@ import type { ApiEnvironment } from "../context.js";
 import { success } from "../envelopes.js";
 import {
   workspaceUser,
+  optionalIdFilter,
   readJsonObject,
   requireIdempotencyKey,
   routingEpoch,
@@ -33,8 +34,8 @@ export function registerSkillGroupRoutes(app: Hono<ApiEnvironment>) {
     ).list(principal, {
       ...page,
       archived: state === "all",
-      ...(c.req.query("skillId") ? { skillId: c.req.query("skillId") ?? "" } : {}),
-      ...(c.req.query("userId") ? { userId: c.req.query("userId") ?? "" } : {}),
+      ...optionalIdFilter(c, "skillId"),
+      ...optionalIdFilter(c, "userId"),
     });
     c.header("Cache-Control", "private, no-store");
     return c.json(success(c, data));

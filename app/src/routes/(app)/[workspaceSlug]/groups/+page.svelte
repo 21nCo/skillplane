@@ -50,6 +50,11 @@
       memberId = page.url.searchParams.get("memberId") ?? "",
       archived = includeArchived,
       generation = ++listGeneration;
+    const stale = () =>
+      !isCurrent(workspaceId) ||
+      memberId !== (page.url.searchParams.get("memberId") ?? "") ||
+      archived !== includeArchived ||
+      generation !== listGeneration;
     if (!more) {
       groupCursor = null;
       listLoaded = false;
@@ -60,16 +65,12 @@
         workspaceId,
         `?${memberId ? `userId=${encodeURIComponent(memberId)}&` : ""}state=${archived ? "all" : "active"}${more && groupCursor ? `&cursor=${encodeURIComponent(groupCursor)}` : ""}`,
       );
-      if (
-        !isCurrent(workspaceId) ||
-        memberId !== (page.url.searchParams.get("memberId") ?? "") ||
-        archived !== includeArchived ||
-        generation !== listGeneration
-      )
-        return;
+      if (stale()) return;
       groups = more ? [...groups, ...result.groups] : result.groups;
       groupCursor = result.nextCursor;
       listLoaded = true;
+    } catch (e) {
+      if (!stale()) throw e;
     } finally {
       if (generation === listGeneration) listLoading = false;
     }
@@ -148,7 +149,8 @@
   }
   async function save(archived = Boolean(selected?.archivedAt), lifecycleOnly = false) {
     if (!workspace) return;
-    const workspaceId = workspace.id;
+    const workspaceId = workspace.id,
+      creating = !selected;
     const r = await groupRequest<{ group: Group }>(
       workspace.id,
       selected ? `/${encodeURIComponent(selected.id)}` : "",
@@ -158,12 +160,15 @@
         description: lifecycleOnly && selected ? selected.description : description,
         ...(selected ? { expectedRevision: selected.revision, archived } : {}),
       },
-      creationKey,
+      creating ? creationKey : undefined,
     );
     if (!isCurrent(workspaceId)) return;
+    // Adopt the saved group before refreshing so a refresh failure leaves a retry
+    // that PATCHes this revision instead of replaying a consumed creation key.
+    selected = r.group;
+    if (creating) creationKey = crypto.randomUUID();
     await load();
     await detail(r.group);
-    creationKey = crypto.randomUUID();
   }
   async function assign(kind: "skills" | "members", id: string, add: boolean) {
     if (!workspace || !selected || !id) return;
@@ -214,6 +219,7 @@
     ><input
       type="checkbox"
       bind:checked={includeArchived}
+      disabled={busy}
       onchange={() => void run(() => load())}
     /> Include archived groups</label
   >

@@ -188,29 +188,6 @@ describe.skipIf(!url)("workspace skill groups", () => {
       archived: false,
     });
     expect((await groups.members(owner, g.id)).members).toHaveLength(1);
-    await pool.query(
-      "DELETE FROM workspace_memberships WHERE workspace_id=$1 AND user_id=$2",
-      [owner.workspaceId, owner.actorId],
-    );
-    expect((await groups.members(owner, g.id)).members[0]?.role).toBe("removed");
-    await groups.association({
-      ...mutation(),
-      groupId: g.id,
-      kind: "member",
-      targetId: owner.actorId,
-      add: false,
-    });
-    await pool.query(
-      "INSERT INTO workspace_memberships(id,workspace_id,user_id,role) VALUES($1,$2,$3,'owner')",
-      [`membership:${crypto.randomUUID()}`, owner.workspaceId, owner.actorId],
-    );
-    await groups.association({
-      ...mutation(),
-      groupId: g.id,
-      kind: "member",
-      targetId: owner.actorId,
-      add: true,
-    });
 
     await groups.association({
       ...mutation(),

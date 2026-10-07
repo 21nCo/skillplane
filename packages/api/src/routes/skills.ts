@@ -13,6 +13,7 @@ import {
   publicSkillVersion,
   publicPublishedSkillVersion,
   readBundleUpload,
+  optionalIdFilter,
   readJsonObject,
   requireIdempotencyKey,
   routingEpoch,
@@ -125,12 +126,11 @@ export function registerSkillRoutes(app: Hono<ApiEnvironment>): void {
     const limit = parseLimit(context.req.query("limit"));
     const query = context.req.query("q")?.trim() ?? "";
     const visibility = parseVisibilityFilter(context);
+    const groupFilter = optionalIdFilter(context, "groupId");
     if (query) {
       const page = await services.skillSearchService.search({
         query,
-        ...(context.req.query("groupId")
-          ? { groupId: context.req.query("groupId") ?? "" }
-          : {}),
+        ...groupFilter,
         principal,
         visibility,
         archive,
@@ -159,9 +159,7 @@ export function registerSkillRoutes(app: Hono<ApiEnvironment>): void {
       );
     }
     const page = await services.skillService.listPage({
-      ...(context.req.query("groupId")
-        ? { groupId: context.req.query("groupId") ?? "" }
-        : {}),
+      ...groupFilter,
       workspaceId: context.req.param("workspaceId"),
       principal,
       archive,
