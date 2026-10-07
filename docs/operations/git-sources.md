@@ -71,9 +71,10 @@ Imports only contact the fixed GitHub REST API host, do not follow redirects, an
 verify Git blob hashes. They never clone repositories or execute source code.
 Reject symlinks, submodules, traversal, unsupported entries, detected private keys
 and token patterns, truncated trees, trees over 10,000 entries, more than 32 skills,
-more than 200 requests, skills with more than 198 distinct files (one skill's
-request budget), blobs over 5 MiB, snapshots over 20 MiB expanded, and
-fetches exceeding 90 seconds. Individual malformed skills remain explicit errors.
+more than 200 requests, skills with more than 198 distinct blob IDs (identical
+files share one blob; the 200-request budget is shared by every skill in the
+snapshot, so a repository-wide source can reach it sooner), blobs over 5 MiB,
+snapshots over 20 MiB expanded, and fetches exceeding 90 seconds. Individual malformed skills remain explicit errors.
 Credential detection is a bounded check for known patterns, not a complete secret
 scanner; only public repositories are accepted and source bytes remain private.
 

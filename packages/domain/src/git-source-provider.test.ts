@@ -209,7 +209,9 @@ describe("public GitHub source provider", () => {
     const r = await f.provider.snapshot(
       gitSourceConfig({ repositoryUrl: "https://github.com/a/b" }),
     );
-    expect(r.skills.find((s) => s.path === "big")?.error).toContain("198 file");
+    expect(r.skills.find((s) => s.path === "big")?.error).toContain(
+      "198 distinct blob",
+    );
     expect(r.skills.find((s) => s.path === "small")?.bundle?.skill.slug).toBe("small");
     expect(f.calls).toHaveLength(3);
   });

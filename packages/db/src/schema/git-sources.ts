@@ -56,7 +56,12 @@ export const skillSourceRuns = pgTable(
       columns: [t.workspaceId, t.sourceId],
       foreignColumns: [skillSources.workspaceId, skillSources.id],
     }),
-    index("skill_source_runs_recent_idx").on(t.workspaceId, t.sourceId, t.createdAt),
+    index("skill_source_runs_recent_idx").on(
+      t.workspaceId,
+      t.sourceId,
+      t.createdAt.desc(),
+    ),
+    check("skill_source_runs_plan_check", sql`jsonb_typeof(${t.plan}) = 'array'`),
     check(
       "skill_source_runs_status_check",
       sql`${t.status} IN ('preview','partial','complete')`,

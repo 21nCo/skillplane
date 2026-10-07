@@ -101,7 +101,8 @@
   ) {
     if (!workspace) return;
     const id = workspace.id,
-      g = generation;
+      g = generation,
+      key = creationKey(id);
     const r = await sourceRequest<{ source: Source }>(
       id,
       selected ? `/${encodeURIComponent(selected.source.id)}` : "",
@@ -117,9 +118,10 @@
           : config()),
         ...(selected ? { archived, expectedRevision: selected.source.revision } : {}),
       },
-      creationKey(id),
+      key,
     );
-    creationKeys[id] = undefined;
+    // A newer create may have replaced the key; it must survive this response.
+    if (creationKeys[id] === key) creationKeys[id] = undefined;
     if (!current(id, g)) return;
     await load();
     await detail(r.source);
