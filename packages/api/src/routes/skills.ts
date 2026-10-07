@@ -128,6 +128,9 @@ export function registerSkillRoutes(app: Hono<ApiEnvironment>): void {
     if (query) {
       const page = await services.skillSearchService.search({
         query,
+        ...(context.req.query("sourceId")
+          ? { sourceId: context.req.query("sourceId") ?? "" }
+          : {}),
         ...(context.req.query("groupId")
           ? { groupId: context.req.query("groupId") ?? "" }
           : {}),
@@ -159,6 +162,9 @@ export function registerSkillRoutes(app: Hono<ApiEnvironment>): void {
       );
     }
     const page = await services.skillService.listPage({
+      ...(context.req.query("sourceId")
+        ? { sourceId: context.req.query("sourceId") ?? "" }
+        : {}),
       ...(context.req.query("groupId")
         ? { groupId: context.req.query("groupId") ?? "" }
         : {}),

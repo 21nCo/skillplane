@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { sourceRequest, type Source } from "$lib/sources/api.js";
   import { groupRequest, type Group } from "$lib/groups/api.js";
   import { resolve } from "$app/paths";
   import { page } from "$app/state";
@@ -26,6 +27,9 @@
   );
   const canWrite = $derived(Boolean(workspace && workspace.role !== "viewer"));
 
+  let sourcesError = $state(""),
+    sources = $state<Source[]>([]),
+    sourceId = $state("");
   let groupsError = $state("");
   let groups = $state<Group[]>([]);
   let groupId = $state("");
@@ -52,6 +56,7 @@
       const result = await listSkills({
         workspaceId: workspace.id,
         ...(groupId ? { groupId } : {}),
+        ...(sourceId ? { sourceId } : {}),
         query,
         archive,
         visibility: visibility === "all" ? [] : [visibility],
@@ -77,6 +82,33 @@
     if (workspace && loadedWorkspaceId !== workspace.id) {
       loadedWorkspaceId = workspace.id;
       const workspaceId = workspace.id;
+      sourceId = "";
+      sources = [];
+      sourcesError = "";
+      void (async () => {
+        let cursor: string | null = null;
+        const all: Source[] = [];
+        do {
+          const r: { sources: Source[]; nextCursor: string | null } =
+            await sourceRequest(
+              workspaceId,
+              cursor ? `?cursor=${encodeURIComponent(cursor)}` : "",
+            );
+          all.push(...r.sources);
+          cursor = r.nextCursor;
+        } while (cursor);
+        if (
+          workspaces.workspaces.find((w) => w.slug === page.params.workspaceSlug)
+            ?.id === workspaceId
+        )
+          sources = all;
+      })().catch(() => {
+        if (
+          workspaces.workspaces.find((w) => w.slug === page.params.workspaceSlug)
+            ?.id === workspaceId
+        )
+          sourcesError = "Sources could not be loaded";
+      });
       groupsError = "";
       groupId = "";
       groups = [];
@@ -155,6 +187,19 @@
         Search
       </Button>
     </form>
+    {#if sourcesError}<p role="status">{sourcesError}</p>{/if}
+    <Select
+      label="Git source"
+      options={[
+        { value: "", label: "All sources" },
+        ...sources.map((source) => ({
+          value: source.id,
+          label: `${source.repositoryUrl.replace("https://github.com/", "")} ${source.path ?? "(all skills)"} · ${source.refPolicy}: ${source.ref}`,
+        })),
+      ]}
+      bind:value={sourceId}
+      onchange={() => void load()}
+    />
     {#if groupsError}<p role="status">{groupsError}</p>{/if}
     <Select
       label="Skill group"
@@ -204,10 +249,18 @@
   {:else if skills.length === 0}
     <SkillState
       kind="empty"
-      title={query || groupId || visibility !== "all" || archive !== "active"
+      title={query ||
+      groupId ||
+      sourceId ||
+      visibility !== "all" ||
+      archive !== "active"
         ? "No skills match these filters"
         : "Create your first skill"}
-      message={query || groupId || visibility !== "all" || archive !== "active"
+      message={query ||
+      groupId ||
+      sourceId ||
+      visibility !== "all" ||
+      archive !== "active"
         ? "Change the search or filters and try again."
         : canWrite
           ? "Author Markdown directly or upload a portable Skillplane bundle."
@@ -338,7 +391,7 @@
 
   .filters {
     display: grid;
-    grid-template-columns: minmax(18rem, 1fr) repeat(3, minmax(9rem, 1fr));
+    grid-template-columns: minmax(18rem, 1fr) repeat(4, minmax(9rem, 1fr));
     gap: var(--sp-space-3);
     align-items: end;
     margin: var(--sp-space-6) 0 var(--sp-space-4);
