@@ -391,7 +391,7 @@
 
   .filters {
     display: grid;
-    grid-template-columns: minmax(18rem, 1fr) repeat(3, minmax(9rem, 1fr));
+    grid-template-columns: minmax(18rem, 1fr) repeat(4, minmax(9rem, 1fr));
     gap: var(--sp-space-3);
     align-items: end;
     margin: var(--sp-space-6) 0 var(--sp-space-4);
