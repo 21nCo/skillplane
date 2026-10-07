@@ -261,6 +261,24 @@ export function normalizePublicSearchInput(options: {
   };
 }
 
+function searchScope(options: {
+  readonly principal?: Principal | null;
+  readonly workspaceId?: string;
+  readonly groupId?: string;
+}): string {
+  if (options.principal) {
+    const group = options.groupId ? `:group:${options.groupId}` : "";
+    return `workspace:${options.principal.workspaceId}${group}`;
+  }
+  if (options.groupId)
+    throw new DomainError(
+      "AUTHENTICATION_REQUIRED",
+      "Group discovery requires workspace membership",
+      401,
+    );
+  return options.workspaceId ? `public-workspace:${options.workspaceId}` : "public";
+}
+
 export class SkillSearchService {
   constructor(
     private readonly pool: Pool,
@@ -329,17 +347,7 @@ export class SkillSearchService {
       throw new DomainError("NOT_FOUND", "Workspace resource was not found", 404);
     }
     const normalized = normalizeSearchInput({ ...options, allowEmptyQuery });
-    if (options.groupId && !options.principal)
-      throw new DomainError(
-        "AUTHENTICATION_REQUIRED",
-        "Group discovery requires workspace membership",
-        401,
-      );
-    const scope = options.principal
-      ? `workspace:${options.principal.workspaceId}${options.groupId ? `:group:${options.groupId}` : ""}`
-      : options.workspaceId
-        ? `public-workspace:${options.workspaceId}`
-        : "public";
+    const scope = searchScope(options);
     const digest = await filterHash({
       query: normalized.query,
       tags: normalized.tags,

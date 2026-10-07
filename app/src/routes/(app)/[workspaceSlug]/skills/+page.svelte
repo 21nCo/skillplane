@@ -39,8 +39,12 @@
   let error = $state<string | null>(null);
   let loadedWorkspaceId = $state<string | null>(null);
 
+  let loadGeneration = 0;
+  // Only the latest request may update the list, cursor, error, or loading state;
+  // a slower response for a superseded filter or workspace is discarded.
   async function load(reset = true) {
     if (!workspace) return;
+    const generation = ++loadGeneration;
     if (reset) {
       loading = true;
       nextCursor = null;
@@ -58,13 +62,17 @@
         cursor: reset ? null : nextCursor,
         limit: 20,
       });
+      if (generation !== loadGeneration) return;
       skills = reset ? [...result.skills] : [...skills, ...result.skills];
       nextCursor = result.nextCursor;
     } catch (cause) {
+      if (generation !== loadGeneration) return;
       error = cause instanceof Error ? cause.message : "Skills could not be loaded.";
     } finally {
-      loading = false;
-      loadingMore = false;
+      if (generation === loadGeneration) {
+        loading = false;
+        loadingMore = false;
+      }
     }
   }
 

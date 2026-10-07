@@ -122,11 +122,22 @@ it("routes lifecycle and assignments through authenticated workspace scope", asy
   expect(
     ((await filtered.json()) as { data: { skills: unknown[] } }).data.skills,
   ).toEqual([]);
+  const padded = await app.request(
+    `${base}?state=all&userId=${encodeURIComponent(` ${owner.userId} `)}`,
+    { headers },
+  );
+  expect(padded.status).toBe(200);
+  expect(
+    ((await padded.json()) as { data: { groups: { id: string }[] } }).data.groups.map(
+      (group) => group.id,
+    ),
+  ).toContain(id);
   for (const path of [
     `/api/v1/workspaces/${owner.workspaceId}/skills?groupId=`,
     `/api/v1/workspaces/${owner.workspaceId}/skills?q=design&groupId=`,
     `${base}?userId=`,
     `${base}?skillId=`,
+    `${base}?skillId=%20%20`,
   ]) {
     const response = await app.request(path, { headers });
     expect(response.status, path).toBe(400);

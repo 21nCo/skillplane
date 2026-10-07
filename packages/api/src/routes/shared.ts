@@ -61,9 +61,9 @@ export function optionalIdFilter<K extends string>(
   context: Context<ApiEnvironment>,
   name: K,
 ): Partial<Record<K, string>> {
-  const value = context.req.query(name);
+  const value = context.req.query(name)?.trim();
   if (value === undefined) return {};
-  if (!value.trim() || value.length > 200) {
+  if (!value || value.length > 200) {
     throw new DomainError(
       "VALIDATION_FAILED",
       `${name} must be a non-empty identifier`,

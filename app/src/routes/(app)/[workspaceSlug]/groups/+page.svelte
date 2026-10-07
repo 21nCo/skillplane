@@ -75,9 +75,9 @@
       if (generation === listGeneration) listLoading = false;
     }
   }
-  async function detail(group: Group) {
-    if (!workspace) return;
-    const workspaceId = workspace.id;
+  // Expose a group only together with cleared group-scoped state, so the detail
+  // pane never shows another group's assignments or removal controls.
+  function select(group: Group) {
     selected = group;
     targetMember = "";
     targetSkill = "";
@@ -87,6 +87,11 @@
     members = [];
     skillCursor = null;
     memberCursor = null;
+  }
+  async function detail(group: Group) {
+    if (!workspace) return;
+    const workspaceId = workspace.id;
+    select(group);
     await Promise.all([loadSkills(), loadMembers()]);
     if (canManage) {
       const r = await apiRequest<{ members: Member[] }>(
@@ -165,19 +170,22 @@
     if (!isCurrent(workspaceId)) return;
     // Adopt the saved group before refreshing so a refresh failure leaves a retry
     // that PATCHes this revision instead of replaying a consumed creation key.
-    selected = r.group;
+    select(r.group);
     if (creating) creationKey = crypto.randomUUID();
     await load();
     await detail(r.group);
   }
   async function assign(kind: "skills" | "members", id: string, add: boolean) {
     if (!workspace || !selected || !id) return;
+    const group = selected;
     await groupRequest(
       workspace.id,
-      `/${encodeURIComponent(selected.id)}/${kind}/${encodeURIComponent(id)}`,
+      `/${encodeURIComponent(group.id)}/${kind}/${encodeURIComponent(id)}`,
       add ? "PUT" : "DELETE",
     );
-    await detail(selected);
+    // Member changes can move this group into or out of a member-filtered list.
+    if (kind === "members" && page.url.searchParams.get("memberId")) await load();
+    await detail(group);
   }
   $effect(() => {
     if (
