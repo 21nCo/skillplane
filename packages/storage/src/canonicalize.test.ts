@@ -123,5 +123,6 @@ describe("canonical bundle", () => {
       ),
       { numRuns: 75, seed: 20_260_725 },
     );
-  });
+    // This exercises 150 ZIP canonicalizations alongside the full CI unit suite.
+  }, 30_000);
 });

@@ -319,13 +319,13 @@
       }}
     />
 
+    <VersionSource
+      workspaceId={workspace.id}
+      skillId={detail.skill.id}
+      versionId={version.id}
+    />
     {#if version.source === "agent_amendment"}
       <section class="panel learning-panel">
-        {#if version}<VersionSource
-            workspaceId={workspace.id}
-            skillId={detail.skill.id}
-            versionId={version.id}
-          />{/if}
         <LearningMetadata metadata={version.learningMetadata} />
       </section>
     {/if}
