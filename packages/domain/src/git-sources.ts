@@ -6,7 +6,7 @@ import type { Principal } from "./principal.js";
 import { hashIdempotentRequest, validateIdempotencyKey } from "./idempotency.js";
 import { withDomainTransaction } from "./transactions.js";
 import { insertPrincipalAudit } from "./mutation-audit.js";
-import type { SkillService } from "./skills.js";
+import type { SkillService, SkillVisibility } from "./skills.js";
 import type { SkillVersionService } from "./skill-versions.js";
 import {
   gitSourceConfig,
@@ -45,6 +45,16 @@ export interface GitSource {
   archivedAt: string | null;
   updatedAt: string;
 }
+// Bindings use the same skill-directory form as source configuration and discovery.
+function bindingPath(path: string) {
+  const normalized = gitSourceConfig({
+    repositoryUrl: "https://github.com/owner/repo",
+    path,
+  }).path;
+  if (normalized === null)
+    throw new DomainError("VALIDATION_FAILED", "Binding path is required", 400);
+  return normalized;
+}
 function record(r: SourceRow): GitSource {
   return {
     id: r.id,
@@ -71,7 +81,7 @@ interface Binding {
   slug: string;
   name: string;
   current_digest: string | null;
-  visibility: "private" | "public";
+  visibility: SkillVisibility;
   disconnected_at: Date | null;
 }
 export interface GitPlanEntry {
@@ -285,12 +295,12 @@ export class GitSourceService {
   }
   async bind(m: Mutation & { sourceId: string; path: string; skillId: string }) {
     authorize(m.principal, "workspace:update");
-    gitSourceConfig({ repositoryUrl: "https://github.com/owner/repo", path: m.path });
+    const path = bindingPath(m.path);
     return this.transaction(m, async (c) => {
       const s = await this.row(m.principal, m.sourceId, c, true);
       if (s.archived_at || (s.sync_expires_at && s.sync_expires_at > new Date()))
         throw new DomainError("CONFLICT", "Source is archived or syncing", 409);
-      if (s.skill_path !== null && s.skill_path !== m.path)
+      if (s.skill_path !== null && s.skill_path !== path)
         throw new DomainError(
           "VALIDATION_FAILED",
           "Path does not match this single-skill source",
@@ -304,7 +314,7 @@ export class GitSourceService {
         throw new DomainError("NOT_FOUND", "Workspace skill was not found", 404);
       const old = await c.query<{ skill_id: string }>(
         "SELECT skill_id FROM skill_source_bindings WHERE workspace_id=$1 AND source_id=$2 AND skill_path=$3 AND disconnected_at IS NULL",
-        [m.principal.workspaceId, m.sourceId, m.path],
+        [m.principal.workspaceId, m.sourceId, path],
       );
       if (old.rows[0]) {
         if (old.rows[0].skill_id !== m.skillId)
@@ -327,7 +337,7 @@ export class GitSourceService {
           [
             m.principal.workspaceId,
             m.sourceId,
-            m.path,
+            path,
             m.skillId,
             skill.rows[0].current_published_version_id,
           ],
@@ -341,26 +351,27 @@ export class GitSourceService {
         "UPDATE skill_sources SET revision=revision+1,updated_at=now() WHERE id=$1",
         [s.id],
       );
-      await this.audit(c, m, s.id, "bound", { skillId: m.skillId, path: m.path });
+      await this.audit(c, m, s.id, "bound", { skillId: m.skillId, path });
       return { changed: true };
     });
   }
   async disconnect(m: Mutation & { sourceId: string; path: string }) {
     authorize(m.principal, "workspace:update");
+    const path = bindingPath(m.path);
     return this.transaction(m, async (c) => {
       const source = await this.row(m.principal, m.sourceId, c, true);
       if (source.sync_expires_at && source.sync_expires_at > new Date())
         throw new DomainError("CONFLICT", "Source is syncing", 409);
       const r = await c.query(
         "UPDATE skill_source_bindings SET disconnected_at=now(),status='disconnected',updated_at=now() WHERE workspace_id=$1 AND source_id=$2 AND skill_path=$3 AND disconnected_at IS NULL RETURNING skill_id",
-        [m.principal.workspaceId, m.sourceId, m.path],
+        [m.principal.workspaceId, m.sourceId, path],
       );
       if (r.rowCount) {
         await c.query(
           "UPDATE skill_sources SET revision=revision+1,updated_at=now() WHERE id=$1",
           [m.sourceId],
         );
-        await this.audit(c, m, m.sourceId, "disconnected", { path: m.path });
+        await this.audit(c, m, m.sourceId, "disconnected", { path });
       }
       return { changed: Boolean(r.rowCount) };
     });
@@ -378,7 +389,13 @@ export class GitSourceService {
     );
     const plan: GitPlanEntry[] = [];
     const seen = new Set<string>(),
-      slugs = new Set<string>();
+      slugCounts = new Map<string, number>();
+    for (const item of snapshot.skills)
+      if (item.bundle)
+        slugCounts.set(
+          item.bundle.skill.slug,
+          (slugCounts.get(item.bundle.skill.slug) ?? 0) + 1,
+        );
     for (const item of snapshot.skills) {
       seen.add(item.path);
       const binding = bindings.find((b) => b.skill_path === item.path),
@@ -394,11 +411,16 @@ export class GitSourceService {
         plan.push({ ...base, action: "error", message: item.error ?? "Invalid skill" });
         continue;
       }
-      const slug = item.bundle.skill.slug,
-        collision = slugs.has(slug);
-      slugs.add(slug);
+      const slug = item.bundle.skill.slug;
+      if ((slugCounts.get(slug) ?? 0) > 1) {
+        plan.push({
+          ...base,
+          action: "conflict",
+          message: "Several source paths declare this slug; import them separately",
+        });
+        continue;
+      }
       if (
-        collision ||
         (!binding && catalog.rows.some((s) => s.slug === slug)) ||
         (binding &&
           (binding.slug !== slug ||
@@ -432,33 +454,26 @@ export class GitSourceService {
         });
         continue;
       }
-      let preparedDigest: string;
-      try {
-        preparedDigest = (
-          await this.skills.prepareGitBundle(
-            item.bundle,
-            m.principal,
-            binding?.visibility ?? "private",
-          )
-        ).digest;
-      } catch {
-        plan.push({
-          ...base,
-          action: "error",
-          message: "Skill composition could not be resolved",
-        });
-        continue;
+      let action: GitPlanEntry["action"] = "added";
+      if (binding) {
+        action = binding.last_digest === item.bundle.digest ? "unchanged" : "changed";
+        // Format-v2 bundles gain a server-generated lock, so an identical explicit
+        // binding is recognized by its prepared digest. Additions and unresolved
+        // compositions are validated when apply creates them, after earlier
+        // entries in the same sync exist, and apply reports any resulting error.
+        if (action === "changed" && binding.current_digest)
+          try {
+            const prepared = await this.skills.prepareGitBundle(
+              item.bundle,
+              m.principal,
+              binding.visibility,
+            );
+            if (prepared.digest === binding.current_digest) action = "unchanged";
+          } catch (e) {
+            if (!(e instanceof DomainError)) throw e;
+          }
       }
-      plan.push({
-        ...base,
-        action: binding
-          ? binding.last_digest === item.bundle.digest ||
-            binding.current_digest === preparedDigest
-            ? "unchanged"
-            : "changed"
-          : "added",
-        message: null,
-      });
+      plan.push({ ...base, action, message: null });
     }
     for (const binding of bindings)
       if (!seen.has(binding.skill_path))

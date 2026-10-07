@@ -33,29 +33,40 @@
     bindSkillId = $state("");
   let available = $state<{ id: string; name: string; slug: string }[]>([]),
     bindQuery = $state("");
-  let creationKey = crypto.randomUUID();
-  function current(id: string) {
-    return workspace?.id === id;
+  // Each workspace keeps its creation key until a confirmed save or an explicit
+  // new source, so re-submitting an ambiguous create after navigation replays it.
+  const creationKeys: Record<string, ReturnType<typeof crypto.randomUUID> | undefined> =
+    {};
+  function creationKey(id: string) {
+    return (creationKeys[id] ??= crypto.randomUUID());
+  }
+  // Every workspace visit starts a new generation, so requests from an earlier
+  // visit to the same workspace cannot update or unlock the current one.
+  let generation = 0;
+  function current(id: string, g: number) {
+    return workspace?.id === id && generation === g;
   }
   async function load(more = false) {
     if (!workspace) return;
-    const id = workspace.id;
+    const id = workspace.id,
+      g = generation;
     const r = await sourceRequest<{ sources: Source[]; nextCursor: string | null }>(
       id,
       more && cursor ? `?cursor=${encodeURIComponent(cursor)}` : "",
     );
-    if (!current(id)) return;
+    if (!current(id, g)) return;
     sources = more ? [...sources, ...r.sources] : r.sources;
     cursor = r.nextCursor;
   }
   async function detail(source: Source) {
     if (!workspace) return;
-    const id = workspace.id;
+    const id = workspace.id,
+      g = generation;
     const r = await sourceRequest<SourceDetail>(
       id,
       `/${encodeURIComponent(source.id)}`,
     );
-    if (!current(id)) return;
+    if (!current(id, g)) return;
     selected = r;
     preview = null;
     repositoryUrl = r.source.repositoryUrl;
@@ -69,15 +80,16 @@
   }
   async function run(action: () => Promise<void>) {
     if (busy || !workspace) return;
-    const id = workspace.id;
+    const id = workspace.id,
+      g = generation;
     busy = true;
     error = "";
     try {
       await action();
     } catch (e) {
-      if (current(id)) error = e instanceof Error ? e.message : "The request failed";
+      if (current(id, g)) error = e instanceof Error ? e.message : "The request failed";
     } finally {
-      if (current(id)) busy = false;
+      if (current(id, g)) busy = false;
     }
   }
   function config() {
@@ -88,7 +100,8 @@
     lifecycleOnly = false,
   ) {
     if (!workspace) return;
-    const id = workspace.id;
+    const id = workspace.id,
+      g = generation;
     const r = await sourceRequest<{ source: Source }>(
       id,
       selected ? `/${encodeURIComponent(selected.source.id)}` : "",
@@ -104,10 +117,10 @@
           : config()),
         ...(selected ? { archived, expectedRevision: selected.source.revision } : {}),
       },
-      creationKey,
+      creationKey(id),
     );
-    if (!current(id)) return;
-    creationKey = crypto.randomUUID();
+    creationKeys[id] = undefined;
+    if (!current(id, g)) return;
     await load();
     await detail(r.source);
   }
@@ -117,13 +130,15 @@
   async function previewSource() {
     if (!workspace || !selected) return;
     const w = workspace.id,
+      g = generation,
       s = selected.source.id;
     const r = await sourceRequest<Run>(w, `/${encodeURIComponent(s)}/preview`, "POST");
-    if (current(w) && selectedSource(s)) preview = r;
+    if (current(w, g) && selectedSource(s)) preview = r;
   }
   async function apply() {
     if (!workspace || !selected || !preview) return;
     const w = workspace.id,
+      g = generation,
       s = selected.source.id;
     const result = await sourceRequest<Run>(
       w,
@@ -131,7 +146,7 @@
       "POST",
       { runId: preview.id },
     );
-    if (!current(w)) return;
+    if (!current(w, g)) return;
     const source = selected.source;
     await load();
     await detail(source);
@@ -139,34 +154,38 @@
   }
   async function findSkills() {
     if (!workspace) return;
-    const id = workspace.id;
+    const id = workspace.id,
+      g = generation;
     const result = await apiRequest<{
       skills: { id: string; name: string; slug: string }[];
     }>(
       `/api/v1/workspaces/${encodeURIComponent(id)}/skills?q=${encodeURIComponent(bindQuery)}&limit=100`,
     );
-    if (current(id)) available = result.skills;
+    if (current(id, g)) available = result.skills;
   }
   async function disconnect(path: string) {
     if (!workspace || !selected) return;
     const w = workspace.id,
+      g = generation,
       s = selected.source;
     await sourceRequest(w, `/${encodeURIComponent(s.id)}/bindings`, "DELETE", { path });
-    if (current(w)) await detail(s);
+    if (current(w, g)) await detail(s);
   }
   async function bind() {
     if (!workspace || !selected) return;
-    await sourceRequest(
-      workspace.id,
-      `/${encodeURIComponent(selected.source.id)}/bindings`,
-      "POST",
-      { path: bindPath, skillId: bindSkillId },
-    );
-    await detail(selected.source);
+    const w = workspace.id,
+      g = generation,
+      s = selected.source;
+    await sourceRequest(w, `/${encodeURIComponent(s.id)}/bindings`, "POST", {
+      path: bindPath,
+      skillId: bindSkillId,
+    });
+    if (current(w, g)) await detail(s);
   }
   $effect(() => {
     if (workspace && loaded !== workspace.id) {
       loaded = workspace.id;
+      generation += 1;
       sources = [];
       selected = null;
       preview = null;
@@ -182,10 +201,10 @@
       bindPath = "";
       bindSkillId = "";
       available = [];
-      creationKey = crypto.randomUUID();
-      const id = workspace.id;
+      const id = workspace.id,
+        g = generation;
       void load().catch((e: unknown) => {
-        if (current(id))
+        if (current(id, g))
           error = e instanceof Error ? e.message : "Sources could not be loaded";
       });
     }
@@ -213,7 +232,7 @@
         refPolicy = "track";
         path = "";
         singlePath = false;
-        creationKey = crypto.randomUUID();
+        if (workspace) creationKeys[workspace.id] = undefined;
       }}>New source</Button
     >{/if}
   <nav aria-label="Git sources">

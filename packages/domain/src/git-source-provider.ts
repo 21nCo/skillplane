@@ -116,7 +116,9 @@ interface TreeEntry {
 }
 const MAX_SNAPSHOT_BYTES = 20 * 1024 * 1024,
   MAX_BLOB_BYTES = 5 * 1024 * 1024,
-  MAX_REQUESTS = 200;
+  MAX_REQUESTS = 200,
+  // One commit and one tree request leave this many blob fetches for one skill.
+  MAX_SKILL_FILES = MAX_REQUESTS - 2;
 export class PublicGitHubSourceProvider implements GitSourceProvider {
   constructor(private readonly fetcher: typeof fetch = globalThis.fetch) {}
   async snapshot(input: GitSourceConfig, pinned?: string): Promise<GitSnapshot> {
@@ -262,7 +264,10 @@ export class PublicGitHubSourceProvider implements GitSourceProvider {
         const local = entries.filter(
           (e) => e.path.startsWith(prefix) && e.type !== "tree",
         );
-        if (local.length > 999) invalid("Skill exceeds the file count limit");
+        if (new Set(local.map((e) => e.sha)).size > MAX_SKILL_FILES)
+          invalid(
+            `Skill exceeds the ${String(MAX_SKILL_FILES)} file import limit; reduce its files`,
+          );
         // A skill directory is imported as one complete bundle. Unsupported files
         // and links are errors, rather than silently dropping source content.
         for (const entry of local) {
@@ -338,7 +343,7 @@ export class PublicGitHubSourceProvider implements GitSourceProvider {
             parse(match[1] ?? "", {
               maxAliasCount: 0,
               uniqueKeys: true,
-              logLevel: "silent",
+              logLevel: "error",
             }) as unknown,
           );
           const name = text(front.name),

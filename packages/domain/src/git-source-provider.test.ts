@@ -187,6 +187,32 @@ describe("public GitHub source provider", () => {
     }).provider.snapshot(config);
     expect(alias.skills[0]?.bundle).toBeNull();
   });
+  it("rejects duplicate keys and malformed YAML frontmatter", async () => {
+    const config = gitSourceConfig({ repositoryUrl: "https://github.com/a/b" });
+    for (const front of [
+      "name: Review\nname: Other\ndescription: Review",
+      "name: [Review\ndescription: Review",
+    ]) {
+      const r = await fixture({
+        "SKILL.md": `---\n${front}\n---\n# Review\n`,
+      }).provider.snapshot(config);
+      expect(r.skills[0]?.bundle).toBeNull();
+    }
+  });
+  it("reports a skill beyond the request budget as that skill's error before fetching it", async () => {
+    const files: Record<string, string> = {
+      "big/SKILL.md": markdown("Big"),
+      "small/SKILL.md": markdown("Small"),
+    };
+    for (let i = 0; i < 198; i++) files[`big/assets/f${String(i)}.txt`] = String(i);
+    const f = fixture(files);
+    const r = await f.provider.snapshot(
+      gitSourceConfig({ repositoryUrl: "https://github.com/a/b" }),
+    );
+    expect(r.skills.find((s) => s.path === "big")?.error).toContain("198 file");
+    expect(r.skills.find((s) => s.path === "small")?.bundle?.skill.slug).toBe("small");
+    expect(f.calls).toHaveLength(3);
+  });
   it("bounds repository-wide skill discovery", async () => {
     const files = Object.fromEntries(
       Array.from({ length: 33 }, (_, i) => [

@@ -15,13 +15,17 @@ Preview resolves a ref to an immutable commit and stores a bounded plan. Apply
 requires that exact run ID, fetches the pinned commit again, verifies content,
 and rejects stale source revisions. Each item reports added, changed, unchanged,
 missing, conflict, or invalid content. New skills are **private** and use the
-existing initial-publication flow. Changes to an existing skill create a
+existing initial-publication flow. Apply creates entries in path order, so a
+format-v2 skill may depend on a skill added earlier in the same sync; dependency
+resolution errors are reported by apply and remain retryable. Changes to an existing skill create a
 `pending_review` version through the normal version service. Owners/admins review
 and publish or reject those versions in the existing version UI.
 
 Bindings are explicit. A matching manual skill slug reports a conflict until the
 owner chooses **Bind an existing workspace skill**; imports never silently attach
-manual skills. Changed published heads, archived targets, renamed slugs, and
+manual skills. When several source paths declare one slug, every one of them is
+a conflict. Binding paths may name the skill directory or its `SKILL.md`; both
+store the directory. Changed published heads, archived targets, renamed slugs, and
 rejected imported candidates require review. Missing/renamed source paths retain
 the existing skill and history. Disconnect a binding to resolve a rename or attach the skill to a different source;
 this retains its versions, provenance, and the disconnected mapping. Archive stops
@@ -67,7 +71,8 @@ Imports only contact the fixed GitHub REST API host, do not follow redirects, an
 verify Git blob hashes. They never clone repositories or execute source code.
 Reject symlinks, submodules, traversal, unsupported entries, detected private keys
 and token patterns, truncated trees, trees over 10,000 entries, more than 32 skills,
-more than 200 requests, blobs over 5 MiB, snapshots over 20 MiB expanded, and
+more than 200 requests, skills with more than 198 distinct files (one skill's
+request budget), blobs over 5 MiB, snapshots over 20 MiB expanded, and
 fetches exceeding 90 seconds. Individual malformed skills remain explicit errors.
 Credential detection is a bounded check for known patterns, not a complete secret
 scanner; only public repositories are accepted and source bytes remain private.

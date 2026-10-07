@@ -659,4 +659,142 @@ describe.skipIf(!url)("Git source persistence and recovery", () => {
       worker.release();
     }
   });
+  it("imports a new composite whose dependency is added earlier in the same sync", async () => {
+    const workspace = (
+      await pool.query<{ slug: string }>("SELECT slug FROM workspaces WHERE id=$1", [
+        owner.workspaceId,
+      ])
+    ).rows[0]?.slug;
+    const childSlug = `child-${crypto.randomUUID()}`,
+      parentSlug = `parent-${crypto.randomUUID()}`;
+    const parent = await canonicalizeBundleFiles({
+      skill: {
+        formatVersion: 2,
+        name: parentSlug,
+        slug: parentSlug,
+        description: "Review workflows",
+        tags: [],
+        entrypoints: { execute: "SKILL.md" },
+        dependencies: [
+          {
+            alias: "child",
+            workspace: workspace ?? "",
+            skill: childSlug,
+            version: "^1.0.0",
+            scope: "execution",
+            mode: "invoke",
+            required: true,
+          },
+        ],
+      },
+      files: new Map([["SKILL.md", new TextEncoder().encode("# Parent")]]),
+    });
+    const source = await sources.create({
+      ...m(),
+      config: { repositoryUrl: "https://github.com/a/same-sync" },
+      idempotencyKey: crypto.randomUUID(),
+    });
+    snapshot = {
+      commitSha: "e".repeat(40),
+      skills: [
+        { path: "a-child", bundle: await bundle(childSlug, "# Child"), error: null },
+        { path: "b-parent", bundle: parent, error: null },
+      ],
+    };
+    const preview = await sources.preview({ ...m(), sourceId: source.id });
+    expect(preview.plan.map((p) => p.action)).toEqual(["added", "added"]);
+    const applied = await sources.apply({
+      ...m(),
+      sourceId: source.id,
+      runId: preview.id,
+    });
+    expect(applied.results.map((r) => r.status)).toEqual(["imported", "imported"]);
+    expect(applied.status).toBe("complete");
+  });
+  it("marks every entry sharing a discovered slug as a conflict", async () => {
+    const slug = `duplicate-${crypto.randomUUID()}`;
+    const source = await sources.create({
+      ...m(),
+      config: { repositoryUrl: "https://github.com/a/duplicates" },
+      idempotencyKey: crypto.randomUUID(),
+    });
+    snapshot = {
+      commitSha: "f".repeat(40),
+      skills: [
+        { path: "a", bundle: await bundle(slug, "# First"), error: null },
+        { path: "b", bundle: await bundle(slug, "# Second"), error: null },
+      ],
+    };
+    const preview = await sources.preview({ ...m(), sourceId: source.id });
+    expect(preview.plan.map((p) => p.action)).toEqual(["conflict", "conflict"]);
+    const applied = await sources.apply({
+      ...m(),
+      sourceId: source.id,
+      runId: preview.id,
+    });
+    expect(applied.results.every((r) => r.skillId === null)).toBe(true);
+    expect(
+      (
+        await pool.query("SELECT 1 FROM skills WHERE workspace_id=$1 AND slug=$2", [
+          owner.workspaceId,
+          slug,
+        ])
+      ).rowCount,
+    ).toBe(0);
+  });
+  it("binds and disconnects SKILL.md file paths as their skill directory", async () => {
+    const manualBundle = await bundle(
+      `file-path-${crypto.randomUUID()}`,
+      "# File path\nInspect evidence.",
+    );
+    const manual = await skills.create({
+      ...m(),
+      workspaceId: owner.workspaceId,
+      archiveBytes: manualBundle.bytes,
+      visibility: "private",
+      idempotencyKey: crypto.randomUUID(),
+    });
+    const wide = await sources.create({
+      ...m(),
+      config: { repositoryUrl: "https://github.com/a/file-paths" },
+      idempotencyKey: crypto.randomUUID(),
+    });
+    await sources.bind({
+      ...m(),
+      sourceId: wide.id,
+      path: "skills/review/SKILL.md",
+      skillId: manual.skill.id,
+    });
+    expect((await sources.get(owner, wide.id)).bindings[0]?.path).toBe("skills/review");
+    snapshot = {
+      commitSha: "d".repeat(40),
+      skills: [{ path: "skills/review", bundle: manualBundle, error: null }],
+    };
+    expect(
+      (await sources.preview({ ...m(), sourceId: wide.id })).plan.map((p) => p.action),
+    ).toEqual(["unchanged"]);
+    expect(
+      await sources.disconnect({
+        ...m(),
+        sourceId: wide.id,
+        path: "skills/review/SKILL.md",
+      }),
+    ).toEqual({ changed: true });
+    const single = await sources.create({
+      ...m(),
+      config: {
+        repositoryUrl: "https://github.com/a/file-paths",
+        path: "skills/review",
+      },
+      idempotencyKey: crypto.randomUUID(),
+    });
+    await expect(
+      sources.bind({
+        ...m(),
+        sourceId: single.id,
+        path: "skills/review/SKILL.md",
+        skillId: manual.skill.id,
+      }),
+    ).resolves.toEqual({ changed: true });
+  });
 });
