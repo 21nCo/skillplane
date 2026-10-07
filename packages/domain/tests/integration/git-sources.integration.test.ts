@@ -8,6 +8,8 @@ import { canonicalizeBundle, R2BundleRepository } from "@skillplane/storage";
 import { IdempotencyStore } from "../../src/idempotency.js";
 import { SkillService } from "../../src/skills.js";
 import { SkillVersionService } from "../../src/skill-versions.js";
+import { SkillGroupService } from "../../src/skill-groups.js";
+import { SkillSearchService } from "../../src/search.js";
 import { GitSourceService } from "../../src/git-sources.js";
 import type { GitSnapshot } from "../../src/git-source-provider.js";
 import type { Principal } from "../../src/principal.js";
@@ -199,6 +201,55 @@ describe.skipIf(!url)("Git source persistence and recovery", () => {
         ])
       ).rowCount,
     ).toBe(2);
+    const groupService = new SkillGroupService(pool),
+      group = await groupService.create({
+        ...m(),
+        name: `Import review ${crypto.randomUUID()}`,
+        idempotencyKey: crypto.randomUUID(),
+      });
+    for (const binding of (await sources.get(owner, s.id)).bindings)
+      await groupService.association({
+        ...m(),
+        groupId: group.id,
+        kind: "skill",
+        targetId: binding.skillId,
+        add: true,
+      });
+    const filter = {
+      workspaceId: owner.workspaceId,
+      principal: owner,
+      groupId: group.id,
+      sourceId: s.id,
+      limit: 1,
+    };
+    const page = await skills.listPage(filter);
+    expect(page.skills).toHaveLength(1);
+    expect(page.nextCursor).toBeTruthy();
+    const next = await skills.listPage({ ...filter, cursor: page.nextCursor });
+    expect(next.skills).toHaveLength(1);
+    expect(next.skills[0]?.id).not.toBe(page.skills[0]?.id);
+    await expect(
+      skills.listPage({ ...filter, cursor: page.nextCursor, sourceId: "other-source" }),
+    ).rejects.toMatchObject({ code: "CURSOR_FILTER_MISMATCH" });
+    const search = new SkillSearchService(
+        pool,
+        "git-group-search-cursor-secret-32chars",
+      ),
+      found = await search.search({ ...filter, query: "Review" });
+    expect(found.skills).toHaveLength(1);
+    expect(found.nextCursor).toBeTruthy();
+    expect(
+      (await search.search({ ...filter, query: "Review", cursor: found.nextCursor }))
+        .skills[0]?.id,
+    ).not.toBe(found.skills[0]?.id);
+    await expect(
+      search.search({
+        ...filter,
+        query: "Review",
+        cursor: found.nextCursor,
+        sourceId: "other-source",
+      }),
+    ).rejects.toMatchObject({ code: "CURSOR_FILTER_MISMATCH" });
     // Model a crash after version+provenance commit, before result/binding commit.
     const recovery = (await sources.get(owner, s.id)).source;
     await pool.query(
