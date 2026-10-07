@@ -1,0 +1,19 @@
+app/src/routes/(app)/[workspaceSlug]/skills/+page.svelte
+  s_3d9cf2f71e25cd::t_e6a4652d615b63 394
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8ce83cf8199d3c88a2094e063f0164885a1f28af",
+  "prompts": {},
+  "sessions": {
+    "s_3d9cf2f71e25cd": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1139c-4793-73e3-92a4-57fc99ae0685",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
