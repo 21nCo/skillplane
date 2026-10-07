@@ -1,0 +1,30 @@
+packages/domain/src/git-source-provider.test.ts
+  s_b0f5ac773d2bd4::t_d2f8f3b62e7fe2 190-215
+packages/domain/tests/integration/git-sources.integration.test.ts
+  s_b0f5ac773d2bd4::t_6c0131bfdf70dc 662-796
+  s_b0f5ac773d2bd4::t_a6006ae0985592 797-799
+app/src/routes/(app)/[workspaceSlug]/sources/+page.svelte
+  s_b0f5ac773d2bd4::t_c0688c31a660e8 36-47,51-52,57,63-64,69,83-84,90,92,103-104,120,122-123,133,136,141,149,157-158,164,169,172,176-183,188,204-205,207,235
+docs/operations/git-sources.md
+  s_b0f5ac773d2bd4::t_56da3e93170f08 18-20,26-28,74-75
+packages/domain/src/git-source-provider.ts
+  s_b0f5ac773d2bd4::t_3fecbfcb24c108 119-121,267-270,346
+packages/domain/src/git-sources.ts
+  s_b0f5ac773d2bd4::t_973b83371573b3 9,48-57,84,298,303,317,340,354,360,367,374,392-398,414-422,457-474,476
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d4b1bd06784ae97bf927efef49d1ce409fde7d4a",
+  "prompts": {},
+  "sessions": {
+    "s_b0f5ac773d2bd4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ca62123f-e191-43ba-a12e-6d1b29e43d5c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
