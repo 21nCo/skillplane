@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { sourceRequest, type Source } from "$lib/sources/api.js";
   import { groupRequest, type Group } from "$lib/groups/api.js";
   import { resolve } from "$app/paths";
   import { page } from "$app/state";
@@ -26,6 +27,9 @@
   );
   const canWrite = $derived(Boolean(workspace && workspace.role !== "viewer"));
 
+  let sourcesError = $state(""),
+    sources = $state<Source[]>([]),
+    sourceId = $state("");
   let groupsError = $state("");
   let groups = $state<Group[]>([]);
   let groupId = $state("");
@@ -52,6 +56,7 @@
       const result = await listSkills({
         workspaceId: workspace.id,
         ...(groupId ? { groupId } : {}),
+        ...(sourceId ? { sourceId } : {}),
         query,
         archive,
         visibility: visibility === "all" ? [] : [visibility],
@@ -77,6 +82,29 @@
     if (workspace && loadedWorkspaceId !== workspace.id) {
       loadedWorkspaceId = workspace.id;
       const workspaceId = workspace.id;
+      sourceId = "";
+      sources = [];
+      sourcesError = "";
+      void (async () => {
+        let cursor: string | null = null;
+        const all: Source[] = [];
+        do {
+          const r: { sources: Source[]; nextCursor: string | null } =
+            await sourceRequest(
+              workspaceId,
+              cursor ? `?cursor=${encodeURIComponent(cursor)}` : "",
+            );
+          all.push(...r.sources);
+          cursor = r.nextCursor;
+        } while (cursor);
+        if (
+          workspaces.workspaces.find((w) => w.slug === page.params.workspaceSlug)
+            ?.id === workspaceId
+        )
+          sources = all;
+      })().catch(() => {
+        sourcesError = "Sources could not be loaded";
+      });
       groupsError = "";
       groupId = "";
       groups = [];
@@ -155,6 +183,19 @@
         Search
       </Button>
     </form>
+    {#if sourcesError}<p role="status">{sourcesError}</p>{/if}
+    <Select
+      label="Git source"
+      options={[
+        { value: "", label: "All sources" },
+        ...sources.map((source) => ({
+          value: source.id,
+          label: `${source.repositoryUrl.replace("https://github.com/", "")} ${source.path ?? "(all skills)"}`,
+        })),
+      ]}
+      bind:value={sourceId}
+      onchange={() => void load()}
+    />
     {#if groupsError}<p role="status">{groupsError}</p>{/if}
     <Select
       label="Skill group"

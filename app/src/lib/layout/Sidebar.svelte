@@ -83,6 +83,13 @@
         onclick={onClose}
         ><UsersThreeIcon weight="duotone" aria-hidden="true" />Skill groups</a
       >
+      <a
+        href={resolve("/(app)/[workspaceSlug]/sources", {
+          workspaceSlug: store.active.slug,
+        })}
+        class:active={pathname === `/${store.active.slug}/sources`}
+        onclick={onClose}><BookOpenTextIcon aria-hidden="true" />Git sources</a
+      >
       {@const analyticsHref = resolve("/(app)/[workspaceSlug]/analytics", {
         workspaceSlug: store.active.slug,
       })}

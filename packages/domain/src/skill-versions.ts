@@ -1,3 +1,7 @@
+import {
+  insertGitVersionProvenance,
+  type GitVersionProvenance,
+} from "./git-provenance.js";
 import { CompositionService } from "./composition-service.js";
 import {
   canonicalizeBundle,
@@ -172,6 +176,7 @@ export class SkillVersionService {
     readonly archiveBytes: Uint8Array;
     readonly idempotencyKey: string;
     readonly requestId: string;
+    readonly gitProvenance?: GitVersionProvenance;
     readonly fencingEpoch?: number;
   }): Promise<SkillVersionRecord> {
     authorize(options.principal, "skills:write");
@@ -190,6 +195,7 @@ export class SkillVersionService {
       proposedBump,
       changeSummary,
       bundleDigest: canonical.digest,
+      ...(options.gitProvenance ? { gitProvenance: options.gitProvenance } : {}),
     });
     const claim = await this.idempotency.claim<{ version: SkillVersionRecord }>({
       workspaceId: options.principal.workspaceId,
@@ -286,8 +292,11 @@ export class SkillVersionService {
       stored = storedBundle;
       const versionId = id("skill-version");
       const actor = principalAuditActor(options.principal);
-      const source =
-        options.principal.kind === "user" ? ("human" as const) : ("import" as const);
+      const source = options.gitProvenance
+        ? ("import" as const)
+        : options.principal.kind === "user"
+          ? ("human" as const)
+          : ("import" as const);
       const response = await withTransaction(
         this.pool,
         options.requestId,
@@ -319,6 +328,14 @@ export class SkillVersionService {
               actor.actorId,
             ],
           );
+          if (options.gitProvenance)
+            await insertGitVersionProvenance(
+              client,
+              options.principal.workspaceId,
+              versionId,
+              canonical.digest,
+              options.gitProvenance,
+            );
           await this.composition.persist(
             client,
             versionId,

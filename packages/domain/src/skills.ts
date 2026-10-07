@@ -1,3 +1,7 @@
+import {
+  insertGitVersionProvenance,
+  type GitVersionProvenance,
+} from "./git-provenance.js";
 import { CompositionService } from "./composition-service.js";
 import {
   BundleValidationError,
@@ -85,6 +89,7 @@ export interface SkillListPage {
 
 interface SkillListCursor {
   readonly groupId?: string | null;
+  readonly sourceId?: string | null;
   readonly version: 1;
   readonly updatedAt: string;
   readonly id: string;
@@ -322,6 +327,7 @@ export class SkillService {
     readonly visibility: SkillVisibility;
     readonly idempotencyKey: string;
     readonly requestId: string;
+    readonly gitProvenance?: GitVersionProvenance;
     readonly fencingEpoch?: number;
     readonly auditContext?: MutationAuditContext;
   }): Promise<{ readonly skill: SkillRecord; readonly version: SkillVersionRecord }> {
@@ -341,6 +347,7 @@ export class SkillService {
       workspaceId: options.workspaceId,
       visibility,
       bundleDigest: canonical.digest,
+      ...(options.gitProvenance ? { gitProvenance: options.gitProvenance } : {}),
       skill: canonical.skill,
     });
     const claim = await this.idempotency.claim<{
@@ -422,7 +429,11 @@ export class SkillService {
               versionId,
               options.workspaceId,
               skillId,
-              options.principal.kind === "user" ? "human" : "import",
+              options.gitProvenance
+                ? "import"
+                : options.principal.kind === "user"
+                  ? "human"
+                  : "import",
               canonical.digest,
               storedBundle.key,
               storedBundle.byteSize,
@@ -436,6 +447,14 @@ export class SkillService {
                 : (options.principal.delegatedUserId ?? null),
             ],
           );
+          if (options.gitProvenance)
+            await insertGitVersionProvenance(
+              client,
+              options.principal.workspaceId,
+              versionId,
+              canonical.digest,
+              options.gitProvenance,
+            );
           await this.composition.revalidate(
             prepared.lock,
             options.principal,
@@ -544,7 +563,11 @@ export class SkillService {
               status: "published",
               baseVersionId: null,
               proposedBump: null,
-              source: options.principal.kind === "user" ? "human" : "import",
+              source: options.gitProvenance
+                ? "import"
+                : options.principal.kind === "user"
+                  ? "human"
+                  : "import",
               digest: canonical.digest,
               objectKey: storedBundle.key,
               byteSize: storedBundle.byteSize,
@@ -627,6 +650,7 @@ export class SkillService {
     readonly workspaceId: string;
     readonly groupId?: string;
     readonly principal: Principal;
+    readonly sourceId?: string;
     readonly archive?: SkillArchiveFilter;
     readonly visibility?: readonly SkillVisibility[];
     readonly cursor?: string | null;
@@ -642,6 +666,12 @@ export class SkillService {
     const cursor = options.cursor
       ? parseListCursor(options.cursor, archive, visibility, options.groupId ?? null)
       : null;
+    if (cursor && (cursor.sourceId ?? null) !== (options.sourceId ?? null))
+      throw new DomainError(
+        "CURSOR_FILTER_MISMATCH",
+        "Skill cursor does not match the source filter",
+        400,
+      );
     const result = await this.pool.query<SkillRow>(
       `SELECT s.id, s.workspace_id, s.slug, s.name, s.description, s.tags,
               s.visibility, s.current_published_version_id,
@@ -651,6 +681,7 @@ export class SkillService {
            ON version.id = s.current_published_version_id
         WHERE s.workspace_id = $1
           AND ($7::text IS NULL OR EXISTS(SELECT 1 FROM skill_group_skills gs JOIN skill_groups g ON g.id=gs.group_id AND g.workspace_id=gs.workspace_id WHERE gs.workspace_id=s.workspace_id AND gs.skill_id=s.id AND gs.group_id=$7 AND g.archived_at IS NULL))
+          AND ($8::text IS NULL OR EXISTS(SELECT 1 FROM skill_source_bindings b WHERE b.workspace_id=s.workspace_id AND b.skill_id=s.id AND b.source_id=$8 AND b.disconnected_at IS NULL))
           AND (
             ($2::text = 'active' AND s.archived_at IS NULL)
             OR ($2::text = 'archived' AND s.archived_at IS NOT NULL)
@@ -675,6 +706,7 @@ export class SkillService {
         cursor?.id ?? null,
         limit + 1,
         options.groupId ?? null,
+        options.sourceId ?? null,
       ],
     );
     const hasNext = result.rows.length > limit;
@@ -690,6 +722,7 @@ export class SkillService {
             id: boundary.id,
             archive,
             visibility,
+            sourceId: options.sourceId ?? null,
           })
         : null,
     };

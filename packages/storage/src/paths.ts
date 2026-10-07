@@ -1,7 +1,21 @@
 const encoder = new TextEncoder();
 
-const ROOT_FILES = new Set(["SKILL.md", "skill.json", "skill.lock.json"]);
-const OPTIONAL_ROOTS = new Set(["assets", "references", "scripts", "verification"]);
+const ROOT_FILES = new Set([
+  "SKILL.md",
+  "skill.json",
+  "skill.lock.json",
+  "LICENSE",
+  "LICENSE.txt",
+  "README.md",
+]);
+const OPTIONAL_ROOTS = new Set([
+  "assets",
+  "references",
+  "scripts",
+  "verification",
+  "templates",
+  "agents",
+]);
 
 export type BundlePathErrorCode =
   "SKILL_PATH_INVALID" | "SKILL_PATH_DUPLICATE" | "SKILL_LINK_INVALID";
