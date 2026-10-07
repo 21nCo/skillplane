@@ -1,0 +1,21 @@
+{
+  "tool_use_id": "toolu_01UxF6xnhC6wnvAd58J7A2eQ",
+  "agent_id": "a38232176d5765dae",
+  "subagent_type": "fork",
+  "task_description": "PR #46 refetch-fix round",
+  "files": [
+    "deployment/wrangler/mcp.development.json",
+    "deployment/wrangler/mcp.production.json",
+    "docs/operations/mcpfn.md",
+    "mcp/package.json",
+    "mcp/wrangler.jsonc",
+    "packages/authfn-mcp-oauth/package.json",
+    "pnpm-lock.yaml",
+    "pnpm-workspace.yaml",
+    "scripts/lib/local-wrangler-config.test.mjs",
+    "scripts/lib/topology-deployment.mjs",
+    "scripts/topology-deployment.test.mjs"
+  ],
+  "started_at": "2026-10-07T10:48:41.317147+05:30",
+  "completed_at": "2026-10-07T10:48:41.317505+05:30"
+}

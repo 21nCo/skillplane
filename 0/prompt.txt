@@ -1,0 +1,5 @@
+add use-skillplane skill from ~/.agents/skills to claude discoverable skills
+
+---
+
+/use-skillplane pr-refetch-fix PR #46, #47
