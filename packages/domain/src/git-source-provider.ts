@@ -69,14 +69,17 @@ export function gitSourceConfig(input: Record<string, unknown>): GitSourceConfig
   if (refPolicy === "pin" && !/^[a-f0-9]{40}$/i.test(ref))
     invalid("Pinned sources require a full commit SHA");
   if (path !== null && (typeof path !== "string" || !safePath(path)))
-    invalid(
-      "Skill path must be a safe repository-relative directory, or empty for repository-wide import",
-    );
+    invalid("Use a safe repository-relative SKILL.md path or skill directory");
   return {
     repositoryUrl: `https://github.com/${match[1] ?? ""}/${match[2] ?? ""}`,
     ref,
     refPolicy,
-    path: path === "" ? "" : path,
+    path:
+      path === "SKILL.md"
+        ? ""
+        : typeof path === "string" && path.endsWith("/SKILL.md")
+          ? path.slice(0, -"/SKILL.md".length)
+          : path,
   };
 }
 function safePath(path: string) {

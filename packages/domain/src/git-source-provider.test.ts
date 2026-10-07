@@ -61,6 +61,15 @@ describe("public GitHub source provider", () => {
       refPolicy: "track",
       path: null,
     });
+    expect(
+      gitSourceConfig({ repositoryUrl: "https://github.com/a/b", path: "SKILL.md" }),
+    ).toMatchObject({ path: "" });
+    expect(
+      gitSourceConfig({
+        repositoryUrl: "https://github.com/a/b",
+        path: "skills/review/SKILL.md",
+      }),
+    ).toMatchObject({ path: "skills/review" });
     for (const repositoryUrl of [
       "http://github.com/a/b",
       "https://github.com.evil/a/b",
@@ -115,7 +124,10 @@ describe("public GitHub source provider", () => {
     );
     expect(all.skills[0]?.error).toContain("Nested");
     const one = await provider.snapshot(
-      gitSourceConfig({ repositoryUrl: "https://github.com/a/b", path: "a/child" }),
+      gitSourceConfig({
+        repositoryUrl: "https://github.com/a/b",
+        path: "a/child/SKILL.md",
+      }),
     );
     expect(one.skills[0]?.bundle?.skill.slug).toBe("nested");
     const missing = await provider.snapshot(

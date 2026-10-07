@@ -238,10 +238,10 @@
         /> Import a single skill path</label
       >
       {#if singlePath}<Input
-          label="Repository-relative skill directory"
+          label="SKILL.md path or skill directory"
           bind:value={path}
           readonly={Boolean(selected)}
-          placeholder="skills/review (empty for repository root)"
+          placeholder="skills/review/SKILL.md (empty for repository root)"
         />{/if}
       <Button type="submit" disabled={busy}>Save source</Button>
       {#if selected}<Button

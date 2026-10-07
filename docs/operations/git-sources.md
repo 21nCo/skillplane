@@ -2,8 +2,9 @@
 
 Workspace owners and admins can connect **public GitHub repositories** from
 **Git sources**. A source imports either all discovered `SKILL.md` directories or
-one repository-relative directory (including an empty directory for repository
-root). No particular parent folder name is required. Choose a tracked branch/tag
+one repository-relative `SKILL.md` path or directory (including an empty
+directory for repository root). File paths are normalized to their containing
+skill directory before storing configuration and provenance. No particular parent folder name is required. Choose a tracked branch/tag
 for manual updates, or pin a full 40-character commit SHA. Repository and path
 scope stay fixed after creation; archive a source and create another to change
 scope. Ref policy and ref can be edited with an expected revision.
