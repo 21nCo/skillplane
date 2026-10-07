@@ -74,6 +74,13 @@
         <BookOpenTextIcon weight="duotone" aria-hidden="true" />
         Skills
       </a>
+      <a
+        href={resolve("/(app)/[workspaceSlug]/groups", {
+          workspaceSlug: store.active.slug,
+        })}
+        class:active={pathname === `/${store.active.slug}/groups`}
+        onclick={onClose}><UsersThreeIcon aria-hidden="true" />Skill groups</a
+      >
       {@const analyticsHref = resolve("/(app)/[workspaceSlug]/analytics", {
         workspaceSlug: store.active.slug,
       })}

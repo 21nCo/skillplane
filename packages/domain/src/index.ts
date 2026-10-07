@@ -29,3 +29,5 @@ export * from "./composition-service.js";
 export * from "./verification.js";
 
 export * from "./version-lifecycle.js";
+
+export * from "./skill-groups.js";

@@ -1,3 +1,4 @@
+import { skillGroupSchema } from "./skill-groups.js";
 import {
   skillVersionCompositions,
   skillVersionDependencies,
@@ -47,6 +48,7 @@ const regionalCompositionSchema = {
 };
 
 export const schema = {
+  ...skillGroupSchema,
   ...regionalCompositionSchema,
   public_skill_version_lifecycle: publicSkillVersionLifecycle,
   ...authfnSchema,
@@ -70,6 +72,7 @@ export const globalControlSchema = {
 };
 
 export const regionalWorkspaceSchema = {
+  ...skillGroupSchema,
   ...regionalCompositionSchema,
   skills,
   skill_versions: skillVersions,
@@ -93,3 +96,5 @@ export type GlobalControlSchema = typeof globalControlSchema;
 export type RegionalWorkspaceSchema = typeof regionalWorkspaceSchema;
 
 export * from "./composition.js";
+
+export * from "./skill-groups.js";

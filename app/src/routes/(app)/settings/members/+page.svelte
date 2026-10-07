@@ -1,4 +1,5 @@
 <script lang="ts">
+  import GroupBadges from "$lib/groups/GroupBadges.svelte";
   import {
     apiErrorField,
     apiRequest,
@@ -245,7 +246,9 @@
             autocomplete="email"
             placeholder="teammate@company.com"
             bind:value={inviteEmail}
-            error={inviteErrorField === "email" ? (inviteError ?? undefined) : undefined}
+            error={inviteErrorField === "email"
+              ? (inviteError ?? undefined)
+              : undefined}
           />
         </div>
         <div class="field">
@@ -291,6 +294,11 @@
             <div class="identity">
               <strong>{member.displayName ?? member.email ?? "Workspace member"}</strong
               >
+              {#if store.active}<GroupBadges
+                  workspaceId={store.active.id}
+                  userId={member.userId}
+                  workspaceSlug={store.active.slug}
+                />{/if}
               {#if member.displayName && member.email}<span>{member.email}</span>{/if}
             </div>
             {#if canManage}

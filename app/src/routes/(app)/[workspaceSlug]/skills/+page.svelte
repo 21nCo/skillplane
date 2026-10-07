@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { groupRequest, type Group } from "$lib/groups/api.js";
   import { resolve } from "$app/paths";
   import { page } from "$app/state";
   import { Badge, Button, Input, Select } from "@skillplane/ui";
@@ -25,6 +26,8 @@
   );
   const canWrite = $derived(Boolean(workspace && workspace.role !== "viewer"));
 
+  let groups = $state<Group[]>([]);
+  let groupId = $state("");
   let skills = $state<Skill[]>([]);
   let query = $state("");
   let visibility = $state<SkillVisibility | "all">("all");
@@ -47,6 +50,7 @@
     try {
       const result = await listSkills({
         workspaceId: workspace.id,
+        ...(groupId ? { groupId } : {}),
         query,
         archive,
         visibility: visibility === "all" ? [] : [visibility],
@@ -71,6 +75,28 @@
   $effect(() => {
     if (workspace && loadedWorkspaceId !== workspace.id) {
       loadedWorkspaceId = workspace.id;
+      const workspaceId = workspace.id;
+      groupId = "";
+      groups = [];
+      void (async () => {
+        let cursor: string | null = null;
+        const all: Group[] = [];
+        do {
+          const r: { groups: Group[]; nextCursor: string | null } = await groupRequest<{
+            groups: Group[];
+            nextCursor: string | null;
+          }>(workspaceId, cursor ? `?cursor=${encodeURIComponent(cursor)}` : "");
+          all.push(...r.groups);
+          cursor = r.nextCursor;
+        } while (cursor);
+        if (
+          workspaces.workspaces.find((w) => w.slug === page.params.workspaceSlug)
+            ?.id === workspaceId
+        )
+          groups = all;
+      })().catch(() => {
+        error = "Groups could not be loaded";
+      });
       void load();
     }
   });
@@ -127,6 +153,15 @@
         Search
       </Button>
     </form>
+    <Select
+      label="Skill group"
+      options={[
+        { value: "", label: "All groups" },
+        ...groups.map((g) => ({ value: g.id, label: g.name })),
+      ]}
+      bind:value={groupId}
+      onchange={() => void load()}
+    />
     <Select
       label="Visibility"
       options={[
