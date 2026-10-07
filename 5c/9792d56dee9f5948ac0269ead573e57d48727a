@@ -1,0 +1,29 @@
+app/src/lib/groups/GroupBadges.svelte
+  s_3d9cf2f71e25cd::t_ff6f666dd7b29d 49
+app/src/lib/layout/Sidebar.svelte
+  s_3d9cf2f71e25cd::t_e3fd4380316325 82-84
+app/src/routes/(app)/[workspaceSlug]/groups/+page.svelte
+  s_3d9cf2f71e25cd::t_e38f561d06270d 44-46,49-75,81-82,136-137,143-144,146,149,157-158,166,185-191,194,196-197,241,259
+app/src/routes/(app)/[workspaceSlug]/skills/+page.svelte
+  s_3d9cf2f71e25cd::t_3b9b877eea790c 207,210,341
+packages/api/tests/integration/skill-groups.integration.test.ts
+  s_3d9cf2f71e25cd::t_2f8e17cfe0a21f 5,10-14,19,21-22,33-37,41
+packages/domain/src/skill-groups.test.ts
+  s_3d9cf2f71e25cd::t_ec061286620d72 27-42
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5c9792d56dee9f5948ac0269ead573e57d48727a",
+  "prompts": {},
+  "sessions": {
+    "s_3d9cf2f71e25cd": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1139c-4793-73e3-92a4-57fc99ae0685",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
