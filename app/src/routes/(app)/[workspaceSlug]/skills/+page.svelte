@@ -103,7 +103,11 @@
         )
           sources = all;
       })().catch(() => {
-        sourcesError = "Sources could not be loaded";
+        if (
+          workspaces.workspaces.find((w) => w.slug === page.params.workspaceSlug)
+            ?.id === workspaceId
+        )
+          sourcesError = "Sources could not be loaded";
       });
       groupsError = "";
       groupId = "";
@@ -190,7 +194,7 @@
         { value: "", label: "All sources" },
         ...sources.map((source) => ({
           value: source.id,
-          label: `${source.repositoryUrl.replace("https://github.com/", "")} ${source.path ?? "(all skills)"}`,
+          label: `${source.repositoryUrl.replace("https://github.com/", "")} ${source.path ?? "(all skills)"} · ${source.refPolicy}: ${source.ref}`,
         })),
       ]}
       bind:value={sourceId}
@@ -245,10 +249,18 @@
   {:else if skills.length === 0}
     <SkillState
       kind="empty"
-      title={query || groupId || visibility !== "all" || archive !== "active"
+      title={query ||
+      groupId ||
+      sourceId ||
+      visibility !== "all" ||
+      archive !== "active"
         ? "No skills match these filters"
         : "Create your first skill"}
-      message={query || groupId || visibility !== "all" || archive !== "active"
+      message={query ||
+      groupId ||
+      sourceId ||
+      visibility !== "all" ||
+      archive !== "active"
         ? "Change the search or filters and try again."
         : canWrite
           ? "Author Markdown directly or upload a portable Skillplane bundle."

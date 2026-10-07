@@ -1,10 +1,15 @@
+import { PublicationService } from "../../src/publication.js";
 import { beforeAll, afterAll, describe, it, expect } from "vitest";
 import { Pool } from "pg";
 import { migrateDatabase } from "../../../db/src/migrate.js";
 import { seedTenantFixture } from "../../../testing/src/fixtures.js";
 import { createSkillBundleFixture } from "../../../testing/src/skill-bundles.js";
 import { TestObjectStorage } from "../../../testing/src/runtime.js";
-import { canonicalizeBundle, R2BundleRepository } from "@skillplane/storage";
+import {
+  canonicalizeBundle,
+  canonicalizeBundleFiles,
+  R2BundleRepository,
+} from "@skillplane/storage";
 import { IdempotencyStore } from "../../src/idempotency.js";
 import { SkillService } from "../../src/skills.js";
 import { SkillVersionService } from "../../src/skill-versions.js";
@@ -106,6 +111,11 @@ describe.skipIf(!url)("Git source persistence and recovery", () => {
         "UPDATE skill_version_git_provenance SET commit_sha=$2 WHERE version_id=$1",
         [versionId, "b".repeat(40)],
       ),
+    ).rejects.toMatchObject({ code: "55000" });
+    await expect(
+      pool.query("DELETE FROM skill_version_git_provenance WHERE version_id=$1", [
+        versionId,
+      ]),
     ).rejects.toMatchObject({ code: "55000" });
     expect(
       (await sources.apply({ ...m(), sourceId: s.id, runId: preview.id })).results,
@@ -412,5 +422,204 @@ describe.skipIf(!url)("Git source persistence and recovery", () => {
       (await sources.apply({ ...m(), sourceId: s.id, runId: retryPreview.id })).status,
     ).toBe("complete");
     expect((await sources.get(owner, s.id)).bindings).toHaveLength(0);
+  });
+  it("fences stalled version writes and run mutations after source lease expiry or takeover", async () => {
+    for (const mode of ["archive", "takeover"] as const) {
+      const source = await sources.create({
+        ...m(),
+        config: { repositoryUrl: `https://github.com/a/lease-${mode}` },
+        idempotencyKey: crypto.randomUUID(),
+      });
+      const slug = `lease-${mode}-${crypto.randomUUID()}`;
+      snapshot = {
+        commitSha: "a".repeat(40),
+        skills: [
+          { path: "one", bundle: await bundle(slug, "# Lease test"), error: null },
+        ],
+      };
+      const preview = await sources.preview({ ...m(), sourceId: source.id });
+      const original = storage.putCanonicalBundle.bind(storage);
+      storage.putCanonicalBundle = async (...args) => {
+        await pool.query(
+          "UPDATE skill_sources SET sync_expires_at=clock_timestamp()-interval '1 second' WHERE id=$1",
+          [source.id],
+        );
+        if (mode === "archive")
+          await sources.update({
+            ...m(),
+            sourceId: source.id,
+            expectedRevision: source.revision,
+            config: { repositoryUrl: source.repositoryUrl },
+            archived: true,
+          });
+        else {
+          await pool.query(
+            "UPDATE skill_sources SET sync_token='replacement-token',sync_expires_at=clock_timestamp()+interval '3 minutes' WHERE id=$1",
+            [source.id],
+          );
+          await pool.query(
+            "UPDATE skill_source_runs SET status='partial',failure_message='new owner state' WHERE id=$1",
+            [preview.id],
+          );
+        }
+        return original(...args);
+      };
+      try {
+        await expect(
+          sources.apply({ ...m(), sourceId: source.id, runId: preview.id }),
+        ).rejects.toMatchObject({ code: "GIT_SOURCE_LEASE_LOST" });
+      } finally {
+        storage.putCanonicalBundle = original;
+      }
+      expect(
+        (
+          await pool.query("SELECT 1 FROM skills WHERE workspace_id=$1 AND slug=$2", [
+            owner.workspaceId,
+            slug,
+          ])
+        ).rowCount,
+      ).toBe(0);
+      const detail = await sources.get(owner, source.id);
+      expect(detail.bindings).toHaveLength(0);
+      expect(detail.runs[0]?.results).toEqual([]);
+      if (mode === "takeover") {
+        expect(detail.runs[0]?.failureMessage).toBe("new owner state");
+        expect(
+          (
+            await pool.query("SELECT sync_token FROM skill_sources WHERE id=$1", [
+              source.id,
+            ])
+          ).rows[0]?.sync_token,
+        ).toBe("replacement-token");
+      }
+    }
+  });
+  it("recognizes identical format-v2 explicit bindings after server lock generation", async () => {
+    const slug = `composite-${crypto.randomUUID()}`;
+    const canonical = await canonicalizeBundleFiles({
+      skill: {
+        formatVersion: 2,
+        name: slug,
+        slug,
+        description: "Review workflows",
+        tags: [],
+        entrypoints: { execute: "SKILL.md" },
+        dependencies: [],
+      },
+      files: new Map([["SKILL.md", new TextEncoder().encode("# Composite")]]),
+    });
+    const manual = await skills.create({
+      ...m(),
+      workspaceId: owner.workspaceId,
+      archiveBytes: canonical.bytes,
+      visibility: "private",
+      idempotencyKey: crypto.randomUUID(),
+    });
+    expect(manual.version.digest).not.toBe(canonical.digest);
+    const source = await sources.create({
+      ...m(),
+      config: { repositoryUrl: "https://github.com/a/composite" },
+      idempotencyKey: crypto.randomUUID(),
+    });
+    await sources.bind({
+      ...m(),
+      sourceId: source.id,
+      path: "composite",
+      skillId: manual.skill.id,
+    });
+    snapshot = {
+      commitSha: "b".repeat(40),
+      skills: [{ path: "composite", bundle: canonical, error: null }],
+    };
+    const preview = await sources.preview({ ...m(), sourceId: source.id });
+    expect(preview.plan[0]?.action).toBe("unchanged");
+    const applied = await sources.apply({
+      ...m(),
+      sourceId: source.id,
+      runId: preview.id,
+    });
+    expect(applied.status).toBe("complete");
+    expect(applied.results[0]?.status).toBe("unchanged");
+    expect(
+      (
+        await pool.query("SELECT 1 FROM skill_versions WHERE skill_id=$1", [
+          manual.skill.id,
+        ])
+      ).rowCount,
+    ).toBe(1);
+  });
+  it("rejects unchanged previews and recovery when imported candidates are later rejected", async () => {
+    const slug = `review-race-${crypto.randomUUID()}`;
+    const source = await sources.create({
+      ...m(),
+      config: { repositoryUrl: "https://github.com/a/review-race" },
+      idempotencyKey: crypto.randomUUID(),
+    });
+    snapshot = {
+      commitSha: "a".repeat(40),
+      skills: [{ path: "review", bundle: await bundle(slug, "# A"), error: null }],
+    };
+    const a = await sources.preview({ ...m(), sourceId: source.id });
+    await sources.apply({ ...m(), sourceId: source.id, runId: a.id });
+    snapshot = {
+      commitSha: "b".repeat(40),
+      skills: [{ path: "review", bundle: await bundle(slug, "# B"), error: null }],
+    };
+    const b = await sources.preview({ ...m(), sourceId: source.id });
+    const pending = await sources.apply({ ...m(), sourceId: source.id, runId: b.id });
+    const unchanged = await sources.preview({ ...m(), sourceId: source.id });
+    expect(unchanged.plan[0]?.action).toBe("unchanged");
+    const item = pending.results[0];
+    if (!item?.skillId || !item.versionId)
+      throw new Error("Import did not create a reviewable version");
+    await new PublicationService(pool, storage, new IdempotencyStore(pool)).reject({
+      ...m(),
+      skillId: item.skillId,
+      candidateVersionId: item.versionId,
+      reason: "Needs changes",
+      idempotencyKey: crypto.randomUUID(),
+    });
+    const stale = await sources.apply({
+      ...m(),
+      sourceId: source.id,
+      runId: unchanged.id,
+    });
+    expect(stale.status).toBe("partial");
+    expect(stale.results[0]).toMatchObject({
+      status: "error",
+      message: expect.stringContaining("rejected"),
+    });
+    expect((await sources.get(owner, source.id)).bindings[0]?.status).toBe(
+      "pending_review",
+    );
+    expect(
+      (await sources.preview({ ...m(), sourceId: source.id })).plan[0]?.action,
+    ).toBe("conflict");
+    // Model recovery of the version commit before result/source completion.
+    const run = (
+      await pool.query("SELECT source_revision FROM skill_source_runs WHERE id=$1", [
+        b.id,
+      ])
+    ).rows[0];
+    await pool.query(
+      "UPDATE skill_source_runs SET status='partial',results='[]' WHERE id=$1",
+      [b.id],
+    );
+    await pool.query("UPDATE skill_sources SET revision=$2 WHERE id=$1", [
+      source.id,
+      run.source_revision,
+    ]);
+    const recovery = await sources.apply({ ...m(), sourceId: source.id, runId: b.id });
+    expect(recovery.results[0]).toMatchObject({
+      status: "error",
+      message: expect.stringContaining("rejected"),
+    });
+    expect(
+      (
+        await pool.query("SELECT 1 FROM skill_versions WHERE skill_id=$1", [
+          item.skillId,
+        ])
+      ).rowCount,
+    ).toBe(2);
   });
 });

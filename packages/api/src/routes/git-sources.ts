@@ -1,3 +1,4 @@
+import { registerResourceRoutes } from "../resource-routing.js";
 import { DomainError, GitSourceService } from "@skillplane/domain";
 import type { Hono, Context } from "hono";
 import type { ApiEnvironment } from "../context.js";
@@ -111,28 +112,33 @@ export function registerGitSourceRoutes(app: Hono<ApiEnvironment>) {
       body = await readJsonObject(c);
     if (typeof body.runId !== "string")
       throw new DomainError("VALIDATION_FAILED", "Confirm a preview run ID", 400);
-    return c.json(
-      success(
-        c,
-        await service(c).apply({
-          ...m,
-          sourceId: c.req.param("sourceId"),
-          runId: body.runId,
-        }),
-      ),
-    );
+    const result = await service(c).apply({
+      ...m,
+      sourceId: c.req.param("sourceId"),
+      runId: body.runId,
+    });
+    const resources = result.results.flatMap((r) => [
+      ...(r.skillId ? [{ resourceType: "skill" as const, resourceId: r.skillId }] : []),
+      ...(r.versionId
+        ? [{ resourceType: "skill_version" as const, resourceId: r.versionId }]
+        : []),
+    ]);
+    const services = c.get("services");
+    if (services)
+      await registerResourceRoutes(services, m.principal.workspaceId, resources);
+    return c.json(success(c, result));
   });
   app.get(
     "/api/v1/workspaces/:workspaceId/skills/:skillId/versions/:versionId/source",
     async (c) => {
-      const p = await workspaceUser(c),
-        s = c.get("services");
+      const s = c.get("services");
       if (!s)
         throw new DomainError(
           "AUTHENTICATION_REQUIRED",
           "Authentication is required",
           401,
         );
+      const p = await workspaceUser(c);
       const version = await s.skillVersionService.get({
         skillId: c.req.param("skillId"),
         versionId: c.req.param("versionId"),

@@ -1,3 +1,4 @@
+import { assertGitSourceLease } from "./git-provenance.js";
 import type { Pool, PoolClient } from "pg";
 import { authorize } from "./authorization.js";
 import { DomainError } from "./errors.js";
@@ -70,6 +71,7 @@ interface Binding {
   slug: string;
   name: string;
   current_digest: string | null;
+  visibility: "private" | "public";
   disconnected_at: Date | null;
 }
 export interface GitPlanEntry {
@@ -276,7 +278,7 @@ export class GitSourceService {
   private async bindings(p: Principal, id: string, includeDisconnected = false) {
     return (
       await this.pool.query<Binding>(
-        "SELECT b.*,s.slug,s.name,s.current_published_version_id,s.archived_at,v.content_digest AS current_digest FROM skill_source_bindings b JOIN skills s ON s.workspace_id=b.workspace_id AND s.id=b.skill_id LEFT JOIN skill_versions v ON v.workspace_id=s.workspace_id AND v.id=s.current_published_version_id WHERE b.workspace_id=$1 AND b.source_id=$2 AND ($3::boolean OR b.disconnected_at IS NULL) ORDER BY b.skill_path",
+        "SELECT b.*,s.slug,s.name,s.visibility,s.current_published_version_id,s.archived_at,v.content_digest AS current_digest FROM skill_source_bindings b JOIN skills s ON s.workspace_id=b.workspace_id AND s.id=b.skill_id LEFT JOIN skill_versions v ON v.workspace_id=s.workspace_id AND v.id=s.current_published_version_id WHERE b.workspace_id=$1 AND b.source_id=$2 AND ($3::boolean OR b.disconnected_at IS NULL) ORDER BY b.skill_path",
         [p.workspaceId, id, includeDisconnected],
       )
     ).rows;
@@ -430,11 +432,28 @@ export class GitSourceService {
         });
         continue;
       }
+      let preparedDigest: string;
+      try {
+        preparedDigest = (
+          await this.skills.prepareGitBundle(
+            item.bundle,
+            m.principal,
+            binding?.visibility ?? "private",
+          )
+        ).digest;
+      } catch {
+        plan.push({
+          ...base,
+          action: "error",
+          message: "Skill composition could not be resolved",
+        });
+        continue;
+      }
       plan.push({
         ...base,
         action: binding
           ? binding.last_digest === item.bundle.digest ||
-            binding.current_digest === item.bundle.digest
+            binding.current_digest === preparedDigest
             ? "unchanged"
             : "changed"
           : "added",
@@ -526,6 +545,12 @@ export class GitSourceService {
     if (claimed.replay) return runRecord(claimed.run);
     const { source, run } = claimed,
       results = [...run.results];
+    const lease = { sourceId: source.id, token, revision: run.source_revision };
+    const fenced = <T>(fn: (c: PoolClient) => Promise<T>) =>
+      this.transaction(m, async (c) => {
+        await assertGitSourceLease(c, m.principal.workspaceId, lease);
+        return fn(c);
+      });
     try {
       const snapshot = await this.provider.snapshot(
         this.config(source),
@@ -536,7 +561,7 @@ export class GitSourceService {
       for (const entry of run.plan) {
         if (results.some((r) => r.path === entry.path && !["error"].includes(r.status)))
           continue;
-        await this.transaction(m, async (c) => {
+        await fenced(async (c) => {
           const renewed = await c.query(
             "UPDATE skill_sources SET sync_expires_at=now()+interval '3 minutes' WHERE workspace_id=$1 AND id=$2 AND sync_token=$3 AND sync_expires_at>now() RETURNING id",
             [m.principal.workspaceId, source.id, token],
@@ -577,6 +602,12 @@ export class GitSourceService {
             );
             let versionId: string, skillId: string;
             if (recovered.rows[0]) {
+              if (recovered.rows[0].status === "rejected")
+                throw new DomainError(
+                  "CONFLICT",
+                  "The recovered imported candidate was rejected; preview again",
+                  409,
+                );
               versionId = recovered.rows[0].version_id;
               skillId = recovered.rows[0].skill_id;
             } else {
@@ -602,6 +633,7 @@ export class GitSourceService {
                 ...(m.fencingEpoch === undefined
                   ? {}
                   : { fencingEpoch: m.fencingEpoch }),
+                gitLease: lease,
                 gitProvenance: {
                   sourceId: source.id,
                   runId: run.id,
@@ -643,7 +675,30 @@ export class GitSourceService {
               versionId,
               message: null,
             };
-            await this.transaction(m, async (c) => {
+            await fenced(async (c) => {
+              const committed = await c.query<{
+                status: string;
+                archived_at: Date | null;
+                current_published_version_id: string | null;
+              }>(
+                `SELECT v.status,s.archived_at,s.current_published_version_id FROM skill_versions v JOIN skills s ON s.workspace_id=v.workspace_id AND s.id=v.skill_id WHERE v.workspace_id=$1 AND v.id=$2 AND s.id=$3 FOR UPDATE OF s,v`,
+                [m.principal.workspaceId, versionId, skillId],
+              );
+              const v = committed.rows[0];
+              if (
+                !v ||
+                v.archived_at ||
+                v.status === "rejected" ||
+                (v.current_published_version_id !==
+                  (entry.baseVersionId ?? versionId) &&
+                  v.current_published_version_id !== versionId)
+              )
+                throw new DomainError(
+                  "CONFLICT",
+                  "Imported version was rejected, archived, or superseded; preview again",
+                  409,
+                );
+              result.status = v.status === "published" ? "imported" : "pending_review";
               await c.query(
                 "INSERT INTO skill_source_bindings(workspace_id,source_id,skill_path,skill_id,last_commit_sha,last_digest,last_version_id,base_version_id,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(source_id,skill_path) DO UPDATE SET skill_id=EXCLUDED.skill_id,disconnected_at=NULL,last_commit_sha=EXCLUDED.last_commit_sha,last_digest=EXCLUDED.last_digest,last_version_id=EXCLUDED.last_version_id,base_version_id=EXCLUDED.base_version_id,status=EXCLUDED.status,updated_at=now()",
                 [
@@ -660,7 +715,41 @@ export class GitSourceService {
               );
             });
           } else if (entry.skillId)
-            await this.transaction(m, async (c) => {
+            await fenced(async (c) => {
+              if (entry.action === "unchanged") {
+                const target = await c.query<{
+                  current_published_version_id: string | null;
+                  archived_at: Date | null;
+                  last_version_id: string | null;
+                }>(
+                  `SELECT s.current_published_version_id,s.archived_at,b.last_version_id FROM skills s JOIN skill_source_bindings b ON b.workspace_id=s.workspace_id AND b.skill_id=s.id WHERE s.workspace_id=$1 AND b.source_id=$2 AND b.skill_path=$3 AND b.disconnected_at IS NULL FOR UPDATE OF s,b`,
+                  [m.principal.workspaceId, source.id, entry.path],
+                );
+                const t = target.rows[0];
+                if (
+                  !t ||
+                  t.archived_at ||
+                  t.current_published_version_id !== entry.baseVersionId ||
+                  t.last_version_id !== entry.bindingVersionId
+                )
+                  throw new DomainError(
+                    "CONFLICT",
+                    "Skill changed after preview; preview again",
+                    409,
+                  );
+                if (t.last_version_id) {
+                  const last = await c.query<{ status: string }>(
+                    "SELECT status FROM skill_versions WHERE workspace_id=$1 AND id=$2 FOR UPDATE",
+                    [m.principal.workspaceId, t.last_version_id],
+                  );
+                  if (last.rows[0]?.status === "rejected")
+                    throw new DomainError(
+                      "CONFLICT",
+                      "The imported candidate was rejected; preview again",
+                      409,
+                    );
+                }
+              }
               await c.query(
                 "UPDATE skill_source_bindings SET status=$4,last_commit_sha=CASE WHEN $4='unchanged' THEN $5 ELSE last_commit_sha END,updated_at=now() WHERE workspace_id=$1 AND source_id=$2 AND skill_path=$3",
                 [
@@ -673,6 +762,7 @@ export class GitSourceService {
               );
             });
         } catch (e) {
+          if (e instanceof DomainError && e.code === "GIT_SOURCE_LEASE_LOST") throw e;
           result = {
             ...result,
             status: "error",
@@ -685,7 +775,7 @@ export class GitSourceService {
         const previous = results.findIndex((r) => r.path === entry.path);
         if (previous >= 0) results[previous] = result;
         else results.push(result);
-        await this.transaction(m, async (c) => {
+        await fenced(async (c) => {
           await c.query(
             "UPDATE skill_source_runs SET results=$4,status='partial',failure_message=NULL,applied_at=now() WHERE workspace_id=$1 AND source_id=$2 AND id=$3",
             [m.principal.workspaceId, source.id, run.id, JSON.stringify(results)],
@@ -693,7 +783,7 @@ export class GitSourceService {
         });
       }
       const status = results.some((r) => r.status === "error") ? "partial" : "complete";
-      await this.transaction(m, async (c) => {
+      await fenced(async (c) => {
         await c.query(
           "UPDATE skill_source_runs SET results=$4,status=$5,failure_message=NULL,applied_at=now() WHERE workspace_id=$1 AND source_id=$2 AND id=$3",
           [m.principal.workspaceId, source.id, run.id, JSON.stringify(results), status],
@@ -717,7 +807,7 @@ export class GitSourceService {
         applied_at: new Date(),
       });
     } catch (error) {
-      await this.transaction(m, async (c) => {
+      await fenced(async (c) => {
         await c.query(
           "UPDATE skill_source_runs SET status='partial',failure_message=$4,applied_at=now() WHERE workspace_id=$1 AND source_id=$2 AND id=$3",
           [

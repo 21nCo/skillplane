@@ -32,7 +32,6 @@ export const skillSources = pgTable(
   },
   (t) => [
     uniqueIndex("skill_sources_workspace_id_unique").on(t.workspaceId, t.id),
-    index("skill_sources_workspace_idx").on(t.workspaceId, t.id),
     check("skill_sources_ref_policy_check", sql`${t.refPolicy} IN ('track','pin')`),
   ],
 );
@@ -82,10 +81,9 @@ export const skillSourceBindings = pgTable(
   },
   (t) => [
     primaryKey({ columns: [t.sourceId, t.skillPath] }),
-    uniqueIndex("skill_source_bindings_workspace_skill_unique").on(
-      t.workspaceId,
-      t.skillId,
-    ),
+    uniqueIndex("skill_source_bindings_workspace_skill_unique")
+      .on(t.workspaceId, t.skillId)
+      .where(sql`${t.disconnectedAt} IS NULL`),
     foreignKey({
       columns: [t.workspaceId, t.sourceId],
       foreignColumns: [skillSources.workspaceId, skillSources.id],
@@ -110,6 +108,10 @@ export const skillVersionGitProvenance = pgTable(
     importedAt: utc("imported_at").notNull().defaultNow(),
   },
   (t) => [
+    uniqueIndex("skill_version_git_provenance_run_skill_unique").on(
+      t.runId,
+      t.skillPath,
+    ),
     foreignKey({
       columns: [t.workspaceId, t.sourceId],
       foreignColumns: [skillSources.workspaceId, skillSources.id],

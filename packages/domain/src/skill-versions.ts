@@ -1,3 +1,4 @@
+import { assertGitSourceLease, type GitSourceLease } from "./git-provenance.js";
 import {
   insertGitVersionProvenance,
   type GitVersionProvenance,
@@ -177,6 +178,7 @@ export class SkillVersionService {
     readonly idempotencyKey: string;
     readonly requestId: string;
     readonly gitProvenance?: GitVersionProvenance;
+    readonly gitLease?: GitSourceLease;
     readonly fencingEpoch?: number;
   }): Promise<SkillVersionRecord> {
     authorize(options.principal, "skills:write");
@@ -229,6 +231,12 @@ export class SkillVersionService {
         this.pool,
         `${options.requestId}:reserve`,
         async ({ client }) => {
+          if (options.gitLease)
+            await assertGitSourceLease(
+              client,
+              options.principal.workspaceId,
+              options.gitLease,
+            );
           const result = await client.query<{
             current_published_version_id: string | null;
             archived_at: Date | null;
@@ -301,6 +309,12 @@ export class SkillVersionService {
         this.pool,
         options.requestId,
         async ({ client }) => {
+          if (options.gitLease)
+            await assertGitSourceLease(
+              client,
+              options.principal.workspaceId,
+              options.gitLease,
+            );
           await client.query(
             `INSERT INTO skill_versions
                (id, workspace_id, skill_id, revision, semantic_version, status,

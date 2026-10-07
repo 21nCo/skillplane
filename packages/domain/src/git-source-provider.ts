@@ -24,6 +24,11 @@ export interface GitSnapshot {
 export interface GitSourceProvider {
   snapshot(config: GitSourceConfig, commitSha?: string): Promise<GitSnapshot>;
 }
+class SnapshotLimitError extends DomainError {
+  constructor(message: string) {
+    super("VALIDATION_FAILED", message, 400);
+  }
+}
 function invalid(message: string): never {
   throw new DomainError("VALIDATION_FAILED", message, 400);
 }
@@ -126,8 +131,8 @@ export class PublicGitHubSourceProvider implements GitSourceProvider {
       if (remaining <= 0)
         throw new DomainError("SERVICE_UNAVAILABLE", "Git source fetch timed out", 503);
       if (++requests > MAX_REQUESTS)
-        invalid(
-          "Repository exceeds the 200 request import limit; select one skill path",
+        throw new SnapshotLimitError(
+          "Source exceeds the 200 request import limit; reduce its skill/file scope",
         );
       let response: Response;
       try {
@@ -164,15 +169,26 @@ export class PublicGitHubSourceProvider implements GitSourceProvider {
       if (!reader) invalid("GitHub returned an empty response");
       const parts: Uint8Array[] = [];
       let size = 0;
-      for (;;) {
-        const next = await reader.read();
-        if (next.done) break;
-        size += next.value.byteLength;
-        if (size > maxBytes) {
-          await reader.cancel();
-          invalid("GitHub response exceeds the import limit");
+      try {
+        for (;;) {
+          const next = await reader.read();
+          if (next.done) break;
+          size += next.value.byteLength;
+          if (size > maxBytes) {
+            await reader.cancel();
+            invalid("GitHub response exceeds the import limit");
+          }
+          parts.push(next.value);
         }
-        parts.push(next.value);
+      } catch (e) {
+        if (e instanceof DomainError) throw e;
+        throw new DomainError(
+          "SERVICE_UNAVAILABLE",
+          "GitHub response was interrupted; retry later",
+          503,
+        );
+      } finally {
+        reader.releaseLock();
       }
       const bytes = new Uint8Array(size);
       let offset = 0;
@@ -236,7 +252,7 @@ export class PublicGitHubSourceProvider implements GitSourceProvider {
     for (const root of selected.sort()) {
       try {
         if (
-          selected.some(
+          roots.some(
             (other) => other !== root && (root === "" || other.startsWith(`${root}/`)),
           )
         )
@@ -259,6 +275,10 @@ export class PublicGitHubSourceProvider implements GitSourceProvider {
             entry.size < 0
           )
             invalid("Skill file exceeds the size limit");
+          if (totalBytes + entry.size > MAX_SNAPSHOT_BYTES)
+            throw new SnapshotLimitError(
+              "Source exceeds the 20 MiB expanded import limit",
+            );
           let bytes = blobCache.get(entry.sha);
           if (!bytes) {
             const blob = await read(
@@ -287,7 +307,9 @@ export class PublicGitHubSourceProvider implements GitSourceProvider {
           }
           totalBytes += bytes.length;
           if (totalBytes > MAX_SNAPSHOT_BYTES)
-            invalid("Source exceeds the 20 MiB expanded import limit");
+            throw new SnapshotLimitError(
+              "Source exceeds the 20 MiB expanded import limit",
+            );
           const decoded = new TextDecoder().decode(bytes);
           if (
             /-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----|\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{50,}|AKIA[0-9A-Z]{16})\b/.test(
@@ -347,7 +369,11 @@ export class PublicGitHubSourceProvider implements GitSourceProvider {
         const bundle = await canonicalizeBundleFiles({ skill: result.data, files });
         skills.push({ path: root, bundle, error: null });
       } catch (error) {
-        if (error instanceof DomainError && error.status === 503) throw error;
+        if (
+          error instanceof SnapshotLimitError ||
+          (error instanceof DomainError && error.status === 503)
+        )
+          throw error;
         skills.push({
           path: root,
           bundle: null,

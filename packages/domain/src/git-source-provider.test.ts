@@ -44,7 +44,7 @@ function fixture(
     }
     return new Response(JSON.stringify(data), { status: options.status ?? 200 });
   };
-  return { provider: new PublicGitHubSourceProvider(fetcher), calls };
+  return { provider: new PublicGitHubSourceProvider(fetcher), calls, fetcher };
 }
 const markdown = (name: string) =>
   `---\nname: ${name}\ndescription: >\n  A repeatable review\n  workflow\n---\n# ${name}\nInspect evidence.\n`;
@@ -130,6 +130,13 @@ describe("public GitHub source provider", () => {
       }),
     );
     expect(one.skills[0]?.bundle?.skill.slug).toBe("nested");
+    const parent = await fixture({
+      "a/SKILL.md": markdown("Parent"),
+      "a/scripts/SKILL.md": markdown("Child"),
+    }).provider.snapshot(
+      gitSourceConfig({ repositoryUrl: "https://github.com/a/b", path: "a" }),
+    );
+    expect(parent.skills[0]?.error).toContain("Nested");
     const missing = await provider.snapshot(
       gitSourceConfig({ repositoryUrl: "https://github.com/a/b", path: "missing" }),
     );
@@ -168,8 +175,12 @@ describe("public GitHub source provider", () => {
       "templates/review.md": "# Review",
       "agents/openai.yaml": "display_name: Review",
     }).provider.snapshot(config);
-    expect(r.skills[0]?.bundle?.manifest.files.map((f) => f.path)).toContain(
-      "LICENSE.txt",
+    expect(r.skills[0]?.bundle?.manifest.files.map((f) => f.path)).toEqual(
+      expect.arrayContaining([
+        "LICENSE.txt",
+        "templates/review.md",
+        "agents/openai.yaml",
+      ]),
     );
     const alias = await fixture({
       "SKILL.md": "---\nname: &name Review\ndescription: *name\n---\n# Review\n",
@@ -202,4 +213,33 @@ describe("public GitHub source provider", () => {
     );
     await expect(large.snapshot(config)).rejects.toThrow("limit");
   });
+  it("propagates body-stream failures as retryable transport errors", async () => {
+    const f = fixture({ "SKILL.md": markdown("Review") });
+    const provider = new PublicGitHubSourceProvider(async (input, init) =>
+      String(input).includes("/git/blobs/")
+        ? new Response(
+            new ReadableStream({
+              start(controller) {
+                controller.error(new Error("connection reset"));
+              },
+            }),
+          )
+        : f.fetcher(input, init),
+    );
+    await expect(
+      provider.snapshot(gitSourceConfig({ repositoryUrl: "https://github.com/a/b" })),
+    ).rejects.toMatchObject({ code: "SERVICE_UNAVAILABLE", status: 503 });
+  });
+  it("stops the whole snapshot before downloading beyond its aggregate byte budget", async () => {
+    const files: Record<string, string> = {};
+    for (let i = 0; i < 6; i++) {
+      files[`s${i}/SKILL.md`] = markdown(`Skill ${i}`);
+      files[`s${i}/assets/data.txt`] = String(i) + "x".repeat(4 * 1024 * 1024);
+    }
+    const f = fixture(files);
+    await expect(
+      f.provider.snapshot(gitSourceConfig({ repositoryUrl: "https://github.com/a/b" })),
+    ).rejects.toThrow("20 MiB");
+    expect(f.calls.length).toBeLessThanOrEqual(11);
+  }, 30000);
 });

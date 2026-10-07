@@ -68,21 +68,25 @@
     if (canManage) await findSkills();
   }
   async function run(action: () => Promise<void>) {
-    if (busy) return;
+    if (busy || !workspace) return;
+    const id = workspace.id;
     busy = true;
     error = "";
     try {
       await action();
     } catch (e) {
-      error = e instanceof Error ? e.message : "The request failed";
+      if (current(id)) error = e instanceof Error ? e.message : "The request failed";
     } finally {
-      busy = false;
+      if (current(id)) busy = false;
     }
   }
   function config() {
     return { repositoryUrl, ref, refPolicy, path: singlePath ? path : null };
   }
-  async function save(archived = Boolean(selected?.source.archivedAt)) {
+  async function save(
+    archived = Boolean(selected?.source.archivedAt),
+    lifecycleOnly = false,
+  ) {
     if (!workspace) return;
     const id = workspace.id;
     const r = await sourceRequest<{ source: Source }>(
@@ -90,7 +94,14 @@
       selected ? `/${encodeURIComponent(selected.source.id)}` : "",
       selected ? "PATCH" : "POST",
       {
-        ...config(),
+        ...(lifecycleOnly && selected
+          ? {
+              repositoryUrl: selected.source.repositoryUrl,
+              ref: selected.source.ref,
+              refPolicy: selected.source.refPolicy,
+              path: selected.source.path,
+            }
+          : config()),
         ...(selected ? { archived, expectedRevision: selected.source.revision } : {}),
       },
       creationKey,
@@ -160,8 +171,22 @@
       selected = null;
       preview = null;
       error = "";
+      busy = false;
+      cursor = null;
+      bindQuery = "";
+      repositoryUrl = "";
+      ref = "HEAD";
+      refPolicy = "track";
+      path = "";
+      singlePath = false;
+      bindPath = "";
+      bindSkillId = "";
+      available = [];
+      creationKey = crypto.randomUUID();
+      const id = workspace.id;
       void load().catch((e: unknown) => {
-        error = e instanceof Error ? e.message : "Sources could not be loaded";
+        if (current(id))
+          error = e instanceof Error ? e.message : "Sources could not be loaded";
       });
     }
   });
@@ -247,7 +272,7 @@
       {#if selected}<Button
           variant="secondary"
           disabled={busy}
-          onclick={() => void run(() => save(!selected?.source.archivedAt))}
+          onclick={() => void run(() => save(!selected?.source.archivedAt, true))}
           >{selected.source.archivedAt ? "Restore source" : "Archive source"}</Button
         >{/if}
     </form>{/if}

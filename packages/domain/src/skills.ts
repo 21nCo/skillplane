@@ -1,3 +1,4 @@
+import { assertGitSourceLease, type GitSourceLease } from "./git-provenance.js";
 import {
   insertGitVersionProvenance,
   type GitVersionProvenance,
@@ -320,6 +321,14 @@ export class SkillService {
     this.idempotency = new IdempotencyStore(pool);
   }
 
+  async prepareGitBundle(
+    bundle: CanonicalBundle,
+    principal: Principal,
+    visibility: SkillVisibility,
+  ) {
+    return (await this.composition.prepare(bundle, principal, visibility)).bundle;
+  }
+
   async create(options: {
     readonly workspaceId: string;
     readonly principal: Principal;
@@ -328,6 +337,7 @@ export class SkillService {
     readonly idempotencyKey: string;
     readonly requestId: string;
     readonly gitProvenance?: GitVersionProvenance;
+    readonly gitLease?: GitSourceLease;
     readonly fencingEpoch?: number;
     readonly auditContext?: MutationAuditContext;
   }): Promise<{ readonly skill: SkillRecord; readonly version: SkillVersionRecord }> {
@@ -395,6 +405,8 @@ export class SkillService {
         this.pool,
         options.requestId,
         async ({ client }) => {
+          if (options.gitLease)
+            await assertGitSourceLease(client, options.workspaceId, options.gitLease);
           await client.query(
             `INSERT INTO skills
                (id, workspace_id, slug, name, description, tags, visibility,

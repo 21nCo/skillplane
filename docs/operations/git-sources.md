@@ -32,7 +32,11 @@ Repeated content creates no version, even when the commit changes. Apply retries
 reuse the same run and per-item idempotency keys; version and Git provenance commit
 atomically. A retry also recovers a committed version whose binding/result write
 failed. A bounded, renewable database lease serializes sync for each source and
-prevents settings/binding edits while it runs. Completed syncs invalidate older
+prevents settings/binding edits while it runs. Version/provenance commits and
+binding/run mutations validate lease ownership, expiry, and source revision under
+a database row lock; a stalled worker cannot resume after expiry or takeover.
+Apply rechecks review decisions before recording unchanged content or recovering a
+previously committed candidate. Completed syncs invalidate older
 previews. A new preview is required to apply corrected content at another commit.
 
 ## Provenance and storage
@@ -78,7 +82,7 @@ Under `/api/v1/workspaces/:workspaceId/sources`:
 
 - `GET` lists sources (50 per page, `cursor`); `POST` creates with an idempotency key.
 - `GET /:sourceId` returns source, bindings, and the latest 20 runs.
-- `PATCH /:sourceId` changes ref/policy/archive with `expectedRevision`.
+- `PATCH /:sourceId` replaces ref/policy/archive configuration. Include `repositoryUrl`, `path`, `archived`, and `expectedRevision`, plus the existing `ref` and `refPolicy` values to retain them.
 - `POST /:sourceId/bindings` explicitly binds `path` and `skillId`; `DELETE` disconnects `path`.
 - `POST /:sourceId/preview` creates a plan; `POST /:sourceId/apply` confirms `runId`.
 

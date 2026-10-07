@@ -1,4 +1,26 @@
 import type { PoolClient } from "pg";
+import { DomainError } from "./errors.js";
+export interface GitSourceLease {
+  sourceId: string;
+  token: string;
+  revision: number;
+}
+export async function assertGitSourceLease(
+  client: PoolClient,
+  workspaceId: string,
+  lease: GitSourceLease,
+) {
+  const result = await client.query(
+    `SELECT id FROM skill_sources WHERE workspace_id=$1 AND id=$2 AND sync_token=$3 AND revision=$4 AND archived_at IS NULL AND sync_expires_at > clock_timestamp() FOR UPDATE`,
+    [workspaceId, lease.sourceId, lease.token, lease.revision],
+  );
+  if (!result.rowCount)
+    throw new DomainError(
+      "GIT_SOURCE_LEASE_LOST",
+      "Source sync lease was lost; preview again",
+      409,
+    );
+}
 export interface GitVersionProvenance {
   sourceId: string;
   runId: string;
