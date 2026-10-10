@@ -1,0 +1,182 @@
+{
+  "cli_version": "0.11.3",
+  "checkpoint_id": "01M4JPHZJD4YGZMAKX6W50TCSV",
+  "session_id": "ca62123f-e191-43ba-a12e-6d1b29e43d5c",
+  "strategy": "manual-commit",
+  "created_at": "2026-10-10T10:43:20.518374Z",
+  "branch": "main",
+  "checkpoints_count": 6,
+  "save_step_count": 8,
+  "files_touched": [
+    "deployment/wrangler/mcp.development.json",
+    "deployment/wrangler/mcp.production.json",
+    "docs/operations/mcpfn.md",
+    "mcp/package.json",
+    "mcp/wrangler.jsonc",
+    "packages/authfn-mcp-oauth/package.json",
+    "pnpm-lock.yaml",
+    "pnpm-workspace.yaml",
+    "scripts/lib/local-wrangler-config.test.mjs",
+    "scripts/lib/topology-deployment.mjs",
+    "scripts/topology-deployment.test.mjs"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-5-5",
+  "turn_id": "db2bad7b80cb",
+  "checkpoint_transcript_start": 326,
+  "transcript_lines_at_start": 326,
+  "compact_transcript_start": 40,
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-use-skillplane-2026-10-07T05:17:31.563302Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "use-skillplane"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "40710931b5bf",
+      "timestamp": "2026-10-07T05:17:31.563302Z",
+      "native": {
+        "command": "/use-skillplane"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/use-skillplane",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "prompt-skill-claude-code-use-skillplane-2026-10-07T09:44:40.645035Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "use-skillplane"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "8ee5f82cb96b",
+      "timestamp": "2026-10-07T09:44:40.645035Z",
+      "native": {
+        "command": "/use-skillplane"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/use-skillplane",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 8
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-10-10T10:43:20.492746Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 56,
+    "human_removed": 76,
+    "total_committed": 0,
+    "total_lines_changed": 132,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 76,
+      "user_lines_removed": 56,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        "deployment/wrangler/mcp.development.json": 1,
+        "deployment/wrangler/mcp.production.json": 1,
+        "docs/operations/mcpfn.md": 3,
+        "mcp/package.json": 3,
+        "mcp/wrangler.jsonc": 1,
+        "packages/authfn-mcp-oauth/package.json": 1,
+        "pnpm-lock.yaml": 59,
+        "pnpm-workspace.yaml": 3,
+        "scripts/lib/local-wrangler-config.test.mjs": 1,
+        "scripts/lib/topology-deployment.mjs": 1,
+        "scripts/topology-deployment.test.mjs": 2
+      },
+      "user_removed_per_file": {
+        "deployment/wrangler/mcp.development.json": 1,
+        "deployment/wrangler/mcp.production.json": 1,
+        "docs/operations/mcpfn.md": 3,
+        "mcp/package.json": 3,
+        "mcp/wrangler.jsonc": 1,
+        "packages/authfn-mcp-oauth/package.json": 1,
+        "pnpm-lock.yaml": 27,
+        "pnpm-workspace.yaml": 3,
+        "scripts/lib/local-wrangler-config.test.mjs": 4,
+        "scripts/lib/topology-deployment.mjs": 4,
+        "scripts/topology-deployment.test.mjs": 8
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 76,
+      "agent_lines_removed": 56
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 76,
+      "agent_lines_removed": 56
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 76,
+      "agent_lines_removed": 56
+    },
+    {
+      "checkpoint_number": 5,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 76,
+      "agent_lines_removed": 56
+    },
+    {
+      "checkpoint_number": 6,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 76,
+      "agent_lines_removed": 56
+    },
+    {
+      "checkpoint_number": 7,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 76,
+      "agent_lines_removed": 56
+    },
+    {
+      "checkpoint_number": 8,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 76,
+      "agent_lines_removed": 56
+    }
+  ]
+}
