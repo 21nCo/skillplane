@@ -1,14 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import regionalDatafn from "../../src/regional-datafn-worker.js";
 
-const authority = "https://app-dev.skillplane.dev";
+const authority = "https://skillplane-app.21n.dev";
 const regions = ["in-south", "us-east"] as const;
 const topology = {
   public: { appAuthority: authority },
   cells: regions.map((regionId) => ({
     regionId,
     datafnEndpoint: {
-      httpUrl: `https://datafn-${regionId}-dev.skillplane.dev/datafn`,
+      httpUrl: `https://skillplane-datafn-${regionId}.21n.dev/datafn`,
       audience: `skillplane-datafn-dev-${regionId}`,
     },
   })),
@@ -26,7 +26,7 @@ function fixture(regionId: (typeof regions)[number]) {
     CELL_APP: { fetch: cell },
     DATAFN_EDGE_LIMIT: { limit },
   };
-  const url = `https://datafn-${regionId}-dev.skillplane.dev/datafn/query`;
+  const url = `https://skillplane-datafn-${regionId}.21n.dev/datafn/query`;
   return { env, url, cell, limit };
 }
 

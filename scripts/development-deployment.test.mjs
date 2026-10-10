@@ -158,6 +158,8 @@ describe("development deployment isolation", () => {
       SKILLPLANE_PRODUCTION_MIGRATION_SOURCE_DATABASE_URL: undefined,
       SKILLPLANE_DEV_CLOUDFLARE_API_TOKEN: "dev-cloudflare-token-material-1234567890",
       SKILLPLANE_PRODUCTION_R2_READ_TOKEN: "prod-r2-token-material-1234567890",
+      SKILLPLANE_PRODUCTION_CLOUDFLARE_ACCOUNT_ID: "b".repeat(32),
+      CLOUDFLARE_ACCOUNT_ID: "c".repeat(32),
     };
     for (const url of Object.values(databases)) {
       withEnvironment({ ...environment, RAILWAY_DATABASE_URL: url }, () => {
@@ -262,10 +264,13 @@ describe("development deployment isolation", () => {
         CLOUDFLARE_API_TOKEN: "production-cloudflare-api-token-material-1234567890",
         CLOUDFLARE_API_KEY: "legacy-key-must-not-be-inherited",
         CLOUDFLARE_EMAIL: "operator@example.test",
+        CLOUDFLARE_ACCOUNT_ID: "C801".repeat(8),
+        SKILLPLANE_PRODUCTION_CLOUDFLARE_ACCOUNT_ID: "1bef".repeat(8),
       },
       () => {
         const environment = developmentCloudflareEnvironment();
         assert.equal(environment.CLOUDFLARE_API_TOKEN, token);
+        assert.equal(environment.CLOUDFLARE_ACCOUNT_ID, "c801".repeat(8));
         assert.equal(environment.SKILLPLANE_DEV_CLOUDFLARE_API_TOKEN, undefined);
         assert.equal(environment.CLOUDFLARE_API_KEY, undefined);
         assert.equal(environment.CLOUDFLARE_EMAIL, undefined);
@@ -273,13 +278,50 @@ describe("development deployment isolation", () => {
     );
   });
 
+  it("refuses development Cloudflare operations against the production account", () => {
+    const token = "development-cloudflare-api-token-material-1234567890";
+    const productionAccountId = "1bef".repeat(8);
+    for (const [overrides, pattern] of [
+      [{ CLOUDFLARE_ACCOUNT_ID: undefined }, /CLOUDFLARE_ACCOUNT_ID is required/u],
+      [
+        {
+          CLOUDFLARE_ACCOUNT_ID: "c801".repeat(8),
+          SKILLPLANE_PRODUCTION_CLOUDFLARE_ACCOUNT_ID: undefined,
+        },
+        /SKILLPLANE_PRODUCTION_CLOUDFLARE_ACCOUNT_ID is required/u,
+      ],
+      [
+        { CLOUDFLARE_ACCOUNT_ID: productionAccountId },
+        /must be the development account/u,
+      ],
+      [
+        { CLOUDFLARE_ACCOUNT_ID: productionAccountId.toUpperCase() },
+        /must be the development account/u,
+      ],
+    ]) {
+      withEnvironment(
+        {
+          SKILLPLANE_DEV_CLOUDFLARE_API_TOKEN: token,
+          CLOUDFLARE_API_TOKEN: undefined,
+          SKILLPLANE_PRODUCTION_CLOUDFLARE_ACCOUNT_ID: productionAccountId,
+          ...overrides,
+        },
+        () => assert.throws(() => developmentCloudflareEnvironment(), pattern),
+      );
+    }
+  });
+
   it("uses a separate read-only token for production bundle reads", () => {
     const sourceToken = "production-r2-read-token-material-1234567890";
     const developmentToken = "development-cloudflare-token-material-1234567890";
+    const sourceAccountId = "1bef".repeat(8);
+    const targetAccountId = "2".repeat(32);
     withEnvironment(
       {
         SKILLPLANE_PRODUCTION_R2_READ_TOKEN: sourceToken,
+        SKILLPLANE_PRODUCTION_CLOUDFLARE_ACCOUNT_ID: sourceAccountId.toUpperCase(),
         SKILLPLANE_DEV_CLOUDFLARE_API_TOKEN: developmentToken,
+        CLOUDFLARE_ACCOUNT_ID: targetAccountId,
         SKILLPLANE_PRODUCTION_DATABASE_URL:
           "postgresql://skillplane:secret@production.example/skillplane",
         CLOUDFLARE_API_KEY: "legacy-key-must-not-be-inherited",
@@ -287,6 +329,15 @@ describe("development deployment isolation", () => {
       () => {
         const environment = productionBundleReadEnvironment();
         assert.equal(environment.CLOUDFLARE_API_TOKEN, sourceToken);
+        assert.equal(environment.CLOUDFLARE_ACCOUNT_ID, sourceAccountId);
+        assert.equal(
+          environment.SKILLPLANE_PRODUCTION_CLOUDFLARE_ACCOUNT_ID,
+          undefined,
+        );
+        assert.equal(
+          developmentCloudflareEnvironment().CLOUDFLARE_ACCOUNT_ID,
+          targetAccountId,
+        );
         assert.equal(environment.SKILLPLANE_PRODUCTION_R2_READ_TOKEN, undefined);
         assert.equal(environment.SKILLPLANE_DEV_CLOUDFLARE_API_TOKEN, undefined);
         assert.equal(environment.SKILLPLANE_PRODUCTION_DATABASE_URL, undefined);
@@ -304,6 +355,21 @@ describe("development deployment isolation", () => {
           /must differ from the development Cloudflare token/u,
         ),
     );
+    for (const invalid of [undefined, "", "not-an-account-id"]) {
+      withEnvironment(
+        {
+          SKILLPLANE_PRODUCTION_R2_READ_TOKEN: sourceToken,
+          SKILLPLANE_DEV_CLOUDFLARE_API_TOKEN: developmentToken,
+          SKILLPLANE_PRODUCTION_CLOUDFLARE_ACCOUNT_ID: invalid,
+          CLOUDFLARE_ACCOUNT_ID: targetAccountId,
+        },
+        () =>
+          assert.throws(
+            () => productionBundleReadEnvironment(),
+            /SKILLPLANE_PRODUCTION_CLOUDFLARE_ACCOUNT_ID/u,
+          ),
+      );
+    }
   });
 
   it("allocates collision-free config dry-run paths", () => {
