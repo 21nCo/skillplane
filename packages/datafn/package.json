@@ -1,0 +1,45 @@
+{
+  "name": "@skillplane/datafn",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "development": "./src/index.ts",
+      "default": "./dist/src/index.js"
+    },
+    "./client": {
+      "types": "./src/client.ts",
+      "development": "./src/client.ts",
+      "default": "./dist/src/client.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc --project tsconfig.json",
+    "typecheck": "tsc --project tsconfig.json --noEmit",
+    "test:unit": "vitest run --exclude 'dist/**' src",
+    "test:integration": "vitest run --exclude 'dist/**' tests/integration",
+    "test:security": "vitest run --exclude 'dist/**' tests/security"
+  },
+  "dependencies": {
+    "@datafn/client": "catalog:",
+    "@datafn/core": "catalog:",
+    "@datafn/server": "catalog:",
+    "@skillplane/db": "workspace:*",
+    "@skillplane/domain": "workspace:*",
+    "@superfunctions/db": "catalog:",
+    "authfn": "catalog:",
+    "pg": "catalog:"
+  },
+  "devDependencies": {
+    "@skillplane/testing": "workspace:*",
+    "@types/pg": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

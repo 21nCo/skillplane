@@ -1,0 +1,145 @@
+import assert from "node:assert/strict";
+import { describe, it } from "node:test";
+import { renderDevelopmentTopologyConfigs } from "./render-development-topology-config.mjs";
+import { assertDevelopmentControlDatabaseShape } from "./prepare-development-topology-databases.mjs";
+import { parseOnlyKinds } from "./deploy-development-topology.mjs";
+import { selectDevelopmentTopologyOutputs } from "./lib/development-topology-deployment.mjs";
+
+const ids = {
+  control: "1".repeat(32),
+  inSouth: "2".repeat(32),
+  usEast: "3".repeat(32),
+  euWest: "4".repeat(32),
+};
+
+describe("multi-cell development deployment", () => {
+  it("rejects invalid deployment selections before starting deployment", () => {
+    assert.throws(
+      () => parseOnlyKinds(["--only", "app,ap"]),
+      /--only must contain app, mcp, projection, or datafn/u,
+    );
+    assert.deepEqual(parseOnlyKinds(["--only", "app,datafn"]), ["app", "datafn"]);
+  });
+
+  it("renders isolated gateways and three private regional cells", async () => {
+    const rendered = await renderDevelopmentTopologyConfigs({
+      controlHyperdriveId: ids.control,
+      publicBucketName: "skillplane-public-bundles-dev",
+      publicTurnstileSiteKey: "development-turnstile-site-key",
+      postHogProjectToken: `phc_${"d".repeat(32)}`,
+      cells: {
+        "in-south": {
+          hyperdriveId: ids.inSouth,
+          bucketName: "skillplane-skill-bundles-dev",
+        },
+        "us-east": {
+          hyperdriveId: ids.usEast,
+          bucketName: "skillplane-us-east-bundles-dev",
+        },
+        "eu-west": {
+          hyperdriveId: ids.euWest,
+          bucketName: "skillplane-eu-west-bundles-dev",
+        },
+      },
+      write: false,
+    });
+
+    assert.equal(rendered.outputs.length, 14);
+    const canary = selectDevelopmentTopologyOutputs(rendered.outputs, [
+      "app",
+      "datafn",
+    ]);
+    assert.equal(canary.length, 7);
+    assert.deepEqual(
+      canary.map((output) => output.kind),
+      ["app", "datafn", "app", "datafn", "app", "datafn", "app"],
+    );
+    assert.equal(canary.at(-1)?.id, "gateway:app");
+    const gatewayApp = rendered.outputs.find((output) => output.id === "gateway:app");
+    const gatewayMcp = rendered.outputs.find((output) => output.id === "gateway:mcp");
+    assert.equal(gatewayApp.config.name, "skillplane-app-dev");
+    assert.equal(gatewayApp.config.routes[0].pattern, "app-dev.skillplane.dev");
+    assert.equal(gatewayApp.config.vars.RUNTIME_ENV, "preview");
+    assert.equal(
+      gatewayApp.config.services.find(
+        (service) => service.binding === "CELL_EU_WEST_APP",
+      )?.service,
+      "skillplane-app-dev-eu-west",
+    );
+    assert.equal(gatewayMcp.config.name, "skillplane-mcp-dev");
+    assert.equal(gatewayMcp.config.routes[0].pattern, "mcp-dev.skillplane.dev");
+
+    for (const output of rendered.outputs.filter((item) => item.regionId)) {
+      if (output.kind === "datafn") {
+        assert.equal(
+          output.config.routes[0].pattern,
+          `datafn-${output.regionId}-dev.skillplane.dev`,
+        );
+      } else {
+        assert.equal(output.config.routes, undefined);
+      }
+      assert.equal(output.config.workers_dev, false);
+      assert.equal(output.config.vars.RUNTIME_ENV, "preview");
+      assert.equal(output.config.vars.SKILLPLANE_REGION_ID, output.regionId);
+    }
+  });
+
+  it("rejects a Hyperdrive reused across control and cells", async () => {
+    await assert.rejects(
+      renderDevelopmentTopologyConfigs({
+        controlHyperdriveId: ids.control,
+        publicBucketName: "skillplane-public-bundles-dev",
+        publicTurnstileSiteKey: "development-turnstile-site-key",
+        postHogProjectToken: `phc_${"d".repeat(32)}`,
+        cells: {
+          "in-south": {
+            hyperdriveId: ids.control,
+            bucketName: "skillplane-skill-bundles-dev",
+          },
+          "us-east": {
+            hyperdriveId: ids.usEast,
+            bucketName: "skillplane-us-east-bundles-dev",
+          },
+          "eu-west": {
+            hyperdriveId: ids.euWest,
+            bucketName: "skillplane-eu-west-bundles-dev",
+          },
+        },
+        write: false,
+      }),
+      /must be distinct/u,
+    );
+  });
+
+  it("rejects a combined database before control migration can drop regional data", () => {
+    assert.throws(
+      () =>
+        assertDevelopmentControlDatabaseShape({
+          tableNames: ["workspace_placements", "skills"],
+        }),
+      /empty or already control-only/u,
+    );
+    assert.doesNotThrow(() =>
+      assertDevelopmentControlDatabaseShape({
+        tableNames: [
+          "authfn_users",
+          "workspace_placements",
+          "skillplane_schema_migrations",
+        ],
+      }),
+    );
+    for (const regionalTable of [
+      "audit_events",
+      "datafn_runtime_records",
+      "__datafn_meta",
+    ]) {
+      assert.throws(
+        () =>
+          assertDevelopmentControlDatabaseShape({
+            tableNames: ["workspace_placements", regionalTable],
+          }),
+        /empty or already control-only/u,
+      );
+    }
+  });
+});

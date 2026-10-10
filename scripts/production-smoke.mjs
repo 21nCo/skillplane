@@ -1,0 +1,390 @@
+#!/usr/bin/env node
+
+import {
+  isMain,
+  productionIssuer,
+  productionResource,
+} from "./lib/production-deployment.mjs";
+
+const endpoints = Object.freeze({
+  landing: "https://skillplane.dev",
+  app: productionIssuer,
+  mcp: "https://mcp.skillplane.dev",
+});
+
+function assert(condition, message) {
+  if (!condition) throw new Error(message);
+}
+
+async function request(url, init = {}, options = {}) {
+  const attempts = options.attempts ?? 1;
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      const response = await fetch(url, {
+        redirect: "follow",
+        ...init,
+        signal: AbortSignal.timeout(options.timeoutMilliseconds ?? 10_000),
+      });
+      if (options.acceptStatus && !options.acceptStatus.includes(response.status)) {
+        throw new Error(`${new URL(url).pathname} returned ${response.status}`);
+      }
+      return response;
+    } catch (error) {
+      lastError = error;
+      if (attempt < attempts) {
+        await new Promise((resolve) => setTimeout(resolve, 2_000));
+      }
+    }
+  }
+  throw lastError;
+}
+
+function assertTls(response, host) {
+  const final = new URL(response.url);
+  assert(final.protocol === "https:", `${host} did not remain on TLS`);
+  assert(final.hostname === host, `${host} redirected to an unexpected host`);
+}
+
+function assertNoStore(response, label) {
+  const value = response.headers.get("cache-control") ?? "";
+  assert(
+    /(?:^|,)\s*(?:private,\s*)?no-store(?:,|$)/iu.test(value) ||
+      value.toLowerCase().includes("no-store"),
+    `${label} is not marked no-store`,
+  );
+}
+
+export function immutableAssetUrl(html, documentUrl) {
+  const reference = /(?:src|href)="((?:\.\/|\/)_app\/immutable\/[^"]+)"/u.exec(
+    html,
+  )?.[1];
+  return reference ? new URL(reference, documentUrl).toString() : undefined;
+}
+
+async function readJson(response, label) {
+  const contentType = response.headers.get("content-type") ?? "";
+  assert(contentType.includes("application/json"), `${label} is not JSON`);
+  try {
+    return await response.json();
+  } catch {
+    throw new Error(`${label} returned invalid JSON`);
+  }
+}
+
+async function readBrandIcon(origin, attempts) {
+  const response = await request(
+    `${origin}/icon-512.png`,
+    {},
+    { attempts, acceptStatus: [200] },
+  );
+  assert(
+    response.headers.get("content-type")?.includes("image/png"),
+    `${origin} did not serve the Skillplane PNG icon`,
+  );
+  const bytes = Buffer.from(await response.arrayBuffer());
+  assert(bytes.byteLength > 1_000, `${origin} served an empty brand icon`);
+  return bytes;
+}
+
+export async function productionReleaseSmoke(options = {}) {
+  const attempts = options.attempts ?? 1;
+  const app = await request(
+    endpoints.app,
+    {},
+    {
+      attempts,
+      acceptStatus: [200],
+    },
+  );
+  assertTls(app, "app.skillplane.dev");
+  const appHtml = await app.text();
+  assert(
+    appHtml.includes("Sign in · Skillplane"),
+    "The app host returned unexpected content",
+  );
+
+  const brandIcons = await Promise.all(
+    [endpoints.app, endpoints.mcp].map((origin) => readBrandIcon(origin, attempts)),
+  );
+  assert(
+    brandIcons.every((icon) => icon.equals(brandIcons[0])),
+    "App and MCP hosts do not serve the same Skillplane icon",
+  );
+
+  const mcpHome = await request(endpoints.mcp, {}, { attempts, acceptStatus: [200] });
+  assertTls(mcpHome, "mcp.skillplane.dev");
+  const mcpHomeHtml = await mcpHome.text();
+  assert(
+    mcpHomeHtml.includes("Skillplane MCP") &&
+      mcpHomeHtml.includes('href="/favicon.ico"'),
+    "The MCP origin omitted its Skillplane favicon discovery page",
+  );
+  const mcpFavicon = await request(
+    `${endpoints.mcp}/favicon.ico`,
+    {},
+    { attempts, acceptStatus: [200] },
+  );
+  assert(
+    mcpFavicon.headers.get("content-type")?.includes("image/x-icon") &&
+      (await mcpFavicon.arrayBuffer()).byteLength > 100,
+    "The MCP origin omitted its Skillplane favicon",
+  );
+
+  const live = await request(
+    `${endpoints.app}/api/v1/health/live`,
+    {},
+    {
+      attempts,
+      acceptStatus: [200],
+    },
+  );
+  assertNoStore(live, "Liveness response");
+  const liveBody = await readJson(live, "Liveness response");
+  assert(
+    liveBody.ok === true && liveBody.data?.status === "live",
+    "The app liveness contract failed",
+  );
+
+  const ready = await request(
+    `${endpoints.app}/api/v1/health/ready`,
+    {},
+    {
+      attempts,
+      acceptStatus: [200],
+      timeoutMilliseconds: 15_000,
+    },
+  );
+  assertNoStore(ready, "Readiness response");
+  const readyBody = await readJson(ready, "Readiness response");
+  const checks = readyBody.data?.checks;
+  assert(
+    readyBody.ok === true &&
+      readyBody.data?.status === "ready" &&
+      checks?.configuration?.code === "CONFIG_VALID" &&
+      checks?.postgres?.code === "POSTGRES_READY" &&
+      checks?.objectStorage?.code === "R2_READY",
+    "Hyperdrive, Postgres, R2, or production configuration is not ready",
+  );
+  assert(
+    !ready.headers.get("access-control-allow-origin"),
+    "Private readiness data unexpectedly enables cross-origin access",
+  );
+
+  const authorizationMetadata = await request(
+    `${endpoints.app}/.well-known/oauth-authorization-server`,
+    {},
+    { attempts, acceptStatus: [200] },
+  );
+  assertNoStore(authorizationMetadata, "OAuth metadata");
+  const authorizationBody = await readJson(authorizationMetadata, "OAuth metadata");
+  assert(
+    authorizationBody.issuer === productionIssuer &&
+      authorizationBody.authorization_endpoint ===
+        `${productionIssuer}/auth/oauth/authorize` &&
+      authorizationBody.token_endpoint === `${productionIssuer}/auth/oauth/token` &&
+      authorizationBody.registration_endpoint ===
+        `${productionIssuer}/auth/oauth/register` &&
+      authorizationBody.code_challenge_methods_supported?.includes("S256"),
+    "OAuth authorization server metadata is inconsistent",
+  );
+
+  const originlessOAuthForm = await request(
+    `${endpoints.app}/auth/oauth/token`,
+    {
+      method: "POST",
+      headers: {
+        accept: "application/json",
+        "content-type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({
+        grant_type: "authorization_code",
+        client_id: "production-smoke-unregistered-client",
+        redirect_uri: `${endpoints.app}/oauth/callback`,
+        resource: productionResource,
+        code: "production-smoke-invalid-code",
+        code_verifier: "production-smoke-invalid-verifier",
+      }),
+    },
+    { attempts, acceptStatus: [400, 401] },
+  );
+  assertNoStore(originlessOAuthForm, "Originless OAuth form response");
+  const originlessOAuthBody = await readJson(
+    originlessOAuthForm,
+    "Originless OAuth form response",
+  );
+  assert(
+    originlessOAuthBody.error === "invalid_client",
+    "The OAuth token endpoint rejected a standards-compliant originless form post",
+  );
+
+  for (const origin of [endpoints.app, endpoints.mcp]) {
+    const metadata = await request(
+      `${origin}/.well-known/oauth-protected-resource/mcp`,
+      {},
+      { attempts, acceptStatus: [200] },
+    );
+    assertNoStore(metadata, `${origin} protected-resource metadata`);
+    const body = await readJson(metadata, `${origin} protected-resource metadata`);
+    assert(
+      body.resource === productionResource &&
+        body.authorization_servers?.length === 1 &&
+        body.authorization_servers[0] === productionIssuer &&
+        body.scopes_supported?.includes("skills:read") &&
+        body.scopes_supported?.includes("skills:write") &&
+        body.scopes_supported?.includes("skills:amend") &&
+        body.scopes_supported?.includes("skills:publish") &&
+        body.scopes_supported?.includes("contexts:write"),
+      `${origin} protected-resource metadata is inconsistent`,
+    );
+  }
+
+  const unauthorizedMcp = await request(
+    `${endpoints.mcp}/mcp`,
+    {
+      method: "POST",
+      headers: {
+        accept: "application/json, text/event-stream",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: "production-smoke",
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-06-18",
+          capabilities: {},
+          clientInfo: { name: "skillplane-production-smoke", version: "1.0.0" },
+        },
+      }),
+    },
+    { attempts, acceptStatus: [401] },
+  );
+  assertNoStore(unauthorizedMcp, "Unauthorized MCP response");
+  const challenge = unauthorizedMcp.headers.get("www-authenticate") ?? "";
+  assert(
+    challenge.startsWith("Bearer ") &&
+      challenge.includes(
+        'resource_metadata="https://mcp.skillplane.dev/.well-known/oauth-protected-resource/mcp"',
+      ) &&
+      challenge.includes('error="invalid_token"'),
+    "The MCP bearer challenge is not resource-aware",
+  );
+
+  const datafn = await request(
+    `${endpoints.app}/datafn/query`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        resource: "skills",
+        version: 1,
+        select: ["id"],
+        limit: 1,
+      }),
+    },
+    { attempts, acceptStatus: [401, 403] },
+  );
+  assertNoStore(datafn, "Unauthenticated DataFn response");
+
+  return {
+    ok: true,
+    scope: "app-mcp-release",
+    checkedAt: new Date().toISOString(),
+    hosts: {
+      app: { status: app.status, tls: true },
+      mcp: { status: unauthorizedMcp.status, tls: true },
+    },
+    readiness: {
+      configuration: checks.configuration.code,
+      postgres: checks.postgres.code,
+      objectStorage: checks.objectStorage.code,
+    },
+    oauth: {
+      issuer: authorizationBody.issuer,
+      resource: productionResource,
+      pkce: "S256",
+    },
+    boundaries: {
+      privateNoStore: true,
+      privateCorsWildcard: false,
+      appMcpBrandConsistent: true,
+      datafnAuthenticationRequired: true,
+      mcpBearerChallenge: true,
+      originlessOAuthFormAccepted: true,
+    },
+  };
+}
+
+export async function productionTopologySmoke(options = {}) {
+  const attempts = options.attempts ?? 1;
+  const release = await productionReleaseSmoke(options);
+  const landing = await request(
+    endpoints.landing,
+    {},
+    {
+      attempts,
+      acceptStatus: [200],
+    },
+  );
+  assertTls(landing, "skillplane.dev");
+  const landingHtml = await landing.text();
+  assert(
+    landingHtml.includes("Skills that self-improve"),
+    "The landing host returned unexpected content",
+  );
+  assert(
+    (landing.headers.get("cache-control") ?? "").startsWith("public,"),
+    "The public landing page is not explicitly cacheable",
+  );
+  const immutableUrl = immutableAssetUrl(landingHtml, landing.url);
+  assert(immutableUrl, "The landing page omitted immutable assets");
+  const immutableAsset = await request(
+    immutableUrl,
+    {},
+    {
+      attempts,
+      acceptStatus: [200],
+    },
+  );
+  assert(
+    (immutableAsset.headers.get("cache-control") ?? "").includes("immutable"),
+    "A digest-named landing asset is missing immutable caching",
+  );
+
+  const [landingIcon, appIcon] = await Promise.all(
+    [endpoints.landing, endpoints.app].map((origin) => readBrandIcon(origin, attempts)),
+  );
+  assert(
+    landingIcon.equals(appIcon),
+    "Landing, app, and MCP hosts do not serve the same Skillplane icon",
+  );
+
+  return {
+    ...release,
+    scope: "production-topology",
+    checkedAt: new Date().toISOString(),
+    hosts: {
+      landing: { status: landing.status, tls: true, cache: "public" },
+      ...release.hosts,
+    },
+    boundaries: {
+      ...release.boundaries,
+      publicAssetImmutable: true,
+      landingAppMcpBrandConsistent: true,
+    },
+  };
+}
+
+if (isMain(import.meta.url)) {
+  const mode = process.argv[2] ?? "release";
+  assert(
+    mode === "release" || mode === "topology",
+    "Production smoke mode must be either release or topology",
+  );
+  const result =
+    mode === "topology"
+      ? await productionTopologySmoke()
+      : await productionReleaseSmoke();
+  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+}

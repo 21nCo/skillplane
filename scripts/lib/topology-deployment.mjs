@@ -1,0 +1,367 @@
+import { execFile } from "node:child_process";
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
+import { promisify } from "node:util";
+import { pathToFileURL } from "node:url";
+import { root } from "./production-deployment.mjs";
+
+const controlPlaneEntry = resolve(root, "packages/control-plane/dist/index.js");
+const execFileAsync = promisify(execFile);
+
+async function buildControlPlane() {
+  try {
+    await execFileAsync("pnpm", ["--filter", "@skillplane/control-plane", "build"], {
+      cwd: root,
+    });
+  } catch (error) {
+    const failure = new Error("The control-plane topology parser build failed");
+    failure.cause = error;
+    throw failure;
+  }
+}
+
+async function importControlPlaneTopologyParser() {
+  const entry = pathToFileURL(controlPlaneEntry);
+  entry.searchParams.set("built", `${Date.now()}`);
+  const { parseTopologyManifest } = await import(entry.href);
+  if (typeof parseTopologyManifest !== "function") {
+    throw new Error("The control-plane topology parser build is invalid");
+  }
+  return parseTopologyManifest;
+}
+
+export function createTopologyParserLoader(options = {}) {
+  const build = options.build ?? buildControlPlane;
+  const importParser = options.importParser ?? importControlPlaneTopologyParser;
+  let parser;
+  return async function loadTopologyParser() {
+    parser ??= (async () => {
+      await build();
+      return importParser();
+    })();
+    return parser;
+  };
+}
+
+const loadTopologyParser = createTopologyParserLoader();
+
+const hyperdriveId = /^[a-f0-9]{32}$/u;
+const bucketName = /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/u;
+
+function requireResource(value, pattern, label) {
+  if (typeof value !== "string" || !pattern.test(value)) {
+    throw new Error(`${label} is invalid`);
+  }
+  return value;
+}
+
+function cloudflareCustomDomainHostname(value, owner) {
+  const parsed = new URL(value);
+  if (parsed.port) {
+    throw new Error(`Cloudflare ${owner} custom domain must not include a port`);
+  }
+  return parsed.hostname;
+}
+
+function resolveCloudflareCustomDomains(manifest) {
+  const entries = [
+    ["app gateway", manifest.public.appAuthority],
+    ["MCP gateway", manifest.public.mcpResource],
+    ...manifest.cells.flatMap((cell) =>
+      cell.datafnEndpoint
+        ? [[`DataFn ${cell.regionId}`, cell.datafnEndpoint.httpUrl]]
+        : [],
+    ),
+  ].map(([owner, url]) => [owner, cloudflareCustomDomainHostname(url, owner)]);
+  const ownersByHostname = new Map();
+  for (const [owner, hostname] of entries) {
+    const existing = ownersByHostname.get(hostname);
+    if (existing) {
+      throw new Error(
+        `Cloudflare custom domain ${hostname} cannot be assigned to both ${existing} and ${owner}`,
+      );
+    }
+    ownersByHostname.set(hostname, owner);
+  }
+  return new Map(entries);
+}
+
+function workerBase(name, kind, variables) {
+  return {
+    $schema: "../node_modules/wrangler/config-schema.json",
+    name,
+    main:
+      kind === "app"
+        ? ".svelte-kit/cloudflare/_worker.js"
+        : kind === "datafn"
+          ? "src/regional-datafn-worker.ts"
+          : "src/index.ts",
+    compatibility_date: "2026-05-03",
+    compatibility_flags: ["nodejs_compat"],
+    workers_dev: false,
+    ...(kind === "app"
+      ? {
+          assets: {
+            binding: "ASSETS",
+            directory: ".svelte-kit/cloudflare",
+          },
+        }
+      : {
+          rules: [
+            {
+              type: "Data",
+              globs: ["**/*.png", "**/*.ico"],
+              fallthrough: true,
+            },
+          ],
+        }),
+    vars: variables,
+    observability: { enabled: true, head_sampling_rate: 1 },
+  };
+}
+
+/**
+ * Cloudflare adapter for the provider-neutral topology manifest. Regional
+ * workers intentionally have neither routes nor workers.dev exposure.
+ */
+export async function createCloudflareTopologyConfigs(input) {
+  const parseTopologyManifest = await loadTopologyParser();
+  const manifest = parseTopologyManifest(input.manifest, {
+    production: input.runtimeEnvironment !== "preview",
+  });
+  if (manifest.mode !== "multi-cell" || manifest.cells.length < 2) {
+    throw new Error("A multi-cell topology with at least two cells is required");
+  }
+  const topology = JSON.stringify(manifest);
+  const runtimeEnvironment = input.runtimeEnvironment ?? "production";
+  if (!["production", "preview"].includes(runtimeEnvironment)) {
+    throw new Error("The topology runtime environment is invalid");
+  }
+  const customDomains = resolveCloudflareCustomDomains(manifest);
+  const appHost = customDomains.get("app gateway");
+  const mcpHost = customDomains.get("MCP gateway");
+  const names = {
+    appGateway: input.workerNames?.appGateway ?? "skillplane-app",
+    mcpGateway: input.workerNames?.mcpGateway ?? "skillplane-mcp",
+    appCell: input.workerNames?.appCell ?? ((regionId) => `skillplane-app-${regionId}`),
+    mcpCell: input.workerNames?.mcpCell ?? ((regionId) => `skillplane-mcp-${regionId}`),
+    projection:
+      input.workerNames?.projection ??
+      ((regionId) => `skillplane-projection-${regionId}`),
+    datafn:
+      input.workerNames?.datafn ?? ((regionId) => `skillplane-datafn-${regionId}`),
+  };
+  if (
+    typeof input.publicTurnstileSiteKey !== "string" ||
+    input.publicTurnstileSiteKey.length < 10
+  ) {
+    throw new Error("A production Turnstile site key is required");
+  }
+  const sharedVariables = {
+    RUNTIME_ENV: runtimeEnvironment,
+    DATABASE_ADAPTER: "postgres",
+    OAUTH_ISSUER: manifest.public.appAuthority,
+    OAUTH_RESOURCE: manifest.public.mcpResource,
+    SKILLPLANE_TOPOLOGY: topology,
+  };
+  const directDatafnEnabled = input.directDatafnEnabled === true;
+  const directDatafnVariables = {
+    DATAFN_DIRECT_ENABLED: String(directDatafnEnabled),
+    DATAFN_DIRECT_WORKSPACES: directDatafnEnabled
+      ? (input.directDatafnWorkspaceIds ?? "")
+      : "",
+  };
+  if (
+    directDatafnEnabled &&
+    (!directDatafnVariables.DATAFN_DIRECT_WORKSPACES ||
+      !directDatafnVariables.DATAFN_DIRECT_WORKSPACES.split(",").some((value) =>
+        value.trim(),
+      ) ||
+      manifest.cells.some((cell) => !cell.datafnEndpoint))
+  )
+    throw new Error("Direct DataFn needs workspace IDs and regional endpoints");
+  const controlId = requireResource(
+    input.controlHyperdriveId,
+    hyperdriveId,
+    "control Hyperdrive ID",
+  );
+  const publicBucket = requireResource(
+    input.publicBucketName,
+    bucketName,
+    "public bucket name",
+  );
+  const appGateway = {
+    ...workerBase(names.appGateway, "app", {
+      ...sharedVariables,
+      ...directDatafnVariables,
+      PUBLIC_DATAFN_DIRECT_ENABLED: String(directDatafnEnabled),
+      SKILLPLANE_ROLE: "gateway",
+      AUTH_MODE: "otp",
+      EMAIL_PROVIDER: "cloudflare-email",
+      TURNSTILE_ALLOWED_HOSTNAMES: appHost,
+      SKILLPLANE_OTP_FROM: input.otpFrom ?? "Skillplane <no-reply@auth.skillplane.dev>",
+      PUBLIC_TURNSTILE_SITE_KEY: input.publicTurnstileSiteKey,
+      ...(input.appVariables ?? {}),
+    }),
+    routes: [{ pattern: appHost, custom_domain: true }],
+    hyperdrive: [{ binding: manifest.controlPlane.databaseBinding, id: controlId }],
+    r2_buckets: [
+      {
+        binding: manifest.controlPlane.publicObjectStorageBinding,
+        bucket_name: publicBucket,
+      },
+    ],
+    services: manifest.cells.map((cell) => ({
+      binding: cell.appServiceBinding,
+      service: names.appCell(cell.regionId),
+    })),
+    send_email: [
+      {
+        name: "SEND_EMAIL",
+        allowed_sender_addresses: [input.emailSender ?? "no-reply@auth.skillplane.dev"],
+        remote: true,
+      },
+    ],
+  };
+  const mcpGateway = {
+    ...workerBase(names.mcpGateway, "mcp", {
+      ...sharedVariables,
+      SKILLPLANE_ROLE: "gateway",
+      ...(input.mcpVariables ?? {}),
+    }),
+    routes: [{ pattern: mcpHost, custom_domain: true }],
+    hyperdrive: [{ binding: manifest.controlPlane.databaseBinding, id: controlId }],
+    r2_buckets: [
+      {
+        binding: manifest.controlPlane.publicObjectStorageBinding,
+        bucket_name: publicBucket,
+      },
+    ],
+    services: manifest.cells.map((cell) => ({
+      binding: cell.mcpServiceBinding,
+      service: names.mcpCell(cell.regionId),
+    })),
+  };
+  const cells = Object.fromEntries(
+    manifest.cells.map((cell) => {
+      if (cell.publiclyRoutable !== false) {
+        throw new Error(`Cell ${cell.regionId} must be private`);
+      }
+      const resources = input.cells?.[cell.regionId];
+      const regionalId = requireResource(
+        resources?.hyperdriveId,
+        hyperdriveId,
+        `${cell.regionId} Hyperdrive ID`,
+      );
+      const regionalBucket = requireResource(
+        resources?.bucketName,
+        bucketName,
+        `${cell.regionId} bucket name`,
+      );
+      const variables = {
+        ...sharedVariables,
+        SKILLPLANE_ROLE: "cell",
+        SKILLPLANE_REGION_ID: cell.regionId,
+      };
+      const bindings = {
+        hyperdrive: [
+          { binding: manifest.controlPlane.databaseBinding, id: controlId },
+          { binding: cell.databaseBinding, id: regionalId },
+        ],
+        r2_buckets: [
+          { binding: cell.objectStorageBinding, bucket_name: regionalBucket },
+        ],
+      };
+      return [
+        cell.regionId,
+        {
+          app: {
+            ...workerBase(names.appCell(cell.regionId), "app", {
+              ...variables,
+              ...directDatafnVariables,
+              PUBLIC_DATAFN_DIRECT_ENABLED: String(directDatafnEnabled),
+            }),
+            ...bindings,
+          },
+          ...(cell.datafnEndpoint
+            ? {
+                datafn: {
+                  ...workerBase(names.datafn(cell.regionId), "datafn", {
+                    SKILLPLANE_TOPOLOGY: topology,
+                    SKILLPLANE_REGION_ID: cell.regionId,
+                    SKILLPLANE_ROLE: "cell",
+                    DATAFN_DIRECT_ENABLED: String(directDatafnEnabled),
+                    RUNTIME_ENV: runtimeEnvironment,
+                  }),
+                  ratelimits: [
+                    {
+                      name: "DATAFN_EDGE_LIMIT",
+                      namespace_id:
+                        runtimeEnvironment === "production" ? "21016" : "21017",
+                      simple: { limit: 300, period: 10 },
+                    },
+                  ],
+                  routes: [
+                    {
+                      pattern: customDomains.get(`DataFn ${cell.regionId}`),
+                      custom_domain: true,
+                    },
+                  ],
+                  services: [
+                    { binding: "CELL_APP", service: names.appCell(cell.regionId) },
+                  ],
+                },
+              }
+            : {}),
+          mcp: {
+            ...workerBase(names.mcpCell(cell.regionId), "mcp", {
+              ...(input.mcpVariables ?? {}),
+              ...variables,
+            }),
+            ...bindings,
+          },
+          projection: {
+            ...workerBase(names.projection(cell.regionId), "projection", variables),
+            main: "src/index.ts",
+            hyperdrive: [
+              { binding: "CONTROL_DATABASE", id: controlId },
+              { binding: "CELL_DATABASE", id: regionalId },
+            ],
+            r2_buckets: [
+              { binding: "CELL_BUNDLES", bucket_name: regionalBucket },
+              { binding: "PUBLIC_BUNDLES", bucket_name: publicBucket },
+            ],
+            triggers: { crons: ["* * * * *"] },
+          },
+        },
+      ];
+    }),
+  );
+  const bucketNames = [
+    publicBucket,
+    ...Object.values(cells).map((cell) => cell.app.r2_buckets[0].bucket_name),
+  ];
+  if (new Set(bucketNames).size !== bucketNames.length) {
+    throw new Error("Public and regional topology buckets must be distinct");
+  }
+  const hyperdriveIds = [
+    controlId,
+    ...Object.values(cells).map((cell) => cell.app.hyperdrive[1].id),
+  ];
+  if (new Set(hyperdriveIds).size !== hyperdriveIds.length) {
+    throw new Error("Control and regional topology Hyperdrives must be distinct");
+  }
+  return { gateway: { app: appGateway, mcp: mcpGateway }, cells };
+}
+
+export async function readProductionTopology() {
+  return JSON.parse(
+    await readFile(resolve(root, "deployment", "topology.production.json"), "utf8"),
+  );
+}
+
+export async function readDevelopmentTopology() {
+  return JSON.parse(
+    await readFile(resolve(root, "deployment", "topology.development.json"), "utf8"),
+  );
+}

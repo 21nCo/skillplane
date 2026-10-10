@@ -1,0 +1,25 @@
+---
+title: Skills
+description: Portable instructions and supporting files that agents retrieve as exact, versioned artifacts.
+---
+
+A skill is a reusable unit of guidance for an AI agent. Its required `SKILL.md` explains the purpose, constraints, steps, and expected output. A bundle may also contain supporting Markdown, text, images, or other declared assets.
+
+## Keep a skill focused
+
+A good skill describes one durable capability: reviewing a pull request, planning a release, conducting research, or writing a support response. Put facts that change by repository, customer, or environment in a [context](/concepts/contexts) instead.
+
+## Identity and discovery
+
+Each skill has a stable slug, description, tags, visibility, archive state, and a current published version. Agents can enumerate skills with `skills_list`, find them with `skills_search`, and retrieve an exact version with `skill_retrieve`.
+
+## Visibility
+
+- **Private** skills are available only to authorized workspace principals.
+- **Public** skills expose published history through public discovery and retrieval.
+
+Changing visibility does not rewrite the published version. Archiving removes a skill from the active workflow without deleting its immutable history; it can be restored later.
+
+## Bundles and files
+
+Skillplane validates a bounded canonical file set. The manifest records each file path, media type, byte size, and digest. `skill_asset_retrieve` can fetch a specific supporting file safely without downloading the entire bundle.

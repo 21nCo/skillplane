@@ -1,0 +1,34 @@
+# The official server suite targets an "everything" fixture. Skillplane does
+# not advertise logging, completions, elicitation, resources, or prompts, and
+# it exposes production tools rather than the runner's synthetic test_* tools.
+# Initialization, ping, tool inventory, Streamable HTTP request handling, and
+# DNS-rebinding protection remain unbaselined hard gates. McpFn's stateless
+# handler intentionally omits session IDs, so the runner's optional
+# multiple-SSE-stream session warning is baselined explicitly.
+server:
+  - logging-set-level
+  - completion-complete
+  - tools-call-simple-text
+  - tools-call-image
+  - tools-call-audio
+  - tools-call-embedded-resource
+  - tools-call-mixed-content
+  - tools-call-with-logging
+  - tools-call-error
+  - tools-call-with-progress
+  - tools-call-sampling
+  - tools-call-elicitation
+  - server-sse-multiple-streams
+  - elicitation-sep1034-defaults
+  - elicitation-sep1330-enums
+  - resources-list
+  - resources-read-text
+  - resources-read-binary
+  - resources-templates-read
+  - resources-subscribe
+  - resources-unsubscribe
+  - prompts-list
+  - prompts-get-simple
+  - prompts-get-with-args
+  - prompts-get-embedded-resource
+  - prompts-get-with-image

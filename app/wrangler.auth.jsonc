@@ -1,0 +1,34 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "skillplane-app-local",
+  "main": ".svelte-kit/cloudflare/_worker.js",
+  "compatibility_date": "2026-05-03",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "binding": "ASSETS",
+    "directory": ".svelte-kit/cloudflare",
+  },
+  "r2_buckets": [
+    {
+      "binding": "SKILL_BUNDLES",
+      "bucket_name": "skillplane-skill-bundles-local",
+      "preview_bucket_name": "skillplane-skill-bundles-local-preview",
+    },
+  ],
+  "send_email": [
+    {
+      "name": "SEND_EMAIL",
+      "allowed_sender_addresses": ["no-reply@auth-dev.skillplane.dev"],
+      "remote": true,
+    },
+  ],
+  "vars": {
+    "AUTH_MODE": "otp",
+    "EMAIL_PROVIDER": "cloudflare-email",
+    "SKILLPLANE_OTP_FROM": "Skillplane Local <no-reply@auth-dev.skillplane.dev>",
+    "TURNSTILE_ALLOWED_HOSTNAMES": "localhost,127.0.0.1",
+  },
+  "observability": {
+    "enabled": true,
+  },
+}

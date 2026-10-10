@@ -1,0 +1,30 @@
+{
+  "dependencies": [],
+  "description": "SKI-3 composition reference fixture",
+  "entrypoints": { "execute": "SKILL.md", "verify": "verification/VERIFY.md" },
+  "files": [
+    {
+      "byteSize": 366,
+      "mediaType": "text/markdown; charset=utf-8",
+      "path": "SKILL.md",
+      "sha256": "ba9c72349d3cbaccdebf87fd6160d07164955a6778e7d8e75fccbbe55eb78587"
+    },
+    {
+      "byteSize": 1630,
+      "mediaType": "text/markdown; charset=utf-8",
+      "path": "verification/VERIFY.md",
+      "sha256": "8cdd5bef1c9c1269b40b54364e5e436adf962c6e42552e31c05ec1009a743004"
+    },
+    {
+      "byteSize": 3281,
+      "mediaType": "application/json",
+      "path": "verification/claims.json",
+      "sha256": "180fd43e6b8f8249af25b49c4c8b4f69c76d382d8077ddf3b3fa34bfeea435a1"
+    }
+  ],
+  "formatVersion": 2,
+  "name": "Use Datafn",
+  "slug": "use-datafn",
+  "tags": ["composition", "reference"],
+  "verification": { "blocking": true, "claims": "verification/claims.json" }
+}

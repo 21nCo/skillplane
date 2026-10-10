@@ -1,0 +1,206 @@
+import { describe, expect, it } from "vitest";
+import {
+  PRODUCTION_APP_AUTHORITY,
+  PRODUCTION_MCP_RESOURCE,
+  TopologyError,
+  createSingleCellTopology,
+  parseTopologyManifest,
+} from "./topology.js";
+
+function productionTopology() {
+  return {
+    version: 1,
+    mode: "multi-cell",
+    public: {
+      appAuthority: PRODUCTION_APP_AUTHORITY,
+      mcpResource: PRODUCTION_MCP_RESOURCE,
+    },
+    controlPlane: {
+      regionId: "global",
+      databaseBinding: "CONTROL_HYPERDRIVE",
+      publicObjectStorageBinding: "PUBLIC_SKILL_BUNDLES",
+      issuer: PRODUCTION_APP_AUTHORITY,
+      oauthResource: PRODUCTION_MCP_RESOURCE,
+    },
+    cells: [
+      {
+        regionId: "in-south",
+        databaseBinding: "CELL_IN_SOUTH_HYPERDRIVE",
+        objectStorageBinding: "CELL_IN_SOUTH_BUNDLES",
+        appServiceBinding: "CELL_IN_SOUTH_APP",
+        mcpServiceBinding: "CELL_IN_SOUTH_MCP",
+        datafnEndpoint: undefined as
+          { httpUrl: string; wsUrl: string; audience: string } | undefined,
+        publiclyRoutable: false,
+      },
+      {
+        regionId: "us-east",
+        databaseBinding: "CELL_US_EAST_HYPERDRIVE",
+        objectStorageBinding: "CELL_US_EAST_BUNDLES",
+        appServiceBinding: "CELL_US_EAST_APP",
+        mcpServiceBinding: "CELL_US_EAST_MCP",
+        publiclyRoutable: false,
+      },
+    ],
+    routing: {
+      activeKeyId: "current",
+      verificationKeyIds: ["current", "previous"],
+      assertionAudience: "skillplane-cell",
+      assertionTtlSeconds: 20,
+    },
+  };
+}
+
+describe("Skillplane topology manifest", () => {
+  it("accepts a global control plane with two private regional cells", () => {
+    const parsed = parseTopologyManifest(productionTopology(), {
+      production: true,
+    });
+    expect(parsed.cells.map((cell) => cell.regionId)).toEqual(["in-south", "us-east"]);
+    expect(parsed.cells.every((cell) => !cell.publiclyRoutable)).toBe(true);
+  });
+
+  it("keeps an explicit one-cell compatibility topology", () => {
+    const parsed = createSingleCellTopology({
+      appAuthority: "https://app-dev.skillplane.dev",
+      mcpResource: "https://mcp-dev.skillplane.dev/mcp",
+      regionId: "legacy",
+    });
+    expect(parsed.mode).toBe("single-cell");
+    expect(parsed.cells).toHaveLength(1);
+    expect(parsed.cells[0]?.regionId).toBe("legacy");
+  });
+
+  it("accepts a DataFn-only regional endpoint without exposing the cell", () => {
+    const topology = productionTopology();
+    const cell = topology.cells[0];
+    if (!cell) throw new Error("Expected a regional cell");
+    cell.datafnEndpoint = {
+      httpUrl: "https://datafn-in.skillplane.dev/datafn",
+      wsUrl: "wss://datafn-in.skillplane.dev/datafn",
+      audience: "skillplane-datafn-in",
+    };
+    expect(parseTopologyManifest(topology).cells[0]?.datafnEndpoint).toEqual(
+      cell.datafnEndpoint,
+    );
+    cell.datafnEndpoint.wsUrl = "wss://app.skillplane.dev/datafn";
+    expect(() => parseTopologyManifest(topology)).toThrow(TopologyError);
+  });
+
+  it("accepts bracketed IPv6 loopback DataFn endpoints", () => {
+    const topology = productionTopology();
+    const cell = topology.cells[0];
+    if (!cell) throw new Error("Expected a regional cell");
+    cell.datafnEndpoint = {
+      httpUrl: "http://[::1]/datafn",
+      wsUrl: "ws://[::1]/datafn",
+      audience: "skillplane-datafn-local",
+    };
+
+    expect(parseTopologyManifest(topology).cells[0]?.datafnEndpoint).toEqual(
+      cell.datafnEndpoint,
+    );
+  });
+
+  it("accepts app and MCP paths on one provider-neutral gateway origin", () => {
+    const topology = productionTopology();
+    topology.public.appAuthority = "https://gateway.example.test";
+    topology.public.mcpResource = "https://gateway.example.test/mcp";
+    topology.controlPlane.issuer = topology.public.appAuthority;
+    topology.controlPlane.oauthResource = topology.public.mcpResource;
+
+    expect(parseTopologyManifest(topology).public).toEqual(topology.public);
+  });
+
+  it("canonicalizes equivalent authority spellings to URL origins", () => {
+    const topology = productionTopology();
+    topology.public.appAuthority = "https://app-preview.example.test/";
+    topology.controlPlane.issuer = "https://app-preview.example.test";
+
+    const parsed = parseTopologyManifest(topology);
+
+    expect(parsed.public.appAuthority).toBe("https://app-preview.example.test");
+    expect(parsed.controlPlane.issuer).toBe("https://app-preview.example.test");
+  });
+
+  it("rejects DataFn custom-domain hosts reused by a gateway or another cell", () => {
+    const gatewayCollision = productionTopology();
+    const firstGatewayCell = gatewayCollision.cells[0];
+    if (!firstGatewayCell) throw new Error("topology fixture has no first cell");
+    firstGatewayCell.datafnEndpoint = {
+      httpUrl: `${PRODUCTION_APP_AUTHORITY}/datafn`,
+      wsUrl: "wss://app.skillplane.dev/datafn",
+      audience: "skillplane-datafn-in",
+    };
+    expect(() => parseTopologyManifest(gatewayCollision)).toThrow(
+      expect.objectContaining({ code: "TOPOLOGY_PUBLIC_HOST_CONFLICT" }),
+    );
+
+    const cellCollision = productionTopology();
+    const firstCell = cellCollision.cells[0];
+    const secondCell = cellCollision.cells[1];
+    if (!firstCell || !secondCell) {
+      throw new Error("topology fixture requires two cells");
+    }
+    const sharedEndpoint = {
+      httpUrl: "https://datafn-shared.skillplane.dev/datafn",
+      wsUrl: "wss://datafn-shared.skillplane.dev/datafn",
+    };
+    firstCell.datafnEndpoint = {
+      ...sharedEndpoint,
+      audience: "skillplane-datafn-in",
+    };
+    secondCell.datafnEndpoint = {
+      ...sharedEndpoint,
+      audience: "skillplane-datafn-us",
+    };
+    expect(() => parseTopologyManifest(cellCollision)).toThrow(
+      expect.objectContaining({ code: "TOPOLOGY_PUBLIC_HOST_CONFLICT" }),
+    );
+  });
+
+  it("rejects issuer drift, public cells, and duplicate bindings", () => {
+    const issuerDrift = productionTopology();
+    issuerDrift.controlPlane.issuer = "https://identity.example.test";
+    expect(() => parseTopologyManifest(issuerDrift, { production: true })).toThrow(
+      expect.objectContaining({ code: "TOPOLOGY_ISSUER_DRIFT" }),
+    );
+
+    const publicCell = productionTopology();
+    const firstPublicCell = publicCell.cells[0];
+    if (!firstPublicCell) throw new Error("topology fixture has no first cell");
+    firstPublicCell.publiclyRoutable = true;
+    expect(() => parseTopologyManifest(publicCell)).toThrow(TopologyError);
+
+    const duplicate = productionTopology();
+    const firstDuplicateCell = duplicate.cells[0];
+    const secondDuplicateCell = duplicate.cells[1];
+    if (!firstDuplicateCell || !secondDuplicateCell) {
+      throw new Error("topology fixture requires two cells");
+    }
+    secondDuplicateCell.databaseBinding = firstDuplicateCell.databaseBinding;
+    expect(() => parseTopologyManifest(duplicate)).toThrow(
+      expect.objectContaining({ code: "TOPOLOGY_DUPLICATE_BINDING" }),
+    );
+  });
+
+  it("rejects operationally invalid and reserved region IDs", () => {
+    for (const invalid of ["us--east", "us-east-", "a".repeat(64)]) {
+      const topology = productionTopology();
+      const firstCell = topology.cells[0];
+      if (!firstCell) throw new Error("topology fixture has no first cell");
+      firstCell.regionId = invalid;
+      expect(() => parseTopologyManifest(topology)).toThrow(
+        expect.objectContaining({ code: "TOPOLOGY_INVALID" }),
+      );
+    }
+
+    const reserved = productionTopology();
+    const firstCell = reserved.cells[0];
+    if (!firstCell) throw new Error("topology fixture has no first cell");
+    firstCell.regionId = "legacy";
+    expect(() => parseTopologyManifest(reserved)).toThrow(
+      expect.objectContaining({ code: "TOPOLOGY_RESERVED_REGION" }),
+    );
+  });
+});

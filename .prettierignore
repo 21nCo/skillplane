@@ -1,0 +1,14 @@
+.conduct/
+.data/
+.pnpm-store/
+.svelte-kit/
+.turbo/
+.wrangler/
+build/
+coverage/
+dist/
+dist-worker/
+node_modules/
+playwright-report/
+test-results/
+pnpm-lock.yaml

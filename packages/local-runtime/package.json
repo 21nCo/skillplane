@@ -1,0 +1,56 @@
+{
+  "name": "skillplane",
+  "version": "0.1.1",
+  "private": false,
+  "description": "Local-first Skillplane CLI for versioned AI-agent skills",
+  "license": "MIT",
+  "keywords": [
+    "ai-agents",
+    "cli",
+    "codex",
+    "claude",
+    "local-first",
+    "mcp",
+    "model-context-protocol",
+    "skills"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/21nCo/skillplane.git",
+    "directory": "packages/local-runtime"
+  },
+  "homepage": "https://skillplane.dev",
+  "type": "module",
+  "bin": {
+    "skillplane": "dist/skillplane.mjs"
+  },
+  "files": [
+    "dist/skillplane.mjs"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "engines": {
+    "node": ">=22.13.0 <25"
+  },
+  "scripts": {
+    "build": "tsc --project tsconfig.json && node build.mjs",
+    "typecheck": "tsc --project tsconfig.json --noEmit",
+    "test:unit": "vitest run --exclude 'dist/**' src",
+    "bundle": "node build.mjs"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/sdk": "catalog:",
+    "@skillplane/domain": "workspace:*",
+    "@skillplane/mcp-schema": "workspace:*",
+    "@skillplane/storage": "workspace:*",
+    "@types/semver": "7.7.1",
+    "esbuild": "0.28.1",
+    "semver": "7.7.4",
+    "typescript": "catalog:",
+    "vitest": "catalog:",
+    "yaml": "2.9.0",
+    "zod": "catalog:"
+  }
+}

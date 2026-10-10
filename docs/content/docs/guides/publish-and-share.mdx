@@ -1,0 +1,22 @@
+---
+title: Publish and share
+description: Control visibility, public discovery, version history, and archival state.
+---
+
+New skills receive published version `1.0.0`, but their visibility determines who can discover the published artifact.
+
+## Private skills
+
+Private skills are available to authorized principals in the workspace. Use private visibility for internal procedures, customer-specific material, or any instructions that should not be publicly discoverable.
+
+## Public skills
+
+Public skills expose their published version and public history through Skillplane’s public directory and stable skill URL. Review the entire bundle—including supporting files—before changing visibility to public.
+
+An OAuth user with `skills:write` can change visibility in the app or through `skill_visibility_update`. Agent credentials can do so only when both their role and `skills:write` scope permit it.
+
+## Archive and restore
+
+Archiving removes a skill from the active inventory and prevents new amendments while retaining its immutable versions and audit history. Restore it when the skill becomes active again.
+
+Use `skill_archive` and `skill_restore` for agent workflows. Both operations require the latest `updatedAt` token and an idempotency key.

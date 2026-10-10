@@ -1,0 +1,326 @@
+import { describe, expect, it, vi } from "vitest";
+import {
+  applyPublicStatsProjectionCheckpoint,
+  cleanupPublicStatsProjectionEvents,
+  cleanupProcessedRegionalProjectionOutbox,
+  drainRegionalProjectionOutbox,
+} from "./projection-outbox.js";
+
+function event(id: string) {
+  return {
+    id,
+    workspace_id: `workspace:${id}`,
+    event_type: "public_skill.unpublished" as const,
+    payload: {
+      workspaceId: `workspace:${id}`,
+      skillId: `skill:${id}`,
+      versionId: `version:${id}`,
+    },
+    // PostgreSQL bigint/numeric values arrive as strings through node-postgres.
+    fencing_epoch: "2",
+    sequence: "1",
+  };
+}
+
+describe("regional projection outbox drainer", () => {
+  it("retires only processed rows outside the replay window", async () => {
+    const query = vi.fn(async () => ({
+      rows: [{ id: "event:one" }, { id: "event:two" }],
+    }));
+
+    await expect(
+      cleanupProcessedRegionalProjectionOutbox({
+        database: { query },
+        retentionSeconds: 86_400,
+        limit: 200,
+      }),
+    ).resolves.toBe(2);
+
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining("processed_at < now()"),
+      [86_400, 200],
+    );
+    expect(query.mock.calls[0]?.[0]).toContain("FOR UPDATE SKIP LOCKED");
+  });
+
+  it("retires only checkpointed stats event IDs with durable sequences", async () => {
+    const query = vi.fn(async () => ({ rows: [{ event_id: "event:one" }] }));
+
+    await expect(
+      cleanupPublicStatsProjectionEvents({
+        database: { query },
+        retentionSeconds: 86_400,
+        limit: 200,
+      }),
+    ).resolves.toBe(1);
+
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining("event.sequence IS NOT NULL"),
+      [86_400, 200],
+    );
+    expect(query.mock.calls[0]?.[0]).toContain("public_stats_projection_checkpoints");
+  });
+
+  it("applies stats through an atomic event claim and sequence checkpoint", async () => {
+    const query = vi.fn(async () => ({ rows: [] }));
+
+    await applyPublicStatsProjectionCheckpoint({
+      database: { query },
+      eventId: "event:stats",
+      workspaceId: "workspace:a",
+      eventType: "public_stats.agent_skill_used",
+      fencingEpoch: 3,
+      sequence: 9,
+      agentSkillUses: 2,
+      totalSkills: 0,
+    });
+
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining("public_stats_projection_checkpoints"),
+      ["event:stats", "workspace:a", "public_stats.agent_skill_used", 2, 0, 3, 9],
+    );
+    expect(query.mock.calls[0]?.[0]).toContain("ON CONFLICT (event_id) DO NOTHING");
+  });
+
+  it("acknowledges claimed events only after successful projection", async () => {
+    const queries: string[] = [];
+    let claimed = false;
+    const database = {
+      query: vi.fn(async (text: string) => {
+        queries.push(text);
+        if (text.includes("WITH candidates AS")) {
+          if (claimed) return { rows: [] };
+          claimed = true;
+          return { rows: [event("one")] };
+        }
+        return { rows: [{ id: "one" }] };
+      }),
+    };
+    const process = vi.fn(async () => undefined);
+    await expect(
+      drainRegionalProjectionOutbox({
+        regionId: "in-south",
+        database,
+        process,
+        claimToken: "claim:test",
+      }),
+    ).resolves.toEqual({ processed: 1, failed: 0 });
+    expect(process).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "one",
+        regionId: "in-south",
+        fencingEpoch: 2,
+        sequence: 1,
+      }),
+    );
+    expect(queries[0]).toContain("FOR UPDATE SKIP LOCKED");
+    expect(queries[1]).toContain("processed_at = now()");
+  });
+
+  it("releases failed claims with a safe retry code", async () => {
+    const values: (readonly unknown[] | undefined)[] = [];
+    let claimed = false;
+    const database = {
+      query: vi.fn(async (text: string, parameters?: readonly unknown[]) => {
+        values.push(parameters);
+        if (text.includes("WITH candidates AS") && !claimed) {
+          claimed = true;
+          return { rows: [event("bad")] };
+        }
+        return { rows: [] };
+      }),
+    };
+    await expect(
+      drainRegionalProjectionOutbox({
+        regionId: "in-south",
+        database,
+        process: async () => {
+          throw new Error("contains private object key / tenant name");
+        },
+        claimToken: "claim:test",
+      }),
+    ).resolves.toEqual({ processed: 0, failed: 1 });
+    expect(values[1]).toEqual(["bad", "claim:test", "PUBLICATION_PROJECTION_FAILED"]);
+  });
+
+  it("continues draining ordered events for one workspace in one invocation", async () => {
+    const rows = [
+      { ...event("one"), workspace_id: "workspace:shared", sequence: 1 },
+      { ...event("two"), workspace_id: "workspace:shared", sequence: 2 },
+    ];
+    const processed = new Set<string>();
+    const claimQueries: (readonly unknown[])[] = [];
+    const database = {
+      query: vi.fn(async (text: string, values: readonly unknown[] = []) => {
+        if (text.includes("WITH candidates AS")) {
+          claimQueries.push(values);
+          const row = rows.find(
+            (candidate) =>
+              !processed.has(candidate.id) &&
+              !rows.some(
+                (earlier) =>
+                  earlier.workspace_id === candidate.workspace_id &&
+                  earlier.sequence < candidate.sequence &&
+                  !processed.has(earlier.id),
+              ),
+          );
+          return { rows: row ? [row] : [] };
+        }
+        if (text.includes("SET processed_at = now()")) {
+          processed.add(String(values[0]));
+          return { rows: [{ id: values[0] }] };
+        }
+        throw new Error(`Unexpected projection SQL: ${text}`);
+      }),
+    };
+    const process = vi.fn(async () => undefined);
+
+    await expect(
+      drainRegionalProjectionOutbox({
+        regionId: "in-south",
+        database,
+        process,
+        limit: 2,
+        claimToken: "claim:test",
+      }),
+    ).resolves.toEqual({ processed: 2, failed: 0 });
+
+    expect(process.mock.calls.map(([value]) => value.id)).toEqual(["one", "two"]);
+    expect(claimQueries).toHaveLength(2);
+    expect(claimQueries.map((values) => values[0])).toEqual([2, 1]);
+  });
+
+  it("does not let a delayed reclaimed unpublish clobber a later publish", async () => {
+    let now = 0;
+    const rows = [
+      {
+        ...event("unpublish"),
+        workspace_id: "workspace:shared",
+        payload: {
+          workspaceId: "workspace:shared",
+          skillId: "skill:shared",
+          versionId: "version:one",
+        },
+        sequence: 1,
+        processed: false,
+        claimToken: null as string | null,
+        claimedAt: null as number | null,
+      },
+      {
+        ...event("publish"),
+        workspace_id: "workspace:shared",
+        event_type: "public_skill.published" as const,
+        payload: {},
+        sequence: 2,
+        processed: false,
+        claimToken: null as string | null,
+        claimedAt: null as number | null,
+      },
+    ];
+    const database = {
+      query: vi.fn(async (text: string, values: readonly unknown[] = []) => {
+        if (text.includes("WITH candidates AS")) {
+          const leaseMs = Number(values[1]) * 1_000;
+          const token = String(values[2]);
+          const candidate = rows.find(
+            (row) =>
+              !row.processed &&
+              (row.claimedAt === null || row.claimedAt < now - leaseMs) &&
+              !rows.some(
+                (earlier) =>
+                  earlier.workspace_id === row.workspace_id &&
+                  !earlier.processed &&
+                  earlier.sequence < row.sequence,
+              ),
+          );
+          if (!candidate) return { rows: [] };
+          candidate.claimToken = token;
+          candidate.claimedAt = now;
+          return { rows: [{ ...candidate }] };
+        }
+        const id = String(values[0]);
+        const token = String(values[1]);
+        const claimed = rows.find((row) => row.id === id);
+        if (text.includes("SET processed_at = now()")) {
+          if (!claimed || claimed.processed || claimed.claimToken !== token) {
+            return { rows: [] };
+          }
+          claimed.processed = true;
+          claimed.claimToken = null;
+          claimed.claimedAt = null;
+          return { rows: [{ id }] };
+        }
+        if (text.includes("last_error = $3")) {
+          if (claimed && !claimed.processed && claimed.claimToken === token) {
+            claimed.claimToken = null;
+            claimed.claimedAt = null;
+          }
+          return { rows: [] };
+        }
+        throw new Error(`Unexpected projection SQL: ${text}`);
+      }),
+    };
+
+    let releaseOriginal!: () => void;
+    const originalReleased = new Promise<void>((resolve) => {
+      releaseOriginal = resolve;
+    });
+    let markOriginalStarted!: () => void;
+    const originalStarted = new Promise<void>((resolve) => {
+      markOriginalStarted = resolve;
+    });
+    let originalBlocked = true;
+    const projection = { state: "published", sequence: 0 };
+    const process = async (projectionEvent: {
+      readonly id: string;
+      readonly eventType: "public_skill.published" | "public_skill.unpublished";
+      readonly sequence: number;
+    }) => {
+      if (projectionEvent.id === "unpublish" && originalBlocked) {
+        originalBlocked = false;
+        markOriginalStarted();
+        await originalReleased;
+      }
+      if (projection.sequence > projectionEvent.sequence) return;
+      projection.sequence = projectionEvent.sequence;
+      projection.state =
+        projectionEvent.eventType === "public_skill.published"
+          ? "published"
+          : "unpublished";
+    };
+
+    const originalWorker = drainRegionalProjectionOutbox({
+      regionId: "in-south",
+      database,
+      process,
+      limit: 1,
+      leaseSeconds: 10,
+      claimToken: "claim:original",
+    });
+    await originalStarted;
+    now = 20_000;
+    await expect(
+      drainRegionalProjectionOutbox({
+        regionId: "in-south",
+        database,
+        process,
+        limit: 1,
+        leaseSeconds: 10,
+        claimToken: "claim:reclaimed",
+      }),
+    ).resolves.toEqual({ processed: 1, failed: 0 });
+    await expect(
+      drainRegionalProjectionOutbox({
+        regionId: "in-south",
+        database,
+        process,
+        limit: 1,
+        leaseSeconds: 10,
+        claimToken: "claim:publish",
+      }),
+    ).resolves.toEqual({ processed: 1, failed: 0 });
+    releaseOriginal();
+    await expect(originalWorker).resolves.toEqual({ processed: 0, failed: 1 });
+    expect(projection).toEqual({ state: "published", sequence: 2 });
+  });
+});

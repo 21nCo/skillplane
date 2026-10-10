@@ -1,0 +1,15 @@
+{
+  "title": "Skillplane",
+  "pages": [
+    "index",
+    "setup",
+    "use-cases",
+    "security",
+    "---Concepts---",
+    "concepts",
+    "---Guides---",
+    "guides",
+    "---Reference---",
+    "reference"
+  ]
+}

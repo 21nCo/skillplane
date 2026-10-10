@@ -1,0 +1,171 @@
+import type { Pool } from "pg";
+import { rollupUtcDay } from "./rollups.js";
+import { writeAuditEvent } from "./audit.js";
+import {
+  setCurrentWorkspaceRoutingEpoch,
+  WorkspaceMaintenanceFencedError,
+} from "./routing-epoch.js";
+
+export interface RetentionResult {
+  readonly cutoff: string;
+  readonly deleted: number;
+  readonly batches: number;
+  readonly affectedWorkspaces: readonly string[];
+}
+
+function utcDay(value: Date): string {
+  return value.toISOString().slice(0, 10);
+}
+
+function daysBetween(from: Date, to: Date): readonly string[] {
+  const days: string[] = [];
+  const cursor = new Date(
+    Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), from.getUTCDate()),
+  );
+  const end = Date.UTC(to.getUTCFullYear(), to.getUTCMonth(), to.getUTCDate());
+  while (cursor.getTime() <= end) {
+    days.push(utcDay(cursor));
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return days;
+}
+
+export async function runAuditRetention(
+  pool: Pool,
+  options: {
+    readonly now?: Date;
+    readonly retentionDays?: number;
+    readonly batchSize?: number;
+    readonly dryRun?: boolean;
+  } = {},
+): Promise<RetentionResult> {
+  const now = options.now ?? new Date();
+  const retentionDays = Math.max(90, Math.floor(options.retentionDays ?? 90));
+  const batchSize = Math.min(
+    10_000,
+    Math.max(1, Math.floor(options.batchSize ?? 1_000)),
+  );
+  const cutoffDate = new Date(now.getTime() - retentionDays * 24 * 60 * 60 * 1_000);
+  const cutoff = cutoffDate.toISOString();
+  const eligible = await pool.query<{
+    workspace_id: string;
+    earliest_at: Date;
+    latest_at: Date;
+    event_count: string;
+  }>(
+    `SELECT workspace_id, min(occurred_at) AS earliest_at,
+            max(occurred_at) AS latest_at, count(*)::text AS event_count
+       FROM audit_events
+      WHERE retention_class = 'detailed_read_90d'
+        AND occurred_at < $1
+        AND NOT EXISTS (
+          SELECT 1 FROM regional_workspace_migration_fences fence
+           WHERE fence.workspace_id = audit_events.workspace_id
+             AND fence.source_epoch > 0
+        )
+      GROUP BY workspace_id
+      ORDER BY workspace_id`,
+    [cutoff],
+  );
+  if (options.dryRun) {
+    return {
+      cutoff,
+      deleted: eligible.rows.reduce((total, row) => total + Number(row.event_count), 0),
+      batches: 0,
+      affectedWorkspaces: eligible.rows.map((row) => row.workspace_id),
+    };
+  }
+  for (const workspace of eligible.rows) {
+    for (const day of daysBetween(workspace.earliest_at, workspace.latest_at)) {
+      await rollupUtcDay(pool, {
+        day,
+        workspaceId: workspace.workspace_id,
+        preserveFullerSnapshot: true,
+      });
+    }
+  }
+  let deleted = 0;
+  let batches = 0;
+  const affectedWorkspaces = new Set<string>();
+  workspaceLoop: for (const workspace of eligible.rows) {
+    let workspaceDeleted = 0;
+    let count = 1;
+    while (count > 0) {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        await setCurrentWorkspaceRoutingEpoch(client, workspace.workspace_id);
+        await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
+          "skillplane-audit-retention-v1",
+        ]);
+        await client.query(
+          "SELECT set_config('skillplane.audit_retention_job', 'enabled', true)",
+        );
+        const batch = await client.query<{ id: string }>(
+          `WITH candidates AS (
+             SELECT id
+               FROM audit_events
+              WHERE workspace_id = $3
+                AND retention_class = 'detailed_read_90d'
+                AND occurred_at < $1
+              ORDER BY occurred_at, id
+              LIMIT $2
+              FOR UPDATE SKIP LOCKED
+           )
+           DELETE FROM audit_events event
+            USING candidates
+            WHERE event.id = candidates.id
+           RETURNING event.id`,
+          [cutoff, batchSize, workspace.workspace_id],
+        );
+        count = batch.rowCount ?? 0;
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK").catch(() => undefined);
+        if (error instanceof WorkspaceMaintenanceFencedError) continue workspaceLoop;
+        throw error;
+      } finally {
+        client.release();
+      }
+      if (count > 0) {
+        deleted += count;
+        workspaceDeleted += count;
+        batches += 1;
+        affectedWorkspaces.add(workspace.workspace_id);
+      }
+    }
+
+    const auditClient = await pool.connect();
+    try {
+      await auditClient.query("BEGIN");
+      await setCurrentWorkspaceRoutingEpoch(auditClient, workspace.workspace_id);
+      await writeAuditEvent(auditClient, {
+        workspaceId: workspace.workspace_id,
+        eventType: "audit.retention.completed",
+        action: "audit:retain",
+        outcome: "success",
+        actorType: "system",
+        actorId: "system:audit-retention",
+        requestId: `retention:${crypto.randomUUID()}`,
+        resourceType: "workspace",
+        resourceId: workspace.workspace_id,
+        channel: "system",
+        retentionClass: "permanent",
+        metadata: { cutoff, deletedEventCount: workspaceDeleted, retentionDays },
+      });
+      await auditClient.query("COMMIT");
+    } catch (error) {
+      await auditClient.query("ROLLBACK").catch(() => undefined);
+      if (error instanceof WorkspaceMaintenanceFencedError) continue;
+      throw error;
+    } finally {
+      auditClient.release();
+    }
+  }
+  return {
+    cutoff,
+    deleted,
+    batches,
+    affectedWorkspaces: [...affectedWorkspaces],
+  };
+}

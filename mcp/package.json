@@ -1,0 +1,42 @@
+{
+  "name": "@skillplane/mcp",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --config wrangler.jsonc --port 5701 --persist-to ../.data/wrangler/mcp",
+    "build": "wrangler deploy --config wrangler.jsonc --dry-run --outdir dist",
+    "typecheck": "tsc --project tsconfig.json --noEmit",
+    "test:unit": "vitest run src",
+    "test:integration": "vitest run --passWithNoTests --exclude 'dist/**' tests/integration",
+    "test:security": "vitest run --no-file-parallelism --passWithNoTests --exclude 'dist/**' tests/security",
+    "deploy:check": "wrangler deploy --config wrangler.jsonc --dry-run --outdir dist-worker"
+  },
+  "dependencies": {
+    "@mcpfn/auth": "0.0.5",
+    "@mcpfn/core": "0.0.5",
+    "@modelcontextprotocol/sdk": "catalog:",
+    "@posthog/mcp": "0.10.9",
+    "@skillplane/api": "workspace:*",
+    "@skillplane/auth": "workspace:*",
+    "@skillplane/config": "workspace:*",
+    "@skillplane/control-plane": "workspace:*",
+    "@skillplane/domain": "workspace:*",
+    "@skillplane/mcp-schema": "workspace:*",
+    "@skillplane/observability": "workspace:*",
+    "@skillplane/storage": "workspace:*",
+    "hono": "catalog:",
+    "pg": "catalog:",
+    "posthog-node": "5.48.1",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@mcpfn/testing": "0.0.5",
+    "@skillplane/db": "workspace:*",
+    "@skillplane/testing": "workspace:*",
+    "@types/pg": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:",
+    "wrangler": "catalog:"
+  }
+}

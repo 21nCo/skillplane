@@ -1,0 +1,10 @@
+{
+  "minimal": {
+    "digest": "sha256:89a1ce5aedcab433c01bee721e93fd9a989a0bc4aa8ab4f54c4d4cb21bae376f",
+    "byteSize": 465
+  },
+  "portable": {
+    "digest": "sha256:c80839837c5bad80842caf1035ff26b82c9a0836c5416cf96ad797c64c24a972",
+    "byteSize": 900
+  }
+}

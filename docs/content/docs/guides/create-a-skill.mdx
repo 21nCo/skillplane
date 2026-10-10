@@ -1,0 +1,46 @@
+---
+title: Create your first skill
+description: Publish focused agent instructions from Markdown or a validated bundle.
+---
+
+## Create in the app
+
+1. Open [Skillplane](https://app.skillplane.dev) and select a workspace.
+2. Choose **Skills → New skill**.
+3. Select **Author Markdown** for a simple skill or **Upload bundle** for an existing portable bundle.
+4. Add a name, stable slug, description, tags, and visibility.
+5. Write `SKILL.md`, then publish.
+
+The initial version is `1.0.0` and is immutable.
+
+## Write useful instructions
+
+Start with a direct purpose and make the operational parts explicit:
+
+```md
+# Purpose
+
+Review a pull request for correctness, security, maintainability, and test coverage.
+
+## Inputs
+
+- The change and surrounding implementation
+- Repository-specific context, when available
+
+## Instructions
+
+1. Read the changed code and its callers.
+2. Identify concrete, reproducible issues.
+3. Prioritize findings by user impact.
+4. Cite the exact file and line for every finding.
+
+## Output
+
+Return prioritized findings first, followed by open questions and a short summary.
+```
+
+Keep project-specific commands and architecture in a [context](/guides/add-context). This lets the same skill serve several repositories.
+
+## Create through MCP
+
+An OAuth user or agent credential with `skills:write` can call `skill_create` with a canonical bounded file set. The tool creates the skill and published version `1.0.0` in one idempotent operation.

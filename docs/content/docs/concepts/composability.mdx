@@ -1,0 +1,28 @@
+---
+title: Composability
+description: Reuse focused skills together and layer the context needed for the current task.
+---
+
+Composability means an agent does not need one giant prompt for every workflow. It can discover focused skills, retrieve the useful ones, and use them together for the task at hand.
+
+For example, one run might combine:
+
+- a research method;
+- a product-writing standard; and
+- a publication checklist.
+
+Each remains independently reusable and versioned. Updating the writing standard does not require copying changes into the research or publication skills.
+
+## Add context without forking
+
+Composition also happens between a skill and its context. A single code-review skill can be used with the context for repository A on one run and repository B on the next. Portable instructions and local knowledge evolve on separate tracks.
+
+## Agent workflow
+
+1. Call `workspaces_list` when the workspace identifier is unknown.
+2. Use `skills_list` or `skills_search` to find each relevant skill.
+3. Retrieve the exact published version of each skill.
+4. List and retrieve a context when the task needs local knowledge.
+5. Record the versions and context revisions used in the run.
+
+Skillplane provides exact artifacts and provenance; the agent or orchestration layer decides how several retrieved skills are sequenced for a particular task.

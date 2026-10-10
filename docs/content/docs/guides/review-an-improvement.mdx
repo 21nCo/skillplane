@@ -1,0 +1,27 @@
+---
+title: Review an improvement
+description: Inspect an agent candidate’s exact change, evidence, provenance, and policy decision.
+---
+
+When the amendment policy requires review, an agent proposal appears under the skill’s **Candidates** section.
+
+## Review checklist
+
+1. Read the change summary and proposed semantic-version bump.
+2. Inspect every added, changed, and deleted file.
+3. Confirm the evidence supports the claimed improvement.
+4. Check validation results and confidence.
+5. Verify the authenticated actor and caller-declared agent/model metadata.
+6. Confirm the base version and source context revision are the ones expected.
+
+An authorized Admin or Owner can approve or reject the candidate. Service credentials cannot make this decision.
+
+## Approve
+
+Approval publishes the immutable candidate as the skill’s next current version. It does not rewrite the previous version. Agents can retrieve the new version on later runs, while version history and diffs remain available.
+
+## Reject
+
+Rejection preserves the candidate and its provenance for audit, but it does not change the published skill. Give a concise reason that helps the next proposal correct the issue.
+
+If the published version changed after the proposal was created, refresh the candidate state before deciding. Skillplane uses concurrency controls to prevent a stale review from silently overwriting newer state.

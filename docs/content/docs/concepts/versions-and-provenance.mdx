@@ -1,0 +1,23 @@
+---
+title: Versions and provenance
+description: Stable version history, exact diffs, digests, and identities behind every change.
+---
+
+Every published skill version is immutable and has a semantic version, content digest, canonical manifest, source, and timestamps. Candidate versions are immutable too, so reviewers inspect the same artifact that will be published.
+
+## Compare versions
+
+Use `skill_versions_list` to enumerate visible history and `skill_versions_diff` to compare any two authorized versions. The diff reports file additions, removals, digest changes, and bounded line-level text changes when safe.
+
+## What provenance records
+
+An agent amendment retains:
+
+- authenticated user or service-principal identity derived by Skillplane;
+- caller-declared agent, model, client, run, session, and conversation metadata;
+- exact base version and file operations;
+- source context revision and digest, when used;
+- evidence, validation results, and confidence;
+- policy decision and human review outcome.
+
+Caller-declared metadata describes the execution environment but does not replace authentication. Skillplane never trusts those fields as the principal’s identity.

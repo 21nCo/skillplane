@@ -1,0 +1,223 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "environment": "production",
+  "startedAt": "2026-08-05T11:28:36.192Z",
+  "completedAt": "2026-08-05T11:31:01.058Z",
+  "tag": "onboarding-2026-08-05-9390dab",
+  "applicationCommit": "9390dab085386a875e51cfe2eff72532c5501aad",
+  "sourceDigest": "d12a1267aae7af638d932ab5f54609ee234d62fe13b23ff84b13b419df4b381a",
+  "topology": {
+    "databaseOrigin": "railway-postgres",
+    "workerDatabasePath": "cloudflare-hyperdrive",
+    "runtimeDirectDatabaseUrl": "[redacted]",
+    "hosts": {
+      "landing": "https://skillplane.dev",
+      "app": "https://app.skillplane.dev",
+      "mcp": "https://mcp.skillplane.dev"
+    }
+  },
+  "bindings": {
+    "hyperdrive": {
+      "binding": "HYPERDRIVE",
+      "id": "24aa11b74b8841d486715e146f7f9f6c",
+      "railwayOriginMatched": true,
+      "queryCacheDisabled": true
+    },
+    "r2": {
+      "binding": "SKILL_BUNDLES",
+      "name": "skillplane-skill-bundles",
+      "created": false,
+      "private": true,
+      "lifecycleActions": [
+        "Abort incomplete multipart uploads after 7 days"
+      ],
+      "r2DevDisabled": true,
+      "customDomainCount": 0
+    },
+    "email": {
+      "binding": "SEND_EMAIL",
+      "provider": "cloudflare-email",
+      "sender": "no-reply@auth.skillplane.dev"
+    },
+    "secretNames": {
+      "app": [
+        "AUTHFN_SECRET",
+        "OAUTH_TOKEN_PEPPER",
+        "TURNSTILE_SECRET_KEY"
+      ],
+      "mcp": [
+        "OAUTH_TOKEN_PEPPER"
+      ]
+    },
+    "turnstile": {
+      "siteKeyConfigured": true,
+      "allowedHostnames": [
+        "app.skillplane.dev"
+      ]
+    }
+  },
+  "configs": {
+    "app": {
+      "path": "app/wrangler.generated.json",
+      "sha256": "88292f5e72d3eb22388548772864a50aef78589be17d87da3d980a42092522ff",
+      "worker": "skillplane-app",
+      "host": "app.skillplane.dev",
+      "routing": {
+        "type": "custom-domain",
+        "pattern": "app.skillplane.dev"
+      }
+    },
+    "mcp": {
+      "path": "mcp/wrangler.generated.json",
+      "sha256": "094cd767ff8bb3c699b59894d558e1ce596d2b61997512653db8b0c6578aa9f0",
+      "worker": "skillplane-mcp",
+      "host": "mcp.skillplane.dev",
+      "routing": {
+        "type": "custom-domain",
+        "pattern": "mcp.skillplane.dev"
+      }
+    }
+  },
+  "database": {
+    "fingerprint": "8410775b4e85c05bb4ea71cbd20b87bfd24f4bcf2c4a0ff25cc49152145f3cce",
+    "backup": {
+      "ok": true,
+      "createdAt": "2026-08-05T10:12:38.448Z",
+      "databaseFingerprint": "8410775b4e85c05bb4ea71cbd20b87bfd24f4bcf2c4a0ff25cc49152145f3cce",
+      "backup": ".data/production/backups/skillplane-2026-08-05T10-12-38-448Z.dump.enc",
+      "manifest": ".data/production/backups/skillplane-2026-08-05T10-12-38-448Z.manifest.json",
+      "encryptedSha256": "a84178b6365b6c87a917ccee3000888f52df5c7fe74498cc4315d1b72be5c5ba",
+      "migrationCount": 15,
+      "bundleReferenceCount": 14,
+      "restoreListVerified": true,
+      "restoreEntryCount": 270,
+      "ssl": {
+        "enabled": true,
+        "protocol": "TLSv1.3",
+        "cipher": "TLS_AES_256_GCM_SHA384",
+        "bits": 256
+      }
+    },
+    "migration": {
+      "ok": true,
+      "createdAt": "2026-08-05T10:12:56.595Z",
+      "databaseFingerprint": "8410775b4e85c05bb4ea71cbd20b87bfd24f4bcf2c4a0ff25cc49152145f3cce",
+      "backupSha256": "a84178b6365b6c87a917ccee3000888f52df5c7fe74498cc4315d1b72be5c5ba",
+      "backupCreatedAt": "2026-08-05T10:12:38.448Z",
+      "ssl": {
+        "enabled": true,
+        "protocol": "TLSv1.3",
+        "cipher": "TLS_AES_256_GCM_SHA384",
+        "bits": 256
+      },
+      "applied": [],
+      "alreadyApplied": [
+        "0001_authfn_core.sql",
+        "0002_skillplane_domain.sql",
+        "0003_integrity_search_retention.sql",
+        "0004_fix_published_version_transition.sql",
+        "0005_authfn_otp_api_keys.sql",
+        "0006_tenancy_credentials.sql",
+        "0007_invitation_concurrency.sql",
+        "0008_skill_bundles_search.sql",
+        "0009_contexts_notes.sql",
+        "0010_amendments_reviews.sql",
+        "0011_authfn_mcp_oauth.sql",
+        "0012_service_principal_audit_identity.sql",
+        "0013_organization_agent_attribution.sql",
+        "0014_observability_analytics.sql",
+        "0015_audit_redaction_hardening.sql"
+      ],
+      "migrationCount": 15,
+      "tableCount": 31,
+      "constraintCount": 683,
+      "triggerCount": 10,
+      "queryPlans": {
+        "workspaceSlug": [
+          "workspaces_slug_key"
+        ],
+        "skillSlug": [
+          "skills_workspace_updated_idx"
+        ],
+        "skillRevision": [
+          "skill_versions_workspace_skill_revision_idx"
+        ],
+        "contextSlug": [
+          "skill_contexts_workspace_skill_idx"
+        ],
+        "publicSkillSearch": [
+          "skills_public_search_idx"
+        ],
+        "workspaceSkillSearch": [
+          "skills_workspace_search_idx"
+        ],
+        "auditExplorer": [
+          "audit_events_workspace_resource_idx"
+        ],
+        "analyticsSummary": [
+          "analytics_daily_summary_workspace_day_idx"
+        ]
+      }
+    }
+  },
+  "workers": {
+    "app": {
+      "worker": "skillplane-app",
+      "host": "app.skillplane.dev",
+      "priorVersion": "024670c0-3fa8-4d03-a55a-1dbcc5f34108",
+      "releaseVersion": "c4f78a58-e912-4879-bf17-d97d53ab4e52",
+      "baselineBootstrapped": false,
+      "deployedAt": "2026-08-05T11:30:17.547Z",
+      "tag": "onboarding-2026-08-05-9390dab",
+      "config": "app/wrangler.generated.json"
+    },
+    "mcp": {
+      "worker": "skillplane-mcp",
+      "host": "mcp.skillplane.dev",
+      "priorVersion": "b7800cb3-92e3-4f50-8128-6fb8c6854c94",
+      "releaseVersion": "f8e4d776-0d68-4023-bde8-41c2f509c78a",
+      "baselineBootstrapped": false,
+      "deployedAt": "2026-08-05T11:30:59.103Z",
+      "tag": "onboarding-2026-08-05-9390dab",
+      "config": "mcp/wrangler.generated.json"
+    }
+  },
+  "smoke": {
+    "ok": true,
+    "checkedAt": "2026-08-05T11:31:00.885Z",
+    "hosts": {
+      "landing": {
+        "status": 200,
+        "tls": true,
+        "cache": "public"
+      },
+      "app": {
+        "status": 200,
+        "tls": true
+      },
+      "mcp": {
+        "status": 401,
+        "tls": true
+      }
+    },
+    "readiness": {
+      "configuration": "CONFIG_VALID",
+      "postgres": "POSTGRES_READY",
+      "objectStorage": "R2_READY"
+    },
+    "oauth": {
+      "issuer": "https://app.skillplane.dev",
+      "resource": "https://mcp.skillplane.dev/mcp",
+      "pkce": "S256"
+    },
+    "boundaries": {
+      "privateNoStore": true,
+      "privateCorsWildcard": false,
+      "publicAssetImmutable": true,
+      "datafnAuthenticationRequired": true,
+      "mcpBearerChallenge": true,
+      "originlessOAuthFormAccepted": true
+    }
+  }
+}

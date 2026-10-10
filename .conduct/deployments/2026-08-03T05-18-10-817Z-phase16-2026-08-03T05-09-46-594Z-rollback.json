@@ -1,0 +1,140 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "startedAt": "2026-08-03T05:18:10.817Z",
+  "completedAt": "2026-08-03T05:19:58.910Z",
+  "releaseTag": "phase16-2026-08-03T05-09-46-594Z",
+  "releaseManifest": ".conduct/deployments/2026-08-03T05-09-46-593Z-phase16-2026-08-03T05-09-46-594Z.json",
+  "workers": {
+    "app": {
+      "priorVersion": "b4948da0-037f-4968-ba1a-024fedc7b409",
+      "releaseVersion": "10796137-167d-43b6-a664-17efa8036c3d"
+    },
+    "mcp": {
+      "priorVersion": "30d3ca98-5e74-4559-87da-071b3ce92ba6",
+      "releaseVersion": "009fb9c5-bda4-476c-b819-a227dbbe987d"
+    },
+    "landing": {
+      "priorVersion": "6f00e57a-ac15-4c97-ba46-ab29ebc25f26",
+      "releaseVersion": "5858f9fe-273a-4468-a17e-79e8ad418ca7"
+    }
+  },
+  "transitions": [
+    {
+      "kind": "landing",
+      "direction": "rollback",
+      "version": "6f00e57a-ac15-4c97-ba46-ab29ebc25f26"
+    },
+    {
+      "kind": "mcp",
+      "direction": "rollback",
+      "version": "30d3ca98-5e74-4559-87da-071b3ce92ba6"
+    },
+    {
+      "kind": "app",
+      "direction": "rollback",
+      "version": "b4948da0-037f-4968-ba1a-024fedc7b409"
+    },
+    {
+      "kind": "app",
+      "direction": "roll-forward",
+      "version": "10796137-167d-43b6-a664-17efa8036c3d"
+    },
+    {
+      "kind": "mcp",
+      "direction": "roll-forward",
+      "version": "009fb9c5-bda4-476c-b819-a227dbbe987d"
+    },
+    {
+      "kind": "landing",
+      "direction": "roll-forward",
+      "version": "5858f9fe-273a-4468-a17e-79e8ad418ca7"
+    }
+  ],
+  "rollbackSmoke": {
+    "ok": true,
+    "checkedAt": "2026-08-03T05:19:05.739Z",
+    "hosts": {
+      "landing": {
+        "status": 200,
+        "tls": true,
+        "cache": "public"
+      },
+      "app": {
+        "status": 200,
+        "tls": true
+      },
+      "mcp": {
+        "status": 401,
+        "tls": true
+      }
+    },
+    "readiness": {
+      "configuration": "CONFIG_VALID",
+      "postgres": "POSTGRES_READY",
+      "objectStorage": "R2_READY"
+    },
+    "oauth": {
+      "issuer": "https://app.skillplane.dev",
+      "resource": "https://mcp.skillplane.dev/mcp",
+      "pkce": "S256"
+    },
+    "boundaries": {
+      "privateNoStore": true,
+      "privateCorsWildcard": false,
+      "publicAssetImmutable": true,
+      "datafnAuthenticationRequired": true,
+      "mcpBearerChallenge": true,
+      "originlessOAuthFormAccepted": true
+    }
+  },
+  "forwardSmoke": {
+    "ok": true,
+    "checkedAt": "2026-08-03T05:19:56.043Z",
+    "hosts": {
+      "landing": {
+        "status": 200,
+        "tls": true,
+        "cache": "public"
+      },
+      "app": {
+        "status": 200,
+        "tls": true
+      },
+      "mcp": {
+        "status": 401,
+        "tls": true
+      }
+    },
+    "readiness": {
+      "configuration": "CONFIG_VALID",
+      "postgres": "POSTGRES_READY",
+      "objectStorage": "R2_READY"
+    },
+    "oauth": {
+      "issuer": "https://app.skillplane.dev",
+      "resource": "https://mcp.skillplane.dev/mcp",
+      "pkce": "S256"
+    },
+    "boundaries": {
+      "privateNoStore": true,
+      "privateCorsWildcard": false,
+      "publicAssetImmutable": true,
+      "datafnAuthenticationRequired": true,
+      "mcpBearerChallenge": true,
+      "originlessOAuthFormAccepted": true
+    }
+  },
+  "database": {
+    "fingerprint": "8410775b4e85c05bb4ea71cbd20b87bfd24f4bcf2c4a0ff25cc49152145f3cce",
+    "stateDigest": "0e8285d532c7f0f16a863d1e7a2eead8279c955664a7b6bf3576147c6dcef176",
+    "migrationLedgerDigest": "a9b649725d6b5319aab808eaff8726b26422821661b2edb4a6cc7ddeeabd8552",
+    "schemaDigest": "6dfe49dbed287fa4dde94398f8a6de15198f727db8907199a979c20fc5af61a0",
+    "immutableTableStateDigest": "55e856019903454483640a61281221351a3ce63ea6545b138baa9eca008d7189",
+    "immutableTableStateUnchanged": true,
+    "operationalTablesAllowedToChange": [
+      "api_rate_limits"
+    ],
+    "operationalTableStateChanged": true
+  }
+}

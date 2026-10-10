@@ -1,0 +1,233 @@
+import {
+  McpFnHostedAuthorizationError,
+  normalizeMcpClientRegistration,
+  type McpFnNormalizedClientRegistration,
+} from "@mcpfn/auth";
+import { consumeRateLimit } from "@skillplane/db";
+import { isIP } from "node:net";
+import type { OAuthRuntime } from "./config.js";
+import { SKILLPLANE_MCP_REDIRECT_POLICY } from "./redirect-policy.js";
+import { id } from "./tokens.js";
+
+type ClientMetadata = McpFnNormalizedClientRegistration["metadata"];
+
+interface ClientRow {
+  readonly client_id: string;
+  readonly client_name: string;
+  readonly token_endpoint_auth_method: string;
+}
+
+const PRIVATE_IPV4 = [
+  /^10\./,
+  /^127\./,
+  /^169\.254\./,
+  /^192\.168\./,
+  /^172\.(?:1[6-9]|2\d|3[01])\./,
+  /^0\./,
+];
+
+function isPrivateHostname(hostname: string): boolean {
+  const normalized = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (
+    normalized === "localhost" ||
+    normalized.endsWith(".localhost") ||
+    normalized.endsWith(".local") ||
+    normalized.endsWith(".internal") ||
+    normalized === "::1" ||
+    normalized.startsWith("fc") ||
+    normalized.startsWith("fd") ||
+    normalized.startsWith("fe80:")
+  ) {
+    return true;
+  }
+  return (
+    isIP(normalized) === 4 && PRIVATE_IPV4.some((pattern) => pattern.test(normalized))
+  );
+}
+
+/** Skillplane's network allow-policy; McpFn owns fetching and document validation. */
+export function isClientMetadataDocumentUrlAllowed(url: URL): boolean {
+  return (
+    url.protocol === "https:" &&
+    url.username === "" &&
+    url.password === "" &&
+    url.search === "" &&
+    url.hash === "" &&
+    url.pathname !== "/" &&
+    !isPrivateHostname(url.hostname)
+  );
+}
+
+export async function resolveRegisteredClient(
+  runtime: OAuthRuntime,
+  clientId: string,
+): Promise<McpFnNormalizedClientRegistration | null> {
+  if (!clientId || clientId.length > 2048 || clientId.startsWith("https://")) {
+    return null;
+  }
+  const result = await runtime.pool.query<ClientRow>(
+    `SELECT client_id, client_name, token_endpoint_auth_method
+       FROM authfn_oauth_clients
+      WHERE client_id = $1`,
+    [clientId],
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  const redirects = await runtime.pool.query<{ redirect_uri: string }>(
+    `SELECT redirect_uri
+       FROM authfn_oauth_client_redirect_uris
+      WHERE client_id = $1
+      ORDER BY redirect_uri`,
+    [clientId],
+  );
+  return normalizeMcpClientRegistration({
+    clientId: row.client_id,
+    source: "dynamic",
+    redirectPolicy: SKILLPLANE_MCP_REDIRECT_POLICY,
+    metadata: {
+      client_name: row.client_name,
+      redirect_uris: redirects.rows.map((redirect) => redirect.redirect_uri),
+      response_types: ["code"],
+      grant_types: ["authorization_code", "refresh_token"],
+      token_endpoint_auth_method: row.token_endpoint_auth_method,
+    },
+  });
+}
+
+function normalizedClientName(metadata: ClientMetadata): string {
+  const name =
+    typeof metadata.client_name === "string" ? metadata.client_name.trim() : "";
+  if (name.length < 1 || name.length > 200 || /[\r\n<>]/u.test(name)) {
+    throw new McpFnHostedAuthorizationError(
+      "invalid_client_metadata",
+      "client_name is invalid",
+    );
+  }
+  return name;
+}
+
+function metadataDocumentClientName(
+  registration: McpFnNormalizedClientRegistration,
+): string {
+  const declaredName = registration.metadata.client_name;
+  return normalizedClientName({
+    ...registration.metadata,
+    client_name:
+      typeof declaredName === "string" && declaredName.trim().length > 0
+        ? declaredName
+        : new URL(registration.clientId).hostname,
+  });
+}
+
+export async function persistClientMetadataDocument(
+  runtime: OAuthRuntime,
+  registration: McpFnNormalizedClientRegistration,
+): Promise<void> {
+  if (registration.source !== "client-metadata-document") return;
+  if (registration.tokenEndpointAuthMethod !== "none") {
+    throw new McpFnHostedAuthorizationError(
+      "unauthorized_client",
+      "Skillplane supports public Client ID Metadata Document clients only",
+    );
+  }
+  const database = await runtime.pool.connect();
+  try {
+    await database.query("BEGIN");
+    const persisted = await database.query<{ client_id: string }>(
+      `INSERT INTO authfn_oauth_clients
+         (client_id, client_name, source, token_endpoint_auth_method,
+          registration_access_token_hash, updated_at)
+       VALUES ($1, $2, 'client_metadata', 'none', NULL, $3)
+       ON CONFLICT (client_id)
+       DO UPDATE SET client_name = EXCLUDED.client_name,
+                     token_endpoint_auth_method = 'none',
+                     registration_access_token_hash = NULL,
+                     updated_at = EXCLUDED.updated_at
+       WHERE authfn_oauth_clients.source = 'client_metadata'
+       RETURNING client_id`,
+      [registration.clientId, metadataDocumentClientName(registration), runtime.now()],
+    );
+    if (persisted.rows.length !== 1) {
+      throw new McpFnHostedAuthorizationError(
+        "invalid_client",
+        "The client_id conflicts with an existing registered client",
+      );
+    }
+    await database.query(
+      "DELETE FROM authfn_oauth_client_redirect_uris WHERE client_id = $1",
+      [registration.clientId],
+    );
+    for (const redirectUri of registration.redirectUris) {
+      await database.query(
+        `INSERT INTO authfn_oauth_client_redirect_uris (id, client_id, redirect_uri)
+         VALUES ($1, $2, $3)`,
+        [id("ocru_", runtime.randomBytes), registration.clientId, redirectUri],
+      );
+    }
+    await database.query("COMMIT");
+  } catch (error) {
+    await database.query("ROLLBACK");
+    throw error;
+  } finally {
+    database.release();
+  }
+}
+
+export async function registerClient(
+  runtime: OAuthRuntime,
+  metadata: ClientMetadata,
+  request: Request,
+): Promise<McpFnNormalizedClientRegistration> {
+  const rate = await consumeRateLimit(
+    runtime.pool,
+    `oauth-register:${request.headers.get("cf-connecting-ip") ?? "unknown"}`,
+    10,
+    60,
+    runtime.now(),
+  );
+  if (!rate.allowed) {
+    throw new McpFnHostedAuthorizationError(
+      "temporarily_unavailable",
+      "Client registration is temporarily rate limited",
+      {
+        status: 429,
+        details: { retryAfterSeconds: rate.retryAfterSeconds },
+      },
+    );
+  }
+  const clientId = id("spclient_", runtime.randomBytes);
+  const persistedMetadata = {
+    ...metadata,
+    client_name: normalizedClientName(metadata),
+    client_id_issued_at: Math.floor(runtime.now().getTime() / 1_000),
+  } as ClientMetadata & { client_id_issued_at: number };
+  const database = await runtime.pool.connect();
+  try {
+    await database.query("BEGIN");
+    await database.query(
+      `INSERT INTO authfn_oauth_clients
+         (client_id, client_name, source, token_endpoint_auth_method)
+       VALUES ($1, $2, 'dynamic', 'none')`,
+      [clientId, persistedMetadata.client_name],
+    );
+    for (const redirectUri of persistedMetadata.redirect_uris) {
+      await database.query(
+        `INSERT INTO authfn_oauth_client_redirect_uris (id, client_id, redirect_uri)
+         VALUES ($1, $2, $3)`,
+        [id("ocru_", runtime.randomBytes), clientId, redirectUri],
+      );
+    }
+    await database.query("COMMIT");
+  } catch (error) {
+    await database.query("ROLLBACK");
+    throw error;
+  } finally {
+    database.release();
+  }
+  return normalizeMcpClientRegistration({
+    clientId,
+    source: "dynamic",
+    redirectPolicy: SKILLPLANE_MCP_REDIRECT_POLICY,
+    metadata: persistedMetadata,
+  });
+}

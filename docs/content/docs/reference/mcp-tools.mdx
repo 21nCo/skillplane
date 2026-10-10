@@ -1,0 +1,57 @@
+---
+title: MCP tools
+description: The user-facing Skillplane MCP catalog, grouped by discovery, retrieval, lifecycle, context, and improvement.
+---
+
+The hosted Streamable HTTP endpoint is `https://mcp.skillplane.dev/mcp`. Tool availability is stable, but every call is authorization-filtered.
+
+## Discover and retrieve
+
+| Tool                   | Purpose                                                                            |
+| ---------------------- | ---------------------------------------------------------------------------------- |
+| `workspaces_list`      | Discover authorized workspaces without an existing workspace ID                    |
+| `skills_list`          | Enumerate authorized workspace skills without a query                              |
+| `skills_search`        | Rank authorized skills for a non-empty text query                                  |
+| `skill_retrieve`       | Retrieve one exact immutable version, instructions, manifest, and optional context |
+| `skill_asset_retrieve` | Retrieve one safe file from an exact version                                       |
+| `skill_versions_list`  | List immutable visible version history                                             |
+| `skill_versions_diff`  | Compare two exact versions by file digest and safe text changes                    |
+
+## Skill lifecycle
+
+| Tool                      | Purpose                                      |
+| ------------------------- | -------------------------------------------- |
+| `skill_create`            | Create a skill and published version `1.0.0` |
+| `skill_visibility_update` | Change private or public visibility          |
+| `skill_archive`           | Archive an active skill                      |
+| `skill_restore`           | Restore an archived skill                    |
+
+## Improve and review
+
+| Tool                            | Purpose                                                         |
+| ------------------------------- | --------------------------------------------------------------- |
+| `skill_amend`                   | Propose an immutable candidate from an exact base with evidence |
+| `skill_candidates_list`         | List visible amendment candidates and review states             |
+| `skill_candidate_approve`       | Approve and publish a pending candidate as an authorized user   |
+| `skill_candidate_reject`        | Reject a pending candidate as an authorized user                |
+| `skill_amendment_policy_get`    | Read review or trusted auto-publish policy                      |
+| `skill_amendment_policy_update` | Replace policy as a workspace Owner                             |
+
+## Contexts
+
+| Tool                        | Purpose                                                        |
+| --------------------------- | -------------------------------------------------------------- |
+| `contexts_list`             | Discover active or archived contexts for a skill               |
+| `context_get`               | Read metadata, an exact knowledge revision, and optional notes |
+| `context_create`            | Create context metadata and the first knowledge revision       |
+| `context_update`            | Update context metadata                                        |
+| `context_archive`           | Archive a context                                              |
+| `context_restore`           | Restore a context                                              |
+| `context_knowledge_history` | List immutable knowledge revisions                             |
+| `context_notes_list`        | List shared context notes                                      |
+| `context_knowledge_update`  | Append a knowledge revision                                    |
+| `context_note_upsert`       | Create or update a named note revision                         |
+
+## Mutation requirements
+
+State-changing tools require an idempotency key. Lifecycle and metadata mutations also require the latest `updatedAt` concurrency token. Candidate decisions and policy changes require a user OAuth token with publication access; agent credentials cannot perform them.
