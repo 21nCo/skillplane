@@ -33,8 +33,9 @@
     bindSkillId = $state("");
   let available = $state<{ id: string; name: string; slug: string }[]>([]),
     bindQuery = $state("");
-  // Each workspace keeps its creation key until a confirmed save or an explicit
-  // new source, so re-submitting an ambiguous create after navigation replays it.
+  // Each workspace keeps one creation key until the page has selected the source
+  // that key created, or the user starts a new source. Any re-submission before
+  // then (ambiguous response, failed refresh, navigation) replays the create.
   const creationKeys: Record<string, ReturnType<typeof crypto.randomUUID> | undefined> =
     {};
   function creationKey(id: string) {
@@ -102,7 +103,7 @@
     if (!workspace) return;
     const id = workspace.id,
       g = generation,
-      key = creationKey(id);
+      key = selected ? undefined : creationKey(id);
     const r = await sourceRequest<{ source: Source }>(
       id,
       selected ? `/${encodeURIComponent(selected.source.id)}` : "",
@@ -120,11 +121,17 @@
       },
       key,
     );
-    // A newer create may have replaced the key; it must survive this response.
-    if (creationKeys[id] === key) creationKeys[id] = undefined;
     if (!current(id, g)) return;
     await load();
     await detail(r.source);
+    // Retire only the key this create sent, and only once its source is selected.
+    if (
+      key &&
+      creationKeys[id] === key &&
+      current(id, g) &&
+      selectedSource(r.source.id)
+    )
+      creationKeys[id] = undefined;
   }
   function selectedSource(id: string) {
     return selected?.source.id === id;
