@@ -1,0 +1,94 @@
+{
+  "cli_version": "0.11.3",
+  "checkpoint_id": "01M4JPHY53D1EJZTFCERACJB18",
+  "session_id": "01a1139c-4793-73e3-92a4-57fc99ae0685",
+  "strategy": "manual-commit",
+  "created_at": "2026-10-10T10:43:20.238053Z",
+  "branch": "main",
+  "checkpoints_count": 1,
+  "save_step_count": 2,
+  "files_touched": [
+    "deployment/wrangler/mcp.development.json",
+    "deployment/wrangler/mcp.production.json",
+    "docs/operations/mcpfn.md",
+    "mcp/package.json",
+    "mcp/wrangler.jsonc",
+    "packages/authfn-mcp-oauth/package.json",
+    "pnpm-lock.yaml",
+    "pnpm-workspace.yaml",
+    "scripts/lib/local-wrangler-config.test.mjs",
+    "scripts/lib/topology-deployment.mjs",
+    "scripts/topology-deployment.test.mjs"
+  ],
+  "agent": "Codex",
+  "model": "gpt-6.1-sol",
+  "turn_id": "4b6f0ffc9a6e",
+  "checkpoint_transcript_start": 2195,
+  "transcript_lines_at_start": 2195,
+  "compact_transcript_start": 290,
+  "token_usage": {
+    "input_tokens": 12777,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 3089536,
+    "output_tokens": 9188,
+    "api_call_count": 14,
+    "subagent_tokens_complete": true
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-10-10T10:43:20.087716Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 56,
+    "human_removed": 76,
+    "total_committed": 0,
+    "total_lines_changed": 132,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 76,
+      "user_lines_removed": 56,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        "deployment/wrangler/mcp.development.json": 1,
+        "deployment/wrangler/mcp.production.json": 1,
+        "docs/operations/mcpfn.md": 3,
+        "mcp/package.json": 3,
+        "mcp/wrangler.jsonc": 1,
+        "packages/authfn-mcp-oauth/package.json": 1,
+        "pnpm-lock.yaml": 59,
+        "pnpm-workspace.yaml": 3,
+        "scripts/lib/local-wrangler-config.test.mjs": 1,
+        "scripts/lib/topology-deployment.mjs": 1,
+        "scripts/topology-deployment.test.mjs": 2
+      },
+      "user_removed_per_file": {
+        "deployment/wrangler/mcp.development.json": 1,
+        "deployment/wrangler/mcp.production.json": 1,
+        "docs/operations/mcpfn.md": 3,
+        "mcp/package.json": 3,
+        "mcp/wrangler.jsonc": 1,
+        "packages/authfn-mcp-oauth/package.json": 1,
+        "pnpm-lock.yaml": 27,
+        "pnpm-workspace.yaml": 3,
+        "scripts/lib/local-wrangler-config.test.mjs": 4,
+        "scripts/lib/topology-deployment.mjs": 4,
+        "scripts/topology-deployment.test.mjs": 8
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 76,
+      "agent_lines_removed": 56
+    }
+  ]
+}
