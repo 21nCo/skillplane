@@ -215,3 +215,26 @@ The `dev` environment must provide:
   `CLOUDFLARE_DEV_CELL_EU_WEST_HYPERDRIVE_ID`, `PUBLIC_DEV_TURNSTILE_SITE_KEY`, and
   optionally `DATAFN_DIRECT_ENABLED`, `DATAFN_DIRECT_WORKSPACES`,
   `DATAFN_ROUTE_ACTIVE_KEY_ID`, and `DATAFN_ROUTE_PUBLIC_KEYS`.
+
+## Retire the old development deployment in `21n`
+
+Deploys to `21n-dev` never touch the production `21n` account, so the previous
+development Workers there stay deployed and keep their database secrets until they
+are removed by hand. After the NPX-76 zone cutover, once
+`https://skillplane-app.21n.dev` and `https://skillplane-mcp.21n.dev/mcp` pass the
+smoke checks above:
+
+1. In the `21n` account, list Workers and select only development Workers: names
+   starting with `skillplane-app-dev`, `skillplane-mcp-dev`,
+   `skillplane-datafn-dev-`, `skillplane-projection-dev-`, or
+   `skillplane-cell-dev`. Never select `skillplane-app`, `skillplane-mcp`, or other
+   production Workers.
+2. Remove their custom domains (`app-dev.skillplane.dev`, `mcp-dev.skillplane.dev`,
+   and `datafn-<region>-dev.skillplane.dev`) and any routes, then delete those
+   Workers so they can no longer reach the development databases.
+3. Delete the development-only R2 buckets (`*-dev`), Hyperdrive configurations,
+   KV namespaces, D1 databases, and queues left in `21n` only after confirming
+   their data exists in `21n-dev`. Leave `skillplane-skill-bundles` and every other
+   production resource untouched.
+4. Revoke any Cloudflare API token that was scoped to development resources in
+   `21n`.
