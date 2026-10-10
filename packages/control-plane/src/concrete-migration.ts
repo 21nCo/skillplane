@@ -32,6 +32,9 @@ export interface WorkspaceMigrationObjectStore {
 
 const regionalTables = [
   "skills",
+  "skill_groups",
+  "skill_group_skills",
+  "skill_group_members",
   "skill_versions",
   "skill_version_files",
   "skill_version_compositions",

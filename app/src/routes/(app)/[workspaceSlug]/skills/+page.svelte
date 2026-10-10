@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { groupRequest, type Group } from "$lib/groups/api.js";
   import { resolve } from "$app/paths";
   import { page } from "$app/state";
   import { Badge, Button, Input, Select } from "@skillplane/ui";
@@ -25,6 +26,9 @@
   );
   const canWrite = $derived(Boolean(workspace && workspace.role !== "viewer"));
 
+  let groupsError = $state("");
+  let groups = $state<Group[]>([]);
+  let groupId = $state("");
   let skills = $state<Skill[]>([]);
   let query = $state("");
   let visibility = $state<SkillVisibility | "all">("all");
@@ -35,8 +39,12 @@
   let error = $state<string | null>(null);
   let loadedWorkspaceId = $state<string | null>(null);
 
+  let loadGeneration = 0;
+  // Only the latest request may update the list, cursor, error, or loading state;
+  // a slower response for a superseded filter or workspace is discarded.
   async function load(reset = true) {
     if (!workspace) return;
+    const generation = ++loadGeneration;
     if (reset) {
       loading = true;
       nextCursor = null;
@@ -47,19 +55,24 @@
     try {
       const result = await listSkills({
         workspaceId: workspace.id,
+        ...(groupId ? { groupId } : {}),
         query,
         archive,
         visibility: visibility === "all" ? [] : [visibility],
         cursor: reset ? null : nextCursor,
         limit: 20,
       });
+      if (generation !== loadGeneration) return;
       skills = reset ? [...result.skills] : [...skills, ...result.skills];
       nextCursor = result.nextCursor;
     } catch (cause) {
+      if (generation !== loadGeneration) return;
       error = cause instanceof Error ? cause.message : "Skills could not be loaded.";
     } finally {
-      loading = false;
-      loadingMore = false;
+      if (generation === loadGeneration) {
+        loading = false;
+        loadingMore = false;
+      }
     }
   }
 
@@ -71,6 +84,33 @@
   $effect(() => {
     if (workspace && loadedWorkspaceId !== workspace.id) {
       loadedWorkspaceId = workspace.id;
+      const workspaceId = workspace.id;
+      groupsError = "";
+      groupId = "";
+      groups = [];
+      void (async () => {
+        let cursor: string | null = null;
+        const all: Group[] = [];
+        do {
+          const r: { groups: Group[]; nextCursor: string | null } = await groupRequest<{
+            groups: Group[];
+            nextCursor: string | null;
+          }>(workspaceId, cursor ? `?cursor=${encodeURIComponent(cursor)}` : "");
+          all.push(...r.groups);
+          cursor = r.nextCursor;
+        } while (cursor);
+        if (
+          workspaces.workspaces.find((w) => w.slug === page.params.workspaceSlug)
+            ?.id === workspaceId
+        )
+          groups = all;
+      })().catch(() => {
+        if (
+          workspaces.workspaces.find((w) => w.slug === page.params.workspaceSlug)
+            ?.id === workspaceId
+        )
+          groupsError = "Groups could not be loaded";
+      });
       void load();
     }
   });
@@ -127,6 +167,16 @@
         Search
       </Button>
     </form>
+    {#if groupsError}<p role="status">{groupsError}</p>{/if}
+    <Select
+      label="Skill group"
+      options={[
+        { value: "", label: "All groups" },
+        ...groups.map((g) => ({ value: g.id, label: g.name })),
+      ]}
+      bind:value={groupId}
+      onchange={() => void load()}
+    />
     <Select
       label="Visibility"
       options={[
@@ -166,10 +216,10 @@
   {:else if skills.length === 0}
     <SkillState
       kind="empty"
-      title={query || visibility !== "all" || archive !== "active"
+      title={query || groupId || visibility !== "all" || archive !== "active"
         ? "No skills match these filters"
         : "Create your first skill"}
-      message={query || visibility !== "all" || archive !== "active"
+      message={query || groupId || visibility !== "all" || archive !== "active"
         ? "Change the search or filters and try again."
         : canWrite
           ? "Author Markdown directly or upload a portable Skillplane bundle."
@@ -300,7 +350,7 @@
 
   .filters {
     display: grid;
-    grid-template-columns: minmax(18rem, 1fr) 11rem 12rem;
+    grid-template-columns: minmax(18rem, 1fr) repeat(3, minmax(9rem, 1fr));
     gap: var(--sp-space-3);
     align-items: end;
     margin: var(--sp-space-6) 0 var(--sp-space-4);

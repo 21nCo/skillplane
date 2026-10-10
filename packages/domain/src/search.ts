@@ -261,6 +261,24 @@ export function normalizePublicSearchInput(options: {
   };
 }
 
+function searchScope(options: {
+  readonly principal?: Principal | null;
+  readonly workspaceId?: string;
+  readonly groupId?: string;
+}): string {
+  if (options.principal) {
+    const group = options.groupId ? `:group:${options.groupId}` : "";
+    return `workspace:${options.principal.workspaceId}${group}`;
+  }
+  if (options.groupId)
+    throw new DomainError(
+      "AUTHENTICATION_REQUIRED",
+      "Group discovery requires workspace membership",
+      401,
+    );
+  return options.workspaceId ? `public-workspace:${options.workspaceId}` : "public";
+}
+
 export class SkillSearchService {
   constructor(
     private readonly pool: Pool,
@@ -270,6 +288,7 @@ export class SkillSearchService {
 
   async search(options: {
     readonly query: string;
+    readonly groupId?: string;
     readonly workspaceId?: string;
     readonly tags?: readonly string[];
     readonly visibility?: readonly SkillVisibility[];
@@ -307,6 +326,7 @@ export class SkillSearchService {
   private async executeSearch(
     options: {
       readonly query: string;
+      readonly groupId?: string;
       readonly workspaceId?: string;
       readonly tags?: readonly string[];
       readonly visibility?: readonly SkillVisibility[];
@@ -327,11 +347,7 @@ export class SkillSearchService {
       throw new DomainError("NOT_FOUND", "Workspace resource was not found", 404);
     }
     const normalized = normalizeSearchInput({ ...options, allowEmptyQuery });
-    const scope = options.principal
-      ? `workspace:${options.principal.workspaceId}`
-      : options.workspaceId
-        ? `public-workspace:${options.workspaceId}`
-        : "public";
+    const scope = searchScope(options);
     const digest = await filterHash({
       query: normalized.query,
       tags: normalized.tags,
@@ -370,6 +386,8 @@ export class SkillSearchService {
            JOIN skill_versions version
              ON version.id = skill.current_published_version_id
           WHERE ${authorization}
+            AND $8::text IN ('active','archived','all')
+            AND ($9::text IS NULL OR EXISTS(SELECT 1 FROM skill_group_skills gs JOIN skill_groups g ON g.id=gs.group_id AND g.workspace_id=gs.workspace_id WHERE gs.workspace_id=skill.workspace_id AND gs.skill_id=skill.id AND gs.group_id=$9 AND g.archived_at IS NULL))
             AND ($2::text[] = '{}'::text[] OR skill.tags @> $2::text[])
             AND (
               cardinality($7::text[]) = 0
@@ -412,7 +430,8 @@ export class SkillSearchService {
         cursor?.id ?? null,
         normalized.limit + 1,
         normalized.visibility,
-        ...(options.principal ? [normalized.archive] : []),
+        normalized.archive,
+        options.groupId ?? null,
       ],
     );
     const hasNext = result.rows.length > normalized.limit;
