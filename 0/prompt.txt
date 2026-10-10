@@ -1,0 +1,328 @@
+add use-skillplane skill from ~/.agents/skills to claude discoverable skills
+
+---
+
+/use-skillplane pr-refetch-fix PR #46, #47
+
+---
+
+<task-notification>
+<task-id>a38232176d5765dae</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-serro-Documents-dev-n-agent-experiments-skillplane/ca62123f-e191-43ba-a12e-6d1b29e43d5c/tasks/a38232176d5765dae.output</output-file>
+<status>completed</status>
+<summary>Agent "PR #46 refetch-fix round" finished</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>PR #46 report (one pr-refetch-fix round, skill `21n/pr-refetch-fix` v1.4.0, `sha256:b6a6e7a8…2726`).
+
+I pushed one commit, **`b2b8aabcd034c1dc7e0bdfd65540721b57cec807`**, to `codex/ski-11-skill-groups`. Local, remote and PR head all match. PR: https://github.com/21nCo/skillplane/pull/46
+
+The snapshot was taken at head `5c9792d`: 39 threads, 14 unresolved, plus review bodies, issue comments and checks. Those 14 threads came down to 9 distinct root causes.
+
+**Fixed (6 root causes, 9 threads)**
+- **Empty ID filters returned unfiltered results** (thread [22]). An empty `groupId` on skills list/search, and the same pattern for `skillId`/`userId` on the group list, now returns 400 `VALIDATION_FAILED`. The check lives in a new `optionalIdFilter` in `packages/api/src/routes/shared.ts`, used by `skills.ts` and `skill-groups.ts`. A new API integration test covers all four cases. It **failed on the old route code** (got 200 instead of 400) and passes with the fix.
+- **Archive-toggle race** (threads [34], [37], [38]). The "Include archived groups" checkbox is now disabled while an operation is running (`groups/+page.svelte`).
+- **Stale load errors** (thread [36]). A failure from a superseded group-list request no longer sets the error message.
+- **Creation-key reuse after a refresh failure** (threads [33] and [4]). After a successful save, the page now takes on the returned group before refreshing. The creation key rotates right away and is sent only on create, not on edit. A retry after a refresh failure now edits the saved group instead of reusing the spent key or the old revision.
+- **Catalog group error crossing workspaces** (thread [30]). The "Groups could not be loaded" message is only shown if you're still on the same workspace (`skills/+page.svelte`).
+- **Docs contradiction and duplicated test** (threads [29], [31]). `docs/operations/skill-groups.md` now consistently describes removed members as listed with a `removed` marker, and documents `GET /:groupId/skills`. I removed the repeated remove/re-add-member sequence from the domain integration test.
+
+**Skipped (Already Fixed / Stale)**
+- Thread [0]: the membership check already runs only when adding a member (`skill-groups.ts:217`).
+- Thread [1]: archived groups' assignments are already served by the separate `GET /:groupId/skills` endpoint, which doesn't exclude archived groups. The catalog filter excluding them is intentional.
+
+**Invalid**
+- **Thread [35] (service principals on group reads).** The authorization middleware rejects any `/api/v1/workspaces/*` request without a user session, and service credentials never have one. So the skills endpoint doesn't actually accept them over HTTP either, contrary to the comment, and swapping the helper in the group routes wouldn't change anything. Opening workspace routes to service credentials is a wider auth decision outside this PR.
+- **Thread [32] (`removed` role).** Real roles are only viewer/editor/admin/owner, so `removed` can't collide with one. The endpoint is new in this PR, so no existing client depends on it, and the behavior is now documented.
+
+**Not Attempted**
+- SonarCloud was cancelled with "analysis failed" and no diagnostic. I'm treating it as an external gate. The CodeRabbit nitpicks (e.g. a nested ternary in `search.ts`) are trivial and out of scope.
+
+**Verification**
+- I ran the group API and domain integration tests against a disposable local Postgres; both pass.
+- The full API integration suite: 46/50 pass. The 4 failures are in `utc-rollups`, because the disposable DB name doesn't end in `_test` and the reset guard refuses. It fails the same way without my changes.
+- Typecheck on api/app/domain passed, svelte-check found 0 errors, eslint and prettier are clean on the changed files, and all unit tests pass.
+- **Gap:** the three Svelte page fixes have no component test harness. Only svelte-check and the logic were checked; I didn't run them in a browser.
+
+**Convergence**
+- Valid blocking root causes went from 6 to 0 assessed remaining. No regressions came from the fixes.
+- The group-list response-guard family has been reported in 3 consecutive review rounds (`59a10e1`, `5c9792d`, this one). This round fixed both remaining ways in, not just the line each reviewer pointed at.
+- Trend: improving, but with low confidence because of the browser-verification gap.
+
+**Convergence gate:** this was a single invocation, so ledger mode was `routine` and kept in task context with no persistent file. Families were tracked as filter-validation, list-race, creation-key, catalog-error and doc/test hygiene. None has failed two rounds.
+
+**For the stacked PR #47:** it doesn't have these fixes until `codex/ski-11-skill-groups` is merged into it. `groups/+page.svelte`, `skills/+page.svelte`, `skills.ts` and `skill-groups.ts` may conflict if #47 edits them. Any new optional ID query filter in #47 should use `optionalIdFilter`.
+
+I didn't reply to or resolve any threads. Threads [22], [29]–[31], [33], [34] and [36]–[38] can be resolved, and [0], [1] and [4] are stale or covered.
+
+One review round is complete. No post-push refetch or additional review loop was performed.</result>
+<usage><subagent_tokens>152443</subagent_tokens><tool_uses>39</tool_uses><duration_ms>442860</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a590f60f29334da37</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-serro-Documents-dev-n-agent-experiments-skillplane/ca62123f-e191-43ba-a12e-6d1b29e43d5c/tasks/a590f60f29334da37.output</output-file>
+<status>completed</status>
+<summary>Agent "PR #47 refetch-fix round" finished</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>I ran one round of PR #47 (`codex/ski-12-git-sources`) in the `skillplane-ski-12` worktree only. It fixed 8 root causes in one commit, `d4b1bd0`, pushed once without force; local, remote and PR head all match.
+
+PR: https://github.com/21nCo/skillplane/pull/47. I used hosted skill `21n/pr-refetch-fix` v1.4.0 (`sha256:b6a6e7a8…2726`). Findings were collected once at head `8ce83cf` (stable throughout): 18 unresolved threads, the review bodies, issue comments, and check runs with their annotations.
+
+Files in the commit:
+- `packages/domain/src/git-sources.ts`
+- `packages/domain/src/git-source-provider.ts`
+- `packages/domain/src/git-source-provider.test.ts`
+- `packages/domain/tests/integration/git-sources.integration.test.ts`
+- `app/src/routes/(app)/[workspaceSlug]/sources/+page.svelte`
+- `docs/operations/git-sources.md`
+
+**Fixed (8 root causes, 11 threads)**
+1. **Binding paths ending in `SKILL.md`** (ptwL-, pt9_d): `bind` and `disconnect` now normalize the path the same way source configuration does. Before, a binding to `x/SKILL.md` was stored as-is and never matched the discovered `x`.
+2. **Duplicate slugs** (ptsGe): every entry sharing a slug is now a conflict. Before, the first one was silently imported.
+3. **Preview rejected composites whose dependency is new in the same sync** (pt_6C, puCPg; also covers pt_6K): preview now resolves composition only to compare an existing binding. A failure there counts as "changed" instead of a permanent error. New skills are validated when apply creates them, in path order, so the real error message appears and the run stays retryable.
+4. **YAML errors were silenced** (puD2H): `logLevel: "silent"` meant duplicate keys and malformed frontmatter were accepted. Changed to `"error"`.
+5. **The 999-file limit could never be reached** (ptpLo): it is now 198 distinct files per skill (the 200-request cap minus 2). An oversized skill gets its own error before any fetch, instead of failing the whole snapshot.
+6. **Stale requests after switching workspaces** (pt_6B): requests on the sources page are now tied to a counter that increments on each workspace switch, so after switching A→B→A an old request can no longer overwrite state or clear the busy flag.
+7. **Creation key reset on workspace switch** (pt_6E): each workspace now keeps its own key until a confirmed save or a "New source" click, so retrying an ambiguous create replays instead of duplicating.
+8. **Binding visibility type** (pt_6G): widened to `SkillVisibility`.
+
+**Skipped (already fixed on 8ce83cf; 4 root causes, 5 threads)**
+- Version provenance now shows outside the agent-amendment block (ptla2, ptmfW).
+- The Drizzle partial `disconnected_at IS NULL` index is present (ptsGg).
+- The provenance `(run_id, skill_path)` unique index is present (ptwIh).
+- `registerResourceRoutes` is called on apply (ptwId).
+
+**Not Attempted**
+- **Case-insensitive root files** (ptpLv, P3): this would change the shared bundle path rules for every upload path, not just Git import. The current behavior is the documented one, and it fails with an explicit per-skill error.
+- **Freeze the resolved composition in the saved preview** (puE9a): this is a design change, either keeping the resolved lock from preview through apply or accepting that dependencies resolve at creation as ordinary skill creation does. After fix 3, additions are not resolved during preview at all. It's still open.
+- **SonarCloud**: the check shows cancelled ("analysis failed") with 40 annotations, all code-smell rules, so it remains an unresolved external gate.
+  - "Weak hash" (SHA-1) is invalid: Git blob IDs require SHA-1.
+  - The `sort()` localeCompare suggestion is invalid: deterministic code-unit order is intended.
+  - Cognitive-complexity refactors are out of scope for this round.
+- **Inherited from #46**: no findings fell into #46's code.
+
+**Verification**
+- The 5 new regression tests failed on the old head with the expected differences, then passed after the fix: same-sync composite, duplicate slug, `SKILL.md` binding path, YAML duplicate/malformed frontmatter, and the per-skill request budget.
+- Ran against a disposable Postgres 16:
+  - Domain: 59 unit tests and 22 integration tests pass.
+  - API: the 2 Git-source integration tests pass.
+- Domain and API `tsc`, app `svelte-check` (0 errors), eslint and prettier on the changed files all pass.
+- **Gap:** the two sources-page fixes (6 and 7) are only checked by typecheck and lint. The app has no component-test setup, so there is no behavioral test for them.
+- CI on `d4b1bd0` hasn't been checked (no polling). Pre-push, `verify` was green on 8ce83cf.
+
+**Invalid / Accepted Risk:** none among the threads; only the two SonarCloud items above are invalid.
+
+**Convergence:** improving, with evidence.
+- Valid blocking root causes went from 10 to 2 open (ptpLv, puE9a), plus the SonarCloud gate.
+- No regressions were found in the existing tests.
+- The composition family has now been through two rounds: commit 3799c02 introduced the same-sync regression, and this round fixed it. A further finding there would trigger the architecture-reset threshold.
+
+**Convergence gate:** single invocation, so no persistent ledger was required and the run used the routine pass, without reset. Family IDs, all at one failed round except composition at 2: git-bind-path, git-dup-slug, git-preview-composition, git-yaml, git-file-budget, sources-ui-fence, sources-ui-idemkey, binding-visibility-type.
+
+I did not reply to or resolve any threads. One review round is complete. No post-push refetch or additional review loop was performed.</result>
+<usage><subagent_tokens>189519</subagent_tokens><tool_uses>61</tool_uses><duration_ms>577603</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b8e8erh37</task-id>
+<tool-use-id>toolu_012DJoWxn5DDoYTbfo41AL9L</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-serro-Documents-dev-n-agent-experiments-skillplane/ca62123f-e191-43ba-a12e-6d1b29e43d5c/tasks/b8e8erh37.output</output-file>
+<status>failed</status>
+<summary>Background command "Check leftover DB processes, PR heads, and worktree state" failed with exit code 144</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a590f60f29334da37</task-id>
+<output-file>/private/tmp/claude-501/-Users-serro-Documents-dev-n-agent-experiments-skillplane/ca62123f-e191-43ba-a12e-6d1b29e43d5c/tasks/a590f60f29334da37.output</output-file>
+<status>completed</status>
+<summary>Agent "PR #47 refetch-fix round" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>That background notice is from an earlier diagnostic command that hung on `docker ps`. It doesn't affect the PR #47 round, which was already pushed (`d4b1bd0`).</result>
+<usage><subagent_tokens>189703</subagent_tokens><tool_uses>61</tool_uses><duration_ms>715486</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a38232176d5765dae</task-id>
+<output-file>/private/tmp/claude-501/-Users-serro-Documents-dev-n-agent-experiments-skillplane/ca62123f-e191-43ba-a12e-6d1b29e43d5c/tasks/a38232176d5765dae.output</output-file>
+<status>completed</status>
+<summary>Agent "PR #46 refetch-fix round" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>That notification is for the earlier `docker ps` check, which hung and was killed. The test edit in that same command was applied before it hung: the empty-filter test is in commit `b2b8aab` and passed. This doesn't change the PR #46 report above.</result>
+<usage><subagent_tokens>152936</subagent_tokens><tool_uses>39</tool_uses><duration_ms>722800</duration_ms></usage>
+</task-notification>
+
+---
+
+/use-skillplane pr-refetch-fix PR #46, #47
+
+---
+
+<task-notification>
+<task-id>a590f60f29334da37</task-id>
+<tool-use-id>toolu_01UQq6dhXEXbntdbtdKauMHj</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-serro-Documents-dev-n-agent-experiments-skillplane/ca62123f-e191-43ba-a12e-6d1b29e43d5c/tasks/a590f60f29334da37.output</output-file>
+<status>completed</status>
+<summary>Agent "PR #47 refetch-fix round" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Round 2 of PR #47 fixed all 3 new findings in one commit, `e342c96`, pushed once without force; local, remote and PR head all match. No architecture reset was triggered, and I made no changes to the composition family.
+
+PR: https://github.com/21nCo/skillplane/pull/47. Skill is `21n/pr-refetch-fix` v1.4.0, revision 6, `sha256:b6a6e7a8…2726`, unchanged. Findings were collected once at head `d4b1bd0` (stable throughout): 14 unresolved threads (3 new), the review bodies, issue comments, and check runs with annotations. #46's `b2b8aab` was not merged in.
+
+Files in the commit:
+- `packages/db/src/schema/git-sources.ts`
+- `packages/db/tests/integration/git-source-schema.integration.test.ts` (new)
+- `app/src/routes/(app)/[workspaceSlug]/sources/+page.svelte`
+- `docs/operations/git-sources.md`
+- `packages/domain/src/git-source-provider.ts`
+- `packages/domain/src/git-source-provider.test.ts`
+
+**Fixed (3 root causes, 3 new threads)**
+1. **Plan-array CHECK missing from the Drizzle schema** (pxQN8, new family `db-schema-parity`): added `skill_source_runs_plan_check`. While tracing the same Drizzle-vs-migration contract I found a sibling drift: `skill_source_runs_recent_idx` was not modeled as `created_at DESC`. Fixed that too.
+2. **Older create clears a newer creation key** (pxPby, family `sources-ui-idemkey`, now at 1 failed round): the save now captures the key it used and clears the stored key only if it still matches. Without that, a "New source" click during an in-flight create could have its new key wiped, and a retry could create a duplicate source.
+3. **Limit wording** (pxPbv, family `git-file-budget`, now at 1 failed round): the docs and error message now say "198 distinct blob IDs" and note that the 200-request budget is shared across the snapshot.
+
+**Skipped (Already Fixed / Stale; 9 threads)**
+- Fixed before round 1: ptla2, ptmfW, ptsGg, ptwId, ptwIh.
+- Fixed in round 1 but still open on GitHub: ptsGe, pt9_d, pt_6K, puD2H. They are eligible for resolution; I left them unchanged.
+
+**Not Attempted**
+- **ptpLv (case-insensitive root files):** same as round 1. It would change the shared bundle path rules for every upload path, not just Git import.
+- **puE9a (freeze resolved composition):** no reset. No new valid finding landed in `git-preview-composition` or a sibling, so I assessed puE9a without changing that family. I found no defect against the current contract:
+  - The plan pins the repository content digest, and apply re-verifies it.
+  - Dependency resolution happens at version creation, as it does for every other ingestion path.
+  - A "changed" entry becomes a `pending_review` candidate, so its actual bytes, lock included, are reviewed before publishing.
+  - After round 1, additions are not resolved during preview at all, so there is no preview-time lock to freeze.
+  - The only effect: if a dependency changes between preview and apply, the preview's action label can be out of date (for example, a redundant candidate). The imported bytes never skip review.
+  - This is a product-contract choice for you: mark it Accepted Risk, or Invalid with that evidence. If you want frozen locks, that would be an `architecture_reset` pass.
+- **Repo-wide naming drift (outside these findings):** the migration names `UNIQUE(workspace_id,id)` constraints `*_id_key`, while the Drizzle models name them `*_workspace_id_unique`. Composition and #46's skill-groups follow the same convention. The new parity test deliberately excludes these.
+- **SonarCloud:** still cancelled ("analysis failed") with 39 annotations, the same rule set as round 1. Round 1's changes raised `preview()`'s cognitive complexity from 24 to 44. This is a code smell, not a behavior defect.
+
+**Verification**
+- The new parity test compares the Drizzle model against a migrated Postgres 16 database, so it doesn't depend on Drizzle's own helpers.
+  - Against the old schema model it fails on `skill_source_runs` (missing check and DESC order).
+  - After the fix it passes for all 4 tables.
+- Ran against that same disposable database:
+  - Domain: 59 unit tests and 22 integration tests pass.
+  - DB package: 43 integration tests pass across 14 files (dist excluded).
+- Domain and DB `tsc`, app `svelte-check` (0 errors), eslint and prettier on the changed files all pass.
+- **Gap:** the creation-key fix is only checked by typecheck and lint; the app has no component-test setup.
+- **CI:** `verify` has no workflow run for `d4b1bd0`, so there's no CI result for that head. I didn't check CI on `e342c96` (no polling).
+
+**Invalid / Accepted Risk:** puE9a, pending your decision as described above.
+
+**Convergence:** improving.
+
+| | Snapshot valid root causes | Open after the round |
+|---|---|---|
+| Round 1 | 10 | 2 (ptpLv, puE9a) |
+| Round 2 | 5 (3 new + 2 carried) | 2 (ptpLv, and puE9a now reclassified as a contract decision) |
+
+- Round 2's new findings were small follow-ups in round-1 families (wording, and a key race inherited from the pre-round-1 rotation) plus one new schema-parity family.
+- No behavioral regressions in the tests.
+- `git-preview-composition` produced no new finding.
+
+**Convergence gate:** single user invocation, so the ledger is kept in task context and the mode is routine.
+
+| Family | Failed rounds | Status |
+|---|---|---|
+| git-preview-composition | 2 | no recurrence, reset not opened, unchanged |
+| git-file-budget | 1 | fixed |
+| sources-ui-idemkey | 1 | fixed |
+| db-schema-parity | 1 | fixed (new) |
+| git-bind-path, git-dup-slug, git-yaml, sources-ui-fence, binding-visibility-type | 0 | — |
+
+I did not reply to or resolve any threads. One review round is complete. No post-push refetch or additional review loop was performed.</result>
+<usage><subagent_tokens>221858</subagent_tokens><tool_uses>18</tool_uses><duration_ms>229828</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a38232176d5765dae</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-serro-Documents-dev-n-agent-experiments-skillplane/ca62123f-e191-43ba-a12e-6d1b29e43d5c/tasks/a38232176d5765dae.output</output-file>
+<status>completed</status>
+<summary>Agent "PR #46 refetch-fix round" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>PR #46, round 2 (skill `21n/pr-refetch-fix` v1.4.0, rev 6, `sha256:b6a6e7a8…2726`, unchanged): this round hit the convergence gate. I recorded the required assessment, reproduced every defect in a browser on the old head, and pushed one coordinated fix commit: **`7076cf84bff2edfd00f760e1f78e45a8e89ca678`**. Local, remote and PR head all match. PR: https://github.com/21nCo/skillplane/pull/46
+
+**Snapshot at `b2b8aab`:** 43 threads, 8 unresolved (4 new: [39]–[42]); all 9 checks completed (none pending). SonarCloud now attaches 3 concrete annotations on `search.ts`, one a failure. `verify` attaches only CI-platform notices (Node 20 deprecation, runner label change).
+
+### Convergence gate
+**`ARCHITECTURE_RESET_REQUIRED:F2-list-detail-freshness`.** Two new findings belong to F2 ([39], [40]) and one to F3, the save-flow family ([42]). Both families have now come back after two fix rounds (`5c9792d`, `b2b8aab`), and [42] was caused by my own round-1 fix. I merged them into one family because the same invariant broke in all three.
+1. **Invariant:** a list or detail view shows only data from the latest request for its current key (workspace, filters, selected group). A change that can alter that key's results must reload it.
+2. **Old-head reproduction:** I added `packages/testing/e2e/groups.spec.ts`, driving the real app, API and Postgres in Playwright. All 3 tests **failed on `b2b8aab`**, each on its distinguishing assertion:
+   - **Catalog:** the stale skill list showed for the newer filter.
+   - **Member filter:** the group stayed in the filtered nav after its member was removed.
+   - **New group:** the previous group's "Remove" controls showed after a create where the list refresh failed.
+3. **Plan:** one fix covering every place the invariant applies:
+   - the catalog's `load()`;
+   - the groups page's group selection, save and assign steps;
+   - the groups-page list guard and `GroupBadges`, which already hold the invariant, so no change there.
+4. **Verification:** checked only at the browser boundary, never by testing the helper code itself.
+
+Mode was `architecture_reset`; the fix went out as one bounded pass.
+
+### Fixed (5 root causes, 4 threads plus 3 SonarCloud annotations)
+- **[40] Catalog stale responses (F2).** The catalog's `load()` now ignores results, errors and loading flags from any request that isn't the latest.
+- **[39] Member-filtered list (F2).** After a member is added or removed with `?memberId` set, the groups page reloads the list.
+- **[42] Stale assignments after create (F3, a regression from my round 1).** A new group is now shown only after the previous group's skills, members and cursors are cleared.
+- **[41] Padded IDs.** `optionalIdFilter` now trims IDs. A new API integration assertion **failed on the old code** (padded ID returned no results) and passes now; a whitespace-only ID still returns 400.
+- **SonarCloud `search.ts:308/339`** (cognitive complexity 17 &gt; 15, nested ternary, nested template literal). I moved the search-scope logic into its own `searchScope()` function. Running the same Sonar rules locally (`eslint-plugin-sonarjs`) flags those issues on the old file and finds 0 on the new one. A new unit test pins the anonymous group-search rejection, which behaves the same before and after.
+
+### Skipped / Invalid (unchanged, no new evidence)
+- [0], [1]: stale (round-1 evidence still holds).
+- [32], [35]: invalid; not re-raised.
+
+### Not Attempted
+- The `verify` notices about Node 20 and runner labels are CI-platform issues outside this PR's code.
+- SonarCloud's overall "analysis failed / cancelled" status is an external gate. Only its concrete annotations were actionable, and those are fixed.
+
+### Verification
+- **New browser spec:** fails 3/3 on `b2b8aab`, passes 3/3 now, and 9/9 across a 3× repeat.
+- **API and domain integration tests:** group/API suites pass on a disposable local Postgres.
+- **Static checks:** typecheck passed for api, app, domain and testing; svelte-check 0/0; eslint and prettier clean; all unit tests pass.
+- **Existing `skills.spec.ts`:** the catalog error/retry test passes. The long authoring test fails on `getByLabel('SKILL.md')` matching 3 elements, and it fails the same way on the unchanged head, so it was already broken.
+- The e2e runs rewrote two tracked `.conduct/` screenshots; I restored them and kept them out of the commit.
+- **Not done:** I didn't run a full-app manual browser session.
+
+### Convergence across rounds
+
+| | Round 1 (`5c9792d`) | Round 2 (`b2b8aab`) |
+|---|---|---|
+| Valid blocking root causes before | 6 | 5 |
+| After | 0 | 0 assessed |
+| Fix-induced regressions | — | 1 ([42], from round 1, now fixed) |
+| Recurring families | F2 | F2+F3 merged (reset), F1 filter-validation (1st recurrence) |
+
+- **Trend:** improving, judged by browser evidence rather than thread counts. F2 is now covered by browser regressions, which should stop the cycle of one-line patches.
+- **Round 3:** if F1 or F2 reappears, F1 would be on its second recurrence and would trip the reset trigger.
+
+### Convergence gate details
+- **Ledger:** kept in this session only; no persistent file because this isn't a recurring workflow.
+- **Family IDs:**
+  - F1 filter-validation: 1 recurrence.
+  - F2 list/detail freshness (absorbed F3): 2 failed fix rounds, reset done.
+  - F4 search complexity: new.
+  - Doc/test hygiene: closed.
+
+### For stacked PR #47
+- #47 has neither `b2b8aab` nor `7076cf8` until `codex/ski-11-skill-groups` is merged into it.
+- If #47 adds list views or ID query filters, it should follow the same patterns: a latest-request guard on list loads, `select()`-style clearing of detail state, and `optionalIdFilter`, which now trims.
+- `groups.spec.ts` can be reused for any new UI.
+
+I didn't reply to or resolve any threads. [39]–[42] can now be resolved.
+
+One review round is complete. No post-push refetch or additional review loop was performed.</result>
+<usage><subagent_tokens>211092</subagent_tokens><tool_uses>30</tool_uses><duration_ms>641903</duration_ms></usage>
+</task-notification>
