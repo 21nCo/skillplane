@@ -46,7 +46,8 @@ jobs:
         run: pnpm deploy:check
 
   deploy:
-    if: ${{ github.event_name != 'pull_request' }}
+    # Only the dev branch may deploy, whether pushed or dispatched manually.
+    if: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/dev' }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     environment: dev
@@ -63,17 +64,37 @@ jobs:
       DATAFN_ROUTE_ACTIVE_KEY_ID: ${{ vars.DATAFN_ROUTE_ACTIVE_KEY_ID }}
       DATAFN_ROUTE_PUBLIC_KEYS: ${{ vars.DATAFN_ROUTE_PUBLIC_KEYS }}
     steps:
-      - name: Verify development account
+      - name: Verify development ref and account
         shell: bash
         env:
           CLOUDFLARE_PROD_ACCOUNT_ID: ${{ vars.CLOUDFLARE_PROD_ACCOUNT_ID }}
+          # Account used by deploy-cloudflare-tag.yml for production releases.
+          CLOUDFLARE_RELEASE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          HAS_DEV_API_TOKEN: ${{ secrets.CLOUDFLARE_DEV_API_TOKEN != '' }}
         run: |
+          if [[ "${GITHUB_REF}" != "refs/heads/dev" ]]; then
+            echo "Development deploys only run from refs/heads/dev (got ${GITHUB_REF})" >&2
+            exit 1
+          fi
           if [[ -z "${CLOUDFLARE_ACCOUNT_ID}" ]]; then
             echo "CLOUDFLARE_DEV_ACCOUNT_ID is not configured" >&2
             exit 1
           fi
+          if [[ "${HAS_DEV_API_TOKEN}" != "true" ]]; then
+            echo "CLOUDFLARE_DEV_API_TOKEN is not configured" >&2
+            exit 1
+          fi
+          # Fail closed: the guard is meaningless without a production account to compare against.
+          if [[ -z "${CLOUDFLARE_PROD_ACCOUNT_ID}" ]]; then
+            echo "CLOUDFLARE_PROD_ACCOUNT_ID must be configured for the production-account guard" >&2
+            exit 1
+          fi
           if [[ "${CLOUDFLARE_ACCOUNT_ID}" == "${CLOUDFLARE_PROD_ACCOUNT_ID}" ]]; then
             echo "Development deploys must not target the production account" >&2
+            exit 1
+          fi
+          if [[ -n "${CLOUDFLARE_RELEASE_ACCOUNT_ID}" && "${CLOUDFLARE_ACCOUNT_ID}" == "${CLOUDFLARE_RELEASE_ACCOUNT_ID}" ]]; then
+            echo "Development deploys must not target the production release account (vars.CLOUDFLARE_ACCOUNT_ID)" >&2
             exit 1
           fi
 

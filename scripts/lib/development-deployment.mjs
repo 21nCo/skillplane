@@ -176,9 +176,19 @@ export function productionBundleReadEnvironment() {
       "SKILLPLANE_PRODUCTION_R2_READ_TOKEN must differ from the development Cloudflare token",
     );
   }
-  const environment = { ...process.env, CLOUDFLARE_API_TOKEN: token };
+  // Production bundles live in the production account; the shared environment's
+  // CLOUDFLARE_ACCOUNT_ID selects the development account, so pin the source here.
+  const accountId = requireEnvironment("SKILLPLANE_PRODUCTION_CLOUDFLARE_ACCOUNT_ID", {
+    pattern: /^[a-f0-9]{32}$/iu,
+  }).toLowerCase();
+  const environment = {
+    ...process.env,
+    CLOUDFLARE_API_TOKEN: token,
+    CLOUDFLARE_ACCOUNT_ID: accountId,
+  };
   for (const name of [
     "SKILLPLANE_PRODUCTION_R2_READ_TOKEN",
+    "SKILLPLANE_PRODUCTION_CLOUDFLARE_ACCOUNT_ID",
     "SKILLPLANE_DEV_CLOUDFLARE_API_TOKEN",
     "SKILLPLANE_DEV_AUTHFN_SECRET",
     "SKILLPLANE_DEV_OAUTH_TOKEN_PEPPER",

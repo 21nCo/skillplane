@@ -42,6 +42,9 @@ these development identities.
    and custom domains.
 7. Create `SKILLPLANE_PRODUCTION_R2_READ_TOKEN` with read-only object access to
    `skillplane-skill-bundles`. Keep it distinct from the development token.
+   `r2:sync:dev` reads production bundles from the account in
+   `SKILLPLANE_PRODUCTION_CLOUDFLARE_ACCOUNT_ID` (the production `21n` account),
+   while `CLOUDFLARE_ACCOUNT_ID` keeps selecting `21n-dev` for development writes.
 8. Create a dedicated PostHog development project and configure its managed
    reverse proxy at `user-dev.skillplane.dev`. Keep its project token distinct
    from production.
@@ -59,6 +62,7 @@ SKILLPLANE_DEV_DATABASE_URL=postgresql://...
 CLOUDFLARE_DEV_HYPERDRIVE_ID=...
 SKILLPLANE_DEV_CLOUDFLARE_API_TOKEN=...
 SKILLPLANE_PRODUCTION_R2_READ_TOKEN=...
+SKILLPLANE_PRODUCTION_CLOUDFLARE_ACCOUNT_ID=<21n production account ID>
 SKILLPLANE_DEV_AUTHFN_SECRET=...
 SKILLPLANE_DEV_OAUTH_TOKEN_PEPPER=...
 SKILLPLANE_DEV_TURNSTILE_SECRET_KEY=...
@@ -187,13 +191,17 @@ remove that development data explicitly rather than silently granting access.
 
 `.github/workflows/deploy-cloudflare-dev.yml` builds pull requests and deploys
 the three-cell development topology to the `21n-dev` account on every push to
-the `dev` branch (or a manual `workflow_dispatch`). It runs `pnpm deploy:check`
+the `dev` branch (or a manual `workflow_dispatch` of the `dev` branch; dispatches
+from any other ref skip the deploy job). It runs `pnpm deploy:check`
 and then `pnpm deploy:dev:topology`; database preparation, `r2:sync:dev`, and the
 interactive OAuth verifier remain manual.
 
 The deploy job uses the GitHub `dev` environment. The org secret
 `CLOUDFLARE_DEV_API_TOKEN` and org variable `CLOUDFLARE_DEV_ACCOUNT_ID` select the
-account. The `dev` environment must provide:
+account. The org variable `CLOUDFLARE_PROD_ACCOUNT_ID` is required too: the job
+fails closed when it is missing, and refuses to deploy when the development
+account equals it or the production release account (`vars.CLOUDFLARE_ACCOUNT_ID`).
+The `dev` environment must provide:
 
 - Secrets: `SKILLPLANE_DEV_CONTROL_DATABASE_URL`, `SKILLPLANE_DEV_DATABASE_URL`,
   `SKILLPLANE_DEV_USEAST_DATABASE_URL`, `SKILLPLANE_DEV_EUWEST_DATABASE_URL`,
