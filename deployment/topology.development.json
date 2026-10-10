@@ -2,15 +2,15 @@
   "version": 1,
   "mode": "multi-cell",
   "public": {
-    "appAuthority": "https://app-dev.skillplane.dev",
-    "mcpResource": "https://mcp-dev.skillplane.dev/mcp"
+    "appAuthority": "https://skillplane-app.21n.dev",
+    "mcpResource": "https://skillplane-mcp.21n.dev/mcp"
   },
   "controlPlane": {
     "regionId": "global",
     "databaseBinding": "CONTROL_HYPERDRIVE",
     "publicObjectStorageBinding": "PUBLIC_SKILL_BUNDLES",
-    "issuer": "https://app-dev.skillplane.dev",
-    "oauthResource": "https://mcp-dev.skillplane.dev/mcp"
+    "issuer": "https://skillplane-app.21n.dev",
+    "oauthResource": "https://skillplane-mcp.21n.dev/mcp"
   },
   "cells": [
     {
@@ -25,8 +25,8 @@
       "appServiceBinding": "CELL_IN_SOUTH_APP",
       "mcpServiceBinding": "CELL_IN_SOUTH_MCP",
       "datafnEndpoint": {
-        "httpUrl": "https://datafn-in-south-dev.skillplane.dev/datafn",
-        "wsUrl": "wss://datafn-in-south-dev.skillplane.dev/datafn",
+        "httpUrl": "https://skillplane-datafn-in-south.21n.dev/datafn",
+        "wsUrl": "wss://skillplane-datafn-in-south.21n.dev/datafn",
         "audience": "skillplane-datafn-dev-in-south"
       },
       "publiclyRoutable": false
@@ -43,8 +43,8 @@
       "appServiceBinding": "CELL_US_EAST_APP",
       "mcpServiceBinding": "CELL_US_EAST_MCP",
       "datafnEndpoint": {
-        "httpUrl": "https://datafn-us-east-dev.skillplane.dev/datafn",
-        "wsUrl": "wss://datafn-us-east-dev.skillplane.dev/datafn",
+        "httpUrl": "https://skillplane-datafn-us-east.21n.dev/datafn",
+        "wsUrl": "wss://skillplane-datafn-us-east.21n.dev/datafn",
         "audience": "skillplane-datafn-dev-us-east"
       },
       "publiclyRoutable": false
@@ -61,8 +61,8 @@
       "appServiceBinding": "CELL_EU_WEST_APP",
       "mcpServiceBinding": "CELL_EU_WEST_MCP",
       "datafnEndpoint": {
-        "httpUrl": "https://datafn-eu-west-dev.skillplane.dev/datafn",
-        "wsUrl": "wss://datafn-eu-west-dev.skillplane.dev/datafn",
+        "httpUrl": "https://skillplane-datafn-eu-west.21n.dev/datafn",
+        "wsUrl": "wss://skillplane-datafn-eu-west.21n.dev/datafn",
         "audience": "skillplane-datafn-dev-eu-west"
       },
       "publiclyRoutable": false

@@ -14,7 +14,7 @@ vi.mock("$lib/analytics/posthog.client.js", () => ({ capturePostHog }));
 import { resetWorkspaceDatafnClients } from "../../src/lib/datafn/client.js";
 import { listSkills } from "../../src/lib/skills/api.js";
 
-const appOrigin = "https://app-dev.skillplane.dev";
+const appOrigin = "https://skillplane-app.21n.dev";
 const workspaceId = "workspace:one";
 
 afterEach(async () => {
@@ -46,14 +46,14 @@ describe("first-party regional DataFn read boundary", () => {
           version: 1,
           httpUrl:
             bootstrapCount === 1
-              ? "https://datafn-in-south-dev.skillplane.dev/datafn"
-              : "https://datafn-us-east-dev.skillplane.dev/datafn",
+              ? "https://skillplane-datafn-in-south.21n.dev/datafn"
+              : "https://skillplane-datafn-us-east.21n.dev/datafn",
           ticket: `ticket.${bootstrapCount}.signature`,
           expiresAt: now + 60_000,
           renewAfter: now + 45_000,
         });
       }
-      if (url.hostname === "datafn-in-south-dev.skillplane.dev") {
+      if (url.hostname === "skillplane-datafn-in-south.21n.dev") {
         oldRegionReads++;
         if (oldRegionReads === 3) {
           return Response.json(
@@ -90,7 +90,7 @@ describe("first-party regional DataFn read boundary", () => {
     await listSkills({ workspaceId });
     expect(bootstrapCount).toBe(2);
     expect(requests.at(-1)?.url).toContain(
-      "datafn-us-east-dev.skillplane.dev/datafn/query",
+      "skillplane-datafn-us-east.21n.dev/datafn/query",
     );
     expect(requests.at(-1)?.headers.get("x-datafn-route-ticket")).toBe(
       "ticket.2.signature",
@@ -201,13 +201,13 @@ describe("first-party regional DataFn read boundary", () => {
           const now = Date.now();
           return Response.json({
             version: 1,
-            httpUrl: "https://datafn-in-south-dev.skillplane.dev/datafn",
+            httpUrl: "https://skillplane-datafn-in-south.21n.dev/datafn",
             ticket: "ticket.1.signature",
             expiresAt: now + 60_000,
             renewAfter: now + 45_000,
           });
         }
-        if (url.hostname === "datafn-in-south-dev.skillplane.dev") {
+        if (url.hostname === "skillplane-datafn-in-south.21n.dev") {
           if (regionalFailure instanceof Response) return regionalFailure.clone();
           throw regionalFailure;
         }
@@ -219,7 +219,7 @@ describe("first-party regional DataFn read boundary", () => {
 
     const regionalRequestIndex = requests.findIndex(
       (request) =>
-        new URL(request.url).hostname === "datafn-in-south-dev.skillplane.dev" &&
+        new URL(request.url).hostname === "skillplane-datafn-in-south.21n.dev" &&
         request.headers.get("x-datafn-route-ticket") === "ticket.1.signature",
     );
     const canonicalRequestIndex = requests.findIndex(
@@ -243,7 +243,7 @@ describe("first-party regional DataFn read boundary", () => {
           const now = Date.now();
           return Response.json({
             version: 1,
-            httpUrl: "https://datafn-in-south-dev.skillplane.dev/datafn",
+            httpUrl: "https://skillplane-datafn-in-south.21n.dev/datafn",
             ticket: "ticket.1.signature",
             expiresAt: now + 60_000,
             renewAfter: now + 45_000,

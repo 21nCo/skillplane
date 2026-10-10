@@ -7,14 +7,15 @@ addressable, credential, and email-identity boundaries below from production:
 | ------------ | ----------------------------------------------- | -------------------------------------------- |
 | App Worker   | `skillplane-app-dev`                            | `skillplane-app`                             |
 | MCP Worker   | `skillplane-mcp-dev`                            | `skillplane-mcp`                             |
-| App host     | `app-dev.skillplane.dev`                        | `app.skillplane.dev`                         |
-| MCP resource | `https://mcp-dev.skillplane.dev/mcp`            | `https://mcp.skillplane.dev/mcp`             |
+| App host     | `skillplane-app.21n.dev`                        | `app.skillplane.dev`                         |
+| MCP resource | `https://skillplane-mcp.21n.dev/mcp`            | `https://mcp.skillplane.dev/mcp`             |
 | R2 bucket    | `skillplane-skill-bundles-dev`                  | `skillplane-skill-bundles`                   |
 | Database     | A distinct PostgreSQL database                  | Production PostgreSQL database               |
 | Hyperdrive   | `CLOUDFLARE_DEV_HYPERDRIVE_ID`                  | `CLOUDFLARE_HYPERDRIVE_ID`                   |
 | Secrets      | `SKILLPLANE_DEV_*` inputs                       | Production secret inputs                     |
-| Email sender | `no-reply@auth-dev.skillplane.dev`              | `no-reply@auth.skillplane.dev`               |
+| Email sender | `no-reply@skillplane-auth.21n.dev`              | `no-reply@auth.skillplane.dev`               |
 | Analytics    | Dedicated project via `user-dev.skillplane.dev` | Production project via `user.skillplane.dev` |
+| CF account   | `21n-dev`                                       | `21n`                                        |
 
 The development runtime uses `RUNTIME_ENV=preview`: it retains production-like
 OTP, Email Service, Hyperdrive, R2, and HTTPS requirements while allowing the
@@ -26,15 +27,19 @@ these development identities.
 1. Select a separate password-authenticated PostgreSQL database reachable over
    TLS. The provider and database name are not used as environment boundaries.
 2. Create a cache-disabled Hyperdrive configuration for that database.
-3. Create a Turnstile widget allowing only `app-dev.skillplane.dev`.
-4. Onboard `auth-dev.skillplane.dev` with Cloudflare Email Service and authorize
-   only `no-reply@auth-dev.skillplane.dev` for the development app Worker.
-5. Create the `app-dev.skillplane.dev` and `mcp-dev.skillplane.dev` custom domains.
-   Remove the old `app.dev.skillplane.dev` and `mcp.dev.skillplane.dev` routes in
-   the same cutover because their OAuth discovery identities are no longer valid.
+3. Create a Turnstile widget allowing only `skillplane-app.21n.dev`.
+4. Onboard `skillplane-auth.21n.dev` with Cloudflare Email Service in the `21n-dev`
+   account and authorize only `no-reply@skillplane-auth.21n.dev` for the
+   development app Worker. (Authenticated local startup keeps the separate
+   `no-reply@auth-dev.skillplane.dev` sender.)
+5. Development Workers deploy to the `21n-dev` Cloudflare account. Wrangler
+   creates the `skillplane-app.21n.dev`, `skillplane-mcp.21n.dev`, and
+   `skillplane-datafn-<region>.21n.dev` custom domains on the `21n.dev` zone.
+   Set `CLOUDFLARE_ACCOUNT_ID` to the `21n-dev` account ID when deploying.
 6. Create a dedicated `SKILLPLANE_DEV_CLOUDFLARE_API_TOKEN`. Do not reuse the
-   production or ambient Wrangler token. Limit it to the account and zones needed
-   by the development Workers, R2 bucket, Hyperdrive, and custom domains.
+   production or ambient Wrangler token. Limit it to the `21n-dev` account and
+   the `21n.dev` zone needed by the development Workers, R2 buckets, Hyperdrive,
+   and custom domains.
 7. Create `SKILLPLANE_PRODUCTION_R2_READ_TOKEN` with read-only object access to
    `skillplane-skill-bundles`. Keep it distinct from the development token.
 8. Create a dedicated PostHog development project and configure its managed
@@ -49,6 +54,7 @@ Put the following values in the ignored `.env.development.local` file and set
 its mode to `0600`:
 
 ```dotenv
+CLOUDFLARE_ACCOUNT_ID=<21n-dev account ID>
 SKILLPLANE_DEV_DATABASE_URL=postgresql://...
 CLOUDFLARE_DEV_HYPERDRIVE_ID=...
 SKILLPLANE_DEV_CLOUDFLARE_API_TOKEN=...
@@ -176,3 +182,28 @@ The old India AuthFn users, sessions, workspaces, memberships, and placement rec
 remain only in the encrypted pre-conversion backup. Existing regional India rows are
 intentionally not attached to newly created control-plane users or workspaces; map or
 remove that development data explicitly rather than silently granting access.
+
+## Continuous deployment
+
+`.github/workflows/deploy-cloudflare-dev.yml` builds pull requests and deploys
+the three-cell development topology to the `21n-dev` account on every push to
+the `dev` branch (or a manual `workflow_dispatch`). It runs `pnpm deploy:check`
+and then `pnpm deploy:dev:topology`; database preparation, `r2:sync:dev`, and the
+interactive OAuth verifier remain manual.
+
+The deploy job uses the GitHub `dev` environment. The org secret
+`CLOUDFLARE_DEV_API_TOKEN` and org variable `CLOUDFLARE_DEV_ACCOUNT_ID` select the
+account. The `dev` environment must provide:
+
+- Secrets: `SKILLPLANE_DEV_CONTROL_DATABASE_URL`, `SKILLPLANE_DEV_DATABASE_URL`,
+  `SKILLPLANE_DEV_USEAST_DATABASE_URL`, `SKILLPLANE_DEV_EUWEST_DATABASE_URL`,
+  `SKILLPLANE_DEV_AUTHFN_SECRET`, `SKILLPLANE_DEV_OAUTH_TOKEN_PEPPER`,
+  `SKILLPLANE_DEV_TURNSTILE_SECRET_KEY`, `SKILLPLANE_DEV_WORKSPACE_ROUTING_SECRET`,
+  `PUBLIC_POSTHOG_KEY`, and, only when direct DataFn is enabled,
+  `DATAFN_ROUTE_PRIVATE_KEY_PEM` and `AUTHFN_PLACEMENT_SUBJECT_SECRET`.
+- Variables: `CLOUDFLARE_DEV_CONTROL_HYPERDRIVE_ID`,
+  `CLOUDFLARE_DEV_CELL_IN_SOUTH_HYPERDRIVE_ID`,
+  `CLOUDFLARE_DEV_CELL_US_EAST_HYPERDRIVE_ID`,
+  `CLOUDFLARE_DEV_CELL_EU_WEST_HYPERDRIVE_ID`, `PUBLIC_DEV_TURNSTILE_SITE_KEY`, and
+  optionally `DATAFN_DIRECT_ENABLED`, `DATAFN_DIRECT_WORKSPACES`,
+  `DATAFN_ROUTE_ACTIVE_KEY_ID`, and `DATAFN_ROUTE_PUBLIC_KEYS`.

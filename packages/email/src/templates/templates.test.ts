@@ -9,14 +9,14 @@ describe("email templates", () => {
       expiresInMinutes: 10,
       purpose: "sign-up",
       environment: "preview",
-      signInUrl: "https://app-dev.skillplane.dev",
+      signInUrl: "https://skillplane-app.21n.dev",
     });
     expect(rendered.subject).toBe("[Skillplane Development] Verification code");
     expect(rendered.text).toContain("123456");
     expect(rendered.text).toContain("Environment: Development");
-    expect(rendered.text).toContain("Sign-in site: https://app-dev.skillplane.dev");
+    expect(rendered.text).toContain("Sign-in site: https://skillplane-app.21n.dev");
     expect(rendered.html).toContain("123456");
-    expect(rendered.html).toContain("app-dev.skillplane.dev");
+    expect(rendered.html).toContain("skillplane-app.21n.dev");
     expect(rendered.html).not.toMatch(/<script|javascript:/i);
   });
 
@@ -50,7 +50,7 @@ describe("email templates", () => {
         expiresInMinutes: 10,
         purpose: "sign-in",
         environment: "preview",
-        signInUrl: "https://user:password@app-dev.skillplane.dev",
+        signInUrl: "https://user:password@skillplane-app.21n.dev",
       }),
     ).toThrow(/HTTPS or loopback HTTP/u);
   });

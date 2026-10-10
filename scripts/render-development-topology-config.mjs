@@ -100,8 +100,8 @@ export async function renderDevelopmentTopologyConfigs(options = {}) {
       options.directDatafnWorkspaceIds ?? process.env.DATAFN_DIRECT_WORKSPACES,
     publicTurnstileSiteKey: options.publicTurnstileSiteKey ?? developmentSiteKey(),
     runtimeEnvironment: "preview",
-    otpFrom: "Skillplane Dev <no-reply@auth-dev.skillplane.dev>",
-    emailSender: "no-reply@auth-dev.skillplane.dev",
+    otpFrom: "Skillplane Dev <no-reply@skillplane-auth.21n.dev>",
+    emailSender: "no-reply@skillplane-auth.21n.dev",
     appVariables: {
       PUBLIC_POSTHOG_KEY: postHogProjectToken,
       PUBLIC_POSTHOG_HOST: developmentPostHogProxyHost,

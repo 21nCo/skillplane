@@ -13,8 +13,8 @@ import {
   writeJsonAtomic,
 } from "./production-deployment.mjs";
 
-export const developmentIssuer = "https://app-dev.skillplane.dev";
-export const developmentResource = "https://mcp-dev.skillplane.dev/mcp";
+export const developmentIssuer = "https://skillplane-app.21n.dev";
+export const developmentResource = "https://skillplane-mcp.21n.dev/mcp";
 export const developmentBucket = "skillplane-skill-bundles-dev";
 export const developmentPostHogHost = "https://us.i.posthog.com";
 export const developmentPostHogProxyHost = "https://user-dev.skillplane.dev";
@@ -23,7 +23,7 @@ export const developmentStateDirectory = resolve(root, ".data", "development");
 export const developmentWorkers = Object.freeze({
   app: {
     name: "skillplane-app-dev",
-    host: "app-dev.skillplane.dev",
+    host: "skillplane-app.21n.dev",
     directory: resolve(root, "app"),
     config: resolve(root, "app", "wrangler.development.generated.json"),
     template: resolve(root, "deployment", "wrangler", "app.development.json"),
@@ -31,7 +31,7 @@ export const developmentWorkers = Object.freeze({
   },
   mcp: {
     name: "skillplane-mcp-dev",
-    host: "mcp-dev.skillplane.dev",
+    host: "skillplane-mcp.21n.dev",
     directory: resolve(root, "mcp"),
     config: resolve(root, "mcp", "wrangler.development.generated.json"),
     template: resolve(root, "deployment", "wrangler", "mcp.development.json"),
