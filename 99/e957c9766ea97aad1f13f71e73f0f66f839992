@@ -1,0 +1,27 @@
+.env.example
+  s_ce12272281eb3b::t_b91d7ce3d83588 61
+.github/workflows/deploy-cloudflare-dev.yml
+  s_ce12272281eb3b::t_74963314486557 49-50,67,71-73,75-78,83-91,96-99
+docs/operations/development.md
+  s_ce12272281eb3b::t_d3e0e39da9e30b 45-47,65,194-195,201-204
+scripts/development-deployment.test.mjs
+  s_ce12272281eb3b::t_d12479ebee4cb2 161,280-281,285,287,295-303,321-335
+scripts/lib/development-deployment.mjs
+  s_ce12272281eb3b::t_4c27ea52f47bdc 179-188,191
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "99e957c9766ea97aad1f13f71e73f0f66f839992",
+  "prompts": {},
+  "sessions": {
+    "s_ce12272281eb3b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1d2376f8-4af3-4920-96da-dff6a042ab4c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
