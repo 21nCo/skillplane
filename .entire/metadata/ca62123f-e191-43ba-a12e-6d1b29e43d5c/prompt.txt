@@ -330,3 +330,92 @@ One review round is complete. No post-push refetch or additional review loop was
 ---
 
 /use-skillplane pr-refetch-fix PR #46, #47
+
+---
+
+<task-notification>
+<task-id>a38232176d5765dae</task-id>
+<tool-use-id>toolu_015o5mbmpSzNCP79V8xufR5v</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-serro-Documents-dev-n-agent-experiments-skillplane/ca62123f-e191-43ba-a12e-6d1b29e43d5c/tasks/a38232176d5765dae.output</output-file>
+<status>completed</status>
+<summary>Agent "PR #46 refetch-fix round" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The remaining vitest processes run from `skillplane-ski-12`, so they belong to the PR #47 agent. Nothing of mine is still running, and the ski-11 worktree is clean.
+
+PR #46, round 3 (skill `21n/pr-refetch-fix` v1.4.0, rev 6, `sha256:b6a6e7a8…2726`, no drift). The round-2 fix had missed the post-mutation paths. I added three browser tests that fail on the old head, fixed both paths and the test-cleanup gap, and pushed one commit: **`4c2eb42f21a72ca53b8c2b08ce411f358e28beb6`**. Local, remote and PR head all match. PR: https://github.com/21nCo/skillplane/pull/46
+
+**Snapshot at `7076cf8`:** 48 threads, 10 unresolved (5 new: [43]–[47]); 10 checks, all completed. SonarCloud attached one warning with no message at `groups.spec.ts:107`, the fixed 500 ms sleep. Kody came back neutral because its rules didn't run. `verify` raised only the CI-platform notices.
+
+### Convergence gate
+- **F1 filter-validation:** no new or sibling finding, so no reset; it stays at 1 recurrence.
+- **F2 list/detail freshness — gap in round 2's fix plan.** Round 2 covered list responses and selection, but not what happens after a save or an assignment completes:
+  - **[45]/[46]:** a late `assign()` response reselects the old group after navigation.
+  - **[43]/[47]:** a failed list refresh skips the detail refresh.
+  - **Sibling found while tracing:** `save()` checked only the workspace, not the member filter, so a late save response had the same problem.
+- **Invariant, extended:** after a save or assignment finishes, the page updates only if the user is still on the same workspace and member filter. List and detail refresh independently, so one failing can't leave the other stale.
+- **Browser test reproduction:** I added 3 Playwright tests ("failed list refresh still refreshes detail", "assignment completes after navigation", "save completes after navigation"). All 3 **failed on `7076cf8`** on their distinguishing assertions.
+- **Plan:**
+  - A single scope check (`stillScoped`) now guards the code that runs after a save or assignment.
+  - A new `refreshAfterMutation` runs the list and detail refreshes side by side and reports the first failure.
+  - I checked every other code path that resumes after a network call (`load`, `detail`, `loadSkills`, `loadMembers`, roster, `searchSkills`, `run`); they were already guarded or harmless.
+- **Verification criteria:** observable browser state only.
+- **Mode:** reset-plan extension (F2's `architecture_reset` continued).
+
+### Fixed (3 root causes, 5 threads plus the SonarCloud annotation)
+- **[45]/[46] and the `save()` sibling:** both continuations now stop if the workspace or member filter changed.
+- **[43]/[47]:** after a mutation, the list and detail refresh independently; one failing no longer skips the other.
+- **[44] Fixture purge (new family F5):** `purgeTenantFixture` now deletes rows from the group tables (`skill_group_members`, `skill_group_skills`, `skill_groups`) before skills. A new integration test **failed on the old code** (`skill_group_members: expected 1 to be 0`) and passes now. I also dropped the API test's manual cleanup workaround.
+- **SonarCloud at `groups.spec.ts:107`:** replaced the fixed sleep with a wait on the held request finishing, then one page task and frame. Sonar's API needs auth, so the rule name is unconfirmed: I inferred "hard-coded wait" from the flagged line.
+
+### Skipped / Invalid (no new evidence)
+- [0], [1], [39] (now outdated, covered by round 2): stale.
+- [32], [35]: invalid; not re-raised.
+
+### Not Attempted
+- SonarCloud's overall "analysis failed" status: external gate.
+- Kody's neutral result (its rules didn't run): external.
+- `verify` Node 20 and runner-label notices: CI platform, not this PR's code.
+
+### Verification (Railway Postgres)
+- **Database:** Railway project `pr46-r3-disposable-pg-20261010` in workspace `ee2c7f17…`, holding a single database `skillplane_pr46_r3_test`. I deleted it afterwards (`projectDelete: true`); reading it back returns "Project not found" and it's gone from the workspace project list. The local files holding its credentials were removed too.
+- **Composio workaround:** Composio's `RAILWAY_DEPLOY_TEMPLATE` validator rejected every valid input, so I deployed and deleted through `composio proxy` to Railway's GraphQL API instead.
+- **Speed:** a full browser-test run took about 2–3.5 minutes; slower than local, but workable.
+- **Browser tests:**
+  - On `7076cf8`: 3 new tests failed, 3 earlier ones passed.
+  - On the fix: 6/6, then 12/12 across a 2× repeat.
+- **Group integration tests:** domain 3/3, API 1/1. They need `--testTimeout=60000` because of remote latency; one test hit the 5-second default on Railway.
+- **Orphan check:** leftover group rows exist only from the old-head runs (10:51–10:55). No post-fix run left any.
+- **Static checks:** typecheck passed for api, app, domain and testing; svelte-check 0/0; eslint and prettier clean; all unit tests pass.
+- **Full API integration suite:** 46/50. The 4 `utc-rollups` failures are the known guard that refuses a non-local database; not caused by this change.
+- **Processes:** none of mine left from earlier rounds; the ski11 cluster was already stopped. I didn't touch `/tmp/sta8-pg16-TDHbTk`.
+
+### Convergence across three rounds
+
+| | Round 1 (`5c9792d`) | Round 2 (`b2b8aab`) | Round 3 (`7076cf8`) |
+|---|---|---|---|
+| Valid blocking root causes before | 6 | 5 | 3 |
+| After | 0 | 0 | 0 assessed |
+| Regressions caused by the previous round's fix | — | 1 ([42]) | 0 |
+| Families | F1, F2, F3 | F1 recurs; F2+F3 reset | F2 plan gap (fixed); F5 new |
+| Browser tests | 0 | 3 | 6 |
+
+- **Trend:** improving. Root causes fell 6 → 5 → 3, and round 3 found no regressions from earlier fixes; each fix is backed by a failing-then-passing browser test.
+- **Open risk:** browser tests now cover F2's list, detail and post-mutation paths. The workspace-switch variant of the late-response bug isn't tested because the harness has only one owner workspace; it goes through the same scope check as the member-filter variant.
+
+### Convergence gate details
+- **Ledger:** kept in this session only; no persistent file.
+- **Family counts:**
+  - F1: 1 recurrence.
+  - F2: reset done; plan extended for the post-mutation gap.
+  - F4 search complexity: closed.
+  - F5 fixture cleanup: new, 0 recurrences.
+
+### For stacked PR #47
+- After `codex/ski-11-skill-groups` is merged in, #47 also picks up the purge fix, `stillScoped`, `refreshAfterMutation` and the 6-test `groups.spec.ts`.
+- If #47 adds new tables for its own data, they need to go into `purgeTenantFixture` too.
+
+I didn't reply to or resolve any threads. [43]–[47] can be resolved.
+
+One review round is complete. No post-push refetch or additional review loop was performed.</result>
+<usage><subagent_tokens>271076</subagent_tokens><tool_uses>42</tool_uses><duration_ms>1388369</duration_ms></usage>
+</task-notification>
