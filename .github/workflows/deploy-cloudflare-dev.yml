@@ -54,6 +54,8 @@ jobs:
     env:
       # Development deploys target the 21n-dev Cloudflare account only.
       CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_DEV_ACCOUNT_ID }}
+      # Deploy scripts refuse to run when the account above equals this one.
+      SKILLPLANE_PRODUCTION_CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_PROD_ACCOUNT_ID }}
       CLOUDFLARE_DEV_CONTROL_HYPERDRIVE_ID: ${{ vars.CLOUDFLARE_DEV_CONTROL_HYPERDRIVE_ID }}
       CLOUDFLARE_DEV_CELL_IN_SOUTH_HYPERDRIVE_ID: ${{ vars.CLOUDFLARE_DEV_CELL_IN_SOUTH_HYPERDRIVE_ID }}
       CLOUDFLARE_DEV_CELL_US_EAST_HYPERDRIVE_ID: ${{ vars.CLOUDFLARE_DEV_CELL_US_EAST_HYPERDRIVE_ID }}
@@ -89,11 +91,15 @@ jobs:
             echo "CLOUDFLARE_PROD_ACCOUNT_ID must be configured for the production-account guard" >&2
             exit 1
           fi
-          if [[ "${CLOUDFLARE_ACCOUNT_ID}" == "${CLOUDFLARE_PROD_ACCOUNT_ID}" ]]; then
+          # Account IDs are hex; compare case-insensitively.
+          dev_account_id="${CLOUDFLARE_ACCOUNT_ID,,}"
+          prod_account_id="${CLOUDFLARE_PROD_ACCOUNT_ID,,}"
+          release_account_id="${CLOUDFLARE_RELEASE_ACCOUNT_ID,,}"
+          if [[ "${dev_account_id}" == "${prod_account_id}" ]]; then
             echo "Development deploys must not target the production account" >&2
             exit 1
           fi
-          if [[ -n "${CLOUDFLARE_RELEASE_ACCOUNT_ID}" && "${CLOUDFLARE_ACCOUNT_ID}" == "${CLOUDFLARE_RELEASE_ACCOUNT_ID}" ]]; then
+          if [[ -n "${release_account_id}" && "${dev_account_id}" == "${release_account_id}" ]]; then
             echo "Development deploys must not target the production release account (vars.CLOUDFLARE_ACCOUNT_ID)" >&2
             exit 1
           fi

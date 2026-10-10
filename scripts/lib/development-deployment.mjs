@@ -131,6 +131,26 @@ export function developmentSiteKey() {
   return value;
 }
 
+const cloudflareAccountIdPattern = /^[a-f0-9]{32}$/iu;
+
+// Fails closed unless the development account is set and differs from the
+// production account, so an over-scoped token cannot deploy dev Workers to 21n.
+export function developmentCloudflareAccountId() {
+  const accountId = requireEnvironment("CLOUDFLARE_ACCOUNT_ID", {
+    pattern: cloudflareAccountIdPattern,
+  }).toLowerCase();
+  const productionAccountId = requireEnvironment(
+    "SKILLPLANE_PRODUCTION_CLOUDFLARE_ACCOUNT_ID",
+    { pattern: cloudflareAccountIdPattern },
+  ).toLowerCase();
+  if (accountId === productionAccountId) {
+    throw new Error(
+      "CLOUDFLARE_ACCOUNT_ID must be the development account, not SKILLPLANE_PRODUCTION_CLOUDFLARE_ACCOUNT_ID",
+    );
+  }
+  return accountId;
+}
+
 export function developmentCloudflareEnvironment() {
   const token = requireSecretEnvironment("SKILLPLANE_DEV_CLOUDFLARE_API_TOKEN");
   for (const name of ["CLOUDFLARE_API_TOKEN"]) {
@@ -138,7 +158,11 @@ export function developmentCloudflareEnvironment() {
       throw new Error(`SKILLPLANE_DEV_CLOUDFLARE_API_TOKEN must differ from ${name}`);
     }
   }
-  const environment = { ...process.env, CLOUDFLARE_API_TOKEN: token };
+  const environment = {
+    ...process.env,
+    CLOUDFLARE_API_TOKEN: token,
+    CLOUDFLARE_ACCOUNT_ID: developmentCloudflareAccountId(),
+  };
   for (const name of [
     "SKILLPLANE_DEV_CLOUDFLARE_API_TOKEN",
     "SKILLPLANE_DEV_AUTHFN_SECRET",
@@ -179,7 +203,7 @@ export function productionBundleReadEnvironment() {
   // Production bundles live in the production account; the shared environment's
   // CLOUDFLARE_ACCOUNT_ID selects the development account, so pin the source here.
   const accountId = requireEnvironment("SKILLPLANE_PRODUCTION_CLOUDFLARE_ACCOUNT_ID", {
-    pattern: /^[a-f0-9]{32}$/iu,
+    pattern: cloudflareAccountIdPattern,
   }).toLowerCase();
   const environment = {
     ...process.env,

@@ -159,6 +159,7 @@ describe("development deployment isolation", () => {
       SKILLPLANE_DEV_CLOUDFLARE_API_TOKEN: "dev-cloudflare-token-material-1234567890",
       SKILLPLANE_PRODUCTION_R2_READ_TOKEN: "prod-r2-token-material-1234567890",
       SKILLPLANE_PRODUCTION_CLOUDFLARE_ACCOUNT_ID: "b".repeat(32),
+      CLOUDFLARE_ACCOUNT_ID: "c".repeat(32),
     };
     for (const url of Object.values(databases)) {
       withEnvironment({ ...environment, RAILWAY_DATABASE_URL: url }, () => {
@@ -263,15 +264,51 @@ describe("development deployment isolation", () => {
         CLOUDFLARE_API_TOKEN: "production-cloudflare-api-token-material-1234567890",
         CLOUDFLARE_API_KEY: "legacy-key-must-not-be-inherited",
         CLOUDFLARE_EMAIL: "operator@example.test",
+        CLOUDFLARE_ACCOUNT_ID: "C801".repeat(8),
+        SKILLPLANE_PRODUCTION_CLOUDFLARE_ACCOUNT_ID: "1bef".repeat(8),
       },
       () => {
         const environment = developmentCloudflareEnvironment();
         assert.equal(environment.CLOUDFLARE_API_TOKEN, token);
+        assert.equal(environment.CLOUDFLARE_ACCOUNT_ID, "c801".repeat(8));
         assert.equal(environment.SKILLPLANE_DEV_CLOUDFLARE_API_TOKEN, undefined);
         assert.equal(environment.CLOUDFLARE_API_KEY, undefined);
         assert.equal(environment.CLOUDFLARE_EMAIL, undefined);
       },
     );
+  });
+
+  it("refuses development Cloudflare operations against the production account", () => {
+    const token = "development-cloudflare-api-token-material-1234567890";
+    const productionAccountId = "1bef".repeat(8);
+    for (const [overrides, pattern] of [
+      [{ CLOUDFLARE_ACCOUNT_ID: undefined }, /CLOUDFLARE_ACCOUNT_ID is required/u],
+      [
+        {
+          CLOUDFLARE_ACCOUNT_ID: "c801".repeat(8),
+          SKILLPLANE_PRODUCTION_CLOUDFLARE_ACCOUNT_ID: undefined,
+        },
+        /SKILLPLANE_PRODUCTION_CLOUDFLARE_ACCOUNT_ID is required/u,
+      ],
+      [
+        { CLOUDFLARE_ACCOUNT_ID: productionAccountId },
+        /must be the development account/u,
+      ],
+      [
+        { CLOUDFLARE_ACCOUNT_ID: productionAccountId.toUpperCase() },
+        /must be the development account/u,
+      ],
+    ]) {
+      withEnvironment(
+        {
+          SKILLPLANE_DEV_CLOUDFLARE_API_TOKEN: token,
+          CLOUDFLARE_API_TOKEN: undefined,
+          SKILLPLANE_PRODUCTION_CLOUDFLARE_ACCOUNT_ID: productionAccountId,
+          ...overrides,
+        },
+        () => assert.throws(() => developmentCloudflareEnvironment(), pattern),
+      );
+    }
   });
 
   it("uses a separate read-only token for production bundle reads", () => {
