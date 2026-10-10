@@ -1,7 +1,10 @@
 import { beforeAll, afterAll, describe, it, expect } from "vitest";
 import { Pool } from "pg";
 import { migrateDatabase } from "../../../db/src/migrate.js";
-import { seedTenantFixture } from "../../../testing/src/fixtures.js";
+import {
+  purgeTenantFixture,
+  seedTenantFixture,
+} from "../../../testing/src/fixtures.js";
 import { SkillGroupService } from "../../src/skill-groups.js";
 import { SkillService } from "../../src/skills.js";
 import { SkillSearchService } from "../../src/search.js";
@@ -213,6 +216,45 @@ describe.skipIf(!url)("workspace skill groups", () => {
     expect(
       audit.rows.filter((r) => r.event_type === "skill_group.skill.added"),
     ).toHaveLength(1);
+  });
+  it("purges group rows with the tenant fixture", async () => {
+    const suffix = `groups-purge-${crypto.randomUUID()}`;
+    const fixture = await seedTenantFixture(url ?? "", suffix);
+    const principal: Principal = {
+      ...owner,
+      actorId: fixture.userId,
+      userId: fixture.userId,
+      workspaceId: fixture.workspaceId,
+    };
+    const purgeMutation = () => ({
+      principal,
+      requestId: crypto.randomUUID(),
+      fencingEpoch: 1,
+    });
+    const group = await groups.create({
+      ...purgeMutation(),
+      name: "Purged",
+      idempotencyKey: crypto.randomUUID(),
+    });
+    for (const [kind, targetId] of [
+      ["skill", fixture.skillId],
+      ["member", fixture.userId],
+    ] as const)
+      await groups.association({
+        ...purgeMutation(),
+        groupId: group.id,
+        kind,
+        targetId,
+        add: true,
+      });
+    await purgeTenantFixture(url ?? "", suffix);
+    for (const table of ["skill_group_members", "skill_group_skills", "skill_groups"]) {
+      const remaining = await pool.query(
+        `SELECT 1 FROM ${table} WHERE workspace_id=$1`,
+        [fixture.workspaceId],
+      );
+      expect(remaining.rowCount, table).toBe(0);
+    }
   });
   it("fences writes during migration and retains ungrouped skills", async () => {
     await pool.query(

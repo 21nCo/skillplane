@@ -165,6 +165,11 @@ export async function purgeTenantFixture(
     // leaves. ALTER TABLE would take relation-wide locks and can deadlock with
     // another integration file that is still writing an unrelated tenant.
     await client.query("SET LOCAL session_replication_role = replica");
+    for (const table of ["skill_group_members", "skill_group_skills", "skill_groups"]) {
+      await client.query(`DELETE FROM ${table} WHERE workspace_id = ANY($1::text[])`, [
+        workspaceIds,
+      ]);
+    }
     await client.query(
       "DELETE FROM skill_version_files WHERE workspace_id = ANY($1::text[])",
       [workspaceIds],

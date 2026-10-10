@@ -30,11 +30,6 @@ beforeAll(async () => {
   app = createApiApp({ getServices: async () => services });
 });
 afterAll(async () => {
-  for (const table of ["skill_group_members", "skill_group_skills", "skill_groups"])
-    await services.database.pool.query(
-      `DELETE FROM ${table} WHERE workspace_id=ANY($1::text[])`,
-      [[owner.workspaceId, outsider.workspaceId]],
-    );
   await services.datafn.close();
   await services.email?.close();
   await services.database.close();

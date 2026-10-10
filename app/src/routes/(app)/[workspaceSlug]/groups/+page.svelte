@@ -152,9 +152,27 @@
       if (scope === loaded) busy = false;
     }
   }
+  // A mutation's continuation may update the page only while the navigation scope
+  // (workspace and member filter) that started it is still the current one.
+  function stillScoped(scope: string, workspaceId: string) {
+    return scope === loaded && isCurrent(workspaceId);
+  }
+  // Refresh every view a mutation affects independently, so one failed refresh
+  // cannot leave another view stale; report the first failure afterwards.
+  async function refreshAfterMutation(group: Group, reloadList: boolean) {
+    const results = await Promise.allSettled([
+      ...(reloadList ? [load()] : []),
+      detail(group),
+    ]);
+    const failure = results.find(
+      (result): result is PromiseRejectedResult => result.status === "rejected",
+    );
+    if (failure) throw failure.reason;
+  }
   async function save(archived = Boolean(selected?.archivedAt), lifecycleOnly = false) {
     if (!workspace) return;
     const workspaceId = workspace.id,
+      scope = loaded,
       creating = !selected;
     const r = await groupRequest<{ group: Group }>(
       workspace.id,
@@ -167,25 +185,29 @@
       },
       creating ? creationKey : undefined,
     );
-    if (!isCurrent(workspaceId)) return;
+    if (!stillScoped(scope, workspaceId)) return;
     // Adopt the saved group before refreshing so a refresh failure leaves a retry
     // that PATCHes this revision instead of replaying a consumed creation key.
     select(r.group);
     if (creating) creationKey = crypto.randomUUID();
-    await load();
-    await detail(r.group);
+    await refreshAfterMutation(r.group, true);
   }
   async function assign(kind: "skills" | "members", id: string, add: boolean) {
     if (!workspace || !selected || !id) return;
-    const group = selected;
+    const workspaceId = workspace.id,
+      scope = loaded,
+      group = selected;
     await groupRequest(
-      workspace.id,
+      workspaceId,
       `/${encodeURIComponent(group.id)}/${kind}/${encodeURIComponent(id)}`,
       add ? "PUT" : "DELETE",
     );
+    if (!stillScoped(scope, workspaceId)) return;
     // Member changes can move this group into or out of a member-filtered list.
-    if (kind === "members" && page.url.searchParams.get("memberId")) await load();
-    await detail(group);
+    await refreshAfterMutation(
+      group,
+      kind === "members" && Boolean(page.url.searchParams.get("memberId")),
+    );
   }
   $effect(() => {
     if (
