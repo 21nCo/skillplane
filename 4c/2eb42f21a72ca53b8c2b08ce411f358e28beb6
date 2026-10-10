@@ -1,0 +1,25 @@
+app/src/routes/(app)/[workspaceSlug]/groups/+page.svelte
+  s_b0f5ac773d2bd4::t_dd49e007a4b87e 155-171,175,188,193,197-199,201,205,207-210
+packages/domain/tests/integration/skill-groups.integration.test.ts
+  s_b0f5ac773d2bd4::t_cddff28412d8fe 4-7,220-258
+packages/testing/e2e/groups.spec.ts
+  s_b0f5ac773d2bd4::t_3acb901bd3e793 65-100,138,222-309
+packages/testing/src/fixtures.ts
+  s_b0f5ac773d2bd4::t_6b31d815f2ae74 168-172
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4c2eb42f21a72ca53b8c2b08ce411f358e28beb6",
+  "prompts": {},
+  "sessions": {
+    "s_b0f5ac773d2bd4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ca62123f-e191-43ba-a12e-6d1b29e43d5c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
