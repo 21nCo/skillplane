@@ -277,7 +277,7 @@ describe("development deployment isolation", () => {
   it("uses a separate read-only token for production bundle reads", () => {
     const sourceToken = "production-r2-read-token-material-1234567890";
     const developmentToken = "development-cloudflare-token-material-1234567890";
-    const sourceAccountId = "1".repeat(32);
+    const sourceAccountId = "1bef".repeat(8);
     const targetAccountId = "2".repeat(32);
     withEnvironment(
       {
