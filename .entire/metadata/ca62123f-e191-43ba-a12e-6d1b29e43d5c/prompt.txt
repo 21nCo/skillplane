@@ -419,3 +419,85 @@ I didn't reply to or resolve any threads. [43]–[47] can be resolved.
 One review round is complete. No post-push refetch or additional review loop was performed.</result>
 <usage><subagent_tokens>271076</subagent_tokens><tool_uses>42</tool_uses><duration_ms>1388369</duration_ms></usage>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>a590f60f29334da37</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-serro-Documents-dev-n-agent-experiments-skillplane/ca62123f-e191-43ba-a12e-6d1b29e43d5c/tasks/a590f60f29334da37.output</output-file>
+<status>completed</status>
+<summary>Agent "PR #47 refetch-fix round" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Round 3 of PR #47 fixed both new findings in one commit, `c0990b6`, pushed once without force; local, remote and PR head all match. One of them recurred in `sources-ui-idemkey` (now at 2 failed rounds), so this round was an architecture reset for that family.
+
+PR: https://github.com/21nCo/skillplane/pull/47. Skill is `21n/pr-refetch-fix` v1.4.0, revision 6, `sha256:b6a6e7a8…2726`, no drift. Findings were collected once at head `e342c96` (stable throughout): 14 unresolved threads (2 new), the review bodies, issue comments, and check runs with annotations.
+
+Files in the commit:
+- `app/src/routes/(app)/[workspaceSlug]/sources/+page.svelte`
+- `packages/db/tests/integration/git-source-schema.integration.test.ts`
+- `packages/testing/e2e/git-sources.spec.ts` (new)
+
+**Stacking conflict (no merge or rebase done):** GitHub reports the PR as conflicting with base `codex/ski-11-skill-groups` @ `7076cf8`. `git merge-tree` shows two conflicting files:
+- `packages/api/src/routes/skills.ts`
+- `packages/domain/src/search.ts`
+
+The conflict is suppressing CI: the `verify` workflow has 0 runs for `d4b1bd0` and for `e342c96`. The other check apps (cubic, pullfrog, Sonar, GitGuardian, Socket) still run.
+
+**Fixed (2 root causes, 2 new threads)**
+1. **`ARCHITECTURE_RESET_REQUIRED:sources-ui-idemkey`** (p2U7Q): if a create committed but the follow-up refresh failed, the key was retired and the visible retry created a duplicate source. Repaired in mode `architecture_reset`; the four reset fields:
+   - **Invariant:** each workspace keeps one creation key until the page has selected the source that key created, or the user clicks "New source". Only the request that sent a key may retire it, and PATCH saves never use or retire it.
+   - **Old-head failing reproduction:** a browser test against the real API and Vite, with the refresh after the create forced to fail with 503. On the round-2 page, the server listed **2 sources** for one create and the retry carried a different key.
+   - **Coordinated plan:** key handling lives only in `save()`. Creates capture a key; nothing is retired on the bare POST response. After refresh, the key is retired only if the created source is selected and the stored key still equals the sent one. "New source" retires it explicitly. This also covers the round-2 race.
+   - **Independent verification criteria:** the `idempotency-key` headers observed on POST requests and the server's own source list, not page internals. The new page passes: the retry reuses the key, exactly 1 source exists, and "New source" then Save sends a new key.
+2. **Weak schema-parity test** (p2P_T, family `db-schema-parity`, now at 1 failed round): the test only checked whether an index had any DESC key and any WHERE clause. It now creates the modeled checks and indexes on a temporary probe table and compares Postgres's own definitions with the migrated tables. That covers key order, direction, uniqueness, predicates, and check expressions too, which were also unchecked before.
+   - Proof on the same input: with the model's index keys reordered and its predicate inverted, the old test passed 4/4 and the new one fails 2/4. On the real model the new test passes 4/4.
+
+**Skipped (Already Fixed / Stale; 10 threads)**
+- ptla2, ptmfW, ptsGg, ptwId, ptwIh, ptsGe, pt9_d, pt_6K, puD2H, pxQN8.
+- All are verified on the current code and eligible for resolution; I left them unchanged.
+
+**Not Attempted**
+- **ptpLv (case-insensitive root files):** out of scope; it would change the shared bundle rules for every upload path.
+- **puE9a (freeze resolved composition):** waiting on your decision; I didn't change it.
+- **SonarCloud:** still cancelled ("analysis failed"); the same 7 failure-level sites as round 2.
+- **Repo-wide naming drift:** the migration names `UNIQUE(workspace_id,id)` constraints `*_id_key`, while Drizzle models use `*_workspace_id_unique` throughout the repo. The parity test excludes these.
+
+**Verification**
+- Everything ran against a disposable Postgres 16 on the Composio-connected Railway account: project `disposable-sp-pr47-r3` with service `postgres-pr47-r3`.
+- Deleted afterwards and read back: `projectDelete: true`, then "Project not found", and it's gone from the workspace list.
+- Results on Railway:
+  - The e2e test failed on the old page and passed on the new one (55 s).
+  - The parity test passed 4/4, with the mutation evidence above.
+  - DB integration: 11/14 files pass. The other 7 tests, in `concrete-migration`, `migration-key-matrix` and `physical-ownership`, failed with 5 s/30 s timeouts and "Connection terminated unexpectedly" over Railway's public TCP proxy. They're latency-sensitive, untouched this round, and passed 43/43 locally in round 2. Per your instruction I did not fall back to a local Postgres; this is a verification gap.
+- The e2e test needed a 120 s budget because of Railway round trips; other specs in this suite also raise their timeouts.
+- Static gates: eslint and prettier on the changed files, `svelte-check` (0 errors), and `tsc` for `db` and `testing` all pass.
+- Domain code is unchanged this round, so I didn't re-run its suites.
+
+**Processes:** none of mine are left running.
+- The rounds 1–2 scratchpad Postgres (port 55447) was stopped each round, and its data directory is gone.
+- I didn't touch `/tmp/sta8-pg16-TDHbTk`, or #46's Railway project, which caused a 30-second project-creation rate limit and is no longer listed.
+
+**Invalid / Accepted Risk:** none; puE9a is still pending your decision.
+
+**Convergence:** improving.
+
+| Round | Snapshot valid root causes | New | Fix-induced | Open after |
+|---|---|---|---|---|
+| 1 | 10 | 10 | 0 | 2 (ptpLv, puE9a) |
+| 2 | 5 | 3 | 1 (idemkey race) | 2 |
+| 3 | 4 | 2 | 1 (idemkey refresh gap) | 2 (ptpLv, puE9a awaiting decision) |
+
+**Convergence gate:** single invocation, so the ledger is kept in task context. Mode was `architecture_reset` for `sources-ui-idemkey` and routine otherwise.
+
+| Family | Failed rounds | Status |
+|---|---|---|
+| git-preview-composition | 2 | no recurrence, not touched |
+| sources-ui-idemkey | 2 | reset opened with all four fields, coordinated repair done |
+| git-file-budget | 1 | no recurrence |
+| db-schema-parity | 1 | fixed |
+| git-bind-path, git-dup-slug, git-yaml, sources-ui-fence, binding-visibility-type | 0 | — |
+
+I did not reply to or resolve any threads. One review round is complete. No post-push refetch or additional review loop was performed.</result>
+<usage><subagent_tokens>296504</subagent_tokens><tool_uses>54</tool_uses><duration_ms>1452454</duration_ms></usage>
+</task-notification>
