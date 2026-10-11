@@ -201,37 +201,44 @@
         Search
       </Button>
     </form>
-    {#if groupsError}<p role="status">{groupsError}</p>{/if}
-    <Select
-      label="Skill group"
-      options={[
-        { value: "", label: "All groups" },
-        ...groups.map((g) => ({ value: g.id, label: g.name })),
-      ]}
-      bind:value={groupId}
-      onchange={() => void load()}
-    />
-    <Select
-      label="Visibility"
-      options={[
-        { value: "all", label: "All visibility" },
-        { value: "private", label: "Private" },
-        { value: "workspace", label: "Workspace" },
-        { value: "public", label: "Public" },
-      ]}
-      bind:value={visibility}
-      onchange={() => void load()}
-    />
-    <Select
-      label="Lifecycle state"
-      options={[
-        { value: "active", label: "Active" },
-        { value: "archived", label: "Archived" },
-        { value: "all", label: "Active and archived" },
-      ]}
-      bind:value={archive}
-      onchange={() => void load()}
-    />
+    <!-- Each filter keeps its label and control together in one grid cell. -->
+    <div class="filter">
+      <Select
+        label="Skill group"
+        options={[
+          { value: "", label: "All groups" },
+          ...groups.map((g) => ({ value: g.id, label: g.name })),
+        ]}
+        bind:value={groupId}
+        onchange={() => void load()}
+      />
+      {#if groupsError}<p role="status">{groupsError}</p>{/if}
+    </div>
+    <div class="filter">
+      <Select
+        label="Visibility"
+        options={[
+          { value: "all", label: "All visibility" },
+          { value: "private", label: "Private" },
+          { value: "workspace", label: "Workspace" },
+          { value: "public", label: "Public" },
+        ]}
+        bind:value={visibility}
+        onchange={() => void load()}
+      />
+    </div>
+    <div class="filter">
+      <Select
+        label="Lifecycle state"
+        options={[
+          { value: "active", label: "Active" },
+          { value: "archived", label: "Archived" },
+          { value: "all", label: "Active and archived" },
+        ]}
+        bind:value={archive}
+        onchange={() => void load()}
+      />
+    </div>
   </section>
 
   {#if loading}
@@ -394,6 +401,12 @@
     gap: var(--sp-space-3);
     align-items: end;
     margin: var(--sp-space-6) 0 var(--sp-space-4);
+  }
+
+  .filter {
+    display: grid;
+    gap: var(--sp-space-1);
+    min-width: 0;
   }
 
   form {
