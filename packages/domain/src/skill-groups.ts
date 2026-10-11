@@ -90,6 +90,8 @@ export class SkillGroupService {
     } = {},
   ) {
     authorize(principal, "skills:read");
+    // Filtering by member reveals that member's groups, so it needs member access.
+    if (options.userId !== undefined) authorize(principal, "members:read");
     const page = groupPage(options.limit ?? 50, options.cursor ?? null);
     const result = await this.pool.query<GroupRow>(
       `SELECT g.* FROM skill_groups g WHERE g.workspace_id=$1 AND ($2::boolean OR g.archived_at IS NULL) AND ($3::text IS NULL OR g.id>$3) AND ($5::text IS NULL OR EXISTS(SELECT 1 FROM skill_group_skills a WHERE a.workspace_id=g.workspace_id AND a.group_id=g.id AND a.skill_id=$5)) AND ($6::text IS NULL OR EXISTS(SELECT 1 FROM skill_group_members a WHERE a.workspace_id=g.workspace_id AND a.group_id=g.id AND a.user_id=$6)) ORDER BY g.id LIMIT $4`,
@@ -108,6 +110,31 @@ export class SkillGroupService {
         result.rows.length > page.limit
           ? (result.rows[page.limit - 1]?.id ?? null)
           : null,
+    };
+  }
+  // Active groups of up to one page of skills in one query, for catalog badges.
+  async skillGroups(principal: Principal, skillIds: readonly string[]) {
+    authorize(principal, "skills:read");
+    const ids = [...new Set(skillIds)];
+    if (ids.length > 100 || ids.some((id) => !id || id.length > 200))
+      throw new DomainError(
+        "VALIDATION_FAILED",
+        "Request groups for 1–100 skill identifiers",
+        400,
+      );
+    const r = ids.length
+      ? await this.pool.query<{ skill_id: string; id: string; name: string }>(
+          "SELECT a.skill_id,g.id,g.name FROM skill_group_skills a JOIN skill_groups g ON g.workspace_id=a.workspace_id AND g.id=a.group_id WHERE a.workspace_id=$1 AND a.skill_id=ANY($2::text[]) AND g.archived_at IS NULL ORDER BY a.skill_id,lower(g.name),g.id",
+          [principal.workspaceId, ids],
+        )
+      : { rows: [] };
+    return {
+      skills: ids.map((skillId) => ({
+        skillId,
+        groups: r.rows
+          .filter((row) => row.skill_id === skillId)
+          .map((row) => ({ id: row.id, name: row.name })),
+      })),
     };
   }
   async get(principal: Principal, groupId: string) {
@@ -165,13 +192,12 @@ export class SkillGroupService {
     options: Mutation & {
       groupId: string;
       expectedRevision: number;
-      name: unknown;
+      name?: unknown;
       description?: unknown;
       archived: boolean;
     },
   ) {
     writePermission(options.principal);
-    const data = groupMetadata(options.name, options.description ?? "");
     if (
       !Number.isSafeInteger(options.expectedRevision) ||
       options.expectedRevision < 1 ||
@@ -183,24 +209,38 @@ export class SkillGroupService {
         400,
       );
     return this.mutate(options, async (client) => {
-      await this.lock(client, options.principal, options.groupId);
+      const current = await this.lock(client, options.principal, options.groupId);
+      if (current.revision !== options.expectedRevision)
+        throw new DomainError("CONFLICT", "Group changed; reload before saving", 409);
+      // An omitted field keeps its stored value; a request that changes nothing
+      // returns the current group without a new revision or audit record.
+      const data = groupMetadata(
+        options.name ?? current.name,
+        options.description ?? current.description,
+      );
+      const changes = [
+        ...(data.name !== current.name ? ["name"] : []),
+        ...(data.description !== current.description ? ["description"] : []),
+        ...(options.archived !== Boolean(current.archived_at) ? ["archived"] : []),
+      ];
+      if (!changes.length) return record(current);
       const r = await client.query<GroupRow>(
-        "UPDATE skill_groups SET name=$3,description=$4,archived_at=CASE WHEN $5::boolean THEN COALESCE(archived_at,now()) ELSE NULL END,revision=revision+1,updated_at=now() WHERE workspace_id=$1 AND id=$2 AND revision=$6 RETURNING *",
+        "UPDATE skill_groups SET name=$3,description=$4,archived_at=CASE WHEN $5::boolean THEN COALESCE(archived_at,now()) ELSE NULL END,revision=revision+1,updated_at=now() WHERE workspace_id=$1 AND id=$2 RETURNING *",
         [
           options.principal.workspaceId,
           options.groupId,
           data.name,
           data.description,
           options.archived,
-          options.expectedRevision,
         ],
       );
-      if (!r.rows[0])
-        throw new DomainError("CONFLICT", "Group changed; reload before saving", 409);
+      const updated = r.rows[0];
+      if (!updated) throw new DomainError("NOT_FOUND", "Group was not found", 404);
       await this.audit(client, options, options.groupId, "updated", {
         archived: options.archived,
+        changes,
       });
-      return record(r.rows[0]);
+      return record(updated);
     });
   }
   async association(

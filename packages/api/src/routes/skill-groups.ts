@@ -15,8 +15,22 @@ function services(c: Context<ApiEnvironment>) {
     throw new DomainError("AUTHENTICATION_REQUIRED", "Authentication is required", 401);
   return value;
 }
+// Like every /api/v1/workspaces route, groups require a human session; service
+// credentials filter skills by group through /api/v1/skills/search instead.
 export function registerSkillGroupRoutes(app: Hono<ApiEnvironment>) {
   const base = "/api/v1/workspaces/:workspaceId/groups";
+  // Registered before /:groupId so the static segment is not read as a group id.
+  app.get(`${base}/skill-assignments`, async (c) => {
+    const principal = await workspaceUser(c),
+      s = services(c);
+    const skillIds = (c.req.queries("skillId") ?? []).map((id) => id.trim());
+    const data = await new SkillGroupService(
+      s.database.pool,
+      s.controlDatabase.pool,
+    ).skillGroups(principal, skillIds);
+    c.header("Cache-Control", "private, no-store");
+    return c.json(success(c, data));
+  });
   app.get(base, async (c) => {
     const principal = await workspaceUser(c),
       s = services(c);
@@ -71,10 +85,15 @@ export function registerSkillGroupRoutes(app: Hono<ApiEnvironment>) {
     const principal = await workspaceUser(c),
       s = services(c),
       body = await readJsonObject(c);
-    if (typeof body.archived !== "boolean" || typeof body.expectedRevision !== "number")
+    if (
+      typeof body.archived !== "boolean" ||
+      typeof body.expectedRevision !== "number" ||
+      body.name === null ||
+      body.description === null
+    )
       throw new DomainError(
         "VALIDATION_FAILED",
-        "Revision and archived state are required",
+        "Revision and archived state are required; omit name or description to keep it",
         400,
       );
     const group = await new SkillGroupService(

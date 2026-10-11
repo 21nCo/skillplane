@@ -6,6 +6,7 @@ import {
 import type { Hono } from "hono";
 import type { ApiEnvironment } from "../context.js";
 import { success } from "../envelopes.js";
+import { optionalIdFilter } from "./shared.js";
 
 function parseLimit(value: string | undefined): number | undefined {
   if (value === undefined) return undefined;
@@ -48,7 +49,16 @@ export function registerSkillSearchRoutes(app: Hono<ApiEnvironment>): void {
         .filter(Boolean) ?? []),
     ].map(parseSkillVisibility);
     const archive = parseSkillArchiveFilter(context.req.query("state") ?? "active");
+    const groupFilter = optionalIdFilter(context, "groupId");
     if (services.publicProjectionService && !context.req.query("workspaceId")) {
+      if (groupFilter.groupId !== undefined) {
+        throw new DomainError(
+          "VALIDATION_FAILED",
+          "Global skill search does not support group filters",
+          400,
+          { field: "groupId" },
+        );
+      }
       if (visibility.some((value) => value !== "public")) {
         throw new DomainError(
           "VALIDATION_FAILED",
@@ -76,6 +86,7 @@ export function registerSkillSearchRoutes(app: Hono<ApiEnvironment>): void {
     }
     const page = await services.skillSearchService.search({
       query: context.req.query("q") ?? "",
+      ...groupFilter,
       tags: [...repeatedTags, ...commaTags],
       visibility,
       archive,

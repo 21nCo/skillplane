@@ -1,5 +1,6 @@
 <script lang="ts">
   import { resolve } from "$app/paths";
+  import { untrack } from "svelte";
   import { SvelteURLSearchParams } from "svelte/reactivity";
   import { page } from "$app/state";
   import { Button, Input, Select, EmptyState } from "@skillplane/ui";
@@ -34,27 +35,48 @@
     targetSkill = $state(""),
     targetMember = $state(""),
     query = $state("");
-  function isCurrent(workspaceId: string, groupId?: string) {
-    return (
-      workspace?.id === workspaceId &&
-      (groupId === undefined || selected?.id === groupId)
-    );
+  // Every async continuation captures a token and may touch page state only while
+  // it is current. Each navigation (workspace or member filter) starts a new
+  // navigation generation, and each group selection a new detail generation, so a
+  // late response can never match a newer view even when its keys repeat.
+  let navigation = 0,
+    detailGeneration = 0,
+    listGeneration = 0;
+  interface Token {
+    readonly navigation: number;
+    readonly detail: number;
+    readonly workspaceId: string;
+  }
+  function token(workspaceId: string): Token {
+    return { navigation, detail: detailGeneration, workspaceId };
+  }
+  function inNavigation(t: Token) {
+    return t.navigation === navigation && workspace?.id === t.workspaceId;
+  }
+  function inDetail(t: Token) {
+    return inNavigation(t) && t.detail === detailGeneration;
+  }
+  // Operations still running, including superseded ones; exposed on the page so a
+  // caller can tell when every continuation has finished.
+  let pendingOperations = $state(0);
+  async function tracked(fn: () => Promise<void>) {
+    pendingOperations += 1;
+    try {
+      await fn();
+    } finally {
+      pendingOperations -= 1;
+    }
   }
   let creationKey = crypto.randomUUID();
-  let listGeneration = 0,
-    listLoaded = $state(false),
+  let listLoaded = $state(false),
     listLoading = $state(false);
   async function load(more = false) {
     if (!workspace) return;
-    const workspaceId = workspace.id,
+    const t = token(workspace.id),
       memberId = page.url.searchParams.get("memberId") ?? "",
       archived = includeArchived,
       generation = ++listGeneration;
-    const stale = () =>
-      !isCurrent(workspaceId) ||
-      memberId !== (page.url.searchParams.get("memberId") ?? "") ||
-      archived !== includeArchived ||
-      generation !== listGeneration;
+    const current = () => inNavigation(t) && generation === listGeneration;
     if (!more) {
       groupCursor = null;
       listLoaded = false;
@@ -62,183 +84,202 @@
     listLoading = true;
     try {
       const result = await groupRequest<{ groups: Group[]; nextCursor: string | null }>(
-        workspaceId,
+        t.workspaceId,
         `?${memberId ? `userId=${encodeURIComponent(memberId)}&` : ""}state=${archived ? "all" : "active"}${more && groupCursor ? `&cursor=${encodeURIComponent(groupCursor)}` : ""}`,
       );
-      if (stale()) return;
+      if (!current()) return;
       groups = more ? [...groups, ...result.groups] : result.groups;
       groupCursor = result.nextCursor;
       listLoaded = true;
     } catch (e) {
-      if (!stale()) throw e;
+      if (current()) throw e;
     } finally {
-      if (generation === listGeneration) listLoading = false;
+      if (current()) listLoading = false;
     }
   }
   // Expose a group only together with cleared group-scoped state, so the detail
-  // pane never shows another group's assignments or removal controls.
-  function select(group: Group) {
+  // pane never shows another group's assignments or removal controls. Starting a
+  // new detail generation discards responses for any earlier selection.
+  function select(group: Group | null) {
+    detailGeneration += 1;
     selected = group;
     targetMember = "";
     targetSkill = "";
-    name = group.name;
-    description = group.description;
+    name = group?.name ?? "";
+    description = group?.description ?? "";
     skills = [];
     members = [];
     skillCursor = null;
     memberCursor = null;
   }
+  // Settle every request before reporting the first failure, so the busy state is
+  // released only after no response for this view is still outstanding.
+  async function settleAll(work: Promise<unknown>[]) {
+    const results = await Promise.allSettled(work);
+    const failure = results.find(
+      (result): result is PromiseRejectedResult => result.status === "rejected",
+    );
+    if (failure) throw failure.reason;
+  }
+  async function loadDetail() {
+    await settleAll([
+      loadSkills(),
+      loadMembers(),
+      ...(canManage ? [loadRoster(), searchSkills()] : []),
+    ]);
+  }
   async function detail(group: Group) {
     if (!workspace) return;
-    const workspaceId = workspace.id;
     select(group);
-    await Promise.all([loadSkills(), loadMembers()]);
-    if (canManage) {
-      const r = await apiRequest<{ members: Member[] }>(
-        `/api/v1/workspaces/${encodeURIComponent(workspace.id)}/members`,
-      );
-      if (!isCurrent(workspaceId, group.id)) return;
-      roster = r.members;
-      await searchSkills();
-    }
+    await loadDetail();
+  }
+  async function loadRoster() {
+    if (!workspace || !selected) return;
+    const t = token(workspace.id);
+    const r = await apiRequest<{ members: Member[] }>(
+      `/api/v1/workspaces/${encodeURIComponent(t.workspaceId)}/members`,
+    );
+    if (inDetail(t)) roster = r.members;
   }
   async function loadSkills(more = false) {
     if (!workspace || !selected) return;
-    const workspaceId = workspace.id,
+    const t = token(workspace.id),
       groupId = selected.id;
     const q = new SvelteURLSearchParams({ limit: "20" });
     if (more && skillCursor) q.set("cursor", skillCursor);
     const r = await groupRequest<{
       skills: (Pick<Skill, "id" | "name" | "slug"> & { archivedAt: string | null })[];
       nextCursor: string | null;
-    }>(workspaceId, `/${encodeURIComponent(groupId)}/skills?${q}`);
-    if (!isCurrent(workspaceId, groupId)) return;
+    }>(t.workspaceId, `/${encodeURIComponent(groupId)}/skills?${q}`);
+    if (!inDetail(t)) return;
     skills = more ? [...skills, ...r.skills] : r.skills;
     skillCursor = r.nextCursor;
   }
   async function loadMembers(more = false) {
     if (!workspace || !selected) return;
-    const workspaceId = workspace.id,
+    const t = token(workspace.id),
       groupId = selected.id;
     const r = await groupRequest<{ members: Member[]; nextCursor: string | null }>(
-      workspace.id,
-      `/${encodeURIComponent(selected.id)}/members${more && memberCursor ? `?cursor=${encodeURIComponent(memberCursor)}` : ""}`,
+      t.workspaceId,
+      `/${encodeURIComponent(groupId)}/members${more && memberCursor ? `?cursor=${encodeURIComponent(memberCursor)}` : ""}`,
     );
-    if (!isCurrent(workspaceId, groupId)) return;
+    if (!inDetail(t)) return;
     members = more ? [...members, ...r.members] : r.members;
     memberCursor = r.nextCursor;
   }
   async function searchSkills() {
-    if (!workspace) return;
-    const workspaceId = workspace.id;
+    if (!workspace || !selected) return;
+    const t = token(workspace.id);
     const r = await apiRequest<{ skills: Skill[] }>(
-      `/api/v1/workspaces/${encodeURIComponent(workspace.id)}/skills?${new SvelteURLSearchParams({ q: query, limit: "100" })}`,
+      `/api/v1/workspaces/${encodeURIComponent(t.workspaceId)}/skills?${new SvelteURLSearchParams({ q: query, limit: "100" })}`,
     );
-    if (!isCurrent(workspaceId)) return;
+    if (!inDetail(t)) return;
     available = r.skills;
     targetSkill = "";
   }
   async function run(fn: () => Promise<void>) {
     if (busy || !workspace) return;
-    const scope = loaded;
+    const t = token(workspace.id);
     busy = true;
     error = "";
-    try {
-      await fn();
-    } catch (e) {
-      if (scope === loaded)
-        error = e instanceof Error ? e.message : "The change failed";
-    } finally {
-      if (scope === loaded) busy = false;
-    }
-  }
-  // A mutation's continuation may update the page only while the navigation scope
-  // (workspace and member filter) that started it is still the current one.
-  function stillScoped(scope: string, workspaceId: string) {
-    return scope === loaded && isCurrent(workspaceId);
-  }
-  // Refresh every view a mutation affects independently, so one failed refresh
-  // cannot leave another view stale; report the first failure afterwards.
-  async function refreshAfterMutation(group: Group, reloadList: boolean) {
-    const results = await Promise.allSettled([
-      ...(reloadList ? [load()] : []),
-      detail(group),
-    ]);
-    const failure = results.find(
-      (result): result is PromiseRejectedResult => result.status === "rejected",
-    );
-    if (failure) throw failure.reason;
+    await tracked(async () => {
+      try {
+        await fn();
+      } catch (e) {
+        if (inNavigation(t))
+          error = e instanceof Error ? e.message : "The change failed";
+      } finally {
+        if (inNavigation(t)) busy = false;
+      }
+    });
   }
   async function save(archived = Boolean(selected?.archivedAt), lifecycleOnly = false) {
     if (!workspace) return;
-    const workspaceId = workspace.id,
-      scope = loaded,
+    const t = token(workspace.id),
       creating = !selected;
     const r = await groupRequest<{ group: Group }>(
-      workspace.id,
+      t.workspaceId,
       selected ? `/${encodeURIComponent(selected.id)}` : "",
       selected ? "PATCH" : "POST",
-      {
-        name: lifecycleOnly && selected ? selected.name : name,
-        description: lifecycleOnly && selected ? selected.description : description,
-        ...(selected ? { expectedRevision: selected.revision, archived } : {}),
-      },
+      lifecycleOnly && selected
+        ? { expectedRevision: selected.revision, archived }
+        : {
+            name,
+            description,
+            ...(selected ? { expectedRevision: selected.revision, archived } : {}),
+          },
       creating ? creationKey : undefined,
     );
-    if (!stillScoped(scope, workspaceId)) return;
+    if (!inDetail(t)) return;
     // Adopt the saved group before refreshing so a refresh failure leaves a retry
     // that PATCHes this revision instead of replaying a consumed creation key.
-    select(r.group);
-    if (creating) creationKey = crypto.randomUUID();
-    await refreshAfterMutation(r.group, true);
+    if (creating) {
+      creationKey = crypto.randomUUID();
+      select(r.group);
+      await settleAll([load(), loadDetail()]);
+      return;
+    }
+    selected = r.group;
+    // An archive or restore keeps any unsaved name or description draft.
+    if (!lifecycleOnly) {
+      name = r.group.name;
+      description = r.group.description;
+    }
+    await load();
   }
   async function assign(kind: "skills" | "members", id: string, add: boolean) {
     if (!workspace || !selected || !id) return;
-    const workspaceId = workspace.id,
-      scope = loaded,
+    const t = token(workspace.id),
       group = selected;
     await groupRequest(
-      workspaceId,
+      t.workspaceId,
       `/${encodeURIComponent(group.id)}/${kind}/${encodeURIComponent(id)}`,
       add ? "PUT" : "DELETE",
     );
-    if (!stillScoped(scope, workspaceId)) return;
+    if (!inDetail(t)) return;
+    if (kind === "skills") targetSkill = "";
+    else targetMember = "";
+    // Refresh the assignment lists without reselecting, so an edit draft survives.
     // Member changes can move this group into or out of a member-filtered list.
-    await refreshAfterMutation(
-      group,
-      kind === "members" && Boolean(page.url.searchParams.get("memberId")),
-    );
+    await settleAll([
+      kind === "skills" ? loadSkills() : loadMembers(),
+      ...(kind === "members" && page.url.searchParams.get("memberId") ? [load()] : []),
+    ]);
   }
   $effect(() => {
-    if (
-      workspace &&
-      loaded !== `${workspace.id}:${page.url.searchParams.get("memberId") ?? ""}`
-    ) {
-      loaded = `${workspace.id}:${page.url.searchParams.get("memberId") ?? ""}`;
-      selected = null;
+    const key = workspace
+      ? `${workspace.id}:${page.url.searchParams.get("memberId") ?? ""}`
+      : "";
+    if (!workspace || loaded === key) return;
+    const workspaceId = workspace.id;
+    // Reset and reload without subscribing this effect to the state it writes.
+    untrack(() => {
+      loaded = key;
+      navigation += 1;
+      select(null);
       groups = [];
       groupCursor = null;
       listLoaded = false;
       busy = false;
-      targetMember = "";
-      targetSkill = "";
-      name = "";
-      description = "";
       error = "";
       creationKey = crypto.randomUUID();
-      const scope = loaded;
-      void load().catch((e: unknown) => {
-        if (scope === loaded)
-          error = e instanceof Error ? e.message : "Groups could not be loaded";
+      const t = token(workspaceId);
+      void tracked(async () => {
+        try {
+          await load();
+        } catch (e) {
+          if (inNavigation(t))
+            error = e instanceof Error ? e.message : "Groups could not be loaded";
+        }
       });
-    }
+    });
   });
 </script>
 
 <svelte:head
   ><title>Skill groups · {workspace?.name ?? "Skillplane"}</title></svelte:head
 >
-<main class="groups-page">
+<main class="groups-page" data-pending-operations={pendingOperations}>
   <h1>Skill groups</h1>
   <p>
     Organize skills and members by domain. Group membership does not grant access or
@@ -257,10 +298,8 @@
       variant="secondary"
       disabled={busy}
       onclick={() => {
-        selected = null;
+        select(null);
         creationKey = crypto.randomUUID();
-        name = "";
-        description = "";
       }}>New group</Button
     >{/if}
   <nav aria-label="Skill groups">
@@ -326,7 +365,7 @@
                 variant="ghost"
                 disabled={busy}
                 onclick={() => void run(() => assign("members", m.userId, false))}
-                >Remove member</Button
+                >Remove {m.displayName ?? m.email ?? m.userId}</Button
               >{/if}
           </li>{/each}
       </ul>

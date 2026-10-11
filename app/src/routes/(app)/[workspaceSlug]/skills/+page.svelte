@@ -1,5 +1,7 @@
 <script lang="ts">
   import { groupRequest, type Group } from "$lib/groups/api.js";
+  import { untrack } from "svelte";
+  import { SvelteURLSearchParams } from "svelte/reactivity";
   import { resolve } from "$app/paths";
   import { page } from "$app/state";
   import { Badge, Button, Input, Select } from "@skillplane/ui";
@@ -29,6 +31,7 @@
   let groupsError = $state("");
   let groups = $state<Group[]>([]);
   let groupId = $state("");
+  let skillGroups = $state<Partial<Record<string, { id: string; name: string }[]>>>({});
   let skills = $state<Skill[]>([]);
   let query = $state("");
   let visibility = $state<SkillVisibility | "all">("all");
@@ -40,11 +43,15 @@
   let loadedWorkspaceId = $state<string | null>(null);
 
   let loadGeneration = 0;
+  // Loads still running, superseded ones included, so a caller can tell when every
+  // response has been handled.
+  let pendingLoads = $state(0);
   // Only the latest request may update the list, cursor, error, or loading state;
   // a slower response for a superseded filter or workspace is discarded.
   async function load(reset = true) {
     if (!workspace) return;
     const generation = ++loadGeneration;
+    pendingLoads += 1;
     if (reset) {
       loading = true;
       nextCursor = null;
@@ -65,6 +72,10 @@
       if (generation !== loadGeneration) return;
       skills = reset ? [...result.skills] : [...skills, ...result.skills];
       nextCursor = result.nextCursor;
+      void loadSkillGroups(
+        workspace.id,
+        result.skills.map((skill) => skill.id),
+      );
     } catch (cause) {
       if (generation !== loadGeneration) return;
       error = cause instanceof Error ? cause.message : "Skills could not be loaded.";
@@ -73,6 +84,27 @@
         loading = false;
         loadingMore = false;
       }
+      pendingLoads -= 1;
+    }
+  }
+
+  // One request per loaded page fetches the active groups of every skill on it;
+  // badges are kept per workspace and merged as later pages arrive.
+  async function loadSkillGroups(workspaceId: string, skillIds: string[]) {
+    if (!skillIds.length) return;
+    try {
+      const q = new SvelteURLSearchParams();
+      for (const id of skillIds) q.append("skillId", id);
+      const r = await groupRequest<{
+        skills: { skillId: string; groups: { id: string; name: string }[] }[];
+      }>(workspaceId, `/skill-assignments?${q}`);
+      if (loadedWorkspaceId !== workspaceId) return;
+      skillGroups = {
+        ...skillGroups,
+        ...Object.fromEntries(r.skills.map((entry) => [entry.skillId, entry.groups])),
+      };
+    } catch {
+      if (loadedWorkspaceId === workspaceId) groupsError = "Groups could not be loaded";
     }
   }
 
@@ -88,6 +120,7 @@
       groupsError = "";
       groupId = "";
       groups = [];
+      skillGroups = {};
       void (async () => {
         let cursor: string | null = null;
         const all: Group[] = [];
@@ -111,7 +144,8 @@
         )
           groupsError = "Groups could not be loaded";
       });
-      void load();
+      // The load tracks its own state; keep it out of this effect's dependencies.
+      untrack(() => void load());
     }
   });
 
@@ -126,7 +160,7 @@
   <title>Skills · {workspace?.name ?? "Skillplane"}</title>
 </svelte:head>
 
-<main class="skill-page">
+<main class="skill-page" data-pending-loads={pendingLoads}>
   <header class="page-heading">
     <div>
       <p class="eyebrow">Knowledge plane</p>
@@ -260,6 +294,12 @@
                   {skill.visibility}
                 </Badge>
                 {#if skill.archivedAt}<Badge tone="warning">Archived</Badge>{/if}
+                {#if skillGroups[skill.id]?.length}<span class="group-badges"
+                    ><span class="sr-only">Groups:</span
+                    >{#each skillGroups[skill.id] ?? [] as group (group.id)}<Badge
+                        tone="accent">{group.name}</Badge
+                      >{/each}</span
+                  >{/if}
               </span>
               <span class="description">
                 {skill.description || "No description provided."}
@@ -410,11 +450,21 @@
   }
 
   .title-row,
-  .meta {
+  .meta,
+  .group-badges {
     display: flex;
     flex-wrap: wrap;
     gap: var(--sp-space-2);
     align-items: center;
+  }
+
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
   }
 
   .description {

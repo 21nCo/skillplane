@@ -83,12 +83,17 @@ describe.skipIf(!url)("workspace skill groups", () => {
       targetId: owner.actorId,
       add: true,
     });
-    expect((await groups.members(owner, g.id)).members).toHaveLength(1);
+    const [active] = (await groups.members(owner, g.id)).members;
+    expect(active).toMatchObject({ userId: owner.actorId, role: "owner" });
+    expect(active?.email).toBeTruthy();
     await pool.query(
       "DELETE FROM workspace_memberships WHERE workspace_id=$1 AND user_id=$2",
       [owner.workspaceId, owner.actorId],
     );
-    expect((await groups.members(owner, g.id)).members[0]?.role).toBe("removed");
+    // A removed member keeps only its identity marker, never profile details.
+    expect((await groups.members(owner, g.id)).members).toEqual([
+      { userId: owner.actorId, role: "removed", displayName: null, email: null },
+    ]);
     await groups.association({
       ...mutation(),
       groupId: g.id,
@@ -216,6 +221,101 @@ describe.skipIf(!url)("workspace skill groups", () => {
     expect(
       audit.rows.filter((r) => r.event_type === "skill_group.skill.added"),
     ).toHaveLength(1);
+  });
+  it("writes exactly one attributed audit record per effective mutation", async () => {
+    const key = crypto.randomUUID();
+    const created = await groups.create({
+      ...mutation(),
+      name: `Audit ${key}`,
+      description: "Kept description",
+      idempotencyKey: key,
+    });
+    await groups.create({
+      ...mutation(),
+      name: `Audit ${key}`,
+      description: "Kept description",
+      idempotencyKey: key,
+    });
+    // Omitting description keeps it; a request that changes nothing is a no-op.
+    const renamed = await groups.update({
+      ...mutation(),
+      groupId: created.id,
+      expectedRevision: created.revision,
+      name: `Renamed ${key}`,
+      archived: false,
+    });
+    expect(renamed).toMatchObject({
+      description: "Kept description",
+      revision: created.revision + 1,
+    });
+    const unchanged = await groups.update({
+      ...mutation(),
+      groupId: created.id,
+      expectedRevision: renamed.revision,
+      name: ` Renamed  ${key} `,
+      description: "Kept description",
+      archived: false,
+    });
+    expect(unchanged).toEqual(renamed);
+    await expect(
+      groups.update({
+        ...mutation(),
+        groupId: created.id,
+        expectedRevision: created.revision,
+        archived: false,
+      }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    const archived = await groups.update({
+      ...mutation(),
+      groupId: created.id,
+      expectedRevision: renamed.revision,
+      archived: true,
+    });
+    const restored = await groups.update({
+      ...mutation(),
+      groupId: created.id,
+      expectedRevision: archived.revision,
+      archived: false,
+    });
+    expect(restored).toMatchObject({
+      name: `Renamed ${key}`,
+      description: "Kept description",
+      archivedAt: null,
+    });
+    for (const [kind, targetId] of [
+      ["skill", skillId],
+      ["member", owner.actorId],
+    ] as const)
+      for (const add of [true, true, false, false])
+        await groups.association({
+          ...mutation(),
+          groupId: created.id,
+          kind,
+          targetId,
+          add,
+        });
+    const audit = await pool.query<{
+      event_type: string;
+      actor_id: string;
+      count: string;
+    }>(
+      "SELECT event_type,actor_id,count(*) FROM audit_events WHERE workspace_id=$1 AND resource_id=$2 GROUP BY event_type,actor_id ORDER BY event_type",
+      [owner.workspaceId, created.id],
+    );
+    expect(audit.rows).toEqual(
+      [
+        ["skill_group.created", "1"],
+        ["skill_group.member.added", "1"],
+        ["skill_group.member.removed", "1"],
+        ["skill_group.skill.added", "1"],
+        ["skill_group.skill.removed", "1"],
+        ["skill_group.updated", "3"],
+      ].map(([event_type, count]) => ({
+        event_type,
+        actor_id: owner.actorId,
+        count,
+      })),
+    );
   });
   it("purges group rows with the tenant fixture", async () => {
     const suffix = `groups-purge-${crypto.randomUUID()}`;
