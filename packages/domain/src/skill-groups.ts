@@ -275,14 +275,12 @@ export class SkillGroupService {
       [principal.workspaceId, groupId, page.cursor, page.limit + 1],
     );
     return {
-      skills: r.rows
-        .slice(0, page.limit)
-        .map((s) => ({
-          id: s.id,
-          name: s.name,
-          slug: s.slug,
-          archivedAt: s.archived_at?.toISOString() ?? null,
-        })),
+      skills: r.rows.slice(0, page.limit).map((s) => ({
+        id: s.id,
+        name: s.name,
+        slug: s.slug,
+        archivedAt: s.archived_at?.toISOString() ?? null,
+      })),
       nextCursor:
         r.rows.length > page.limit ? (r.rows[page.limit - 1]?.id ?? null) : null,
     };
