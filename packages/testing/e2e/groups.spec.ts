@@ -538,6 +538,53 @@ test("@groups assignment changes keep an unsaved name and description draft", as
   await expect(page.getByLabel("Description")).toHaveValue("Unsaved description");
 });
 
+for (const flow of ["create", "update"] as const)
+  for (const edited of ["Name", "Description"] as const)
+    test(`@groups a ${flow} response keeps a ${edited.toLowerCase()} typed while it was pending`, async ({
+      context,
+      page,
+    }) => {
+      await authenticate(context);
+      const base = `Pending ${crypto.randomUUID().slice(0, 8)}`;
+      if (flow === "update") {
+        const existing = `${base} before`;
+        await createGroup(page, existing);
+        await page.goto(`${harness.origin}/${harness.workspaceSlug}/groups`);
+        await page
+          .getByRole("navigation", { name: "Skill groups" })
+          .getByRole("button", { name: existing })
+          .click();
+      } else {
+        await page.goto(`${harness.origin}/${harness.workspaceSlug}/groups`);
+      }
+      await settled(page);
+      // The server normalizes the submitted whitespace, so a field left alone while
+      // the save is pending visibly adopts the saved value.
+      await page.getByLabel("Name").fill(`  ${base}   saved `);
+      await page.getByLabel("Description").fill("  Saved description  ");
+      const held: Route[] = [];
+      await page.route(
+        (url) => /\/groups(\/[^/]+)?$/u.test(url.pathname),
+        async (route) => {
+          if (["POST", "PATCH"].includes(route.request().method())) held.push(route);
+          else await route.continue();
+        },
+      );
+      await page.getByRole("button", { name: "Save group" }).click();
+      await expect.poll(() => held.length).toBe(1);
+      const typed = `${base} typed`;
+      await page.getByLabel(edited).fill(typed);
+      await release(page, held[0], "data-pending-operations");
+      const detail = page.getByRole("region", { name: "Group detail" });
+      await expect(
+        detail.getByRole("heading", { name: `${base} saved` }),
+      ).toBeVisible();
+      await expect(page.getByLabel(edited)).toHaveValue(typed);
+      if (edited === "Name")
+        await expect(page.getByLabel("Description")).toHaveValue("Saved description");
+      else await expect(page.getByLabel("Name")).toHaveValue(`${base} saved`);
+    });
+
 test("@groups catalog rows show every group of a skill from one bulk request", async ({
   context,
   page,
@@ -570,6 +617,45 @@ test("@groups catalog rows show every group of a skill from one bulk request", a
   expect(url.searchParams.getAll("skillId")).toEqual(
     expect.arrayContaining([harness.skillId, ungrouped]),
   );
+});
+
+test("@groups a catalog reset drops badges whose replacement request fails", async ({
+  context,
+  page,
+}) => {
+  await authenticate(context);
+  const name = `Reset badge ${crypto.randomUUID().slice(0, 8)}`;
+  const skillPath = `/groups/${encodeURIComponent(await createGroup(page, name))}/skills/${encodeURIComponent(harness.skillId)}`;
+  await api(page, "PUT", skillPath);
+  await page.goto(`${harness.origin}/${harness.workspaceSlug}/skills`);
+  const grouped = page
+    .getByRole("region", { name: "Skill inventory" })
+    .getByRole("article")
+    .filter({ hasText: "PR Review" });
+  await expect(grouped.getByText(name, { exact: true })).toBeVisible();
+  await api(page, "DELETE", skillPath);
+  await page.route(
+    (url) => url.pathname.endsWith("/groups/skill-assignments"),
+    (route) =>
+      route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({
+          error: { code: "UNAVAILABLE", message: "Groups unavailable" },
+        }),
+      }),
+  );
+  await page
+    .getByRole("region", { name: "Skill filters" })
+    .getByRole("button", { name: "Search" })
+    .click();
+  await expect(page.getByText("Groups could not be loaded")).toBeVisible();
+  await expect(page.locator("main[data-pending-loads]")).toHaveAttribute(
+    "data-pending-loads",
+    "0",
+  );
+  await expect(grouped).toHaveCount(1);
+  await expect(grouped.getByText(name, { exact: true })).toHaveCount(0);
 });
 
 for (const outcome of ["stale data", "failure"] as const)

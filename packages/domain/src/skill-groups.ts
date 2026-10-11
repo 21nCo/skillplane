@@ -154,7 +154,7 @@ export class SkillGroupService {
     },
   ) {
     writePermission(options.principal);
-    const data = groupMetadata(options.name, options.description ?? "");
+    const data = groupMetadata(options.name, options.description);
     const key = validateIdempotencyKey(options.idempotencyKey);
     const creationHash = await hashIdempotentRequest(data);
     const id = `group:${await hashIdempotentRequest({ workspaceId: options.principal.workspaceId, actor: options.principal.actorId, key })}`;
@@ -212,11 +212,12 @@ export class SkillGroupService {
       const current = await this.lock(client, options.principal, options.groupId);
       if (current.revision !== options.expectedRevision)
         throw new DomainError("CONFLICT", "Group changed; reload before saving", 409);
-      // An omitted field keeps its stored value; a request that changes nothing
-      // returns the current group without a new revision or audit record.
+      // An omitted field keeps its stored value, while null is invalid metadata; a
+      // request that changes nothing returns the current group without a new
+      // revision or audit record.
       const data = groupMetadata(
-        options.name ?? current.name,
-        options.description ?? current.description,
+        options.name === undefined ? current.name : options.name,
+        options.description === undefined ? current.description : options.description,
       );
       const changes = [
         ...(data.name !== current.name ? ["name"] : []),

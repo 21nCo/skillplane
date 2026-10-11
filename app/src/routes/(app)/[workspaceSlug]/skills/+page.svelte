@@ -90,6 +90,9 @@
         });
         if (generation !== loadGeneration) return;
         skills = reset ? [...result.skills] : [...skills, ...result.skills];
+        // A reset list starts with no badges, so a skill shown again never keeps a
+        // badge from the earlier list; its own badge request supplies them.
+        if (reset) skillGroups = {};
         nextCursor = result.nextCursor;
         void loadSkillGroups(
           workspaceId,

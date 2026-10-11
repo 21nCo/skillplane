@@ -282,6 +282,36 @@ describe.skipIf(!url)("workspace skill groups", () => {
       description: "Kept description",
       archivedAt: null,
     });
+    // Explicit null is invalid metadata, not an omission: the request fails without
+    // archiving, a new revision or an audit record.
+    for (const field of ["name", "description"] as const)
+      await expect(
+        groups.update({
+          ...mutation(),
+          groupId: created.id,
+          expectedRevision: restored.revision,
+          [field]: null,
+          archived: true,
+        }),
+      ).rejects.toMatchObject({ code: "VALIDATION_FAILED", status: 400 });
+    expect(await groups.get(owner, created.id)).toEqual(restored);
+    const nullKey = crypto.randomUUID();
+    await expect(
+      groups.create({
+        ...mutation(),
+        name: `Null ${nullKey}`,
+        description: null,
+        idempotencyKey: nullKey,
+      }),
+    ).rejects.toMatchObject({ code: "VALIDATION_FAILED", status: 400 });
+    expect(
+      (
+        await pool.query(
+          "SELECT 1 FROM skill_groups WHERE workspace_id=$1 AND name=$2",
+          [owner.workspaceId, `Null ${nullKey}`],
+        )
+      ).rowCount,
+    ).toBe(0);
     for (const [kind, targetId] of [
       ["skill", skillId],
       ["member", owner.actorId],

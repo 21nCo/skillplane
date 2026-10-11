@@ -199,7 +199,8 @@
   async function save(archived = Boolean(selected?.archivedAt), lifecycleOnly = false) {
     if (!workspace) return;
     const t = token(workspace.id),
-      creating = !selected;
+      creating = !selected,
+      submitted = { name, description };
     const r = await groupRequest<{ group: Group }>(
       t.workspaceId,
       selected ? `/${encodeURIComponent(selected.id)}` : "",
@@ -214,20 +215,27 @@
       creating ? creationKey : undefined,
     );
     if (!inDetail(t)) return;
+    // The response replaces a draft field only if it is still the submitted text;
+    // an edit typed while the save was pending survives, and an archive or restore
+    // keeps every draft.
+    const draft = {
+      name: !lifecycleOnly && name === submitted.name ? r.group.name : name,
+      description:
+        !lifecycleOnly && description === submitted.description
+          ? r.group.description
+          : description,
+    };
     // Adopt the saved group before refreshing so a refresh failure leaves a retry
     // that PATCHes this revision instead of replaying a consumed creation key.
     if (creating) {
       creationKey = crypto.randomUUID();
       select(r.group);
+      ({ name, description } = draft);
       await settleAll([load(), loadDetail()]);
       return;
     }
     selected = r.group;
-    // An archive or restore keeps any unsaved name or description draft.
-    if (!lifecycleOnly) {
-      name = r.group.name;
-      description = r.group.description;
-    }
+    ({ name, description } = draft);
     await load();
   }
   async function assign(kind: "skills" | "members", id: string, add: boolean) {
