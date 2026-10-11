@@ -399,3 +399,88 @@ it("filters skill list and search by group with visibility, archive and cursor",
     [ungrouped, []],
   ]);
 });
+
+it("traverses every page of groups and of an archived group's skills and members", async () => {
+  const base = `/api/v1/workspaces/${owner.workspaceId}/groups`;
+  const group = await createGroup(`Pages ${crypto.randomUUID()}`);
+  const sibling = await createGroup(`Pages sibling ${crypto.randomUUID()}`);
+  const skillIds = [
+    owner.skillId,
+    await createSkill(`pages-a-${crypto.randomUUID().slice(0, 8)}`, "workspace"),
+    await createSkill(`pages-b-${crypto.randomUUID().slice(0, 8)}`, "private"),
+  ];
+  for (const skillId of skillIds) await assignSkill(group.id, skillId);
+  const userIds = [owner.userId, members.viewer?.userId, members.editor?.userId];
+  for (const userId of userIds)
+    await data(
+      await app.request(
+        `${base}/${encodeURIComponent(group.id)}/members/${encodeURIComponent(userId ?? "")}`,
+        { method: "PUT", headers: sessionHeaders(owner) },
+      ),
+    );
+  await data(
+    await app.request(`${base}/${encodeURIComponent(group.id)}`, {
+      method: "PATCH",
+      headers: sessionHeaders(owner, { "content-type": "application/json" }),
+      body: JSON.stringify({ expectedRevision: group.revision, archived: true }),
+    }),
+  );
+  // Follow nextCursor one item at a time until it runs out.
+  async function traverse<T>(path: string, key: string, pick: (item: T) => string) {
+    const seen: string[] = [];
+    let cursor: string | null = null;
+    let pages = 0;
+    do {
+      const separator = path.includes("?") ? "&" : "?";
+      const page: Record<string, unknown> & { nextCursor: string | null } = await data(
+        await app.request(
+          `${path}${separator}limit=1${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`,
+          { headers: sessionHeaders(owner) },
+        ),
+        path,
+      );
+      const items = page[key] as T[];
+      expect(items.length, path).toBeLessThanOrEqual(1);
+      seen.push(...items.map(pick));
+      cursor = page.nextCursor;
+      pages += 1;
+      expect(pages, path).toBeLessThan(200);
+    } while (cursor);
+    expect(new Set(seen).size, path).toBe(seen.length);
+    return seen;
+  }
+  const groupIds = await traverse<{ id: string }>(
+    `${base}?state=all`,
+    "groups",
+    (g) => g.id,
+  );
+  expect(groupIds).toEqual(expect.arrayContaining([group.id, sibling.id]));
+  const everyGroup = await data<{ groups: { id: string }[] }>(
+    await app.request(`${base}?state=all&limit=100`, {
+      headers: sessionHeaders(owner),
+    }),
+  );
+  expect(groupIds).toEqual(everyGroup.groups.map((g) => g.id));
+  // The default list omits the archived group but still pages through the rest.
+  const activeIds = await traverse<{ id: string }>(base, "groups", (g) => g.id);
+  expect(activeIds).toContain(sibling.id);
+  expect(activeIds).not.toContain(group.id);
+  expect(
+    (
+      await traverse<{ id: string }>(
+        `${base}/${encodeURIComponent(group.id)}/skills`,
+        "skills",
+        (s) => s.id,
+      )
+    ).sort(),
+  ).toEqual([...skillIds].sort());
+  expect(
+    (
+      await traverse<{ userId: string }>(
+        `${base}/${encodeURIComponent(group.id)}/members`,
+        "members",
+        (m) => m.userId,
+      )
+    ).sort(),
+  ).toEqual([...userIds].sort());
+});

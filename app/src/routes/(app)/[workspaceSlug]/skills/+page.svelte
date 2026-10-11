@@ -29,6 +29,7 @@
   const canWrite = $derived(Boolean(workspace && workspace.role !== "viewer"));
 
   let groupsError = $state("");
+  let badgesError = $state("");
   let groups = $state<Group[]>([]);
   let groupId = $state("");
   let skillGroups = $state<Partial<Record<string, { id: string; name: string }[]>>>({});
@@ -43,69 +44,117 @@
   let loadedWorkspaceId = $state<string | null>(null);
 
   let loadGeneration = 0;
-  // Loads still running, superseded ones included, so a caller can tell when every
-  // response has been handled.
+  // Every reset load (a new filter or workspace) starts a new list generation; the
+  // pages of one list, "load more" included, share it so their badges merge.
+  let listGeneration = 0;
+  // Every workspace change starts a new generation for the group filter options.
+  let optionsGeneration = 0;
+  // Requests still running (skills, badges and group options), superseded ones
+  // included, so a caller can tell when every response has been handled.
   let pendingLoads = $state(0);
-  // Only the latest request may update the list, cursor, error, or loading state;
-  // a slower response for a superseded filter or workspace is discarded.
-  async function load(reset = true) {
-    if (!workspace) return;
-    const generation = ++loadGeneration;
+  async function tracked(fn: () => Promise<void>) {
     pendingLoads += 1;
-    if (reset) {
-      loading = true;
-      nextCursor = null;
-    } else {
-      loadingMore = true;
-    }
-    error = null;
     try {
-      const result = await listSkills({
-        workspaceId: workspace.id,
-        ...(groupId ? { groupId } : {}),
-        query,
-        archive,
-        visibility: visibility === "all" ? [] : [visibility],
-        cursor: reset ? null : nextCursor,
-        limit: 20,
-      });
-      if (generation !== loadGeneration) return;
-      skills = reset ? [...result.skills] : [...skills, ...result.skills];
-      nextCursor = result.nextCursor;
-      void loadSkillGroups(
-        workspace.id,
-        result.skills.map((skill) => skill.id),
-      );
-    } catch (cause) {
-      if (generation !== loadGeneration) return;
-      error = cause instanceof Error ? cause.message : "Skills could not be loaded.";
+      await fn();
     } finally {
-      if (generation === loadGeneration) {
-        loading = false;
-        loadingMore = false;
-      }
       pendingLoads -= 1;
     }
   }
 
-  // One request per loaded page fetches the active groups of every skill on it;
-  // badges are kept per workspace and merged as later pages arrive.
-  async function loadSkillGroups(workspaceId: string, skillIds: string[]) {
-    if (!skillIds.length) return;
-    try {
-      const q = new SvelteURLSearchParams();
-      for (const id of skillIds) q.append("skillId", id);
-      const r = await groupRequest<{
-        skills: { skillId: string; groups: { id: string; name: string }[] }[];
-      }>(workspaceId, `/skill-assignments?${q}`);
-      if (loadedWorkspaceId !== workspaceId) return;
-      skillGroups = {
-        ...skillGroups,
-        ...Object.fromEntries(r.skills.map((entry) => [entry.skillId, entry.groups])),
-      };
-    } catch {
-      if (loadedWorkspaceId === workspaceId) groupsError = "Groups could not be loaded";
+  // Only the latest request may update the list, cursor, error, or loading state;
+  // a slower response for a superseded filter or workspace is discarded.
+  async function load(reset = true) {
+    if (!workspace) return;
+    const workspaceId = workspace.id;
+    const generation = ++loadGeneration;
+    if (reset) {
+      listGeneration += 1;
+      loading = true;
+      nextCursor = null;
+      badgesError = "";
+    } else {
+      loadingMore = true;
     }
+    const list = listGeneration;
+    error = null;
+    await tracked(async () => {
+      try {
+        const result = await listSkills({
+          workspaceId,
+          ...(groupId ? { groupId } : {}),
+          query,
+          archive,
+          visibility: visibility === "all" ? [] : [visibility],
+          cursor: reset ? null : nextCursor,
+          limit: 20,
+        });
+        if (generation !== loadGeneration) return;
+        skills = reset ? [...result.skills] : [...skills, ...result.skills];
+        nextCursor = result.nextCursor;
+        void loadSkillGroups(
+          workspaceId,
+          list,
+          result.skills.map((skill) => skill.id),
+        );
+      } catch (cause) {
+        if (generation !== loadGeneration) return;
+        error = cause instanceof Error ? cause.message : "Skills could not be loaded.";
+      } finally {
+        if (generation === loadGeneration) {
+          loading = false;
+          loadingMore = false;
+        }
+      }
+    });
+  }
+
+  // One request per loaded page fetches the active groups of every skill on it.
+  // Badges merge only while the list they were requested for is still current.
+  async function loadSkillGroups(
+    workspaceId: string,
+    list: number,
+    skillIds: string[],
+  ) {
+    if (!skillIds.length) return;
+    await tracked(async () => {
+      try {
+        const q = new SvelteURLSearchParams();
+        for (const id of skillIds) q.append("skillId", id);
+        const r = await groupRequest<{
+          skills: { skillId: string; groups: { id: string; name: string }[] }[];
+        }>(workspaceId, `/skill-assignments?${q}`);
+        if (list !== listGeneration) return;
+        skillGroups = {
+          ...skillGroups,
+          ...Object.fromEntries(r.skills.map((entry) => [entry.skillId, entry.groups])),
+        };
+      } catch {
+        if (list === listGeneration) badgesError = "Groups could not be loaded";
+      }
+    });
+  }
+
+  async function loadGroupOptions(workspaceId: string) {
+    const generation = ++optionsGeneration;
+    await tracked(async () => {
+      try {
+        let cursor: string | null = null;
+        const all: Group[] = [];
+        do {
+          const r: { groups: Group[]; nextCursor: string | null } = await groupRequest<{
+            groups: Group[];
+            nextCursor: string | null;
+          }>(workspaceId, cursor ? `?cursor=${encodeURIComponent(cursor)}` : "");
+          if (generation !== optionsGeneration) return;
+          all.push(...r.groups);
+          cursor = r.nextCursor;
+        } while (cursor);
+        groups = all;
+      } catch {
+        if (generation === optionsGeneration)
+          groupsError = "Groups could not be loaded";
+      }
+    });
   }
 
   function search(event: SubmitEvent) {
@@ -121,31 +170,11 @@
       groupId = "";
       groups = [];
       skillGroups = {};
-      void (async () => {
-        let cursor: string | null = null;
-        const all: Group[] = [];
-        do {
-          const r: { groups: Group[]; nextCursor: string | null } = await groupRequest<{
-            groups: Group[];
-            nextCursor: string | null;
-          }>(workspaceId, cursor ? `?cursor=${encodeURIComponent(cursor)}` : "");
-          all.push(...r.groups);
-          cursor = r.nextCursor;
-        } while (cursor);
-        if (
-          workspaces.workspaces.find((w) => w.slug === page.params.workspaceSlug)
-            ?.id === workspaceId
-        )
-          groups = all;
-      })().catch(() => {
-        if (
-          workspaces.workspaces.find((w) => w.slug === page.params.workspaceSlug)
-            ?.id === workspaceId
-        )
-          groupsError = "Groups could not be loaded";
+      // The loads track their own state; keep them out of this effect's dependencies.
+      untrack(() => {
+        void loadGroupOptions(workspaceId);
+        void load();
       });
-      // The load tracks its own state; keep it out of this effect's dependencies.
-      untrack(() => void load());
     }
   });
 
@@ -212,7 +241,9 @@
         bind:value={groupId}
         onchange={() => void load()}
       />
-      {#if groupsError}<p role="status">{groupsError}</p>{/if}
+      {#if groupsError || badgesError}<p role="status">
+          {groupsError || badgesError}
+        </p>{/if}
     </div>
     <div class="filter">
       <Select

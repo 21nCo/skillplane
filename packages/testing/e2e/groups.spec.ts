@@ -37,7 +37,7 @@ async function authenticate(context: BrowserContext): Promise<void> {
 
 async function api<T>(
   page: Page,
-  method: "GET" | "POST" | "PUT" | "DELETE",
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
   path: string,
   data?: unknown,
 ): Promise<T> {
@@ -56,6 +56,53 @@ async function api<T>(
   );
   expect(response.ok(), `${method} ${path}`).toBe(true);
   return ((await response.json()) as { data: T }).data;
+}
+
+// A second workspace owned by the fixture user; the fixture purge removes it.
+async function createWorkspace(page: Page): Promise<{ id: string; slug: string }> {
+  const slug = `groups-b-${crypto.randomUUID().slice(0, 8)}`;
+  const listed = await page.request.get(`${harness.origin}/api/v1/workspaces`);
+  expect(listed.ok(), "GET /api/v1/workspaces").toBe(true);
+  const { regions } = ((await listed.json()) as { data: { regions: { id: string }[] } })
+    .data;
+  const response = await page.request.fetch(`${harness.origin}/api/v1/workspaces`, {
+    method: "POST",
+    headers: {
+      "x-authfn-csrf": harness.csrfToken,
+      "idempotency-key": crypto.randomUUID(),
+      "content-type": "application/json",
+    },
+    data: JSON.stringify({ name: `Groups B ${slug}`, slug, regionId: regions[0]?.id }),
+  });
+  expect(response.ok(), await response.text()).toBe(true);
+  const { id } = ((await response.json()) as { data: { workspace: { id: string } } })
+    .data.workspace;
+  return { id, slug };
+}
+
+// Move the catalog from workspace A to B with a client-side router navigation,
+// then return to A through history, so the same page component serves both
+// visits to A. The shell keeps the switcher on the routed workspace, so the
+// first leg follows a document link to B.
+async function catalogAwayAndBack(
+  page: Page,
+  other: { id: string; slug: string },
+  between: () => Promise<void>,
+): Promise<void> {
+  await page.evaluate((href) => {
+    const link = document.createElement("a");
+    link.href = href;
+    document.body.append(link);
+    link.click();
+    link.remove();
+  }, `/${other.slug}/skills`);
+  await expect(page).toHaveURL(`${harness.origin}/${other.slug}/skills`);
+  await expect(
+    page.getByRole("heading", { name: "Create your first skill" }),
+  ).toBeVisible();
+  await between();
+  await page.goBack();
+  await expect(page).toHaveURL(`${harness.origin}/${harness.workspaceSlug}/skills`);
 }
 
 async function createGroup(page: Page, name: string): Promise<string> {
@@ -523,4 +570,180 @@ test("@groups catalog rows show every group of a skill from one bulk request", a
   expect(url.searchParams.getAll("skillId")).toEqual(
     expect.arrayContaining([harness.skillId, ungrouped]),
   );
+});
+
+for (const outcome of ["stale data", "failure"] as const)
+  test(`@groups catalog badges ignore a ${outcome} from a superseded visit to the workspace`, async ({
+    context,
+    page,
+  }) => {
+    await authenticate(context);
+    const other = await createWorkspace(page);
+    const before = `Badge before ${crypto.randomUUID().slice(0, 8)}`;
+    const after = `Badge after ${crypto.randomUUID().slice(0, 8)}`;
+    const beforeId = await createGroup(page, before);
+    const afterId = await createGroup(page, after);
+    const skillPath = (groupId: string) =>
+      `/groups/${encodeURIComponent(groupId)}/skills/${encodeURIComponent(harness.skillId)}`;
+    await api(page, "PUT", skillPath(beforeId));
+    const held: { route: Route; body: string }[] = [];
+    await page.route(
+      (url) => url.pathname.endsWith("/groups/skill-assignments"),
+      async (route) => {
+        if (held.length) {
+          await route.continue();
+          return;
+        }
+        // Answer from the server now, but deliver the response only later.
+        const response = await route.fetch();
+        held.push({ route, body: await response.text() });
+      },
+    );
+    await page.goto(`${harness.origin}/${harness.workspaceSlug}/skills`);
+    await expect.poll(() => held.length).toBe(1);
+    // Move the skill from one group to another while the page is on workspace B.
+    await catalogAwayAndBack(page, other, async () => {
+      await api(page, "DELETE", skillPath(beforeId));
+      await api(page, "PUT", skillPath(afterId));
+    });
+    const grouped = page
+      .getByRole("region", { name: "Skill inventory" })
+      .getByRole("article")
+      .filter({ hasText: "PR Review" });
+    await expect(grouped.getByText(after, { exact: true })).toBeVisible();
+    await expect(page.locator("main[data-pending-loads]")).toHaveAttribute(
+      "data-pending-loads",
+      "1",
+    );
+    const stale = held[0];
+    expect(stale).toBeDefined();
+    await stale?.route.fulfill(
+      outcome === "stale data"
+        ? { status: 200, contentType: "application/json", body: stale.body }
+        : {
+            status: 503,
+            contentType: "application/json",
+            body: JSON.stringify({
+              error: { code: "UNAVAILABLE", message: "Groups unavailable" },
+            }),
+          },
+    );
+    await expect(page.locator("main[data-pending-loads]")).toHaveAttribute(
+      "data-pending-loads",
+      "0",
+    );
+    await expect(grouped.getByText(after, { exact: true })).toBeVisible();
+    await expect(grouped.getByText(before, { exact: true })).toHaveCount(0);
+    await expect(page.getByText("Groups could not be loaded")).toHaveCount(0);
+  });
+
+for (const outcome of ["stale data", "failure"] as const)
+  test(`@groups catalog group options ignore a ${outcome} from a superseded visit to the workspace`, async ({
+    context,
+    page,
+  }) => {
+    await authenticate(context);
+    const other = await createWorkspace(page);
+    const name = `Options archived ${crypto.randomUUID().slice(0, 8)}`;
+    const groupId = await createGroup(page, name);
+    const kept = await createGroup(
+      page,
+      `Options kept ${crypto.randomUUID().slice(0, 8)}`,
+    );
+    const optionsPath = `/api/v1/workspaces/${encodeURIComponent(harness.workspaceId)}/groups`;
+    const held: { route: Route; body: string }[] = [];
+    await page.route(
+      (url) => url.pathname === optionsPath,
+      async (route) => {
+        if (held.length || route.request().method() !== "GET") {
+          await route.continue();
+          return;
+        }
+        const response = await route.fetch();
+        held.push({ route, body: await response.text() });
+      },
+    );
+    await page.goto(`${harness.origin}/${harness.workspaceSlug}/skills`);
+    await expect.poll(() => held.length).toBe(1);
+    expect(held[0]?.body).toContain(name);
+    // Archive the group while the page is on workspace B.
+    await catalogAwayAndBack(page, other, async () => {
+      await api(page, "PATCH", `/groups/${encodeURIComponent(groupId)}`, {
+        expectedRevision: 1,
+        archived: true,
+      });
+    });
+    const filter = page.getByLabel("Skill group");
+    await expect(page.locator("main[data-pending-loads]")).toHaveAttribute(
+      "data-pending-loads",
+      "1",
+    );
+    await expect(filter.locator(`option[value="${kept}"]`)).toHaveCount(1);
+    await expect(filter.locator(`option[value="${groupId}"]`)).toHaveCount(0);
+    const stale = held[0];
+    await stale?.route.fulfill(
+      outcome === "stale data"
+        ? { status: 200, contentType: "application/json", body: stale.body }
+        : {
+            status: 503,
+            contentType: "application/json",
+            body: JSON.stringify({
+              error: { code: "UNAVAILABLE", message: "Groups unavailable" },
+            }),
+          },
+    );
+    await expect(page.locator("main[data-pending-loads]")).toHaveAttribute(
+      "data-pending-loads",
+      "0",
+    );
+    await expect(filter.locator(`option[value="${groupId}"]`)).toHaveCount(0);
+    await expect(filter.locator(`option[value="${kept}"]`)).toHaveCount(1);
+    await expect(page.getByText("Groups could not be loaded")).toHaveCount(0);
+  });
+
+test("@groups a selection whose lookups fail offers no members or skills from the previous one", async ({
+  context,
+  page,
+}) => {
+  await authenticate(context);
+  const first = `Lookup first ${crypto.randomUUID().slice(0, 8)}`;
+  const second = `Lookup second ${crypto.randomUUID().slice(0, 8)}`;
+  await createGroup(page, first);
+  await createGroup(page, second);
+  const workspacePath = `/api/v1/workspaces/${encodeURIComponent(harness.workspaceId)}`;
+  let failLookups = false;
+  await page.route(
+    (url) =>
+      url.pathname === `${workspacePath}/members` ||
+      url.pathname === `${workspacePath}/skills`,
+    async (route) => {
+      if (!failLookups || route.request().method() !== "GET") {
+        await route.continue();
+        return;
+      }
+      await route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({
+          error: { code: "UNAVAILABLE", message: "Lookup unavailable" },
+        }),
+      });
+    },
+  );
+  await page.goto(`${harness.origin}/${harness.workspaceSlug}/groups`);
+  const nav = page.getByRole("navigation", { name: "Skill groups" });
+  const detail = page.getByRole("region", { name: "Group detail" });
+  const memberOptions = detail.getByLabel("Member").locator("option");
+  const skillOptions = detail.getByLabel("Skill", { exact: true }).locator("option");
+  await nav.getByRole("button", { name: first }).click();
+  await settled(page);
+  await expect(memberOptions).not.toHaveCount(1);
+  await expect(skillOptions).not.toHaveCount(1);
+  failLookups = true;
+  await nav.getByRole("button", { name: second }).click();
+  await settled(page);
+  await expect(detail.getByRole("heading", { name: second })).toBeVisible();
+  await expect(page.getByRole("alert")).toContainText("Lookup unavailable");
+  await expect(memberOptions).toHaveCount(1);
+  await expect(skillOptions).toHaveCount(1);
 });

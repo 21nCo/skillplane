@@ -98,13 +98,16 @@
     }
   }
   // Expose a group only together with cleared group-scoped state, so the detail
-  // pane never shows another group's assignments or removal controls. Starting a
-  // new detail generation discards responses for any earlier selection.
+  // pane never shows another group's assignments or removal controls, nor offers
+  // members or skills from an earlier view whose lookup has not been redone.
+  // Starting a new detail generation discards responses for any earlier selection.
   function select(group: Group | null) {
     detailGeneration += 1;
     selected = group;
     targetMember = "";
     targetSkill = "";
+    roster = [];
+    available = [];
     name = group?.name ?? "";
     description = group?.description ?? "";
     skills = [];
