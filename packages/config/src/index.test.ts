@@ -105,7 +105,9 @@ function productionBindings(overrides: Partial<RuntimeBindings> = {}): RuntimeBi
     SKILLPLANE_OTP_FROM:
       environment === "production"
         ? "Skillplane <no-reply@auth.skillplane.dev>"
-        : "Skillplane Dev <no-reply@auth-dev.skillplane.dev>",
+        : environment === "preview"
+          ? "Skillplane Dev <no-reply@skillplane-auth.21n.dev>"
+          : "Skillplane Dev <no-reply@auth-dev.skillplane.dev>",
     ...overrides,
   };
 }
@@ -227,16 +229,16 @@ describe("parseRuntimeConfig", () => {
     const config = parseRuntimeConfig(
       productionBindings({
         RUNTIME_ENV: "preview",
-        OAUTH_ISSUER: "https://app-dev.skillplane.dev/",
-        OAUTH_RESOURCE: "https://mcp-dev.skillplane.dev/mcp",
-        TURNSTILE_ALLOWED_HOSTNAMES: "app-dev.skillplane.dev",
+        OAUTH_ISSUER: "https://skillplane-app.21n.dev/",
+        OAUTH_RESOURCE: "https://skillplane-mcp.21n.dev/mcp",
+        TURNSTILE_ALLOWED_HOSTNAMES: "skillplane-app.21n.dev",
       }),
     );
 
     expect(config.environment).toBe("preview");
     expect(config.oauth).toMatchObject({
-      issuer: "https://app-dev.skillplane.dev",
-      resource: "https://mcp-dev.skillplane.dev/mcp",
+      issuer: "https://skillplane-app.21n.dev",
+      resource: "https://skillplane-mcp.21n.dev/mcp",
     });
   });
 
@@ -246,13 +248,13 @@ describe("parseRuntimeConfig", () => {
         RUNTIME_ENV: "preview",
         OAUTH_ISSUER: undefined,
         OAUTH_RESOURCE: undefined,
-        TURNSTILE_ALLOWED_HOSTNAMES: "app-dev.skillplane.dev",
+        TURNSTILE_ALLOWED_HOSTNAMES: "skillplane-app.21n.dev",
       }),
     );
 
     expect(config.oauth).toMatchObject({
-      issuer: "https://app-dev.skillplane.dev",
-      resource: "https://mcp-dev.skillplane.dev/mcp",
+      issuer: "https://skillplane-app.21n.dev",
+      resource: "https://skillplane-mcp.21n.dev/mcp",
     });
   });
 
@@ -262,7 +264,7 @@ describe("parseRuntimeConfig", () => {
         productionBindings({
           RUNTIME_ENV: "preview",
           SKILLPLANE_OTP_FROM: "Skillplane <no-reply@auth.skillplane.dev>",
-          TURNSTILE_ALLOWED_HOSTNAMES: "app-dev.skillplane.dev",
+          TURNSTILE_ALLOWED_HOSTNAMES: "skillplane-app.21n.dev",
         }),
       ),
     ).toThrowError(
@@ -277,7 +279,7 @@ describe("parseRuntimeConfig", () => {
     expect(() =>
       parseRuntimeConfig(
         productionBindings({
-          SKILLPLANE_OTP_FROM: "Skillplane Dev <no-reply@auth-dev.skillplane.dev>",
+          SKILLPLANE_OTP_FROM: "Skillplane Dev <no-reply@skillplane-auth.21n.dev>",
         }),
       ),
     ).toThrowError(
@@ -311,8 +313,8 @@ describe("parseRuntimeConfig", () => {
     expect(() =>
       parseRuntimeConfig(
         productionBindings({
-          OAUTH_ISSUER: "https://app-dev.skillplane.dev",
-          OAUTH_RESOURCE: "https://mcp-dev.skillplane.dev/mcp",
+          OAUTH_ISSUER: "https://skillplane-app.21n.dev",
+          OAUTH_RESOURCE: "https://skillplane-mcp.21n.dev/mcp",
         }),
       ),
     ).toThrowError(

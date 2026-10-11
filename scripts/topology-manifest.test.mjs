@@ -28,8 +28,8 @@ describe("development topology manifest", () => {
     const manifest = JSON.parse(
       await readFile(resolve(root, "deployment", "topology.development.json"), "utf8"),
     );
-    assert.equal(manifest.public.appAuthority, "https://app-dev.skillplane.dev");
-    assert.equal(manifest.public.mcpResource, "https://mcp-dev.skillplane.dev/mcp");
+    assert.equal(manifest.public.appAuthority, "https://skillplane-app.21n.dev");
+    assert.equal(manifest.public.mcpResource, "https://skillplane-mcp.21n.dev/mcp");
     assert.deepEqual(
       manifest.cells.map((cell) => cell.regionId),
       ["in-south", "us-east", "eu-west"],

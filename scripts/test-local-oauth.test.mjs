@@ -96,7 +96,7 @@ describe("dynamic registration cleanup", () => {
     assert.equal(
       registrationManagement(
         { client_id: "dynamic-client" },
-        "https://app-dev.skillplane.dev",
+        "https://skillplane-app.21n.dev",
       ),
       undefined,
     );
@@ -107,7 +107,7 @@ describe("dynamic registration cleanup", () => {
       () =>
         registrationManagement(
           { registration_access_token: "a".repeat(32) },
-          "https://app-dev.skillplane.dev",
+          "https://skillplane-app.21n.dev",
         ),
       /incomplete management credentials/u,
     );
@@ -116,13 +116,13 @@ describe("dynamic registration cleanup", () => {
         {
           registration_access_token: "a".repeat(32),
           registration_client_uri:
-            "https://app-dev.skillplane.dev/oauth/register/dynamic-client",
+            "https://skillplane-app.21n.dev/oauth/register/dynamic-client",
         },
-        "https://app-dev.skillplane.dev",
+        "https://skillplane-app.21n.dev",
       ),
       {
         accessToken: "a".repeat(32),
-        clientUri: "https://app-dev.skillplane.dev/oauth/register/dynamic-client",
+        clientUri: "https://skillplane-app.21n.dev/oauth/register/dynamic-client",
       },
     );
   });

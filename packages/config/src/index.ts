@@ -257,7 +257,9 @@ function parseEmailSender(
   const expectedAddress =
     environment === "production"
       ? "no-reply@auth.skillplane.dev"
-      : "no-reply@auth-dev.skillplane.dev";
+      : environment === "preview"
+        ? "no-reply@skillplane-auth.21n.dev"
+        : "no-reply@auth-dev.skillplane.dev";
   const normalized = value?.trim();
   const address = normalized
     ? (/^[^<>\r\n]+\s*<([^\s<>@]+@[^\s<>@]+)>$/.exec(normalized)?.[1] ??
@@ -454,7 +456,7 @@ export function parseOAuthEndpoints(
       (environment === "local"
         ? "http://localhost:5700"
         : environment === "preview"
-          ? "https://app-dev.skillplane.dev"
+          ? "https://skillplane-app.21n.dev"
           : "https://app.skillplane.dev"),
     "OAUTH_ISSUER",
     environment,
@@ -466,7 +468,7 @@ export function parseOAuthEndpoints(
       (environment === "local"
         ? "http://127.0.0.1:5701/mcp"
         : environment === "preview"
-          ? "https://mcp-dev.skillplane.dev/mcp"
+          ? "https://skillplane-mcp.21n.dev/mcp"
           : "https://mcp.skillplane.dev/mcp"),
     "OAUTH_RESOURCE",
     environment,
