@@ -77,7 +77,11 @@
       archived = includeArchived,
       generation = ++listGeneration;
     const current = () => inNavigation(t) && generation === listGeneration;
+    // A reset drops the rows of the previous filter or revision, so neither a
+    // pending nor a failed replacement leaves them listed or selectable; only
+    // load-more keeps the rows it extends.
     if (!more) {
+      groups = [];
       groupCursor = null;
       listLoaded = false;
     }

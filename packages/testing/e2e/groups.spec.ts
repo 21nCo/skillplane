@@ -833,3 +833,122 @@ test("@groups a selection whose lookups fail offers no members or skills from th
   await expect(memberOptions).toHaveCount(1);
   await expect(skillOptions).toHaveCount(1);
 });
+
+function unavailable(route: Route): Promise<void> {
+  return route.fulfill({
+    status: 503,
+    contentType: "application/json",
+    body: JSON.stringify({
+      error: { code: "UNAVAILABLE", message: "Group list unavailable" },
+    }),
+  });
+}
+
+const isGroupList = (url: URL) =>
+  url.pathname.endsWith("/groups") && url.searchParams.has("state");
+
+for (const outcome of ["held", "failed"] as const)
+  test(`@groups hiding archived groups lists no archived row while the replacement is ${outcome}`, async ({
+    context,
+    page,
+  }) => {
+    await authenticate(context);
+    const base = `Hide archived ${crypto.randomUUID().slice(0, 8)}`;
+    const archivedId = await createGroup(page, `${base} old`);
+    await createGroup(page, `${base} live`);
+    await api(page, "PATCH", `/groups/${encodeURIComponent(archivedId)}`, {
+      expectedRevision: 1,
+      archived: true,
+    });
+    await page.goto(`${harness.origin}/${harness.workspaceSlug}/groups`);
+    await settled(page);
+    const nav = page.getByRole("navigation", { name: "Skill groups" });
+    const archivedRow = nav.getByRole("button", { name: `${base} old (archived)` });
+    await page.getByLabel("Include archived groups").check();
+    await settled(page);
+    await expect(archivedRow).toHaveCount(1);
+    const held: Route[] = [];
+    await page.route(isGroupList, (route) =>
+      outcome === "held" ? void held.push(route) : unavailable(route),
+    );
+    await page.getByLabel("Include archived groups").uncheck();
+    if (outcome === "held") {
+      await expect.poll(() => held.length).toBe(1);
+      await expect(archivedRow).toHaveCount(0);
+      await release(page, held[0], "data-pending-operations");
+      await expect(nav.getByRole("button", { name: `${base} live` })).toHaveCount(1);
+      await expect(page.getByRole("alert")).toHaveCount(0);
+    } else {
+      await settled(page);
+      await expect(page.getByRole("alert")).toContainText("Group list unavailable");
+      await expect(nav.getByRole("button")).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "Load more groups" })).toHaveCount(
+        0,
+      );
+    }
+    await expect(archivedRow).toHaveCount(0);
+  });
+
+test("@groups a failed refresh after archiving lists no row for the archived group", async ({
+  context,
+  page,
+}) => {
+  await authenticate(context);
+  const name = `Archive refresh ${crypto.randomUUID().slice(0, 8)}`;
+  await createGroup(page, name);
+  await page.goto(`${harness.origin}/${harness.workspaceSlug}/groups`);
+  const nav = page.getByRole("navigation", { name: "Skill groups" });
+  await nav.getByRole("button", { name }).click();
+  await settled(page);
+  await page.route(isGroupList, unavailable);
+  await page.getByRole("button", { name: "Archive", exact: true }).click();
+  await settled(page);
+  await expect(page.getByRole("alert")).toContainText("Group list unavailable");
+  await expect(
+    page.getByRole("button", { name: "Restore", exact: true }),
+  ).toBeVisible();
+  await expect(
+    nav.getByRole("button", { name: new RegExp(`^${name}`, "u") }),
+  ).toHaveCount(0);
+});
+
+test("@groups load more appends groups and a failed page keeps the listed ones", async ({
+  context,
+  page,
+}) => {
+  await authenticate(context);
+  const group = (name: string) => ({
+    id: crypto.randomUUID(),
+    workspaceId: harness.workspaceId,
+    name,
+    description: "",
+    revision: 1,
+    archivedAt: null,
+  });
+  const pages: Record<string, { groups: unknown[]; nextCursor: string | null }> = {
+    "": { groups: [group("Paged first")], nextCursor: "second" },
+    second: { groups: [group("Paged second")], nextCursor: "third" },
+  };
+  await page.route(isGroupList, async (route) => {
+    const cursor = new URL(route.request().url()).searchParams.get("cursor") ?? "";
+    const body = pages[cursor];
+    if (!body) return unavailable(route);
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ ok: true, data: body }),
+    });
+  });
+  await page.goto(`${harness.origin}/${harness.workspaceSlug}/groups`);
+  await settled(page);
+  const nav = page.getByRole("navigation", { name: "Skill groups" });
+  const more = page.getByRole("button", { name: "Load more groups" });
+  await expect(nav.getByRole("button")).toHaveText(["Paged first"]);
+  await more.click();
+  await settled(page);
+  await expect(nav.getByRole("button")).toHaveText(["Paged first", "Paged second"]);
+  await more.click();
+  await settled(page);
+  await expect(page.getByRole("alert")).toContainText("Group list unavailable");
+  await expect(nav.getByRole("button")).toHaveText(["Paged first", "Paged second"]);
+});
