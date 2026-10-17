@@ -329,6 +329,7 @@
             · <code>{binding.path || "/"}</code> · {binding.status}{#if canManage && !binding.disconnectedAt}<Button
                 variant="ghost"
                 disabled={busy}
+                aria-label={`Disconnect binding ${binding.name} at ${binding.path || "/"}`}
                 onclick={() => void run(() => disconnect(binding.path))}
                 >Disconnect binding</Button
               >{/if}{#if binding.lastCommitSha}<a
@@ -379,8 +380,11 @@
               href={`${selected.source.repositoryUrl}/commit/${item.commitSha}`}
               target="_blank"
               rel="noreferrer">{item.commitSha.slice(0, 12)}</a
-            ><Button variant="ghost" disabled={busy} onclick={() => (preview = item)}
-              >View preview and results</Button
+            ><Button
+              variant="ghost"
+              disabled={busy}
+              aria-label={`View preview and results for ${item.commitSha.slice(0, 12)} at ${item.createdAt}`}
+              onclick={() => (preview = item)}>View preview and results</Button
             >
           </li>{/each}
       </ul>

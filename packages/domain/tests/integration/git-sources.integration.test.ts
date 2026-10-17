@@ -1193,4 +1193,92 @@ describe("Git source persistence and recovery", () => {
       ).rowCount,
     ).toBe(2);
   });
+  it("tracks a pending imported candidate across an upstream revert and reuses identical candidates", async () => {
+    const slug = `reuse-${crypto.randomUUID()}`;
+    const source = await sources.create({
+      ...m(),
+      config: { repositoryUrl: "https://github.com/a/reuse" },
+      idempotencyKey: crypto.randomUUID(),
+    });
+    const sync = async (commit: string, content: string) => {
+      snapshot = {
+        commitSha: commit.repeat(40),
+        skills: [{ path: "review", bundle: await bundle(slug, content), error: null }],
+      };
+      const preview = await sources.preview({ ...m(), sourceId: source.id });
+      return {
+        preview,
+        applied: await sources.apply({
+          ...m(),
+          sourceId: source.id,
+          runId: preview.id,
+        }),
+      };
+    };
+    const binding = async () => (await sources.get(owner, source.id)).bindings[0];
+    const count = async (skillId: string | null | undefined) =>
+      (await pool.query("SELECT 1 FROM skill_versions WHERE skill_id=$1", [skillId]))
+        .rowCount;
+    const published = (await sync("1", "# One")).applied.results[0];
+    const first = (await sync("2", "# Two")).applied.results[0];
+    expect(first?.status).toBe("pending_review");
+    // Upstream reverts to the published content: the candidate stays tracked.
+    const reverted = await sync("3", "# One");
+    expect(reverted.preview.plan[0]).toMatchObject({
+      action: "unchanged",
+      message:
+        "Upstream matches the published version; the imported candidate is still awaiting review",
+    });
+    expect(reverted.applied.results[0]).toMatchObject({
+      status: "unchanged",
+      versionId: first?.versionId,
+      message: reverted.preview.plan[0]?.message,
+    });
+    expect(await binding()).toMatchObject({
+      status: "pending_review",
+      lastVersionId: first?.versionId,
+    });
+    const again = await sync("4", "# Two");
+    expect(again.preview.plan[0]).toMatchObject({
+      action: "unchanged",
+      message: "The imported candidate is awaiting review",
+    });
+    expect(again.applied.results[0]).toMatchObject({
+      status: "unchanged",
+      versionId: first?.versionId,
+    });
+    expect(await binding()).toMatchObject({
+      status: "pending_review",
+      lastVersionId: first?.versionId,
+    });
+    expect(await count(published?.skillId)).toBe(2);
+    // A newer candidate replaces the tracked one; returning to the earlier
+    // content binds its still-pending candidate instead of importing it again.
+    const second = (await sync("5", "# Three")).applied.results[0];
+    expect(second?.status).toBe("pending_review");
+    expect(second?.versionId).not.toBe(first?.versionId);
+    const back = await sync("6", "# Two");
+    expect(back.preview.plan[0]).toMatchObject({
+      action: "unchanged",
+      candidateVersionId: first?.versionId,
+      message: "The imported candidate is awaiting review",
+    });
+    expect(back.applied.status).toBe("complete");
+    expect(back.applied.results[0]).toMatchObject({
+      status: "unchanged",
+      versionId: first?.versionId,
+    });
+    expect(await binding()).toMatchObject({
+      status: "pending_review",
+      lastVersionId: first?.versionId,
+      lastCommitSha: "6".repeat(40),
+    });
+    expect(await count(published?.skillId)).toBe(3);
+    // Identical content then remains unchanged without another version.
+    expect((await sync("7", "# Two")).applied.results[0]).toMatchObject({
+      status: "unchanged",
+      versionId: first?.versionId,
+    });
+    expect(await count(published?.skillId)).toBe(3);
+  });
 });

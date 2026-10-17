@@ -27,7 +27,11 @@ manual skills. When several source paths declare one slug, every one of them is
 a conflict. Binding paths may name the skill directory or its `SKILL.md`; both
 store the directory. Changed published heads, archived targets, renamed slugs, and
 rejected imported candidates require review; if upstream later returns to the
-published head, the binding converges to it as unchanged. Missing/renamed source
+published head, the binding converges to it as unchanged. A pending imported
+candidate is never duplicated: upstream content identical to a pending candidate
+imported from the same path binds that candidate (unchanged, awaiting review), and
+upstream returning to the published head while a candidate is pending keeps the
+binding `pending_review` on that candidate with an explicit message. Missing/renamed source
 paths retain the existing skill and history. An active binding is never moved to
 another skill: a path that became bound after preview is a conflict. A source binds
 at most 32 skills (missing paths count until disconnected); additions beyond that

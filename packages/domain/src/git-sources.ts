@@ -48,7 +48,10 @@ export interface GitSource {
 // Active bindings per source; repository-wide discovery is bounded to the same
 // count, so a stored plan holds at most twice this many entries.
 const MAX_BINDINGS = 32,
-  MAX_PLAN_MESSAGE = 500;
+  MAX_PLAN_MESSAGE = 500,
+  AWAITING_REVIEW = "The imported candidate is awaiting review",
+  PUBLISHED_WHILE_PENDING =
+    "Upstream matches the published version; the imported candidate is still awaiting review";
 // Bindings use the same skill-directory form as source configuration and discovery.
 function bindingPath(path: string) {
   const normalized = gitSourceConfig({
@@ -97,6 +100,9 @@ export interface GitPlanEntry {
   skillId: string | null;
   baseVersionId: string | null;
   bindingVersionId: string | null;
+  // A pending imported candidate from this source path with identical content,
+  // which apply binds instead of creating another version.
+  candidateVersionId?: string | null;
   message: string | null;
 }
 export interface GitApplyResult {
@@ -468,7 +474,9 @@ export class GitSourceService {
         });
         continue;
       }
-      let action: GitPlanEntry["action"] = "added";
+      let action: GitPlanEntry["action"] = "added",
+        message: string | null = null,
+        candidateVersionId: string | null = null;
       if (!binding && bindings.length + added >= MAX_BINDINGS) {
         plan.push({
           ...base,
@@ -479,19 +487,37 @@ export class GitSourceService {
       }
       if (!binding) added++;
       if (binding) {
+        const pending = last?.rows[0]?.status === "pending_review";
         action = binding.last_digest === item.bundle.digest ? "unchanged" : "changed";
+        if (action === "unchanged" && pending) message = AWAITING_REVIEW;
         // Format-v2 bundles gain a server-generated lock, so an identical explicit
         // binding is recognized by its prepared digest. Additions and unresolved
         // compositions are validated when apply creates them, after earlier
         // entries in the same sync exist, and apply reports any resulting error.
-        if (action === "changed" && binding.current_digest)
+        if (action === "changed")
           try {
             const prepared = await this.skills.prepareGitBundle(
               item.bundle,
               m.principal,
               binding.visibility,
             );
-            if (prepared.digest === binding.current_digest) action = "unchanged";
+            if (prepared.digest === binding.current_digest) {
+              // Upstream returned to the published head; a pending candidate
+              // stays tracked for review rather than being dropped.
+              action = "unchanged";
+              if (pending) message = PUBLISHED_WHILE_PENDING;
+            } else {
+              candidateVersionId = await this.pendingCandidate(
+                m.principal,
+                source.id,
+                binding,
+                prepared.digest,
+              );
+              if (candidateVersionId) {
+                action = "unchanged";
+                message = AWAITING_REVIEW;
+              }
+            }
           } catch (e) {
             if (!(e instanceof DomainError)) throw e;
           }
@@ -499,12 +525,8 @@ export class GitSourceService {
       plan.push({
         ...base,
         action,
-        message:
-          action === "unchanged" &&
-          binding?.last_digest === item.bundle.digest &&
-          last?.rows[0]?.status === "pending_review"
-            ? "The imported candidate is awaiting review"
-            : null,
+        message,
+        ...(candidateVersionId ? { candidateVersionId } : {}),
       });
     }
     for (const binding of bindings)
@@ -553,6 +575,25 @@ export class GitSourceService {
       if (!row) throw new DomainError("CONFLICT", "Preview could not be saved", 409);
       return runRecord(row);
     });
+  }
+  // The newest pending candidate this source path imported for the bound skill
+  // with the given prepared content, on the current published head.
+  private async pendingCandidate(
+    p: Principal,
+    sourceId: string,
+    binding: { skill_id: string; skill_path: string },
+    digest: string,
+  ) {
+    const r = await this.pool.query<{ id: string }>(
+      `SELECT v.id FROM skill_versions v
+         JOIN skills s ON s.workspace_id=v.workspace_id AND s.id=v.skill_id
+         JOIN skill_version_git_provenance g ON g.workspace_id=v.workspace_id AND g.version_id=v.id
+        WHERE v.workspace_id=$1 AND v.skill_id=$2 AND v.status='pending_review' AND v.content_digest=$5
+          AND v.base_version_id=s.current_published_version_id AND g.source_id=$3 AND g.skill_path=$4
+        ORDER BY v.revision DESC LIMIT 1`,
+      [p.workspaceId, binding.skill_id, sourceId, binding.skill_path, digest],
+    );
+    return r.rows[0]?.id ?? null;
   }
   private async assertBindable(
     c: PoolClient,
@@ -874,16 +915,51 @@ export class GitSourceService {
                   );
                 // As in preview, a rejected candidate blocks only its own content,
                 // and a pending one keeps its review state. Upstream content equal
-                // to the published head converges the binding to that head instead.
-                if (t.last_digest === entry.digest) {
-                  const last = t.last_version_id
-                    ? (
-                        await c.query<{ status: string }>(
-                          "SELECT status FROM skill_versions WHERE workspace_id=$1 AND id=$2 FOR UPDATE",
-                          [m.principal.workspaceId, t.last_version_id],
-                        )
-                      ).rows[0]?.status
-                    : undefined;
+                // to a pending candidate from this path binds that candidate, and
+                // content equal to the published head converges the binding to it
+                // unless a tracked candidate is still awaiting review.
+                const last = t.last_version_id
+                  ? (
+                      await c.query<{ status: string }>(
+                        "SELECT status FROM skill_versions WHERE workspace_id=$1 AND id=$2 FOR UPDATE",
+                        [m.principal.workspaceId, t.last_version_id],
+                      )
+                    ).rows[0]?.status
+                  : undefined;
+                if (entry.candidateVersionId) {
+                  const candidate = await c.query<{ id: string }>(
+                    "SELECT v.id FROM skill_versions v JOIN skill_version_git_provenance g ON g.workspace_id=v.workspace_id AND g.version_id=v.id WHERE v.workspace_id=$1 AND v.id=$2 AND v.skill_id=$3 AND v.status='pending_review' AND v.base_version_id=$4 AND g.source_id=$5 AND g.skill_path=$6 FOR UPDATE OF v",
+                    [
+                      m.principal.workspaceId,
+                      entry.candidateVersionId,
+                      entry.skillId,
+                      t.current_published_version_id,
+                      source.id,
+                      entry.path,
+                    ],
+                  );
+                  if (!candidate.rows[0])
+                    throw new DomainError(
+                      "CONFLICT",
+                      "The imported candidate changed after preview; preview again",
+                      409,
+                    );
+                  await c.query(
+                    "UPDATE skill_source_bindings SET status='pending_review',last_commit_sha=$2,last_digest=$3,last_version_id=$4,base_version_id=$5,updated_at=now() WHERE id=$1",
+                    [
+                      t.id,
+                      run.commit_sha,
+                      entry.digest,
+                      entry.candidateVersionId,
+                      t.current_published_version_id,
+                    ],
+                  );
+                  result = {
+                    ...result,
+                    versionId: entry.candidateVersionId,
+                    message: AWAITING_REVIEW,
+                  };
+                } else if (t.last_digest === entry.digest) {
                   if (last === "rejected")
                     throw new DomainError(
                       "CONFLICT",
@@ -900,8 +976,18 @@ export class GitSourceService {
                     result = {
                       ...result,
                       versionId: t.last_version_id,
-                      message: "The imported candidate is awaiting review",
+                      message: AWAITING_REVIEW,
                     };
+                } else if (last === "pending_review") {
+                  await c.query(
+                    "UPDATE skill_source_bindings SET status='pending_review',last_commit_sha=$2,updated_at=now() WHERE id=$1",
+                    [t.id, run.commit_sha],
+                  );
+                  result = {
+                    ...result,
+                    versionId: t.last_version_id,
+                    message: PUBLISHED_WHILE_PENDING,
+                  };
                 } else
                   await c.query(
                     "UPDATE skill_source_bindings SET status='unchanged',last_commit_sha=$2,last_digest=$3,last_version_id=$4,base_version_id=$4,updated_at=now() WHERE id=$1",
