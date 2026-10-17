@@ -1,5 +1,8 @@
 import { parse } from "yaml";
 import {
+  BundlePathError,
+  BundleValidationError,
+  bundlePathCollisionKey,
   canonicalizeBundleFiles,
   normalizeBundlePath,
   skillJsonSchema,
@@ -87,10 +90,12 @@ export function gitSourceConfig(input: Record<string, unknown>): GitSourceConfig
           : path,
   };
 }
+// Repository paths locate a skill directory; files inside it are validated
+// separately with the canonical bundle-relative path rules.
 function safePath(path: string) {
   return (
     path === "" ||
-    (path.length <= 240 &&
+    (path.length <= 1024 &&
       // eslint-disable-next-line no-control-regex -- reject control characters in untrusted paths
       !/[\\\x00-\x1f]/u.test(path) &&
       !path.startsWith("/") &&
@@ -117,8 +122,8 @@ interface TreeEntry {
 const MAX_SNAPSHOT_BYTES = 20 * 1024 * 1024,
   MAX_BLOB_BYTES = 5 * 1024 * 1024,
   MAX_REQUESTS = 200,
-  // One commit and one tree request leave this many distinct blob fetches for one skill.
-  MAX_SKILL_FILES = MAX_REQUESTS - 2;
+  // Ref, commit and tree requests leave this many distinct blob fetches for one skill.
+  MAX_SKILL_FILES = MAX_REQUESTS - 3;
 export class PublicGitHubSourceProvider implements GitSourceProvider {
   constructor(private readonly fetcher: typeof fetch = globalThis.fetch) {}
   async snapshot(input: GitSourceConfig, pinned?: string): Promise<GitSnapshot> {
@@ -128,7 +133,11 @@ export class PublicGitHubSourceProvider implements GitSourceProvider {
     let requests = 0,
       totalBytes = 0;
     const deadline = Date.now() + 90000;
-    const read = async (path: string, maxBytes: number) => {
+    const fetchBytes = async (
+      path: string,
+      maxBytes: number,
+      accept = "application/vnd.github+json",
+    ) => {
       const remaining = deadline - Date.now();
       if (remaining <= 0)
         throw new DomainError("SERVICE_UNAVAILABLE", "Git source fetch timed out", 503);
@@ -142,7 +151,7 @@ export class PublicGitHubSourceProvider implements GitSourceProvider {
           `https://api.github.com/repos/${repository}/${path}`,
           {
             headers: {
-              accept: "application/vnd.github+json",
+              accept,
               "x-github-api-version": "2026-03-10",
               "user-agent": "Skillplane-public-source-import",
             },
@@ -198,20 +207,31 @@ export class PublicGitHubSourceProvider implements GitSourceProvider {
         bytes.set(part, offset);
         offset += part.byteLength;
       }
+      return new TextDecoder().decode(bytes);
+    };
+    const read = async (path: string, maxBytes: number) => {
+      const body = await fetchBytes(path, maxBytes);
       try {
-        return object(JSON.parse(new TextDecoder().decode(bytes)) as unknown);
+        return object(JSON.parse(body) as unknown);
       } catch {
         invalid("GitHub returned invalid JSON");
       }
     };
-    const commit = await read(
-      `commits/${encodeURIComponent(pinned ?? config.ref)}`,
-      1024 * 1024,
-    );
-    const sha = text(commit.sha);
-    if (!/^[a-f0-9]{40}$/.test(sha) || (pinned && sha !== pinned.toLowerCase()))
-      invalid("GitHub returned a different commit");
-    const treeSha = text(object(object(commit.commit).tree).sha);
+    // Resolve a ref with the SHA media type: the full commit resource embeds
+    // per-file patches whose size is unrelated to the skills being imported.
+    const sha = pinned
+      ? pinned.toLowerCase()
+      : (
+          await fetchBytes(
+            `commits/${encodeURIComponent(config.ref)}`,
+            1024,
+            "application/vnd.github.sha",
+          )
+        ).trim();
+    if (!/^[a-f0-9]{40}$/.test(sha)) invalid("GitHub returned an invalid commit");
+    const commit = await read(`git/commits/${sha}`, 256 * 1024);
+    if (commit.sha !== sha) invalid("GitHub returned a different commit");
+    const treeSha = text(object(commit.tree).sha);
     if (!/^[a-f0-9]{40}$/.test(treeSha)) invalid("Invalid Git tree identity");
     const tree = await read(`git/trees/${treeSha}?recursive=1`, 8 * 1024 * 1024);
     if (
@@ -222,10 +242,12 @@ export class PublicGitHubSourceProvider implements GitSourceProvider {
       invalid(
         "Repository tree is incomplete or too large; import a smaller repository",
       );
+    // Out-of-scope entries are never fetched, so only in-scope paths are
+    // validated, and an unsafe in-scope path is reported as that skill's error.
     const entries: TreeEntry[] = tree.tree.map((value: unknown) => {
       const row = object(value);
       const path = text(row.path);
-      if (!safePath(path)) invalid("Repository contains an unsafe path");
+      if (!path) invalid("GitHub returned invalid data");
       return {
         path,
         mode: text(row.mode),
@@ -253,6 +275,7 @@ export class PublicGitHubSourceProvider implements GitSourceProvider {
       });
     for (const root of selected.sort()) {
       try {
+        if (!safePath(root)) invalid("Skill directory path is unsafe or too long");
         if (
           roots.some(
             (other) => other !== root && (root === "" || other.startsWith(`${root}/`)),
@@ -268,18 +291,39 @@ export class PublicGitHubSourceProvider implements GitSourceProvider {
           invalid(
             `Skill exceeds the ${String(MAX_SKILL_FILES)} distinct blob import limit; reduce its files`,
           );
-        // A skill directory is imported as one complete bundle. Unsupported files
-        // and links are errors, rather than silently dropping source content.
+        // A skill directory is imported as one complete bundle. Unsupported files,
+        // links and paths are errors, rather than silently dropping source content,
+        // and every entry is checked before any of the skill's blobs is fetched.
+        const paths = new Map<TreeEntry, string>(),
+          collisions = new Set<string>();
         for (const entry of local) {
           if (entry.type !== "blob" || !["100644", "100755"].includes(entry.mode))
             invalid("Skill contains a symlink, submodule, or unsupported file mode");
-          const path = normalizeBundlePath(entry.path.slice(prefix.length));
+          const relative = entry.path.slice(prefix.length);
+          let path: string;
+          try {
+            path = normalizeBundlePath(relative);
+          } catch (e) {
+            if (!(e instanceof BundlePathError)) throw e;
+            invalid(
+              `Skill file ${JSON.stringify(relative.slice(0, 200))}: ${e.message}`,
+            );
+          }
+          // NFC/NFD or case-only twins would otherwise overwrite one another.
+          const key = bundlePathCollisionKey(path);
+          if (collisions.has(key))
+            invalid("Skill contains paths that collide after Unicode or case folding");
+          collisions.add(key);
           if (
             !/^[a-f0-9]{40}$/.test(entry.sha) ||
             entry.size > MAX_BLOB_BYTES ||
             entry.size < 0
           )
             invalid("Skill file exceeds the size limit");
+          paths.set(entry, path);
+        }
+        for (const entry of local) {
+          const path = paths.get(entry) ?? invalid("Skill path was not validated");
           if (totalBytes + entry.size > MAX_SNAPSHOT_BYTES)
             throw new SnapshotLimitError(
               "Source exceeds the 20 MiB expanded import limit",
@@ -383,7 +427,7 @@ export class PublicGitHubSourceProvider implements GitSourceProvider {
           path: root,
           bundle: null,
           error:
-            error instanceof DomainError
+            error instanceof DomainError || error instanceof BundleValidationError
               ? error.message
               : "Skill bundle is invalid or unsupported",
         });

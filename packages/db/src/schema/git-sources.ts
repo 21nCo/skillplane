@@ -6,7 +6,6 @@ import {
   jsonb,
   uniqueIndex,
   foreignKey,
-  primaryKey,
   index,
   check,
 } from "drizzle-orm/pg-core";
@@ -46,6 +45,7 @@ export const skillSourceRuns = pgTable(
     plan: jsonb("plan").notNull(),
     results: jsonb("results").notNull().default([]),
     failureMessage: text("failure_message"),
+    appliedRevision: integer("applied_revision"),
     status: text("status").notNull().default("preview"),
     createdAt: utc("created_at").notNull().defaultNow(),
     appliedAt: utc("applied_at"),
@@ -63,6 +63,10 @@ export const skillSourceRuns = pgTable(
     ),
     check("skill_source_runs_plan_check", sql`jsonb_typeof(${t.plan}) = 'array'`),
     check(
+      "skill_source_runs_plan_size_check",
+      sql`jsonb_array_length(${t.plan}) <= 64`,
+    ),
+    check(
       "skill_source_runs_status_check",
       sql`${t.status} IN ('preview','partial','complete')`,
     ),
@@ -72,6 +76,7 @@ export const skillSourceRuns = pgTable(
 export const skillSourceBindings = pgTable(
   "skill_source_bindings",
   {
+    id: text("id").primaryKey(),
     workspaceId: text("workspace_id").notNull(),
     sourceId: text("source_id").notNull(),
     skillPath: text("skill_path").notNull(),
@@ -85,9 +90,12 @@ export const skillSourceBindings = pgTable(
     updatedAt: utc("updated_at").notNull().defaultNow(),
   },
   (t) => [
-    primaryKey({ columns: [t.sourceId, t.skillPath] }),
     uniqueIndex("skill_source_bindings_workspace_skill_unique")
       .on(t.workspaceId, t.skillId)
+      .where(sql`${t.disconnectedAt} IS NULL`),
+    // Disconnected rows are retained mapping history; one path is active at a time.
+    uniqueIndex("skill_source_bindings_active_path_unique")
+      .on(t.sourceId, t.skillPath)
       .where(sql`${t.disconnectedAt} IS NULL`),
     foreignKey({
       columns: [t.workspaceId, t.sourceId],

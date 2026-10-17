@@ -153,6 +153,9 @@ describe("API scope classification", () => {
       "groups",
       "groups/group%3Aone/members/user%3Aone",
       "groups/skill-assignments?skillId=skill%3Aone",
+      "sources",
+      "sources/source%3Aone/apply",
+      "sources/source%3Aone/bindings",
     ])
       expect(
         classifyApiScope(

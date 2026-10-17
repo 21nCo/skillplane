@@ -10,19 +10,21 @@ CREATE TABLE skill_source_runs (
  id text PRIMARY KEY, workspace_id text NOT NULL, source_id text NOT NULL,
  source_revision integer NOT NULL, commit_sha text NOT NULL CHECK(commit_sha ~ '^[a-f0-9]{40}$'),
  plan jsonb NOT NULL CHECK(jsonb_typeof(plan)='array'), results jsonb NOT NULL DEFAULT '[]', failure_message text,
+ applied_revision integer,
  status text NOT NULL DEFAULT 'preview' CHECK(status IN ('preview','partial','complete')),
  created_at timestamptz NOT NULL DEFAULT now(), applied_at timestamptz,
+ CONSTRAINT skill_source_runs_plan_size_check CHECK(jsonb_array_length(plan) <= 64),
  UNIQUE(workspace_id,id), FOREIGN KEY(workspace_id,source_id) REFERENCES skill_sources(workspace_id,id)
 );
 CREATE TABLE skill_source_bindings (
- workspace_id text NOT NULL, source_id text NOT NULL, skill_path text NOT NULL, skill_id text NOT NULL,
+ id text PRIMARY KEY, workspace_id text NOT NULL, source_id text NOT NULL, skill_path text NOT NULL, skill_id text NOT NULL,
  last_commit_sha text, last_digest text, last_version_id text, base_version_id text,
  disconnected_at timestamptz, status text NOT NULL DEFAULT 'bound', updated_at timestamptz NOT NULL DEFAULT now(),
- PRIMARY KEY(source_id,skill_path),
  FOREIGN KEY(workspace_id,source_id) REFERENCES skill_sources(workspace_id,id),
  FOREIGN KEY(workspace_id,skill_id) REFERENCES skills(workspace_id,id)
 );
 CREATE UNIQUE INDEX skill_source_bindings_workspace_skill_unique ON skill_source_bindings(workspace_id,skill_id) WHERE disconnected_at IS NULL;
+CREATE UNIQUE INDEX skill_source_bindings_active_path_unique ON skill_source_bindings(source_id,skill_path) WHERE disconnected_at IS NULL;
 CREATE TABLE skill_version_git_provenance (
  version_id text PRIMARY KEY, workspace_id text NOT NULL, source_id text NOT NULL, run_id text NOT NULL,
  repository_url text NOT NULL, commit_sha text NOT NULL CHECK(commit_sha ~ '^[a-f0-9]{40}$'),

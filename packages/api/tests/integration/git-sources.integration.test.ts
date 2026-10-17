@@ -199,3 +199,73 @@ it("repairs immediate skill/version routing on apply replay before projection pr
     ]),
   );
 });
+
+it("filters the catalog list and query search by source", async () => {
+  const principal: Principal = {
+    kind: "user",
+    role: "owner",
+    workspaceId: owner.workspaceId,
+    userId: owner.userId,
+    actorId: owner.userId,
+    sessionId: "source-filter-test",
+  };
+  const mutation = { principal, requestId: crypto.randomUUID() };
+  const slug = `source-filter-${crypto.randomUUID()}`;
+  const bundle = await canonicalizeBundle(
+    await createSkillBundleFixture({
+      name: "Source filtered import",
+      slug,
+      description: "Source filter",
+      tags: [],
+      skillMarkdown: "# Source filtered import",
+    }),
+  );
+  const sources = new GitSourceService(
+    services.database.pool,
+    services.skillService,
+    services.skillVersionService,
+    {
+      snapshot: async () => ({
+        commitSha: "c".repeat(40),
+        skills: [{ path: "filtered", bundle, error: null }],
+      }),
+    },
+  );
+  const source = await sources.create({
+    ...mutation,
+    config: { repositoryUrl: "https://github.com/a/source-filter" },
+    idempotencyKey: crypto.randomUUID(),
+  });
+  const preview = await sources.preview({ ...mutation, sourceId: source.id });
+  const applied = await sources.apply({
+    ...mutation,
+    sourceId: source.id,
+    runId: preview.id,
+  });
+  const imported = applied.results[0]?.skillId;
+  expect(imported).toBeTruthy();
+  const list = async (query: string) => {
+    const response = await app.request(
+      `/api/v1/workspaces/${owner.workspaceId}/skills?${query}`,
+      {
+        headers: {
+          authorization: `Bearer ${owner.sessionToken}`,
+          "x-skillplane-workspace-id": owner.workspaceId,
+        },
+      },
+    );
+    expect(response.status).toBe(200);
+    return (
+      (await response.json()) as { data: { skills: { id: string }[] } }
+    ).data.skills.map((s) => s.id);
+  };
+  const sourceId = encodeURIComponent(source.id);
+  expect(await list(`sourceId=${sourceId}`)).toEqual([imported]);
+  expect(
+    await list(`sourceId=${sourceId}&q=${encodeURIComponent("Source filtered")}`),
+  ).toEqual([imported]);
+  expect(
+    await list(`sourceId=source%3Aunknown&q=${encodeURIComponent("Source filtered")}`),
+  ).toEqual([]);
+  expect(await list("")).toEqual(expect.arrayContaining([imported, owner.skillId]));
+});

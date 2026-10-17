@@ -3,6 +3,7 @@ import { PublicationService } from "../../src/publication.js";
 import { beforeAll, afterAll, describe, it, expect } from "vitest";
 import { Pool } from "pg";
 import { migrateDatabase } from "../../../db/src/migrate.js";
+import { resolveTestDatabaseUrl } from "../../../db/src/database-url.js";
 import { seedTenantFixture } from "../../../testing/src/fixtures.js";
 import { createSkillBundleFixture } from "../../../testing/src/skill-bundles.js";
 import { TestObjectStorage } from "../../../testing/src/runtime.js";
@@ -19,13 +20,15 @@ import { SkillSearchService } from "../../src/search.js";
 import { GitSourceService } from "../../src/git-sources.js";
 import type { GitSnapshot } from "../../src/git-source-provider.js";
 import type { Principal } from "../../src/principal.js";
-const url = process.env.TEST_DATABASE_URL ?? "";
-describe.skipIf(!url)("Git source persistence and recovery", () => {
-  const pool = new Pool({ connectionString: url, max: 4 }),
-    objects = new TestObjectStorage(),
-    storage = new R2BundleRepository(objects),
-    skills = new SkillService(pool, storage),
-    versions = new SkillVersionService(pool, storage, new IdempotencyStore(pool));
+// This acceptance suite must fail, never skip, when no test database resolves.
+describe("Git source persistence and recovery", () => {
+  let url: string,
+    pool: Pool,
+    skills: SkillService,
+    versions: SkillVersionService,
+    sources: GitSourceService;
+  const objects = new TestObjectStorage(),
+    storage = new R2BundleRepository(objects);
   let snapshot: GitSnapshot = { commitSha: "a".repeat(40), skills: [] },
     failProvider = false;
   const provider = {
@@ -35,7 +38,6 @@ describe.skipIf(!url)("Git source persistence and recovery", () => {
       return snapshot;
     },
   };
-  const sources = new GitSourceService(pool, skills, versions, provider);
   let owner: Principal, other: Principal;
   const m = () => ({
     principal: owner,
@@ -53,6 +55,11 @@ describe.skipIf(!url)("Git source persistence and recovery", () => {
       }),
     );
   beforeAll(async () => {
+    url = await resolveTestDatabaseUrl();
+    pool = new Pool({ connectionString: url, max: 4 });
+    skills = new SkillService(pool, storage);
+    versions = new SkillVersionService(pool, storage, new IdempotencyStore(pool));
+    sources = new GitSourceService(pool, skills, versions, provider);
     await migrateDatabase(url);
     const a = await seedTenantFixture(url, `git-a-${crypto.randomUUID()}`),
       b = await seedTenantFixture(url, `git-b-${crypto.randomUUID()}`);
@@ -71,7 +78,7 @@ describe.skipIf(!url)("Git source persistence and recovery", () => {
       workspaceId: b.workspaceId,
     };
   }, 60000);
-  afterAll(() => pool.end());
+  afterAll(() => pool?.end());
   it("imports privately, stores immutable provenance and creates reviewable updates without duplicate versions", async () => {
     const key = crypto.randomUUID(),
       config = { repositoryUrl: "https://github.com/a/b", ref: "main" };
@@ -262,7 +269,7 @@ describe.skipIf(!url)("Git source persistence and recovery", () => {
       }),
     ).rejects.toMatchObject({ code: "CURSOR_FILTER_MISMATCH" });
     // Model a crash after version+provenance commit, before result/binding commit.
-    const recovery = (await sources.get(owner, s.id)).source;
+    // The source revision still equals this run's own last claim.
     await pool.query(
       "DELETE FROM skill_source_bindings WHERE source_id=$1 AND skill_path='one'",
       [s.id],
@@ -271,10 +278,6 @@ describe.skipIf(!url)("Git source persistence and recovery", () => {
       "UPDATE skill_source_runs SET status='partial',results='[]' WHERE id=$1",
       [preview.id],
     );
-    await pool.query("UPDATE skill_sources SET revision=$2 WHERE id=$1", [
-      s.id,
-      recovery.revision - 1,
-    ]);
     const resumed = await sources.apply({ ...m(), sourceId: s.id, runId: preview.id });
     expect(resumed.status).toBe("complete");
     expect(
@@ -796,5 +799,272 @@ describe.skipIf(!url)("Git source persistence and recovery", () => {
         skillId: manual.skill.id,
       }),
     ).resolves.toEqual({ changed: true });
+  });
+  it("invalidates sibling previews on apply and never retargets an active binding", async () => {
+    const source = await sources.create({
+      ...m(),
+      config: { repositoryUrl: "https://github.com/a/siblings" },
+      idempotencyKey: crypto.randomUUID(),
+    });
+    const first = `sibling-first-${crypto.randomUUID()}`,
+      original = `sibling-original-${crypto.randomUUID()}`,
+      renamed = `sibling-renamed-${crypto.randomUUID()}`;
+    const before: GitSnapshot = {
+      commitSha: "1".repeat(40),
+      skills: [
+        { path: "one", bundle: await bundle(first, "# One"), error: null },
+        { path: "two", bundle: await bundle(original, "# Two"), error: null },
+      ],
+    };
+    // The tracked ref moves between two previews taken at one source revision.
+    const after: GitSnapshot = {
+      commitSha: "2".repeat(40),
+      skills: [{ path: "two", bundle: await bundle(renamed, "# Two"), error: null }],
+    };
+    snapshot = before;
+    const a = await sources.preview({ ...m(), sourceId: source.id });
+    snapshot = after;
+    const b = await sources.preview({ ...m(), sourceId: source.id });
+    expect(b.plan.map((p) => p.action)).toEqual(["added"]);
+    snapshot = before;
+    objects.failNextPut = true;
+    const partial = await sources.apply({ ...m(), sourceId: source.id, runId: a.id });
+    expect(partial.results.map((r) => r.status)).toEqual(["error", "imported"]);
+    const boundSkill = partial.results[1]?.skillId;
+    snapshot = after;
+    await expect(
+      sources.apply({ ...m(), sourceId: source.id, runId: b.id }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    // Even a sibling plan that is forced to apply cannot move the active binding.
+    await pool.query(
+      "UPDATE skill_sources SET revision=(SELECT source_revision FROM skill_source_runs WHERE id=$2) WHERE id=$1",
+      [source.id, b.id],
+    );
+    const forced = await sources.apply({ ...m(), sourceId: source.id, runId: b.id });
+    expect(forced.results[0]).toMatchObject({
+      status: "error",
+      message: expect.stringContaining("already bound"),
+    });
+    expect(
+      (
+        await pool.query("SELECT 1 FROM skills WHERE workspace_id=$1 AND slug=$2", [
+          owner.workspaceId,
+          renamed,
+        ])
+      ).rowCount,
+    ).toBe(0);
+    expect((await sources.get(owner, source.id)).bindings).toEqual([
+      expect.objectContaining({
+        path: "two",
+        skillId: boundSkill,
+        disconnectedAt: null,
+      }),
+    ]);
+  });
+  it("keeps a disconnected mapping when its path is bound to another skill", async () => {
+    const created = [];
+    for (const name of ["first", "second"]) {
+      const b = await bundle(`rebind-${name}-${crypto.randomUUID()}`, `# ${name}`);
+      created.push(
+        await skills.create({
+          ...m(),
+          workspaceId: owner.workspaceId,
+          archiveBytes: b.bytes,
+          visibility: "private",
+          idempotencyKey: crypto.randomUUID(),
+        }),
+      );
+    }
+    const [first, second] = created.map((c) => c.skill.id);
+    const source = await sources.create({
+      ...m(),
+      config: { repositoryUrl: "https://github.com/a/rebind" },
+      idempotencyKey: crypto.randomUUID(),
+    });
+    await sources.bind({
+      ...m(),
+      sourceId: source.id,
+      path: "p",
+      skillId: first ?? "",
+    });
+    await expect(
+      sources.bind({ ...m(), sourceId: source.id, path: "p", skillId: second ?? "" }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    await sources.disconnect({ ...m(), sourceId: source.id, path: "p" });
+    await sources.bind({
+      ...m(),
+      sourceId: source.id,
+      path: "p",
+      skillId: second ?? "",
+    });
+    const { bindings } = await sources.get(owner, source.id);
+    expect(bindings.map((b) => [b.path, b.skillId, b.disconnectedAt === null])).toEqual(
+      [
+        ["p", second, true],
+        ["p", first, false],
+      ],
+    );
+    expect(new Set(bindings.map((b) => b.id)).size).toBe(2);
+  });
+  it("caps active bindings in preview and apply, counting missing paths", async () => {
+    const source = await sources.create({
+      ...m(),
+      config: { repositoryUrl: "https://github.com/a/binding-cap" },
+      idempotencyKey: crypto.randomUUID(),
+    });
+    const prefix = `cap-${crypto.randomUUID()}`;
+    snapshot = {
+      commitSha: "3".repeat(40),
+      skills: await Promise.all(
+        Array.from({ length: 33 }, async (_, i) => ({
+          path: `p${String(i).padStart(2, "0")}`,
+          bundle: await bundle(`${prefix}-${String(i)}`, `# Skill ${String(i)}`),
+          error: null,
+        })),
+      ),
+    };
+    const preview = await sources.preview({ ...m(), sourceId: source.id });
+    expect(preview.plan.filter((p) => p.action === "added")).toHaveLength(32);
+    expect(preview.plan[32]).toMatchObject({
+      path: "p32",
+      action: "conflict",
+      message: expect.stringContaining("at most 32"),
+    });
+    const applied = await sources.apply({
+      ...m(),
+      sourceId: source.id,
+      runId: preview.id,
+    });
+    expect(applied.status).toBe("complete");
+    expect(applied.results[32]).toMatchObject({ status: "conflict", skillId: null });
+    const count = async () =>
+      (
+        await pool.query(
+          "SELECT 1 FROM skills WHERE workspace_id=$1 AND slug LIKE $2",
+          [owner.workspaceId, `${prefix}-%`],
+        )
+      ).rowCount;
+    expect(await count()).toBe(32);
+    snapshot = {
+      commitSha: "4".repeat(40),
+      skills: [
+        { path: "new", bundle: await bundle(`${prefix}-new`, "# New"), error: null },
+      ],
+    };
+    const next = await sources.preview({ ...m(), sourceId: source.id });
+    expect(next.plan).toHaveLength(33);
+    expect(next.plan.find((p) => p.path === "new")?.action).toBe("conflict");
+    expect(next.plan.filter((p) => p.action === "missing")).toHaveLength(32);
+    await sources.apply({ ...m(), sourceId: source.id, runId: next.id });
+    expect(await count()).toBe(32);
+  }, 60000);
+  it("converges to the published head when upstream reverts a rejected candidate", async () => {
+    const slug = `revert-${crypto.randomUUID()}`;
+    const source = await sources.create({
+      ...m(),
+      config: { repositoryUrl: "https://github.com/a/revert" },
+      idempotencyKey: crypto.randomUUID(),
+    });
+    const sync = async (commit: string, content: string) => {
+      snapshot = {
+        commitSha: commit.repeat(40),
+        skills: [{ path: "review", bundle: await bundle(slug, content), error: null }],
+      };
+      const preview = await sources.preview({ ...m(), sourceId: source.id });
+      return {
+        preview,
+        applied: await sources.apply({
+          ...m(),
+          sourceId: source.id,
+          runId: preview.id,
+        }),
+      };
+    };
+    const published = (await sync("5", "# One")).applied.results[0];
+    const candidate = (await sync("6", "# Two")).applied.results[0];
+    expect(candidate?.status).toBe("pending_review");
+    await new PublicationService(pool, storage, new IdempotencyStore(pool)).reject({
+      ...m(),
+      skillId: candidate?.skillId ?? "",
+      candidateVersionId: candidate?.versionId ?? "",
+      reason: "Needs changes",
+      idempotencyKey: crypto.randomUUID(),
+    });
+    for (const commit of ["7", "8"]) {
+      const { preview, applied } = await sync(commit, "# One");
+      expect(preview.plan[0]?.action).toBe("unchanged");
+      expect(applied.status).toBe("complete");
+      expect(applied.results[0]?.status).toBe("unchanged");
+    }
+    expect((await sources.get(owner, source.id)).bindings[0]).toMatchObject({
+      lastVersionId: published?.versionId,
+      lastCommitSha: "8".repeat(40),
+      status: "unchanged",
+    });
+    expect(
+      (
+        await pool.query("SELECT 1 FROM skill_versions WHERE skill_id=$1", [
+          published?.skillId,
+        ])
+      ).rowCount,
+    ).toBe(2);
+  });
+  it("reports invalid skills, rejects stale previews after a completed sync and restores archived sources", async () => {
+    const source = await sources.create({
+      ...m(),
+      config: { repositoryUrl: "https://github.com/a/lifecycle" },
+      idempotencyKey: crypto.randomUUID(),
+    });
+    snapshot = {
+      commitSha: "9".repeat(40),
+      skills: [
+        { path: "bad", bundle: null, error: "Skill metadata is invalid" },
+        {
+          path: "good",
+          bundle: await bundle(`lifecycle-${crypto.randomUUID()}`, "# Good"),
+          error: null,
+        },
+      ],
+    };
+    const older = await sources.preview({ ...m(), sourceId: source.id });
+    const newer = await sources.preview({ ...m(), sourceId: source.id });
+    expect(older.plan.map((p) => p.action)).toEqual(["invalid", "added"]);
+    const applied = await sources.apply({
+      ...m(),
+      sourceId: source.id,
+      runId: newer.id,
+    });
+    expect(applied.status).toBe("complete");
+    expect(applied.results.map((r) => r.status)).toEqual(["invalid", "imported"]);
+    await expect(
+      sources.apply({ ...m(), sourceId: source.id, runId: older.id }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    const versionId = applied.results[1]?.versionId ?? "";
+    let current = (await sources.get(owner, source.id)).source;
+    const archived = await sources.update({
+      ...m(),
+      sourceId: source.id,
+      expectedRevision: current.revision,
+      config: { repositoryUrl: current.repositoryUrl },
+      archived: true,
+    });
+    await expect(
+      sources.preview({ ...m(), sourceId: source.id }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    expect((await sources.get(owner, source.id)).bindings).toHaveLength(1);
+    expect(await sources.provenance(owner, versionId)).not.toBeNull();
+    current = await sources.update({
+      ...m(),
+      sourceId: source.id,
+      expectedRevision: archived.revision,
+      config: { repositoryUrl: current.repositoryUrl },
+      archived: false,
+    });
+    expect(current.archivedAt).toBeNull();
+    expect(
+      (await sources.preview({ ...m(), sourceId: source.id })).plan.map(
+        (p) => p.action,
+      ),
+    ).toEqual(["invalid", "unchanged"]);
   });
 });

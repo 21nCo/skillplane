@@ -45,6 +45,10 @@ export interface GitSource {
   archivedAt: string | null;
   updatedAt: string;
 }
+// Active bindings per source; repository-wide discovery is bounded to the same
+// count, so a stored plan holds at most twice this many entries.
+const MAX_BINDINGS = 32,
+  MAX_PLAN_MESSAGE = 500;
 // Bindings use the same skill-directory form as source configuration and discovery.
 function bindingPath(path: string) {
   const normalized = gitSourceConfig({
@@ -69,6 +73,7 @@ function record(r: SourceRow): GitSource {
   };
 }
 interface Binding {
+  id: string;
   skill_path: string;
   skill_id: string;
   last_commit_sha: string | null;
@@ -88,7 +93,7 @@ export interface GitPlanEntry {
   path: string;
   slug: string | null;
   digest: string | null;
-  action: "added" | "changed" | "unchanged" | "missing" | "conflict" | "error";
+  action: "added" | "changed" | "unchanged" | "missing" | "conflict" | "invalid";
   skillId: string | null;
   baseVersionId: string | null;
   bindingVersionId: string | null;
@@ -107,6 +112,7 @@ interface RunRow {
   source_id: string;
   source_revision: number;
   failure_message: string | null;
+  applied_revision: number | null;
   commit_sha: string;
   plan: GitPlanEntry[];
   results: GitApplyResult[];
@@ -191,6 +197,7 @@ export class GitSourceService {
     return {
       source,
       bindings: bindings.map((b) => ({
+        id: b.id,
         path: b.skill_path,
         skillId: b.skill_id,
         slug: b.slug,
@@ -288,7 +295,7 @@ export class GitSourceService {
   private async bindings(p: Principal, id: string, includeDisconnected = false) {
     return (
       await this.pool.query<Binding>(
-        "SELECT b.*,s.slug,s.name,s.visibility,s.current_published_version_id,s.archived_at,v.content_digest AS current_digest FROM skill_source_bindings b JOIN skills s ON s.workspace_id=b.workspace_id AND s.id=b.skill_id LEFT JOIN skill_versions v ON v.workspace_id=s.workspace_id AND v.id=s.current_published_version_id WHERE b.workspace_id=$1 AND b.source_id=$2 AND ($3::boolean OR b.disconnected_at IS NULL) ORDER BY b.skill_path",
+        "SELECT b.*,s.slug,s.name,s.visibility,s.current_published_version_id,s.archived_at,v.content_digest AS current_digest FROM skill_source_bindings b JOIN skills s ON s.workspace_id=b.workspace_id AND s.id=b.skill_id LEFT JOIN skill_versions v ON v.workspace_id=s.workspace_id AND v.id=s.current_published_version_id WHERE b.workspace_id=$1 AND b.source_id=$2 AND ($3::boolean OR b.disconnected_at IS NULL) ORDER BY b.skill_path,b.disconnected_at DESC NULLS FIRST,b.id",
         [p.workspaceId, id, includeDisconnected],
       )
     ).rows;
@@ -325,16 +332,18 @@ export class GitSourceService {
         "SELECT count(*)::text AS count FROM skill_source_bindings WHERE workspace_id=$1 AND source_id=$2 AND disconnected_at IS NULL",
         [m.principal.workspaceId, m.sourceId],
       );
-      if (Number(count.rows[0]?.count ?? 0) >= 32)
+      if (Number(count.rows[0]?.count ?? 0) >= MAX_BINDINGS)
         throw new DomainError(
           "VALIDATION_FAILED",
-          "A source may bind at most 32 skills",
+          `A source may bind at most ${String(MAX_BINDINGS)} skills`,
           400,
         );
+      // Disconnected rows for this path stay as mapping history.
       try {
         await c.query(
-          "INSERT INTO skill_source_bindings(workspace_id,source_id,skill_path,skill_id,base_version_id) VALUES($1,$2,$3,$4,$5) ON CONFLICT(source_id,skill_path) DO UPDATE SET skill_id=EXCLUDED.skill_id,base_version_id=EXCLUDED.base_version_id,last_digest=NULL,last_version_id=NULL,last_commit_sha=NULL,disconnected_at=NULL,status='bound',updated_at=now()",
+          "INSERT INTO skill_source_bindings(id,workspace_id,source_id,skill_path,skill_id,base_version_id) VALUES($1,$2,$3,$4,$5,$6)",
           [
+            `source-binding:${crypto.randomUUID()}`,
             m.principal.workspaceId,
             m.sourceId,
             path,
@@ -390,6 +399,7 @@ export class GitSourceService {
     const plan: GitPlanEntry[] = [];
     const seen = new Set<string>(),
       slugCounts = new Map<string, number>();
+    let added = 0;
     for (const item of snapshot.skills)
       if (item.bundle)
         slugCounts.set(
@@ -408,7 +418,11 @@ export class GitSourceService {
           bindingVersionId: binding?.last_version_id ?? null,
         };
       if (!item.bundle) {
-        plan.push({ ...base, action: "error", message: item.error ?? "Invalid skill" });
+        plan.push({
+          ...base,
+          action: "invalid",
+          message: (item.error ?? "Invalid skill").slice(0, MAX_PLAN_MESSAGE),
+        });
         continue;
       }
       const slug = item.bundle.skill.slug;
@@ -455,6 +469,15 @@ export class GitSourceService {
         continue;
       }
       let action: GitPlanEntry["action"] = "added";
+      if (!binding && bindings.length + added >= MAX_BINDINGS) {
+        plan.push({
+          ...base,
+          action: "conflict",
+          message: `A source may bind at most ${String(MAX_BINDINGS)} skills; disconnect one first`,
+        });
+        continue;
+      }
+      if (!binding) added++;
       if (binding) {
         action = binding.last_digest === item.bundle.digest ? "unchanged" : "changed";
         // Format-v2 bundles gain a server-generated lock, so an identical explicit
@@ -487,6 +510,8 @@ export class GitSourceService {
           action: "missing",
           message: "Source path is missing or renamed; the existing skill is preserved",
         });
+    if (plan.length > MAX_BINDINGS * 2)
+      throw new DomainError("CONFLICT", "Source plan exceeds the import limit", 409);
     return this.transaction(m, async (c) => {
       const current = await this.row(m.principal, source.id, c, true);
       if (
@@ -520,6 +545,29 @@ export class GitSourceService {
       return runRecord(row);
     });
   }
+  private async assertBindable(
+    c: PoolClient,
+    p: Principal,
+    sourceId: string,
+    path: string,
+  ) {
+    const r = await c.query<{ path_bound: boolean; count: string }>(
+      "SELECT bool_or(skill_path=$3) AS path_bound,count(*)::text AS count FROM skill_source_bindings WHERE workspace_id=$1 AND source_id=$2 AND disconnected_at IS NULL",
+      [p.workspaceId, sourceId, path],
+    );
+    if (r.rows[0]?.path_bound)
+      throw new DomainError(
+        "CONFLICT",
+        "Source path is already bound; preview again",
+        409,
+      );
+    if (Number(r.rows[0]?.count ?? 0) >= MAX_BINDINGS)
+      throw new DomainError(
+        "CONFLICT",
+        `A source may bind at most ${String(MAX_BINDINGS)} skills`,
+        409,
+      );
+  }
   private config(s: GitSource): GitSourceConfig {
     return {
       repositoryUrl: s.repositoryUrl,
@@ -540,10 +588,14 @@ export class GitSourceService {
         run = r.rows[0];
       if (!run) throw new DomainError("NOT_FOUND", "Preview was not found", 404);
       if (run.status === "complete")
-        return { source: record(source), run, replay: true };
+        return { source: record(source), run, replay: true, revision: 0 };
+      // A run applies at the revision it previewed, or resumes only if nothing
+      // changed since its own last claim. Every claim advances the revision, so
+      // sibling previews cannot apply plans computed before this run's writes.
       if (
         source.archived_at ||
-        source.revision !== run.source_revision ||
+        (source.revision !== run.source_revision &&
+          source.revision !== run.applied_revision) ||
         (source.sync_expires_at && source.sync_expires_at > new Date())
       )
         throw new DomainError(
@@ -551,16 +603,23 @@ export class GitSourceService {
           "Source changed, is archived, or another sync is running",
           409,
         );
-      await c.query(
-        "UPDATE skill_sources SET sync_token=$3,sync_expires_at=now()+interval '3 minutes' WHERE workspace_id=$1 AND id=$2",
+      const claim = await c.query<{ revision: number }>(
+        "UPDATE skill_sources SET sync_token=$3,sync_expires_at=now()+interval '3 minutes',revision=revision+1,updated_at=now() WHERE workspace_id=$1 AND id=$2 RETURNING revision",
         [m.principal.workspaceId, source.id, token],
       );
-      return { source: record(source), run, replay: false };
+      const revision = claim.rows[0]?.revision;
+      if (revision === undefined)
+        throw new DomainError("NOT_FOUND", "Source was not found", 404);
+      await c.query(
+        "UPDATE skill_source_runs SET applied_revision=$4 WHERE workspace_id=$1 AND source_id=$2 AND id=$3",
+        [m.principal.workspaceId, source.id, run.id, revision],
+      );
+      return { source: record(source), run, replay: false, revision };
     });
     if (claimed.replay) return runRecord(claimed.run);
     const { source, run } = claimed,
       results = [...run.results];
-    const lease = { sourceId: source.id, token, revision: run.source_revision };
+    const lease = { sourceId: source.id, token, revision: claimed.revision };
     const fenced = <T>(fn: (c: PoolClient) => Promise<T>) =>
       this.transaction(m, async (c) => {
         await assertGitSourceLease(c, m.principal.workspaceId, lease);
@@ -590,7 +649,7 @@ export class GitSourceService {
         });
         let result: GitApplyResult = {
           path: entry.path,
-          status: entry.action === "error" ? "invalid" : entry.action,
+          status: entry.action,
           skillId: entry.skillId,
           versionId: null,
           message: entry.message,
@@ -631,7 +690,8 @@ export class GitSourceService {
                   (b) => b.skill_path === entry.path,
                 );
                 if (
-                  binding?.last_version_id !== entry.bindingVersionId ||
+                  binding?.skill_id !== entry.skillId ||
+                  binding.last_version_id !== entry.bindingVersionId ||
                   binding.current_published_version_id !== entry.baseVersionId
                 )
                   throw new DomainError(
@@ -639,7 +699,11 @@ export class GitSourceService {
                     "Skill or binding changed after preview; preview again",
                     409,
                   );
-              }
+              } else
+                // Check before creating a skill; the binding write rechecks.
+                await fenced((c) =>
+                  this.assertBindable(c, m.principal, source.id, entry.path),
+                );
               const options = {
                 principal: m.principal,
                 archiveBytes: bundle.bytes,
@@ -714,31 +778,64 @@ export class GitSourceService {
                   409,
                 );
               result.status = v.status === "published" ? "imported" : "pending_review";
-              await c.query(
-                "INSERT INTO skill_source_bindings(workspace_id,source_id,skill_path,skill_id,last_commit_sha,last_digest,last_version_id,base_version_id,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(source_id,skill_path) DO UPDATE SET skill_id=EXCLUDED.skill_id,disconnected_at=NULL,last_commit_sha=EXCLUDED.last_commit_sha,last_digest=EXCLUDED.last_digest,last_version_id=EXCLUDED.last_version_id,base_version_id=EXCLUDED.base_version_id,status=EXCLUDED.status,updated_at=now()",
-                [
-                  m.principal.workspaceId,
-                  source.id,
-                  entry.path,
-                  skillId,
-                  run.commit_sha,
-                  entry.digest,
-                  versionId,
-                  entry.baseVersionId ?? versionId,
-                  result.status,
-                ],
+              // Never retarget an active binding: it is updated only for the same
+              // skill (including a recovered retry of this entry), else inserted.
+              const active = await c.query<{ id: string; skill_id: string }>(
+                "SELECT id,skill_id FROM skill_source_bindings WHERE workspace_id=$1 AND source_id=$2 AND skill_path=$3 AND disconnected_at IS NULL FOR UPDATE",
+                [m.principal.workspaceId, source.id, entry.path],
               );
+              const values = [
+                run.commit_sha,
+                entry.digest,
+                versionId,
+                entry.baseVersionId ?? versionId,
+                result.status,
+              ];
+              const bound = active.rows[0];
+              if (bound) {
+                if (bound.skill_id !== skillId)
+                  throw new DomainError(
+                    "CONFLICT",
+                    "Source path is bound to another skill; preview again",
+                    409,
+                  );
+                await c.query(
+                  "UPDATE skill_source_bindings SET last_commit_sha=$2,last_digest=$3,last_version_id=$4,base_version_id=$5,status=$6,updated_at=now() WHERE id=$1",
+                  [bound.id, ...values],
+                );
+              } else {
+                if (entry.action === "changed")
+                  throw new DomainError(
+                    "CONFLICT",
+                    "Binding was disconnected after preview; preview again",
+                    409,
+                  );
+                await this.assertBindable(c, m.principal, source.id, entry.path);
+                await c.query(
+                  "INSERT INTO skill_source_bindings(id,workspace_id,source_id,skill_path,skill_id,last_commit_sha,last_digest,last_version_id,base_version_id,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
+                  [
+                    `source-binding:${crypto.randomUUID()}`,
+                    m.principal.workspaceId,
+                    source.id,
+                    entry.path,
+                    skillId,
+                    ...values,
+                  ],
+                );
+              }
             });
           } else if (entry.skillId)
             await fenced(async (c) => {
               if (entry.action === "unchanged") {
                 const target = await c.query<{
+                  id: string;
                   current_published_version_id: string | null;
                   archived_at: Date | null;
                   last_version_id: string | null;
+                  last_digest: string | null;
                 }>(
-                  `SELECT s.current_published_version_id,s.archived_at,b.last_version_id FROM skills s JOIN skill_source_bindings b ON b.workspace_id=s.workspace_id AND b.skill_id=s.id WHERE s.workspace_id=$1 AND b.source_id=$2 AND b.skill_path=$3 AND b.disconnected_at IS NULL FOR UPDATE OF s,b`,
-                  [m.principal.workspaceId, source.id, entry.path],
+                  `SELECT b.id,s.current_published_version_id,s.archived_at,b.last_version_id,b.last_digest FROM skills s JOIN skill_source_bindings b ON b.workspace_id=s.workspace_id AND b.skill_id=s.id WHERE s.workspace_id=$1 AND b.source_id=$2 AND b.skill_path=$3 AND b.skill_id=$4 AND b.disconnected_at IS NULL FOR UPDATE OF s,b`,
+                  [m.principal.workspaceId, source.id, entry.path, entry.skillId],
                 );
                 const t = target.rows[0];
                 if (
@@ -752,29 +849,47 @@ export class GitSourceService {
                     "Skill changed after preview; preview again",
                     409,
                   );
-                if (t.last_version_id) {
-                  const last = await c.query<{ status: string }>(
-                    "SELECT status FROM skill_versions WHERE workspace_id=$1 AND id=$2 FOR UPDATE",
-                    [m.principal.workspaceId, t.last_version_id],
-                  );
-                  if (last.rows[0]?.status === "rejected")
-                    throw new DomainError(
-                      "CONFLICT",
-                      "The imported candidate was rejected; preview again",
-                      409,
+                // As in preview, a rejected candidate blocks only its own content.
+                // Upstream content equal to the published head converges the
+                // binding to that head instead.
+                if (t.last_digest === entry.digest) {
+                  if (t.last_version_id) {
+                    const last = await c.query<{ status: string }>(
+                      "SELECT status FROM skill_versions WHERE workspace_id=$1 AND id=$2 FOR UPDATE",
+                      [m.principal.workspaceId, t.last_version_id],
                     );
-                }
-              }
-              await c.query(
-                "UPDATE skill_source_bindings SET status=$4,last_commit_sha=CASE WHEN $4='unchanged' THEN $5 ELSE last_commit_sha END,updated_at=now() WHERE workspace_id=$1 AND source_id=$2 AND skill_path=$3",
-                [
-                  m.principal.workspaceId,
-                  source.id,
-                  entry.path,
-                  entry.action,
-                  run.commit_sha,
-                ],
-              );
+                    if (last.rows[0]?.status === "rejected")
+                      throw new DomainError(
+                        "CONFLICT",
+                        "The imported candidate was rejected; preview again",
+                        409,
+                      );
+                  }
+                  await c.query(
+                    "UPDATE skill_source_bindings SET status='unchanged',last_commit_sha=$2,updated_at=now() WHERE id=$1",
+                    [t.id, run.commit_sha],
+                  );
+                } else
+                  await c.query(
+                    "UPDATE skill_source_bindings SET status='unchanged',last_commit_sha=$2,last_digest=$3,last_version_id=$4,base_version_id=$4,updated_at=now() WHERE id=$1",
+                    [
+                      t.id,
+                      run.commit_sha,
+                      entry.digest,
+                      t.current_published_version_id,
+                    ],
+                  );
+              } else
+                await c.query(
+                  "UPDATE skill_source_bindings SET status=$5,updated_at=now() WHERE workspace_id=$1 AND source_id=$2 AND skill_path=$3 AND skill_id=$4 AND disconnected_at IS NULL",
+                  [
+                    m.principal.workspaceId,
+                    source.id,
+                    entry.path,
+                    entry.skillId,
+                    entry.action,
+                  ],
+                );
             });
         } catch (e) {
           if (e instanceof DomainError && e.code === "GIT_SOURCE_LEASE_LOST") throw e;
@@ -803,11 +918,6 @@ export class GitSourceService {
           "UPDATE skill_source_runs SET results=$4,status=$5,failure_message=NULL,applied_at=now() WHERE workspace_id=$1 AND source_id=$2 AND id=$3",
           [m.principal.workspaceId, source.id, run.id, JSON.stringify(results), status],
         );
-        if (status === "complete")
-          await c.query(
-            "UPDATE skill_sources SET revision=revision+1,updated_at=now() WHERE workspace_id=$1 AND id=$2 AND sync_token=$3",
-            [m.principal.workspaceId, source.id, token],
-          );
         await this.audit(c, m, source.id, "synced", {
           runId: run.id,
           commitSha: run.commit_sha,

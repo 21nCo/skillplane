@@ -36,6 +36,7 @@ export interface Run {
 export interface SourceDetail {
   source: Source;
   bindings: {
+    id: string;
     path: string;
     skillId: string;
     slug: string;

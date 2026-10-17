@@ -26,9 +26,14 @@ owner chooses **Bind an existing workspace skill**; imports never silently attac
 manual skills. When several source paths declare one slug, every one of them is
 a conflict. Binding paths may name the skill directory or its `SKILL.md`; both
 store the directory. Changed published heads, archived targets, renamed slugs, and
-rejected imported candidates require review. Missing/renamed source paths retain
-the existing skill and history. Disconnect a binding to resolve a rename or attach the skill to a different source;
-this retains its versions, provenance, and the disconnected mapping. Archive stops
+rejected imported candidates require review; if upstream later returns to the
+published head, the binding converges to it as unchanged. Missing/renamed source
+paths retain the existing skill and history. An active binding is never moved to
+another skill: a path that became bound after preview is a conflict. A source binds
+at most 32 skills (missing paths count until disconnected); additions beyond that
+are conflicts and create nothing. Disconnect a binding to resolve a rename or attach the skill to a different source;
+this retains its versions, provenance, and the disconnected mapping, which stays
+listed even after the path is bound to another skill. Archive stops
 sync but preserves bindings,
 runs, versions, and provenance. Restoring permits another preview.
 
@@ -40,8 +45,10 @@ prevents settings/binding edits while it runs. Version/provenance commits and
 binding/run mutations validate lease ownership, expiry, and source revision under
 a database row lock; a stalled worker cannot resume after expiry or takeover.
 Apply rechecks review decisions before recording unchanged content or recovering a
-previously committed candidate. Completed syncs invalidate older
-previews. A new preview is required to apply corrected content at another commit.
+previously committed candidate. Starting an apply advances the source revision,
+so any other preview of that source becomes stale; only the same run may resume
+while nothing else changed. A new preview is required to apply corrected content
+at another commit.
 
 ## Provenance and storage
 
@@ -68,10 +75,14 @@ bundle roots, imports preserve common `LICENSE`, `LICENSE.txt`, `README.md`,
 without changing existing canonical digests.
 
 Imports only contact the fixed GitHub REST API host, do not follow redirects, and
-verify Git blob hashes. They never clone repositories or execute source code.
+verify Git blob hashes. Refs resolve to a bare commit SHA, so large upstream
+diffs never count toward import limits. Only entries inside a selected skill
+directory are fetched or validated; other repository files are ignored. Inside a
+skill, paths follow bundle rules, and paths that collide after Unicode
+normalization or case folding make that skill invalid. They never clone repositories or execute source code.
 Reject symlinks, submodules, traversal, unsupported entries, detected private keys
 and token patterns, truncated trees, trees over 10,000 entries, more than 32 skills,
-more than 200 requests, skills with more than 198 distinct blob IDs (identical
+more than 200 requests, skills with more than 197 distinct blob IDs (identical
 files share one blob; the 200-request budget is shared by every skill in the
 snapshot, so a repository-wide source can reach it sooner), blobs over 5 MiB,
 snapshots over 20 MiB expanded, and fetches exceeding 90 seconds. Individual malformed skills remain explicit errors.
@@ -87,7 +98,7 @@ configuration or preview records.
 Under `/api/v1/workspaces/:workspaceId/sources`:
 
 - `GET` lists sources (50 per page, `cursor`); `POST` creates with an idempotency key.
-- `GET /:sourceId` returns source, bindings, and the latest 20 runs.
+- `GET /:sourceId` returns source, active and disconnected bindings, and the latest 20 runs.
 - `PATCH /:sourceId` replaces ref/policy/archive configuration. Include `repositoryUrl`, `path`, `archived`, and `expectedRevision`, plus the existing `ref` and `refPolicy` values to retain them.
 - `POST /:sourceId/bindings` explicitly binds `path` and `skillId`; `DELETE` disconnects `path`.
 - `POST /:sourceId/preview` creates a plan; `POST /:sourceId/apply` confirms `runId`.

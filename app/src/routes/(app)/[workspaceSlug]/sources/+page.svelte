@@ -319,7 +319,7 @@
         >{/if}
       <h3>Bound skills</h3>
       <ul>
-        {#each selected.bindings as binding (binding.path)}<li>
+        {#each selected.bindings as binding (binding.id)}<li>
             <a
               href={resolve("/(app)/[workspaceSlug]/skills/[skillSlug]", {
                 workspaceSlug: workspace?.slug ?? "",
