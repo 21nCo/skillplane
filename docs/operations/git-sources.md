@@ -68,6 +68,9 @@ pinned preview commit at apply, is a permanent `VALIDATION_FAILED` (400) error.
 Once the commit resolved, a failed tree or blob request aborts the whole snapshot
 as a retryable `SERVICE_UNAVAILABLE` (503), never a partial plan with invalid
 skills; network failures, throttling (403/429) and server errors are 503 too.
+Redirects are never followed: a redirected ref resolution (a moved or renamed
+repository) is a 400 asking for the repository's current URL, and a redirected
+tree or blob request aborts the snapshot with a 503.
 
 ## Provenance and storage
 

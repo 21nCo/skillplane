@@ -125,7 +125,11 @@ const MAX_SNAPSHOT_BYTES = 20 * 1024 * 1024,
   // Ref, commit and tree requests leave this many distinct blob fetches for one skill.
   MAX_SKILL_FILES = MAX_REQUESTS - 3;
 export class PublicGitHubSourceProvider implements GitSourceProvider {
-  constructor(private readonly fetcher: typeof fetch = globalThis.fetch) {}
+  // workerd rejects fetch called with a receiver other than the global scope,
+  // so the default looks up and calls the global fetch on each request.
+  constructor(
+    private readonly fetcher: typeof fetch = (input, init) => fetch(input, init),
+  ) {}
   async snapshot(input: GitSourceConfig, pinned?: string): Promise<GitSnapshot> {
     const config = gitSourceConfig({ ...input });
     if (pinned && !/^[a-f0-9]{40}$/i.test(pinned)) invalid("Invalid preview commit");
@@ -159,7 +163,9 @@ export class PublicGitHubSourceProvider implements GitSourceProvider {
               "x-github-api-version": "2026-03-10",
               "user-agent": "Skillplane-public-source-import",
             },
-            redirect: "error",
+            // workerd supports only "follow" and "manual"; redirects are
+            // rejected below and never followed.
+            redirect: "manual",
             signal: AbortSignal.timeout(Math.min(10000, remaining)),
           },
         );
@@ -167,6 +173,20 @@ export class PublicGitHubSourceProvider implements GitSourceProvider {
         throw new DomainError(
           "SERVICE_UNAVAILABLE",
           "GitHub could not be reached; retry later",
+          503,
+        );
+      }
+      if (
+        response.type === "opaqueredirect" ||
+        (response.status >= 300 && response.status < 400)
+      ) {
+        await response.body?.cancel();
+        // A moved or renamed repository redirects its ref resolution.
+        if (stage === "resolve")
+          invalid("GitHub redirected the repository; use its current URL");
+        throw new DomainError(
+          "SERVICE_UNAVAILABLE",
+          "GitHub redirected a content request; retry later",
           503,
         );
       }

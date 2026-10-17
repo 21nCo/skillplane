@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { gitSourceConfig, PublicGitHubSourceProvider } from "./git-source-provider.js";
 const sha = "a".repeat(40),
   treeSha = "b".repeat(40);
@@ -36,6 +36,8 @@ function fixture(
   const fetcher: typeof fetch = async (input, init) => {
     const url = String(input);
     calls.push(url);
+    // workerd rejects redirect: "error"; redirects are never followed.
+    expect(init?.redirect).toBe("manual");
     if (options.fail?.url.test(url))
       return new Response(JSON.stringify({ message: "Not Found" }), {
         status: options.fail.status,
@@ -289,6 +291,66 @@ describe("public GitHub source provider", () => {
       async () => new Response("x".repeat(1024 * 1024 + 1)),
     );
     await expect(large.snapshot(config)).rejects.toThrow("limit");
+  });
+  it("rejects redirects instead of following them", async () => {
+    const config = gitSourceConfig({ repositoryUrl: "https://github.com/a/b" });
+    const files = { "a/SKILL.md": markdown("Alpha"), "b/SKILL.md": markdown("Beta") };
+    // A renamed repository redirects ref resolution: the source URL must change.
+    for (const status of [301, 302, 307, 308]) {
+      const f = fixture(files, { fail: { url: /\/commits\//, status } });
+      await expect(f.provider.snapshot(config)).rejects.toMatchObject({
+        code: "VALIDATION_FAILED",
+        status: 400,
+        message: "GitHub redirected the repository; use its current URL",
+      });
+      expect(f.calls).toHaveLength(1);
+    }
+    // A redirected tree or blob aborts the snapshot as retryable.
+    for (const url of [/\/git\/trees\//, /\/git\/blobs\//]) {
+      const f = fixture(files, { fail: { url, status: 302 } });
+      await expect(f.provider.snapshot(config)).rejects.toMatchObject({
+        code: "SERVICE_UNAVAILABLE",
+        status: 503,
+      });
+      expect(
+        f.calls.every((c) => c.startsWith("https://api.github.com/repos/a/b/")),
+      ).toBe(true);
+    }
+    const opaque = fixture(files);
+    const provider = new PublicGitHubSourceProvider(async (input, init) => {
+      if (!String(input).includes("/git/blobs/")) return opaque.fetcher(input, init);
+      const response = new Response(null, { status: 200 });
+      Object.defineProperty(response, "type", { value: "opaqueredirect" });
+      return response;
+    });
+    await expect(provider.snapshot(config)).rejects.toMatchObject({
+      code: "SERVICE_UNAVAILABLE",
+      status: 503,
+    });
+  });
+  describe("default fetcher", () => {
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+    it("calls the global fetch with the receiver workerd requires", async () => {
+      const f = fixture({ "SKILL.md": markdown("Review") });
+      // workerd throws Illegal invocation when fetch runs with another receiver.
+      vi.stubGlobal(
+        "fetch",
+        function (this: unknown, ...args: Parameters<typeof fetch>) {
+          if (this !== undefined && this !== globalThis)
+            throw new TypeError("Illegal invocation");
+          return f.fetcher(...args);
+        },
+      );
+      const snapshot = await new PublicGitHubSourceProvider().snapshot(
+        gitSourceConfig({ repositoryUrl: "https://github.com/a/b" }),
+      );
+      expect(snapshot).toMatchObject({
+        commitSha: sha,
+        skills: [{ path: "", error: null }],
+      });
+    });
   });
   it("propagates body-stream failures as retryable transport errors", async () => {
     const f = fixture({ "SKILL.md": markdown("Review") });
