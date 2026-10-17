@@ -36,7 +36,7 @@ import {
   isPostHogSessionId,
 } from "./analytics.js";
 import {
-  compactToolCatalogResponse,
+  finalizeMcpProtocolResponse,
   prepareMcpToolCallRequest,
   skillplaneDiagnosticEvidence,
 } from "./client-profiles.js";
@@ -528,7 +528,7 @@ export function createMcpApp(options: CreateMcpAppOptions = {}) {
           });
           const response = await protocolHandler(protocolRequest, handleOptions);
           const protocolResponse = secureProtocolResponse(
-            await compactToolCatalogResponse(response, identity),
+            await finalizeMcpProtocolResponse(response, identity),
           );
           // Correlates client-visible failures with mcp.tool.rejected_before_handler.
           protocolResponse.headers.set("x-skillplane-request-id", requestId);

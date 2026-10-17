@@ -49,6 +49,17 @@ export type SkillplaneMcpToolName = (typeof SKILLPLANE_MCP_TOOL_NAMES)[number];
 
 export const SKILLPLANE_MCP_TOOL_COUNT = SKILLPLANE_MCP_TOOL_NAMES.length;
 
+/** Tools served by whichever deployment receives them, including a gateway. */
+export const GLOBAL_MCP_TOOL_NAMES: ReadonlySet<string> = new Set(["workspaces_list"]);
+
+/**
+ * Tools whose data lives in one workspace's regional cell. A gateway must route
+ * them and never run their handlers against control-plane data.
+ */
+export const WORKSPACE_ROUTED_MCP_TOOL_NAMES: ReadonlySet<string> = new Set(
+  SKILLPLANE_MCP_TOOL_NAMES.filter((name) => !GLOBAL_MCP_TOOL_NAMES.has(name)),
+);
+
 export function registeredSkillplaneMcpToolNames(
   tools: readonly { readonly name: string }[],
 ): string[] {

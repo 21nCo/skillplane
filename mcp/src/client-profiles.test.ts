@@ -1,22 +1,16 @@
 import {
   buildMcpFnEffectiveCatalog,
-  createSchemaCompiler,
   enrichMcpFnClientProfileCall,
   type McpFnClientProfile,
   type McpFnListedTool,
 } from "@mcpfn/core";
 import {
-  McpFnTestClient,
   runMcpFnClientProfileContracts,
   type McpFnClientProfileContractCase,
 } from "@mcpfn/testing";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
-import type { ApiServices } from "@skillplane/api";
+import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { callerDeclarationSchema } from "@skillplane/mcp-schema";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import incident from "../tests/fixtures/oauth-list-skills-incident.json" with { type: "json" };
-import type { McpAuditRecord, McpAuditWriter } from "./audit.js";
 import type { McpIdentity } from "./auth.js";
 import {
   CLAUDE_MCP_CLIENT_ID,
@@ -26,264 +20,24 @@ import {
   SKILLPLANE_CLIENT_PROFILES,
   verifiedClientIdentity,
 } from "./client-profiles.js";
-import { createMcpApp } from "./index.js";
+import {
+  appTarget,
+  connect,
+  DECLARED_CALLER,
+  describeDiagnosticContract,
+  GENERIC_CLIENT_ID,
+  harness,
+  oauthIdentity,
+  rawCall,
+  RESOURCE,
+  runtimeFor,
+  SERVICE_IDENTITY,
+  toolError,
+  WORKSPACE,
+} from "../tests/support/client-profile-contract.js";
 import { skillplaneMcpDeclaration } from "./server.js";
 import { SKILLPLANE_MCP_TOOL_COUNT } from "./tool-catalog.js";
 import type { McpToolRuntime } from "./tools/shared.js";
-
-const RESOURCE = "https://mcp.skillplane.dev/mcp";
-const GENERIC_CLIENT_ID = "dcr-client:agent-example";
-const WORKSPACE = {
-  id: "workspace:one",
-  slug: "one",
-  name: "One",
-  kind: "personal",
-  updated_at: new Date("2026-10-01T00:00:00.000Z"),
-};
-const SKILL = {
-  id: "skill:review",
-  workspaceId: WORKSPACE.id,
-  slug: "review",
-  name: "Review",
-  description: "Review pull requests.",
-  tags: ["review"],
-  visibility: "workspace",
-  currentPublishedVersionId: "version:review:1",
-  currentSemanticVersion: "1.0.0",
-  archivedAt: null,
-  createdAt: "2026-10-01T00:00:00.000Z",
-  updatedAt: "2026-10-01T00:00:00.000Z",
-};
-const DECLARED_CALLER = {
-  agentId: "service-agent",
-  agentName: "Service agent",
-  modelProvider: "Example",
-  modelName: "Example model",
-  modelVersion: "1",
-  clientName: "Example client",
-  clientVersion: "1",
-  runId: "run:declared",
-  sessionId: "session:declared",
-  conversationId: "conversation:declared",
-};
-const SECRET_VALUE = "argument-value-must-not-leak";
-
-type Principal =
-  { readonly kind: "oauth"; readonly clientId: string } | { readonly kind: "service" };
-
-interface Harness {
-  readonly app: ReturnType<typeof createMcpApp>;
-  readonly token: string;
-  readonly audit: McpAuditRecord[];
-}
-
-function harness(principal: Principal): Harness {
-  const audit: McpAuditRecord[] = [];
-  const writer: McpAuditWriter = {
-    record: async (event) => {
-      audit.push(event);
-    },
-    recordBatch: async (events) => {
-      audit.push(...events);
-    },
-  };
-  const controlQuery = async (sql: string, params: readonly unknown[] = []) => {
-    if (sql.includes("FROM service_principals")) {
-      return {
-        rows: [
-          {
-            id: "service:test",
-            workspace_id: WORKSPACE.id,
-            name: "Test service",
-            role: "viewer",
-            scopes: ["skills:read"],
-            delegated_user_id: null,
-            expires_at: null,
-            revoked_at: null,
-            credential_version: 1,
-            authfn_api_key_id: "api-key:test",
-          },
-        ],
-      };
-    }
-    if (sql.includes("FROM workspace_memberships membership")) {
-      return { rows: [{ ...WORKSPACE, role: "owner" }] };
-    }
-    if (sql.includes("FROM workspace_memberships"))
-      return { rows: [{ role: "owner" }] };
-    if (sql.includes("FROM workspaces workspace")) {
-      return { rows: [{ ...WORKSPACE, role: params[1] }] };
-    }
-    if (sql.includes("FROM workspaces")) {
-      const value = params[0];
-      return {
-        rows:
-          value === WORKSPACE.id || value === WORKSPACE.slug
-            ? [{ ...WORKSPACE, role: "viewer" }]
-            : [],
-      };
-    }
-    return { rows: [] };
-  };
-  const services = {
-    auth: {
-      oauth: {
-        resource: RESOURCE,
-        tokenPepper: "client-profile-test-pepper-at-least-32-characters",
-        now: () => new Date(),
-        pool: {
-          query: async () => ({
-            rows:
-              principal.kind === "oauth"
-                ? [
-                    {
-                      id: "oauth-token:test",
-                      user_id: "user:test",
-                      client_id: principal.clientId,
-                      resource: RESOURCE,
-                      scopes: ["skills:read", "contexts:read"],
-                      expires_at: new Date("2099-01-01T00:00:00.000Z"),
-                      revoked_at: null,
-                    },
-                  ]
-                : [],
-          }),
-        },
-      },
-      apiKeys: {
-        authenticate: async () => ({
-          type: "api-key",
-          actorType: "api-key",
-          actorId: "api-key:test",
-          metadata: {
-            kind: "skillplane_service_principal",
-            servicePrincipalId: "service:test",
-            workspaceId: WORKSPACE.id,
-            credentialVersion: 1,
-          },
-        }),
-      },
-    },
-    tenancySecret: "client-profile-test-tenancy-secret-at-least-32-characters",
-    database: { role: "combined", pool: {} },
-    controlDatabase: { pool: { query: controlQuery } },
-    skillService: {
-      listPage: async () => ({ skills: [SKILL], nextCursor: null }),
-    },
-    skillSearchService: {
-      search: async () => ({
-        skills: [
-          {
-            ...SKILL,
-            workspaceSlug: WORKSPACE.slug,
-            currentVersionId: SKILL.currentPublishedVersionId,
-            semanticVersion: SKILL.currentSemanticVersion,
-            digest: `sha256:${"a".repeat(64)}`,
-          },
-        ],
-        nextCursor: null,
-      }),
-    },
-  } as unknown as ApiServices;
-  return {
-    app: createMcpApp({
-      getServices: async () => services,
-      createAuditWriter: () => writer,
-    }),
-    token:
-      principal.kind === "oauth"
-        ? "spo_client_profile_test"
-        : "spk_client_profile_test",
-    audit,
-  };
-}
-
-function rawCall({ app, token }: Harness, body: unknown): Promise<Response> {
-  return Promise.resolve(
-    app.fetch(
-      new Request(RESOURCE, {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${token}`,
-          "content-type": "application/json",
-          accept: "application/json, text/event-stream",
-          "mcp-protocol-version": "2025-11-25",
-        },
-        body: JSON.stringify(body),
-      }),
-    ),
-  );
-}
-
-type McpFnTarget = McpFnClientProfileContractCase["target"];
-type McpFnTransport = Awaited<ReturnType<McpFnTarget["open"]>>["transport"];
-
-/** Drives the production Hono app, including McpFn auth, in process. */
-function appTarget({ app, token }: Harness): McpFnTarget {
-  return {
-    kind: "skillplane-app",
-    describe: () => ({ kind: "skillplane-app" }),
-    open: async () => ({
-      // The SDK declares sessionId as optional while McpFn's handle type uses
-      // exact optional properties; the runtime object is the same transport.
-      transport: new StreamableHTTPClientTransport(new URL(RESOURCE), {
-        requestInit: { headers: { authorization: `Bearer ${token}` } },
-        fetch: async (input, init) => app.fetch(new Request(input, init)),
-      }) as unknown as McpFnTransport,
-    }),
-  };
-}
-
-async function connect(target: Harness, clientInfo = { name: "test", version: "1" }) {
-  return McpFnTestClient.connectTarget(appTarget(target), clientInfo);
-}
-
-function toolError(result: CallToolResult) {
-  const text = result.content.find((item) => item.type === "text");
-  if (!result.isError || text?.type !== "text")
-    throw new Error("Expected a tool error");
-  return JSON.parse(text.text) as {
-    readonly error: {
-      readonly code: string;
-      readonly details: {
-        readonly lifecycleStage: string;
-        readonly issues: readonly Record<string, string>[];
-      };
-    };
-  };
-}
-
-function oauthIdentity(clientId: string): McpIdentity {
-  return {
-    kind: "oauth",
-    actorType: "user",
-    actorId: "user:test",
-    userId: "user:test",
-    credentialId: "oauth-token:test",
-    credentialKind: "oauth_access_token",
-    clientId,
-    scopes: ["skills:read"],
-    expiresAt: new Date("2099-01-01T00:00:00.000Z"),
-  };
-}
-
-const SERVICE_IDENTITY: McpIdentity = {
-  kind: "service",
-  actorType: "service_principal",
-  actorId: "service:test",
-  servicePrincipalId: "service:test",
-  userId: null,
-  credentialId: "api-key:test",
-  credentialKind: "service_principal",
-  workspaceId: WORKSPACE.id,
-  displayName: "Test service",
-  role: "viewer",
-  scopes: ["skills:read"],
-};
-
-function runtimeFor(identity: McpIdentity): McpToolRuntime {
-  return { identity } as McpToolRuntime;
-}
 
 function profileById(id: string): McpFnClientProfile<McpToolRuntime> {
   const profile = SKILLPLANE_CLIENT_PROFILES.find((candidate) => candidate.id === id);
@@ -605,127 +359,21 @@ describe("authenticated tool calls", () => {
     await client.close();
   });
 
-  it("accepts both nested selectors and the flat alias on discovery tools for every identity", async () => {
-    for (const principal of [
+  it("never runs a workspace tool against control-plane data", async () => {
+    const control = harness(
       { kind: "oauth", clientId: GENERIC_CLIENT_ID },
-      { kind: "service" },
-    ] as const) {
-      const target = harness(principal);
-      const client = await connect(target);
-      const caller = principal.kind === "service" ? { caller: DECLARED_CALLER } : {};
-      for (const selector of [
-        { workspace: { id: WORKSPACE.id } },
-        { workspace: { slug: WORKSPACE.slug } },
-        { workspaceId: WORKSPACE.id },
-      ]) {
-        const listed = await client.callTool("skills_list", { ...selector, ...caller });
-        expect(listed.isError, JSON.stringify(listed)).not.toBe(true);
-        expect(listed.structuredContent).toMatchObject({
-          workspace: { id: WORKSPACE.id },
-          skills: [{ id: SKILL.id }],
-        });
-        const searched = await client.callTool("skills_search", {
-          query: "review",
-          ...selector,
-          ...caller,
-        });
-        expect(searched.isError, JSON.stringify(searched)).not.toBe(true);
-        expect(searched.structuredContent).toMatchObject({
-          skills: [{ id: SKILL.id }],
-        });
-      }
-      for (const [selector, rejectedProperty] of [
-        [{ workspace: { id: WORKSPACE.id }, workspaceId: WORKSPACE.id }, "workspaceId"],
-        [{ workspace_id: WORKSPACE.id }, "workspace_id"],
-      ] as const) {
-        for (const [tool, extra] of [
-          ["skills_list", {}],
-          ["skills_search", { query: "review" }],
-        ] as const) {
-          const rejected = toolError(
-            await client.callTool(tool, { ...selector, ...extra, ...caller }),
-          );
-          expect(rejected.error.code).toBe("MCPFN_INVALID_ARGUMENTS");
-          expect(rejected.error.details.issues).toContainEqual(
-            expect.objectContaining({
-              keyword: "additionalProperties",
-              instancePath: "/",
-              rejectedProperty,
-            }),
-          );
-        }
-      }
-      await client.close();
-    }
-  });
-
-  it("emits one redacted, correlated diagnostic for a pre-handler rejection", async () => {
-    const target = harness({ kind: "oauth", clientId: CLAUDE_MCP_CLIENT_ID });
-    const logs: string[] = [];
-    vi.spyOn(console, "info").mockImplementation((line: unknown) => {
-      logs.push(String(line));
-    });
-    const response = await rawCall(target, {
-      jsonrpc: "2.0",
-      id: 1,
-      method: "tools/call",
-      params: {
-        name: "skills_list",
-        arguments: { workspace_id: SECRET_VALUE, caller: { agentId: SECRET_VALUE } },
-      },
-    });
-    const requestId = response.headers.get("x-skillplane-request-id");
-    const body = await response.text();
-    const result = (JSON.parse(body) as { readonly result: CallToolResult }).result;
-    const error = toolError(result);
-    expect(error.error).toMatchObject({
-      code: "MCPFN_INVALID_ARGUMENTS",
-      details: {
-        lifecycleStage: "input-validation",
-        profile: { id: OAUTH_CLIENT_PROFILES.claude.id, version: "1" },
-      },
-    });
-    expect(error.error.details.issues).toContainEqual({
-      path: "/",
-      instancePath: "/",
-      schemaPath: "#/additionalProperties",
-      keyword: "additionalProperties",
-      message: expect.any(String),
-      rejectedProperty: "workspace_id",
-    });
-    expect(error.error.details.issues).toContainEqual(
-      expect.objectContaining({ keyword: "required", missingProperty: "workspace" }),
+      { databaseRole: "control" },
     );
-    expect(body).not.toContain(SECRET_VALUE);
-
-    const diagnostics = logs
-      .map((line) => JSON.parse(line) as Record<string, unknown>)
-      .filter((entry) => entry.event === "mcp.tool.rejected_before_handler");
-    expect(requestId).toMatch(/^mcp-request:[0-9a-f-]{36}$/u);
-    expect(diagnostics).toEqual([
-      {
-        component: "mcp",
-        event: "mcp.tool.rejected_before_handler",
-        requestId,
-        tool: "skills_list",
-        profileId: `${OAUTH_CLIENT_PROFILES.claude.id}@1`,
-        stage: "input-validation",
-        code: "MCPFN_INVALID_ARGUMENTS",
-        actorType: "user",
-        actorId: "user:test",
-        issues: expect.arrayContaining([
-          {
-            keyword: "additionalProperties",
-            instancePath: "/",
-            schemaPath: "#/additionalProperties",
-            rejectedProperty: "workspace_id",
-          },
-        ]),
-      },
-    ]);
-    expect(logs.join("\n")).not.toContain(SECRET_VALUE);
-    expect(logs.join("\n")).not.toContain(target.token);
-    expect(target.audit).toEqual([]);
+    const client = await connect(control);
+    const refused = toolError(
+      await client.callTool("skills_list", { workspace: { id: WORKSPACE.id } }),
+    );
+    expect(refused.error.code).toBe("VALIDATION_FAILED");
+    expect(control.workspaceReads).toEqual([]);
+    expect(control.audit).toEqual([]);
+    const global = await client.callTool("workspaces_list", {});
+    expect(global.isError, JSON.stringify(global)).not.toBe(true);
+    await client.close();
   });
 
   it("does not emit a diagnostic when the handler runs", async () => {
@@ -745,60 +393,7 @@ describe("authenticated tool calls", () => {
   });
 });
 
-describe("OAuth list-skills incident regression", () => {
-  function incidentArguments(): Record<string, unknown> {
-    return JSON.parse(
-      JSON.stringify(incident.rejectedArguments).replaceAll(
-        incident.redactedWorkspaceId,
-        WORKSPACE.id,
-      ),
-    ) as Record<string, unknown>;
-  }
-
-  it("fails on the pre-fix path that published the canonical schema to OAuth clients", async () => {
-    const validate = createSchemaCompiler().compile(incident.effectiveInputSchema);
-    expect(validate(incidentArguments())).toBe(false);
-
-    // The pre-fix runtime: the canonical declaration with no client profile
-    // and no pre-validation normalization.
-    const server = skillplaneMcpDeclaration.createServer({
-      context: () => runtimeFor(oauthIdentity(CLAUDE_MCP_CLIENT_ID)),
-    });
-    const client = await McpFnTestClient.connect(server);
-    const listed = await client.listTools();
-    expect(listed.find((tool) => tool.name === incident.tool)?.inputSchema).toEqual(
-      incident.effectiveInputSchema,
-    );
-    const rejected = toolError(
-      await client.callTool(incident.tool, incidentArguments()),
-    );
-    expect(rejected.error.code).toBe("MCPFN_INVALID_ARGUMENTS");
-    expect(rejected.error.details.issues).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ rejectedProperty: "workspaceId" }),
-        expect.objectContaining({ missingProperty: "caller" }),
-      ]),
-    );
-    await client.close();
-  });
-
-  it("reaches skills_list and returns the seeded skills through the corrected profile", async () => {
-    const target = harness({ kind: "oauth", clientId: CLAUDE_MCP_CLIENT_ID });
-    const client = await connect(target, { name: "claude-ai", version: "1" });
-    const tool = (await client.listTools()).find(
-      (entry) => entry.name === incident.tool,
-    );
-    expect(tool?.inputSchema).not.toHaveProperty("properties.caller");
-    const result = await client.callTool(incident.tool, incidentArguments());
-    expect(result.isError, JSON.stringify(result)).not.toBe(true);
-    expect(result.structuredContent).toMatchObject({
-      workspace: { id: WORKSPACE.id },
-      skills: [{ id: SKILL.id, name: SKILL.name }],
-    });
-    expect(target.audit[0]?.caller).toMatchObject(OAUTH_CLIENT_PROFILES.claude.caller);
-    await client.close();
-  });
-});
+describeDiagnosticContract("ajv");
 
 describe("pre-validation normalization", () => {
   function post(body: unknown): Request {

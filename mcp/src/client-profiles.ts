@@ -9,6 +9,11 @@ import type { CallerDeclaration } from "@skillplane/mcp-schema";
 import { emitMcpDiagnosticEvent } from "./audit.js";
 import type { McpIdentity } from "./auth.js";
 import { SKILLPLANE_MCP_TOOL_NAMES } from "./tool-catalog.js";
+import {
+  INVALID_ARGUMENTS_CODE,
+  normalizeInvalidArgumentsResult,
+  normalizeMcpSchemaIssues,
+} from "./schema-issues.js";
 import type { McpToolRuntime } from "./tools/shared.js";
 
 export const LINEAR_MCP_CLIENT_ID =
@@ -188,7 +193,8 @@ const PRE_HANDLER_STAGES = new Set<McpFnClientProfileEvidence["stage"]>([
 
 /**
  * Turns McpFn lifecycle evidence into one redacted diagnostic per call that
- * fails before its handler. Evidence is structural, so values never reach it.
+ * fails before its handler. Issues are normalized exactly as the client sees
+ * them, and their messages are dropped, so values never reach the event.
  */
 export function skillplaneDiagnosticEvidence(input: {
   readonly requestId: string;
@@ -206,7 +212,7 @@ export function skillplaneDiagnosticEvidence(input: {
       code: event.code ?? "MCPFN_TOOL_ERROR",
       actorType: input.identity.actorType,
       actorId: input.identity.actorId,
-      issues: (event.issues ?? []).slice(0, 20),
+      issues: normalizeMcpSchemaIssues(event.issues ?? []).slice(0, 20),
     });
   };
 }
@@ -298,32 +304,41 @@ function isJsonObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-export async function compactToolCatalogResponse(
+/**
+ * The single post-McpFn wire step: Linear catalog compaction and value-free
+ * invalid-argument issues. The body is parsed only when one of them applies.
+ */
+export async function finalizeMcpProtocolResponse(
   response: Response,
   identity: McpIdentity,
 ): Promise<Response> {
-  if (
-    identity.kind !== "oauth" ||
-    !oauthClientProfileFor(identity.clientId).compactWireCatalog ||
-    !response.headers.get("content-type")?.includes("application/json")
-  ) {
+  if (!response.headers.get("content-type")?.includes("application/json")) {
     return response;
   }
+  const compact =
+    identity.kind === "oauth" &&
+    oauthClientProfileFor(identity.clientId).compactWireCatalog;
   const body = await response.text();
+  if (!compact && !body.includes(INVALID_ARGUMENTS_CODE)) {
+    return new Response(body, response);
+  }
   let payload: unknown;
   try {
     payload = JSON.parse(body);
   } catch {
     return new Response(body, response);
   }
-  if (
-    !isJsonObject(payload) ||
-    !isJsonObject(payload.result) ||
-    !Array.isArray(payload.result.tools)
-  ) {
-    return new Response(body, response);
+  let changed = false;
+  for (const message of Array.isArray(payload) ? payload : [payload]) {
+    if (!isJsonObject(message) || !isJsonObject(message.result)) continue;
+    const result = message.result;
+    if (compact && Array.isArray(result.tools)) {
+      result.tools = compactLinearToolCatalog(result.tools as Tool[]);
+      changed = true;
+    }
+    if (normalizeInvalidArgumentsResult(result)) changed = true;
   }
-  payload.result.tools = compactLinearToolCatalog(payload.result.tools as Tool[]);
+  if (!changed) return new Response(body, response);
   const headers = new Headers(response.headers);
   headers.delete("content-length");
   return new Response(JSON.stringify(payload), {

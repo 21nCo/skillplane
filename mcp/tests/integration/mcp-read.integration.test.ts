@@ -244,7 +244,7 @@ describe("MCP read surface", () => {
         name: "skills_search",
         arguments: {
           query: "authorization",
-          workspaceId: environment.owner.workspaceId,
+          workspace: { id: environment.owner.workspaceId },
           visibility: ["public"],
           tags: ["review"],
           limit: 20,
@@ -270,6 +270,7 @@ describe("MCP read surface", () => {
         name: "skills_search",
         arguments: {
           query: "incident",
+          // Deprecated flat alias for workspace: { id }, kept for older clients.
           workspaceId: environment.owner.workspaceId,
           visibility: ["private"],
           limit: 20,

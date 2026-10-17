@@ -186,6 +186,21 @@ function errorResult(error: McpToolError, requestId: string): CallToolResult {
   };
 }
 
+/**
+ * Refuses a workspace tool on a deployment that holds only control-plane data.
+ * A gateway serves such a call locally only when its arguments name no
+ * workspace, so validation normally rejects it before this point.
+ */
+export function workspaceRouteRequiredResult(): CallToolResult {
+  return errorResult(
+    new McpToolError(
+      "VALIDATION_FAILED",
+      "The MCP tool call does not identify one workspace",
+    ),
+    `mcp:${crypto.randomUUID()}`,
+  );
+}
+
 export async function executeReadTool<T extends object>(
   runtime: McpToolRuntime,
   tool: string,

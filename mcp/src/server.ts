@@ -81,6 +81,7 @@ import {
   skillVersionsDiffOutputSchema,
 } from "@skillplane/mcp-schema";
 import { skillplaneClientProfiles } from "./client-profiles.js";
+import { WORKSPACE_ROUTED_MCP_TOOL_NAMES } from "./tool-catalog.js";
 import { skillAmend } from "./tools/amend.js";
 import { skillAssetRetrieve } from "./tools/assets.js";
 import { skillsList, workspacesList } from "./tools/catalog.js";
@@ -111,7 +112,7 @@ import {
   skillVersionsDiff,
   skillVisibilityUpdate,
 } from "./tools/skill-lifecycle.js";
-import type { McpToolRuntime } from "./tools/shared.js";
+import { workspaceRouteRequiredResult, type McpToolRuntime } from "./tools/shared.js";
 import { skillVersionsList } from "./tools/versions.js";
 import { z, type ZodType } from "zod";
 
@@ -179,10 +180,17 @@ function tool<TInput>(options: {
     inputSchema: objectSchema(options.input, "input"),
     outputSchema: objectSchema(options.output, "output"),
     annotations: options.annotations,
-    handler: async (args, runtime) =>
-      (await options.run(runtime, options.input.parse(args))) as Awaited<
+    handler: async (args, runtime) => {
+      if (
+        runtime.services.database.role === "control" &&
+        WORKSPACE_ROUTED_MCP_TOOL_NAMES.has(options.name)
+      ) {
+        return workspaceRouteRequiredResult();
+      }
+      return (await options.run(runtime, options.input.parse(args))) as Awaited<
         ReturnType<McpFnToolDefinition<McpToolRuntime>["handler"]>
-      >,
+      >;
+    },
   };
 }
 

@@ -126,7 +126,7 @@ export async function testProductionMcp() {
         name: "skills_search",
         arguments: {
           query: "skill",
-          workspaceId,
+          workspace: { id: workspaceId },
           visibility: ["private", "workspace", "public"],
           tags: [],
           cursor: null,
