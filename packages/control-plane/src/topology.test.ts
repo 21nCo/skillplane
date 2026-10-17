@@ -62,8 +62,8 @@ describe("Skillplane topology manifest", () => {
 
   it("keeps an explicit one-cell compatibility topology", () => {
     const parsed = createSingleCellTopology({
-      appAuthority: "https://app-dev.skillplane.dev",
-      mcpResource: "https://mcp-dev.skillplane.dev/mcp",
+      appAuthority: "https://skillplane-app.21n.dev",
+      mcpResource: "https://skillplane-mcp.21n.dev/mcp",
       regionId: "legacy",
     });
     expect(parsed.mode).toBe("single-cell");

@@ -1,7 +1,10 @@
 import { beforeAll, afterAll, describe, it, expect } from "vitest";
 import { Pool } from "pg";
 import { migrateDatabase } from "../../../db/src/migrate.js";
-import { seedTenantFixture } from "../../../testing/src/fixtures.js";
+import {
+  purgeTenantFixture,
+  seedTenantFixture,
+} from "../../../testing/src/fixtures.js";
 import { SkillGroupService } from "../../src/skill-groups.js";
 import { SkillService } from "../../src/skills.js";
 import { SkillSearchService } from "../../src/search.js";
@@ -80,12 +83,17 @@ describe.skipIf(!url)("workspace skill groups", () => {
       targetId: owner.actorId,
       add: true,
     });
-    expect((await groups.members(owner, g.id)).members).toHaveLength(1);
+    const [active] = (await groups.members(owner, g.id)).members;
+    expect(active).toMatchObject({ userId: owner.actorId, role: "owner" });
+    expect(active?.email).toBeTruthy();
     await pool.query(
       "DELETE FROM workspace_memberships WHERE workspace_id=$1 AND user_id=$2",
       [owner.workspaceId, owner.actorId],
     );
-    expect((await groups.members(owner, g.id)).members[0]?.role).toBe("removed");
+    // A removed member keeps only its identity marker, never profile details.
+    expect((await groups.members(owner, g.id)).members).toEqual([
+      { userId: owner.actorId, role: "removed", displayName: null, email: null },
+    ]);
     await groups.association({
       ...mutation(),
       groupId: g.id,
@@ -188,29 +196,6 @@ describe.skipIf(!url)("workspace skill groups", () => {
       archived: false,
     });
     expect((await groups.members(owner, g.id)).members).toHaveLength(1);
-    await pool.query(
-      "DELETE FROM workspace_memberships WHERE workspace_id=$1 AND user_id=$2",
-      [owner.workspaceId, owner.actorId],
-    );
-    expect((await groups.members(owner, g.id)).members[0]?.role).toBe("removed");
-    await groups.association({
-      ...mutation(),
-      groupId: g.id,
-      kind: "member",
-      targetId: owner.actorId,
-      add: false,
-    });
-    await pool.query(
-      "INSERT INTO workspace_memberships(id,workspace_id,user_id,role) VALUES($1,$2,$3,'owner')",
-      [`membership:${crypto.randomUUID()}`, owner.workspaceId, owner.actorId],
-    );
-    await groups.association({
-      ...mutation(),
-      groupId: g.id,
-      kind: "member",
-      targetId: owner.actorId,
-      add: true,
-    });
 
     await groups.association({
       ...mutation(),
@@ -236,6 +221,170 @@ describe.skipIf(!url)("workspace skill groups", () => {
     expect(
       audit.rows.filter((r) => r.event_type === "skill_group.skill.added"),
     ).toHaveLength(1);
+  });
+  it("writes exactly one attributed audit record per effective mutation", async () => {
+    const key = crypto.randomUUID();
+    const created = await groups.create({
+      ...mutation(),
+      name: `Audit ${key}`,
+      description: "Kept description",
+      idempotencyKey: key,
+    });
+    await groups.create({
+      ...mutation(),
+      name: `Audit ${key}`,
+      description: "Kept description",
+      idempotencyKey: key,
+    });
+    // Omitting description keeps it; a request that changes nothing is a no-op.
+    const renamed = await groups.update({
+      ...mutation(),
+      groupId: created.id,
+      expectedRevision: created.revision,
+      name: `Renamed ${key}`,
+      archived: false,
+    });
+    expect(renamed).toMatchObject({
+      description: "Kept description",
+      revision: created.revision + 1,
+    });
+    const unchanged = await groups.update({
+      ...mutation(),
+      groupId: created.id,
+      expectedRevision: renamed.revision,
+      name: ` Renamed  ${key} `,
+      description: "Kept description",
+      archived: false,
+    });
+    expect(unchanged).toEqual(renamed);
+    await expect(
+      groups.update({
+        ...mutation(),
+        groupId: created.id,
+        expectedRevision: created.revision,
+        archived: false,
+      }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    const archived = await groups.update({
+      ...mutation(),
+      groupId: created.id,
+      expectedRevision: renamed.revision,
+      archived: true,
+    });
+    const restored = await groups.update({
+      ...mutation(),
+      groupId: created.id,
+      expectedRevision: archived.revision,
+      archived: false,
+    });
+    expect(restored).toMatchObject({
+      name: `Renamed ${key}`,
+      description: "Kept description",
+      archivedAt: null,
+    });
+    // Explicit null is invalid metadata, not an omission: the request fails without
+    // archiving, a new revision or an audit record.
+    for (const field of ["name", "description"] as const)
+      await expect(
+        groups.update({
+          ...mutation(),
+          groupId: created.id,
+          expectedRevision: restored.revision,
+          [field]: null,
+          archived: true,
+        }),
+      ).rejects.toMatchObject({ code: "VALIDATION_FAILED", status: 400 });
+    expect(await groups.get(owner, created.id)).toEqual(restored);
+    const nullKey = crypto.randomUUID();
+    await expect(
+      groups.create({
+        ...mutation(),
+        name: `Null ${nullKey}`,
+        description: null,
+        idempotencyKey: nullKey,
+      }),
+    ).rejects.toMatchObject({ code: "VALIDATION_FAILED", status: 400 });
+    expect(
+      (
+        await pool.query(
+          "SELECT 1 FROM skill_groups WHERE workspace_id=$1 AND name=$2",
+          [owner.workspaceId, `Null ${nullKey}`],
+        )
+      ).rowCount,
+    ).toBe(0);
+    for (const [kind, targetId] of [
+      ["skill", skillId],
+      ["member", owner.actorId],
+    ] as const)
+      for (const add of [true, true, false, false])
+        await groups.association({
+          ...mutation(),
+          groupId: created.id,
+          kind,
+          targetId,
+          add,
+        });
+    const audit = await pool.query<{
+      event_type: string;
+      actor_id: string;
+      count: string;
+    }>(
+      "SELECT event_type,actor_id,count(*) FROM audit_events WHERE workspace_id=$1 AND resource_id=$2 GROUP BY event_type,actor_id ORDER BY event_type",
+      [owner.workspaceId, created.id],
+    );
+    expect(audit.rows).toEqual(
+      [
+        ["skill_group.created", "1"],
+        ["skill_group.member.added", "1"],
+        ["skill_group.member.removed", "1"],
+        ["skill_group.skill.added", "1"],
+        ["skill_group.skill.removed", "1"],
+        ["skill_group.updated", "3"],
+      ].map(([event_type, count]) => ({
+        event_type,
+        actor_id: owner.actorId,
+        count,
+      })),
+    );
+  });
+  it("purges group rows with the tenant fixture", async () => {
+    const suffix = `groups-purge-${crypto.randomUUID()}`;
+    const fixture = await seedTenantFixture(url ?? "", suffix);
+    const principal: Principal = {
+      ...owner,
+      actorId: fixture.userId,
+      userId: fixture.userId,
+      workspaceId: fixture.workspaceId,
+    };
+    const purgeMutation = () => ({
+      principal,
+      requestId: crypto.randomUUID(),
+      fencingEpoch: 1,
+    });
+    const group = await groups.create({
+      ...purgeMutation(),
+      name: "Purged",
+      idempotencyKey: crypto.randomUUID(),
+    });
+    for (const [kind, targetId] of [
+      ["skill", fixture.skillId],
+      ["member", fixture.userId],
+    ] as const)
+      await groups.association({
+        ...purgeMutation(),
+        groupId: group.id,
+        kind,
+        targetId,
+        add: true,
+      });
+    await purgeTenantFixture(url ?? "", suffix);
+    for (const table of ["skill_group_members", "skill_group_skills", "skill_groups"]) {
+      const remaining = await pool.query(
+        `SELECT 1 FROM ${table} WHERE workspace_id=$1`,
+        [fixture.workspaceId],
+      );
+      expect(remaining.rowCount, table).toBe(0);
+    }
   });
   it("fences writes during migration and retains ungrouped skills", async () => {
     await pool.query(

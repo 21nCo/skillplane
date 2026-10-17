@@ -13,8 +13,8 @@ import {
   writeJsonAtomic,
 } from "./production-deployment.mjs";
 
-export const developmentIssuer = "https://app-dev.skillplane.dev";
-export const developmentResource = "https://mcp-dev.skillplane.dev/mcp";
+export const developmentIssuer = "https://skillplane-app.21n.dev";
+export const developmentResource = "https://skillplane-mcp.21n.dev/mcp";
 export const developmentBucket = "skillplane-skill-bundles-dev";
 export const developmentPostHogHost = "https://us.i.posthog.com";
 export const developmentPostHogProxyHost = "https://user-dev.skillplane.dev";
@@ -23,7 +23,7 @@ export const developmentStateDirectory = resolve(root, ".data", "development");
 export const developmentWorkers = Object.freeze({
   app: {
     name: "skillplane-app-dev",
-    host: "app-dev.skillplane.dev",
+    host: "skillplane-app.21n.dev",
     directory: resolve(root, "app"),
     config: resolve(root, "app", "wrangler.development.generated.json"),
     template: resolve(root, "deployment", "wrangler", "app.development.json"),
@@ -31,7 +31,7 @@ export const developmentWorkers = Object.freeze({
   },
   mcp: {
     name: "skillplane-mcp-dev",
-    host: "mcp-dev.skillplane.dev",
+    host: "skillplane-mcp.21n.dev",
     directory: resolve(root, "mcp"),
     config: resolve(root, "mcp", "wrangler.development.generated.json"),
     template: resolve(root, "deployment", "wrangler", "mcp.development.json"),
@@ -131,6 +131,26 @@ export function developmentSiteKey() {
   return value;
 }
 
+const cloudflareAccountIdPattern = /^[a-f0-9]{32}$/iu;
+
+// Fails closed unless the development account is set and differs from the
+// production account, so an over-scoped token cannot deploy dev Workers to 21n.
+export function developmentCloudflareAccountId() {
+  const accountId = requireEnvironment("CLOUDFLARE_ACCOUNT_ID", {
+    pattern: cloudflareAccountIdPattern,
+  }).toLowerCase();
+  const productionAccountId = requireEnvironment(
+    "SKILLPLANE_PRODUCTION_CLOUDFLARE_ACCOUNT_ID",
+    { pattern: cloudflareAccountIdPattern },
+  ).toLowerCase();
+  if (accountId === productionAccountId) {
+    throw new Error(
+      "CLOUDFLARE_ACCOUNT_ID must be the development account, not SKILLPLANE_PRODUCTION_CLOUDFLARE_ACCOUNT_ID",
+    );
+  }
+  return accountId;
+}
+
 export function developmentCloudflareEnvironment() {
   const token = requireSecretEnvironment("SKILLPLANE_DEV_CLOUDFLARE_API_TOKEN");
   for (const name of ["CLOUDFLARE_API_TOKEN"]) {
@@ -138,7 +158,11 @@ export function developmentCloudflareEnvironment() {
       throw new Error(`SKILLPLANE_DEV_CLOUDFLARE_API_TOKEN must differ from ${name}`);
     }
   }
-  const environment = { ...process.env, CLOUDFLARE_API_TOKEN: token };
+  const environment = {
+    ...process.env,
+    CLOUDFLARE_API_TOKEN: token,
+    CLOUDFLARE_ACCOUNT_ID: developmentCloudflareAccountId(),
+  };
   for (const name of [
     "SKILLPLANE_DEV_CLOUDFLARE_API_TOKEN",
     "SKILLPLANE_DEV_AUTHFN_SECRET",
@@ -176,9 +200,19 @@ export function productionBundleReadEnvironment() {
       "SKILLPLANE_PRODUCTION_R2_READ_TOKEN must differ from the development Cloudflare token",
     );
   }
-  const environment = { ...process.env, CLOUDFLARE_API_TOKEN: token };
+  // Production bundles live in the production account; the shared environment's
+  // CLOUDFLARE_ACCOUNT_ID selects the development account, so pin the source here.
+  const accountId = requireEnvironment("SKILLPLANE_PRODUCTION_CLOUDFLARE_ACCOUNT_ID", {
+    pattern: cloudflareAccountIdPattern,
+  }).toLowerCase();
+  const environment = {
+    ...process.env,
+    CLOUDFLARE_API_TOKEN: token,
+    CLOUDFLARE_ACCOUNT_ID: accountId,
+  };
   for (const name of [
     "SKILLPLANE_PRODUCTION_R2_READ_TOKEN",
+    "SKILLPLANE_PRODUCTION_CLOUDFLARE_ACCOUNT_ID",
     "SKILLPLANE_DEV_CLOUDFLARE_API_TOKEN",
     "SKILLPLANE_DEV_AUTHFN_SECRET",
     "SKILLPLANE_DEV_OAUTH_TOKEN_PEPPER",

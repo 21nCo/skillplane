@@ -123,6 +123,6 @@ describe("canonical bundle", () => {
       ),
       { numRuns: 75, seed: 20_260_725 },
     );
-    // This exercises 150 ZIP canonicalizations alongside the full CI unit suite.
+    // 75 seeded runs take ~0.3s alone but approach the 5s default under parallel CI load.
   }, 30_000);
 });

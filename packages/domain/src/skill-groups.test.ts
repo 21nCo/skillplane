@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { groupMetadata, groupPage, SkillGroupService } from "./skill-groups.js";
+import { SkillSearchService } from "./search.js";
 import type { Pool } from "pg";
 import type { Principal } from "./principal.js";
 describe("skill group validation and authorization", () => {
@@ -58,5 +59,17 @@ describe("skill group validation and authorization", () => {
         }),
       ).rejects.toMatchObject({ code: "WORKSPACE_FORBIDDEN" });
     }
+  });
+  it("rejects anonymous group-scoped search before querying storage", async () => {
+    const pool = {
+      query: () => Promise.reject(new Error("storage must not be queried")),
+    } as unknown as Pool;
+    await expect(
+      new SkillSearchService(pool, "cursor-secret-for-unit-tests-32chars").search({
+        query: "design",
+        groupId: "group:a",
+        workspaceId: "workspace:a",
+      }),
+    ).rejects.toMatchObject({ code: "AUTHENTICATION_REQUIRED" });
   });
 });

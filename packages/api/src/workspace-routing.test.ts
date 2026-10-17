@@ -149,6 +149,20 @@ describe("API scope classification", () => {
         ),
       ),
     ).toEqual({ kind: "workspace", workspaceId: "workspace:one" });
+    for (const path of [
+      "groups",
+      "groups/group%3Aone/members/user%3Aone",
+      "groups/skill-assignments?skillId=skill%3Aone",
+    ])
+      expect(
+        classifyApiScope(
+          new Request(
+            `https://app.skillplane.dev/api/v1/workspaces/workspace%3Aone/${path}`,
+            { method: "PUT" },
+          ),
+        ),
+        path,
+      ).toEqual({ kind: "workspace", workspaceId: "workspace:one" });
     expect(
       classifyApiScope(
         new Request("https://app.skillplane.dev/api/v1/skills/skill%3Aone"),

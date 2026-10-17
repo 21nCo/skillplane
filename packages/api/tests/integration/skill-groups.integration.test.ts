@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { migrateDatabase, resolveTestDatabaseUrl } from "@skillplane/db";
 import {
+  createSkillBundleFixture,
   seedTenantFixture,
   purgeTenantFixture,
   TestObjectStorage,
@@ -11,8 +12,13 @@ const suffixes = [
   `groups-http-${crypto.randomUUID()}`,
   `groups-out-${crypto.randomUUID()}`,
 ] as const;
+const roleSuffixes = {
+  viewer: `groups-viewer-${crypto.randomUUID()}`,
+  editor: `groups-editor-${crypto.randomUUID()}`,
+} as const;
 let databaseUrl: string;
 let services: ApiServices, owner: TenantFixture, outsider: TenantFixture;
+const members: Partial<Record<keyof typeof roleSuffixes, TenantFixture>> = {};
 let app: ReturnType<typeof createApiApp>;
 beforeAll(async () => {
   const url = await resolveTestDatabaseUrl();
@@ -28,17 +34,27 @@ beforeAll(async () => {
     SKILL_BUNDLES: new TestObjectStorage(),
   });
   app = createApiApp({ getServices: async () => services });
+  // Sessions for viewer and editor members of the owner's workspace.
+  for (const role of ["viewer", "editor"] as const) {
+    const fixture = await seedTenantFixture(url, roleSuffixes[role]);
+    await services.database.pool.query(
+      "INSERT INTO workspace_memberships(id,workspace_id,user_id,role) VALUES($1,$2,$3,$4)",
+      [
+        `membership:${roleSuffixes[role]}:owner-workspace`,
+        owner.workspaceId,
+        fixture.userId,
+        role,
+      ],
+    );
+    members[role] = fixture;
+  }
 });
 afterAll(async () => {
-  for (const table of ["skill_group_members", "skill_group_skills", "skill_groups"])
-    await services.database.pool.query(
-      `DELETE FROM ${table} WHERE workspace_id=ANY($1::text[])`,
-      [[owner.workspaceId, outsider.workspaceId]],
-    );
   await services.datafn.close();
   await services.email?.close();
   await services.database.close();
-  for (const suffix of suffixes) await purgeTenantFixture(databaseUrl, suffix);
+  for (const suffix of [...suffixes, ...Object.values(roleSuffixes)])
+    await purgeTenantFixture(databaseUrl, suffix);
 });
 it("routes lifecycle and assignments through authenticated workspace scope", async () => {
   const headers = {
@@ -122,4 +138,349 @@ it("routes lifecycle and assignments through authenticated workspace scope", asy
   expect(
     ((await filtered.json()) as { data: { skills: unknown[] } }).data.skills,
   ).toEqual([]);
+  const padded = await app.request(
+    `${base}?state=all&userId=${encodeURIComponent(` ${owner.userId} `)}`,
+    { headers },
+  );
+  expect(padded.status).toBe(200);
+  expect(
+    ((await padded.json()) as { data: { groups: { id: string }[] } }).data.groups.map(
+      (group) => group.id,
+    ),
+  ).toContain(id);
+  for (const path of [
+    `/api/v1/workspaces/${owner.workspaceId}/skills?groupId=`,
+    `/api/v1/workspaces/${owner.workspaceId}/skills?q=design&groupId=`,
+    `${base}?userId=`,
+    `${base}?skillId=`,
+    `${base}?skillId=%20%20`,
+  ]) {
+    const response = await app.request(path, { headers });
+    expect(response.status, path).toBe(400);
+    expect(await response.json(), path).toMatchObject({
+      error: { code: "VALIDATION_FAILED" },
+    });
+  }
+});
+
+function sessionHeaders(tenant: TenantFixture, extra: Record<string, string> = {}) {
+  return {
+    authorization: `Bearer ${tenant.sessionToken}`,
+    "x-skillplane-workspace-id": owner.workspaceId,
+    ...extra,
+  };
+}
+async function data<T>(response: Response, label = ""): Promise<T> {
+  expect(response.status, label).toBeLessThan(300);
+  return ((await response.json()) as { data: T }).data;
+}
+async function createGroup(name: string) {
+  return (
+    await data<{ group: { id: string; revision: number } }>(
+      await app.request(`/api/v1/workspaces/${owner.workspaceId}/groups`, {
+        method: "POST",
+        headers: sessionHeaders(owner, {
+          "content-type": "application/json",
+          "idempotency-key": crypto.randomUUID(),
+        }),
+        body: JSON.stringify({ name }),
+      }),
+    )
+  ).group;
+}
+async function assignSkill(groupId: string, skillId: string) {
+  await data(
+    await app.request(
+      `/api/v1/workspaces/${owner.workspaceId}/groups/${encodeURIComponent(groupId)}/skills/${encodeURIComponent(skillId)}`,
+      { method: "PUT", headers: sessionHeaders(owner) },
+    ),
+  );
+}
+async function createSkill(slug: string, visibility: string, archived = false) {
+  const bundle = await createSkillBundleFixture({
+    name: `Harbor ${slug}`,
+    slug,
+    description: "Harbor operations guidance",
+    tags: ["harbor"],
+    skillMarkdown: "# Harbor\n\nHarbor operations guidance.\n",
+  });
+  const { skill } = await data<{ skill: { id: string } }>(
+    await app.request(`/api/v1/workspaces/${owner.workspaceId}/skills`, {
+      method: "POST",
+      headers: sessionHeaders(owner, {
+        "content-type": "application/json",
+        "idempotency-key": crypto.randomUUID(),
+      }),
+      body: JSON.stringify({
+        visibility,
+        bundleBase64: Buffer.from(bundle).toString("base64"),
+      }),
+    }),
+    slug,
+  );
+  if (archived)
+    await data(
+      await app.request(`/api/v1/skills/${encodeURIComponent(skill.id)}/archive`, {
+        method: "POST",
+        headers: sessionHeaders(owner, { "idempotency-key": crypto.randomUUID() }),
+      }),
+      `archive ${slug}`,
+    );
+  return skill.id;
+}
+
+it("rejects group writes from viewers, editors and service credentials over HTTP", async () => {
+  const group = await createGroup(`Writes ${crypto.randomUUID()}`);
+  const base = `/api/v1/workspaces/${owner.workspaceId}/groups`;
+  const writes = (headers: Record<string, string>) => [
+    app.request(base, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({ name: `Denied ${crypto.randomUUID()}` }),
+    }),
+    app.request(`${base}/${encodeURIComponent(group.id)}`, {
+      method: "PATCH",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({ name: "Denied", archived: true, expectedRevision: 1 }),
+    }),
+    app.request(
+      `${base}/${encodeURIComponent(group.id)}/skills/${encodeURIComponent(owner.skillId)}`,
+      { method: "PUT", headers },
+    ),
+    app.request(
+      `${base}/${encodeURIComponent(group.id)}/members/${encodeURIComponent(owner.userId)}`,
+      { method: "PUT", headers },
+    ),
+  ];
+  for (const role of ["viewer", "editor"] as const) {
+    const tenant = members[role];
+    if (!tenant) throw new Error(`${role} fixture missing`);
+    const headers = sessionHeaders(tenant, { "idempotency-key": crypto.randomUUID() });
+    for (const response of await Promise.all(writes(headers))) {
+      expect(response.status, role).toBe(403);
+      expect(await response.json()).toMatchObject({
+        error: { code: "WORKSPACE_FORBIDDEN" },
+      });
+    }
+    // Reading groups stays available to every workspace member.
+    expect((await app.request(base, { headers })).status, role).toBe(200);
+  }
+  const created = await data<{ credential: string }>(
+    await app.request(`/api/v1/workspaces/${owner.workspaceId}/service-principals`, {
+      method: "POST",
+      headers: sessionHeaders(owner, { "content-type": "application/json" }),
+      body: JSON.stringify({
+        name: `groups-agent-${crypto.randomUUID().slice(0, 8)}`,
+        role: "admin",
+        scopes: ["skills:read", "skills:write"],
+      }),
+    }),
+    "service principal",
+  );
+  const service = {
+    authorization: `Bearer ${created.credential}`,
+    "x-skillplane-workspace-id": owner.workspaceId,
+    "idempotency-key": crypto.randomUUID(),
+  };
+  // The workspace route tree, groups included, accepts only human sessions.
+  for (const response of await Promise.all(writes(service)))
+    expect(response.status).toBe(401);
+  for (const path of [
+    base,
+    `${base}/${encodeURIComponent(group.id)}`,
+    `${base}/${encodeURIComponent(group.id)}/members`,
+  ])
+    expect((await app.request(path, { headers: service })).status, path).toBe(401);
+  // A credential with skills:read can still filter search by a group id.
+  const serviceSearch = async () =>
+    (
+      await data<{ skills: { id: string }[] }>(
+        await app.request(
+          `/api/v1/skills/search?q=review&groupId=${encodeURIComponent(group.id)}`,
+          { headers: service },
+        ),
+        "service search",
+      )
+    ).skills.map((skill) => skill.id);
+  expect(await serviceSearch()).toEqual([]);
+  await assignSkill(group.id, owner.skillId);
+  expect(await serviceSearch()).toEqual([owner.skillId]);
+  const audit = await services.database.pool.query(
+    "SELECT event_type FROM audit_events WHERE workspace_id=$1 AND resource_id=$2",
+    [owner.workspaceId, group.id],
+  );
+  expect(audit.rows.map((row) => row.event_type).sort()).toEqual([
+    "skill_group.created",
+    "skill_group.skill.added",
+  ]);
+});
+
+it("filters skill list and search by group with visibility, archive and cursor", async () => {
+  const tag = crypto.randomUUID().slice(0, 8);
+  const grouped = await createSkill(`harbor-a-${tag}`, "private");
+  const groupedPublic = await createSkill(`harbor-b-${tag}`, "public");
+  const ungrouped = await createSkill(`harbor-c-${tag}`, "private");
+  const groupedArchived = await createSkill(`harbor-d-${tag}`, "private", true);
+  const group = await createGroup(`Harbor ${tag}`);
+  const second = await createGroup(`Harbor second ${tag}`);
+  for (const id of [grouped, groupedPublic, groupedArchived])
+    await assignSkill(group.id, id);
+  await assignSkill(second.id, grouped);
+  const headers = sessionHeaders(owner);
+  const list = `/api/v1/workspaces/${owner.workspaceId}/skills`;
+  const search = `/api/v1/skills/search?workspaceId=${encodeURIComponent(owner.workspaceId)}`;
+  const g = `groupId=${encodeURIComponent(group.id)}`;
+  async function ids(path: string) {
+    const all: string[] = [];
+    let cursor: string | null = null;
+    do {
+      const page: { skills: { id: string }[]; nextCursor: string | null } = await data(
+        await app.request(
+          `${path}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`,
+          { headers },
+        ),
+        path,
+      );
+      all.push(...page.skills.map((skill) => skill.id));
+      cursor = page.nextCursor;
+    } while (cursor);
+    return all.sort();
+  }
+  const sorted = (...values: string[]) => [...values].sort();
+  for (const [label, path] of [
+    ["list", `${list}?q=harbor&`],
+    ["list without query", `${list}?`],
+    ["search", `${search}&q=harbor&`],
+  ] as const) {
+    const scoped = (filters: string) => ids(`${path}${filters}&limit=1`);
+    if (label !== "list without query")
+      expect(await scoped("state=active"), label).toEqual(
+        expect.arrayContaining([grouped, groupedPublic, ungrouped]),
+      );
+    expect(await scoped(g), label).toEqual(sorted(grouped, groupedPublic));
+    expect(await scoped(`${g}&visibility=public`), label).toEqual([groupedPublic]);
+    expect(await scoped(`${g}&state=archived`), label).toEqual([groupedArchived]);
+    expect(await scoped(`${g}&state=all`), label).toEqual(
+      sorted(grouped, groupedPublic, groupedArchived),
+    );
+    // A cursor is bound to its group filter.
+    const first: { nextCursor: string | null } = await data(
+      await app.request(`${path}${g}&limit=1`, { headers }),
+    );
+    expect(first.nextCursor, label).toBeTruthy();
+    const mismatch = await app.request(
+      `${path}groupId=${encodeURIComponent(second.id)}&limit=1&cursor=${encodeURIComponent(first.nextCursor ?? "")}`,
+      { headers },
+    );
+    expect(mismatch.status, label).toBe(400);
+  }
+  for (const path of [`${search}&q=harbor&groupId=`, `${search}&groupId=%20`]) {
+    const response = await app.request(path, { headers });
+    expect(response.status, path).toBe(400);
+    expect(await response.json()).toMatchObject({
+      error: { code: "VALIDATION_FAILED" },
+    });
+  }
+  const badges = await data<{
+    skills: { skillId: string; groups: { id: string }[] }[];
+  }>(
+    await app.request(
+      `/api/v1/workspaces/${owner.workspaceId}/groups/skill-assignments?skillId=${encodeURIComponent(grouped)}&skillId=${encodeURIComponent(ungrouped)}`,
+      { headers },
+    ),
+  );
+  expect(
+    badges.skills.map((entry) => [
+      entry.skillId,
+      entry.groups.map((item) => item.id).sort(),
+    ]),
+  ).toEqual([
+    [grouped, sorted(group.id, second.id)],
+    [ungrouped, []],
+  ]);
+});
+
+it("traverses every page of groups and of an archived group's skills and members", async () => {
+  const base = `/api/v1/workspaces/${owner.workspaceId}/groups`;
+  const group = await createGroup(`Pages ${crypto.randomUUID()}`);
+  const sibling = await createGroup(`Pages sibling ${crypto.randomUUID()}`);
+  const skillIds = [
+    owner.skillId,
+    await createSkill(`pages-a-${crypto.randomUUID().slice(0, 8)}`, "workspace"),
+    await createSkill(`pages-b-${crypto.randomUUID().slice(0, 8)}`, "private"),
+  ];
+  for (const skillId of skillIds) await assignSkill(group.id, skillId);
+  const userIds = [owner.userId, members.viewer?.userId, members.editor?.userId];
+  for (const userId of userIds)
+    await data(
+      await app.request(
+        `${base}/${encodeURIComponent(group.id)}/members/${encodeURIComponent(userId ?? "")}`,
+        { method: "PUT", headers: sessionHeaders(owner) },
+      ),
+    );
+  await data(
+    await app.request(`${base}/${encodeURIComponent(group.id)}`, {
+      method: "PATCH",
+      headers: sessionHeaders(owner, { "content-type": "application/json" }),
+      body: JSON.stringify({ expectedRevision: group.revision, archived: true }),
+    }),
+  );
+  // Follow nextCursor one item at a time until it runs out.
+  async function traverse<T>(path: string, key: string, pick: (item: T) => string) {
+    const seen: string[] = [];
+    let cursor: string | null = null;
+    let pages = 0;
+    do {
+      const separator = path.includes("?") ? "&" : "?";
+      const page: Record<string, unknown> & { nextCursor: string | null } = await data(
+        await app.request(
+          `${path}${separator}limit=1${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`,
+          { headers: sessionHeaders(owner) },
+        ),
+        path,
+      );
+      const items = page[key] as T[];
+      expect(items.length, path).toBeLessThanOrEqual(1);
+      seen.push(...items.map(pick));
+      cursor = page.nextCursor;
+      pages += 1;
+      expect(pages, path).toBeLessThan(200);
+    } while (cursor);
+    expect(new Set(seen).size, path).toBe(seen.length);
+    return seen;
+  }
+  const groupIds = await traverse<{ id: string }>(
+    `${base}?state=all`,
+    "groups",
+    (g) => g.id,
+  );
+  expect(groupIds).toEqual(expect.arrayContaining([group.id, sibling.id]));
+  const everyGroup = await data<{ groups: { id: string }[] }>(
+    await app.request(`${base}?state=all&limit=100`, {
+      headers: sessionHeaders(owner),
+    }),
+  );
+  expect(groupIds).toEqual(everyGroup.groups.map((g) => g.id));
+  // The default list omits the archived group but still pages through the rest.
+  const activeIds = await traverse<{ id: string }>(base, "groups", (g) => g.id);
+  expect(activeIds).toContain(sibling.id);
+  expect(activeIds).not.toContain(group.id);
+  expect(
+    (
+      await traverse<{ id: string }>(
+        `${base}/${encodeURIComponent(group.id)}/skills`,
+        "skills",
+        (s) => s.id,
+      )
+    ).sort(),
+  ).toEqual([...skillIds].sort());
+  expect(
+    (
+      await traverse<{ userId: string }>(
+        `${base}/${encodeURIComponent(group.id)}/members`,
+        "members",
+        (m) => m.userId,
+      )
+    ).sort(),
+  ).toEqual([...userIds].sort());
 });
