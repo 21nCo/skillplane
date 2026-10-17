@@ -168,11 +168,11 @@ export class PublicGitHubSourceProvider implements GitSourceProvider {
       }
       if (!response.ok) {
         await response.body?.cancel();
+        // A missing repository or ref is a configuration error, not an outage.
+        if (response.status === 404) invalid("Public repository or ref was not found");
         throw new DomainError(
           "SERVICE_UNAVAILABLE",
-          response.status === 404
-            ? "Public repository or ref was not found"
-            : "GitHub rejected the request; check its availability or rate limit",
+          "GitHub rejected the request; check its availability or rate limit",
           503,
         );
       }

@@ -51,7 +51,8 @@ const MAX_BINDINGS = 32,
   MAX_PLAN_MESSAGE = 500,
   AWAITING_REVIEW = "The imported candidate is awaiting review",
   PUBLISHED_WHILE_PENDING =
-    "Upstream matches the published version; the imported candidate is still awaiting review";
+    "Upstream matches the published version; the imported candidate is still awaiting review",
+  PREVIEW_CHANGED = "Preview content changed; preview again";
 // Bindings use the same skill-directory form as source configuration and discovery.
 function bindingPath(path: string) {
   const normalized = gitSourceConfig({
@@ -103,6 +104,10 @@ export interface GitPlanEntry {
   // A pending imported candidate from this source path with identical content,
   // which apply binds instead of creating another version.
   candidateVersionId?: string | null;
+  // The prepared (lock-included) digest that decided this action, when preview
+  // could prepare it. Apply re-prepares and imports, reuses or converges only
+  // if it still matches; additions resolve their lock at apply.
+  preparedDigest?: string | null;
   message: string | null;
 }
 export interface GitApplyResult {
@@ -476,7 +481,8 @@ export class GitSourceService {
       }
       let action: GitPlanEntry["action"] = "added",
         message: string | null = null,
-        candidateVersionId: string | null = null;
+        candidateVersionId: string | null = null,
+        preparedDigest: string | null = null;
       if (!binding && bindings.length + added >= MAX_BINDINGS) {
         plan.push({
           ...base,
@@ -501,6 +507,7 @@ export class GitSourceService {
               m.principal,
               binding.visibility,
             );
+            preparedDigest = prepared.digest;
             if (prepared.digest === binding.current_digest) {
               // Upstream returned to the published head; a pending candidate
               // stays tracked for review rather than being dropped.
@@ -527,6 +534,7 @@ export class GitSourceService {
         action,
         message,
         ...(candidateVersionId ? { candidateVersionId } : {}),
+        ...(preparedDigest ? { preparedDigest } : {}),
       });
     }
     for (const binding of bindings)
@@ -744,11 +752,20 @@ export class GitSourceService {
             ["added", "changed", "unchanged"].includes(entry.action) &&
             bundle?.digest !== entry.digest
           )
-            throw new DomainError(
-              "CONFLICT",
-              "Preview content changed; preview again",
-              409,
-            );
+            throw new DomainError("CONFLICT", PREVIEW_CHANGED, 409);
+          // Dependencies published since preview change the prepared bundle;
+          // reuse and convergence must still match what preview decided on.
+          if (entry.action === "unchanged" && entry.preparedDigest && bundle) {
+            const visibility = (await this.bindings(m.principal, source.id)).find(
+              (b) => b.skill_path === entry.path,
+            )?.visibility;
+            if (
+              !visibility ||
+              (await this.skills.prepareGitBundle(bundle, m.principal, visibility))
+                .digest !== entry.preparedDigest
+            )
+              throw new DomainError("CONFLICT", PREVIEW_CHANGED, 409);
+          }
           if ((entry.action === "added" || entry.action === "changed") && bundle) {
             const recovered = await this.pool.query<{
               version_id: string;
@@ -826,6 +843,9 @@ export class GitSourceService {
                   baseVersionId: entry.baseVersionId,
                   proposedBump: "patch",
                   changeSummary: `Import ${source.repositoryUrl} at ${run.commit_sha}`,
+                  ...(entry.preparedDigest
+                    ? { expectedPreparedDigest: entry.preparedDigest }
+                    : {}),
                 });
                 skillId = entry.skillId;
                 versionId = version.id;

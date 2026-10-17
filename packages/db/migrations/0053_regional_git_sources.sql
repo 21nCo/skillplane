@@ -14,14 +14,17 @@ CREATE TABLE skill_source_runs (
  status text NOT NULL DEFAULT 'preview' CHECK(status IN ('preview','partial','complete')),
  created_at timestamptz NOT NULL DEFAULT now(), applied_at timestamptz,
  CONSTRAINT skill_source_runs_plan_size_check CHECK(jsonb_array_length(plan) <= 64),
- UNIQUE(workspace_id,id), FOREIGN KEY(workspace_id,source_id) REFERENCES skill_sources(workspace_id,id)
+ UNIQUE(workspace_id,id), CONSTRAINT skill_source_runs_workspace_id_source_unique UNIQUE(workspace_id,id,source_id),
+ FOREIGN KEY(workspace_id,source_id) REFERENCES skill_sources(workspace_id,id)
 );
 CREATE TABLE skill_source_bindings (
  id text PRIMARY KEY, workspace_id text NOT NULL, source_id text NOT NULL, skill_path text NOT NULL, skill_id text NOT NULL,
  last_commit_sha text, last_digest text, last_version_id text, base_version_id text,
  disconnected_at timestamptz, status text NOT NULL DEFAULT 'bound', updated_at timestamptz NOT NULL DEFAULT now(),
  FOREIGN KEY(workspace_id,source_id) REFERENCES skill_sources(workspace_id,id),
- FOREIGN KEY(workspace_id,skill_id) REFERENCES skills(workspace_id,id)
+ FOREIGN KEY(workspace_id,skill_id) REFERENCES skills(workspace_id,id),
+ FOREIGN KEY(workspace_id,last_version_id) REFERENCES skill_versions(workspace_id,id),
+ FOREIGN KEY(workspace_id,base_version_id) REFERENCES skill_versions(workspace_id,id)
 );
 CREATE UNIQUE INDEX skill_source_bindings_workspace_skill_unique ON skill_source_bindings(workspace_id,skill_id) WHERE disconnected_at IS NULL;
 CREATE UNIQUE INDEX skill_source_bindings_active_path_unique ON skill_source_bindings(source_id,skill_path) WHERE disconnected_at IS NULL;
@@ -31,7 +34,7 @@ CREATE TABLE skill_version_git_provenance (
  skill_path text NOT NULL, bundle_digest text NOT NULL, imported_at timestamptz NOT NULL DEFAULT now(),
  CONSTRAINT skill_version_git_provenance_run_skill_unique UNIQUE(run_id,skill_path),
  FOREIGN KEY(workspace_id,source_id) REFERENCES skill_sources(workspace_id,id),
- FOREIGN KEY(workspace_id,run_id) REFERENCES skill_source_runs(workspace_id,id),
+ FOREIGN KEY(workspace_id,run_id,source_id) REFERENCES skill_source_runs(workspace_id,id,source_id),
  FOREIGN KEY(workspace_id,version_id) REFERENCES skill_versions(workspace_id,id)
 );
 CREATE INDEX skill_source_runs_recent_idx ON skill_source_runs(workspace_id,source_id,created_at DESC);

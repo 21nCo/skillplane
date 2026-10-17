@@ -89,7 +89,8 @@
         })}
         class:active={pathname === `/${store.active.slug}/sources`}
         aria-current={pathname === `/${store.active.slug}/sources` ? "page" : undefined}
-        onclick={onClose}><BookOpenTextIcon aria-hidden="true" />Git sources</a
+        onclick={onClose}
+        ><BookOpenTextIcon weight="duotone" aria-hidden="true" />Git sources</a
       >
       {@const analyticsHref = resolve("/(app)/[workspaceSlug]/analytics", {
         workspaceSlug: store.active.slug,

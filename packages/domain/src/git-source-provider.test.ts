@@ -241,9 +241,24 @@ describe("public GitHub source provider", () => {
     await expect(
       fixture({}, { truncated: true }).provider.snapshot(config),
     ).rejects.toThrow("incomplete");
+    // A missing repository or ref is permanent; throttling and transport
+    // failures stay retryable.
     await expect(
-      fixture({}, { status: 429 }).provider.snapshot(config),
-    ).rejects.toMatchObject({ code: "SERVICE_UNAVAILABLE" });
+      fixture({}, { status: 404 }).provider.snapshot(config),
+    ).rejects.toMatchObject({
+      code: "VALIDATION_FAILED",
+      status: 400,
+      message: "Public repository or ref was not found",
+    });
+    for (const status of [403, 429])
+      await expect(
+        fixture({}, { status }).provider.snapshot(config),
+      ).rejects.toMatchObject({ code: "SERVICE_UNAVAILABLE", status: 503 });
+    await expect(
+      new PublicGitHubSourceProvider(async () => {
+        throw new TypeError("fetch failed");
+      }).snapshot(config),
+    ).rejects.toMatchObject({ code: "SERVICE_UNAVAILABLE", status: 503 });
     const large = new PublicGitHubSourceProvider(
       async () => new Response("x".repeat(1024 * 1024 + 1)),
     );

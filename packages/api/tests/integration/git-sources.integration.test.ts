@@ -2,7 +2,7 @@ import { GitSourceService } from "@skillplane/domain";
 import { canonicalizeBundle } from "@skillplane/storage";
 import { createSkillBundleFixture } from "@skillplane/testing";
 import type { Principal } from "@skillplane/domain";
-import { beforeAll, afterAll, it, expect } from "vitest";
+import { beforeAll, afterAll, it, expect, vi } from "vitest";
 import { migrateDatabase, resolveTestDatabaseUrl } from "@skillplane/db";
 import {
   seedTenantFixture,
@@ -365,4 +365,52 @@ it("serves version provenance only for the owning skill and workspace members", 
       )
     ).status,
   ).toBe(404);
+});
+
+it("reports a missing repository or ref as a permanent preview error", async () => {
+  const base = `/api/v1/workspaces/${owner.workspaceId}/sources`,
+    headers = {
+      authorization: `Bearer ${owner.sessionToken}`,
+      "content-type": "application/json",
+      "idempotency-key": crypto.randomUUID(),
+      "x-skillplane-workspace-id": owner.workspaceId,
+    };
+  const created = await app.request(base, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      repositoryUrl: "https://github.com/a/missing",
+      ref: "main",
+    }),
+  });
+  const { id } = ((await created.json()) as { data: { source: { id: string } } }).data
+    .source;
+  const preview = async (upstream: () => Promise<Response>) => {
+    vi.stubGlobal("fetch", upstream);
+    try {
+      const response = await app.request(`${base}/${id}/preview`, {
+        method: "POST",
+        headers,
+      });
+      return {
+        status: response.status,
+        code: ((await response.json()) as { error?: { code?: string } }).error?.code,
+      };
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  };
+  expect(await preview(async () => new Response("{}", { status: 404 }))).toEqual({
+    status: 400,
+    code: "VALIDATION_FAILED",
+  });
+  expect(await preview(async () => new Response("{}", { status: 429 }))).toEqual({
+    status: 503,
+    code: "SERVICE_UNAVAILABLE",
+  });
+  expect(
+    await preview(async () => {
+      throw new TypeError("fetch failed");
+    }),
+  ).toEqual({ status: 503, code: "SERVICE_UNAVAILABLE" });
 });

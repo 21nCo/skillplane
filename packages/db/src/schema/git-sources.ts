@@ -52,6 +52,12 @@ export const skillSourceRuns = pgTable(
   },
   (t) => [
     uniqueIndex("skill_source_runs_workspace_id_unique").on(t.workspaceId, t.id),
+    // Provenance references a run together with the source that owns it.
+    uniqueIndex("skill_source_runs_workspace_id_source_unique").on(
+      t.workspaceId,
+      t.id,
+      t.sourceId,
+    ),
     foreignKey({
       columns: [t.workspaceId, t.sourceId],
       foreignColumns: [skillSources.workspaceId, skillSources.id],
@@ -105,6 +111,14 @@ export const skillSourceBindings = pgTable(
       columns: [t.workspaceId, t.skillId],
       foreignColumns: [skills.workspaceId, skills.id],
     }),
+    foreignKey({
+      columns: [t.workspaceId, t.lastVersionId],
+      foreignColumns: [skillVersions.workspaceId, skillVersions.id],
+    }),
+    foreignKey({
+      columns: [t.workspaceId, t.baseVersionId],
+      foreignColumns: [skillVersions.workspaceId, skillVersions.id],
+    }),
   ],
 );
 export const skillVersionGitProvenance = pgTable(
@@ -130,8 +144,12 @@ export const skillVersionGitProvenance = pgTable(
       foreignColumns: [skillSources.workspaceId, skillSources.id],
     }),
     foreignKey({
-      columns: [t.workspaceId, t.runId],
-      foreignColumns: [skillSourceRuns.workspaceId, skillSourceRuns.id],
+      columns: [t.workspaceId, t.runId, t.sourceId],
+      foreignColumns: [
+        skillSourceRuns.workspaceId,
+        skillSourceRuns.id,
+        skillSourceRuns.sourceId,
+      ],
     }),
     foreignKey({
       columns: [t.workspaceId, t.versionId],

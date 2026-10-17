@@ -54,11 +54,23 @@ so any other preview of that source becomes stale; only the same run may resume
 while nothing else changed. A new preview is required to apply corrected content
 at another commit.
 
+Format-v2 skills gain a server-generated dependency lock, so a plan entry that
+preview could prepare (changed, unchanged against the published head, or reuse of
+a pending candidate) stores its `preparedDigest` beside the raw repository
+`digest`. Apply prepares the bundle again and imports, reuses or converges only
+when that digest still matches; a dependency published in between fails the entry
+with "Preview content changed; preview again" and creates nothing. Additions resolve
+their lock at apply. A missing repository or ref is a permanent `VALIDATION_FAILED`
+(400) error; network failures and GitHub throttling (403/429) stay retryable
+`SERVICE_UNAVAILABLE` (503).
+
 ## Provenance and storage
 
 Each imported version records repository URL, resolved commit SHA, directory,
 canonical bundle digest, source/run IDs, and import timestamp. The database rejects
-provenance updates and edits to stored preview identity/plan. Version overview and
+provenance updates and edits to stored preview identity/plan. Binding version
+references must name existing versions of the same workspace, and provenance must
+name a run of its own source. Version overview and
 review pages show provenance; source detail lists all bindings and recent runs.
 Catalog discovery supports a source filter with filter-bound pagination.
 
@@ -104,7 +116,7 @@ Under `/api/v1/workspaces/:workspaceId/sources`:
 - `GET` lists sources (50 per page, `cursor`); `POST` creates with an idempotency key.
 - `GET /:sourceId` returns source, active and disconnected bindings, and the latest 20 runs.
 - `PATCH /:sourceId` replaces ref/policy/archive configuration. Include `repositoryUrl`, `path`, `archived`, and `expectedRevision`, plus the existing `ref` and `refPolicy` values to retain them.
-- `POST /:sourceId/bindings` explicitly binds `path` and `skillId`; `DELETE` disconnects `path`.
+- `POST /:sourceId/bindings` explicitly binds `path` and `skillId` (JSON body `{ "path", "skillId" }`); `DELETE` disconnects the path given in the JSON body `{ "path": "skills/review" }`.
 - `POST /:sourceId/preview` creates a plan; `POST /:sourceId/apply` confirms `runId`.
 
 Workspace members may read; owner/admin human sessions may write. Existing CSRF

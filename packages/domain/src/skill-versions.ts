@@ -179,6 +179,8 @@ export class SkillVersionService {
     readonly requestId: string;
     readonly gitProvenance?: GitVersionProvenance;
     readonly gitLease?: GitSourceLease;
+    // A Git preview's prepared digest; the write fails if the lock resolved now differs.
+    readonly expectedPreparedDigest?: string;
     readonly fencingEpoch?: number;
   }): Promise<SkillVersionRecord> {
     authorize(options.principal, "skills:write");
@@ -227,6 +229,15 @@ export class SkillVersionService {
         skillVisibility.rows[0].visibility,
       );
       canonical = prepared.bundle;
+      if (
+        options.expectedPreparedDigest !== undefined &&
+        canonical.digest !== options.expectedPreparedDigest
+      )
+        throw new DomainError(
+          "CONFLICT",
+          "Preview content changed; preview again",
+          409,
+        );
       const reservedRevision = await withTransaction(
         this.pool,
         `${options.requestId}:reserve`,

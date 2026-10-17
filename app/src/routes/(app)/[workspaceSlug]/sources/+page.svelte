@@ -59,6 +59,12 @@
     sources = more ? [...sources, ...r.sources] : r.sources;
     cursor = r.nextCursor;
   }
+  function form() {
+    return { repositoryUrl, ref, refPolicy, singlePath, path, bindPath };
+  }
+  // Form values when the running request began. A refresh adopts server values
+  // only for fields not edited since, so typing during a request is kept.
+  let started: ReturnType<typeof form> | null = null;
   async function detail(source: Source) {
     if (!workspace) return;
     const id = workspace.id,
@@ -68,14 +74,16 @@
       `/${encodeURIComponent(source.id)}`,
     );
     if (!current(id, g)) return;
+    const now = form(),
+      adopt = (field: keyof typeof now) => !started || started[field] === now[field];
     selected = r;
     preview = null;
-    repositoryUrl = r.source.repositoryUrl;
-    ref = r.source.ref;
-    refPolicy = r.source.refPolicy;
-    singlePath = r.source.path !== null;
-    path = r.source.path ?? "";
-    bindPath = r.source.path ?? "";
+    if (adopt("repositoryUrl")) repositoryUrl = r.source.repositoryUrl;
+    if (adopt("ref")) ref = r.source.ref;
+    if (adopt("refPolicy")) refPolicy = r.source.refPolicy;
+    if (adopt("singlePath")) singlePath = r.source.path !== null;
+    if (adopt("path")) path = r.source.path ?? "";
+    if (adopt("bindPath")) bindPath = r.source.path ?? "";
     bindSkillId = "";
     if (canManage) await findSkills();
   }
@@ -85,12 +93,16 @@
       g = generation;
     busy = true;
     error = "";
+    started = form();
     try {
       await action();
     } catch (e) {
       if (current(id, g)) error = e instanceof Error ? e.message : "The request failed";
     } finally {
-      if (current(id, g)) busy = false;
+      if (current(id, g)) {
+        busy = false;
+        started = null;
+      }
     }
   }
   function config() {
@@ -200,6 +212,7 @@
       preview = null;
       error = "";
       busy = false;
+      started = null;
       cursor = null;
       bindQuery = "";
       repositoryUrl = "";
@@ -458,7 +471,7 @@
   td,
   th {
     padding: 0.75rem;
-    border-bottom: 1px solid var(--sp-border-default);
+    border-bottom: 1px solid var(--sp-color-border);
   }
   li {
     margin: 0.5rem 0;

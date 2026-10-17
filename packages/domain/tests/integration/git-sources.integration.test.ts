@@ -413,15 +413,18 @@ describe("Git source persistence and recovery", () => {
     );
     const retryPreview = await sources.preview({ ...m(), sourceId: s.id });
     failProvider = true;
-    await expect(sources.preview({ ...m(), sourceId: s.id })).rejects.toThrow();
-    await expect(
-      sources.apply({ ...m(), sourceId: s.id, runId: retryPreview.id }),
-    ).rejects.toThrow();
+    try {
+      await expect(sources.preview({ ...m(), sourceId: s.id })).rejects.toThrow();
+      await expect(
+        sources.apply({ ...m(), sourceId: s.id, runId: retryPreview.id }),
+      ).rejects.toThrow();
+    } finally {
+      failProvider = false;
+    }
     expect((await sources.get(owner, s.id)).runs[0]).toMatchObject({
       status: "partial",
       failureMessage: "Source sync could not complete; retry this preview",
     });
-    failProvider = false;
     expect(
       (await sources.apply({ ...m(), sourceId: s.id, runId: retryPreview.id })).status,
     ).toBe("complete");
@@ -1413,5 +1416,250 @@ describe("Git source persistence and recovery", () => {
       versionId: first?.versionId,
     });
     expect(await count(published?.skillId)).toBe(3);
+  });
+  it("rejects a preview whose prepared composition changed before apply", async () => {
+    const workspace = (
+      await pool.query<{ slug: string }>("SELECT slug FROM workspaces WHERE id=$1", [
+        owner.workspaceId,
+      ])
+    ).rows[0]?.slug;
+    const publication = new PublicationService(
+      pool,
+      storage,
+      new IdempotencyStore(pool),
+    );
+    const count = async (skillId: string | null | undefined) =>
+      (await pool.query("SELECT 1 FROM skill_versions WHERE skill_id=$1", [skillId]))
+        .rowCount;
+    // Each case has its own dependency, so publishing a new child version
+    // changes only that case's prepared lock.
+    const child = async () => {
+      const slug = `dep-${crypto.randomUUID()}`;
+      const created = await skills.create({
+        ...m(),
+        workspaceId: owner.workspaceId,
+        archiveBytes: (await bundle(slug, "# Dependency")).bytes,
+        visibility: "private",
+        idempotencyKey: crypto.randomUUID(),
+      });
+      return {
+        slug,
+        publishNext: async () => {
+          const next = await versions.createCandidate({
+            ...m(),
+            skillId: created.skill.id,
+            baseVersionId: created.version.id,
+            proposedBump: "patch",
+            changeSummary: "Next dependency",
+            archiveBytes: (await bundle(slug, "# Dependency v2")).bytes,
+            idempotencyKey: crypto.randomUUID(),
+          });
+          await publication.publish({
+            ...m(),
+            skillId: created.skill.id,
+            candidateVersionId: next.id,
+            idempotencyKey: crypto.randomUUID(),
+          });
+        },
+      };
+    };
+    const composite = (slug: string, dependency: string, content: string) =>
+      canonicalizeBundleFiles({
+        skill: {
+          formatVersion: 2,
+          name: slug,
+          slug,
+          description: "Review workflows",
+          tags: [],
+          entrypoints: { execute: "SKILL.md" },
+          dependencies: [
+            {
+              alias: "dep",
+              workspace: workspace ?? "",
+              skill: dependency,
+              version: "^1.0.0",
+              scope: "execution",
+              mode: "invoke",
+              required: true,
+            },
+          ],
+        },
+        files: new Map([["SKILL.md", new TextEncoder().encode(content)]]),
+      });
+    const setup = async () => {
+      const dep = await child(),
+        slug = `pinned-${crypto.randomUUID()}`;
+      const source = await sources.create({
+        ...m(),
+        config: { repositoryUrl: `https://github.com/a/${slug}` },
+        idempotencyKey: crypto.randomUUID(),
+      });
+      const stage = async (commit: string, content: string) => {
+        snapshot = {
+          commitSha: commit.repeat(40),
+          skills: [
+            {
+              path: "parent",
+              bundle: await composite(slug, dep.slug, content),
+              error: null,
+            },
+          ],
+        };
+        return sources.preview({ ...m(), sourceId: source.id });
+      };
+      const apply = (runId: string) =>
+        sources.apply({ ...m(), sourceId: source.id, runId });
+      const binding = async () => (await sources.get(owner, source.id)).bindings[0];
+      return { dep, slug, source, stage, apply, binding };
+    };
+    const conflict = {
+      status: "error",
+      message: "Preview content changed; preview again",
+    };
+
+    // (a) A changed entry imports nothing when its dependency moved since preview.
+    const changed = await setup();
+    const v1 = (await changed.apply((await changed.stage("1", "# One")).id)).results[0];
+    const edit = await changed.stage("2", "# Two");
+    expect(edit.plan[0]).toMatchObject({
+      action: "changed",
+      preparedDigest: expect.any(String),
+    });
+    await changed.dep.publishNext();
+    const staleEdit = await changed.apply(edit.id);
+    expect(staleEdit.status).toBe("partial");
+    expect(staleEdit.results[0]).toMatchObject(conflict);
+    expect(await count(v1?.skillId)).toBe(1);
+    expect(await changed.binding()).toMatchObject({ lastVersionId: v1?.versionId });
+    // Control: previewing again pins the current lock and applies.
+    const control = await changed.apply((await changed.stage("2", "# Two")).id);
+    expect(control.status).toBe("complete");
+    expect(control.results[0]?.status).toBe("pending_review");
+    expect(await count(v1?.skillId)).toBe(2);
+
+    // (b) Content that prepared equal to the published head does not converge
+    // an explicit binding once the dependency moved.
+    const bound = await setup();
+    const manual = await skills.create({
+      ...m(),
+      workspaceId: owner.workspaceId,
+      archiveBytes: (await composite(bound.slug, bound.dep.slug, "# Manual")).bytes,
+      visibility: "private",
+      idempotencyKey: crypto.randomUUID(),
+    });
+    await sources.bind({
+      ...m(),
+      sourceId: bound.source.id,
+      path: "parent",
+      skillId: manual.skill.id,
+    });
+    const same = await bound.stage("3", "# Manual");
+    expect(same.plan[0]).toMatchObject({
+      action: "unchanged",
+      preparedDigest: manual.version.digest,
+    });
+    await bound.dep.publishNext();
+    expect((await bound.apply(same.id)).results[0]).toMatchObject(conflict);
+    expect(await bound.binding()).toMatchObject({
+      status: "bound",
+      lastVersionId: null,
+    });
+    expect(await count(manual.skill.id)).toBe(1);
+
+    // (c) A pending candidate prepared with the old lock is not reused.
+    const reuse = await setup();
+    const head = (await reuse.apply((await reuse.stage("4", "# One")).id)).results[0];
+    const older = (await reuse.apply((await reuse.stage("5", "# Two")).id)).results[0];
+    const newer = (await reuse.apply((await reuse.stage("6", "# Three")).id))
+      .results[0];
+    const back = await reuse.stage("7", "# Two");
+    expect(back.plan[0]).toMatchObject({
+      action: "unchanged",
+      candidateVersionId: older?.versionId,
+      preparedDigest: expect.any(String),
+    });
+    await reuse.dep.publishNext();
+    expect((await reuse.apply(back.id)).results[0]).toMatchObject(conflict);
+    expect(await reuse.binding()).toMatchObject({
+      status: "pending_review",
+      lastVersionId: newer?.versionId,
+    });
+    expect(await count(head?.skillId)).toBe(3);
+  });
+  it("rejects dangling binding versions and provenance naming another source's run", async () => {
+    const stage = async (name: string) => {
+      const source = await sources.create({
+        ...m(),
+        config: { repositoryUrl: `https://github.com/a/${name}` },
+        idempotencyKey: crypto.randomUUID(),
+      });
+      snapshot = {
+        commitSha: "c".repeat(40),
+        skills: [
+          {
+            path: "one",
+            bundle: await bundle(`${name}-${crypto.randomUUID()}`, `# ${name}`),
+            error: null,
+          },
+        ],
+      };
+      const preview = await sources.preview({ ...m(), sourceId: source.id });
+      const result = (
+        await sources.apply({ ...m(), sourceId: source.id, runId: preview.id })
+      ).results[0];
+      return { source, runId: preview.id, versionId: result?.versionId ?? "" };
+    };
+    const a = await stage("integrity-a"),
+      b = await stage("integrity-b");
+    for (const column of ["last_version_id", "base_version_id"])
+      await expect(
+        pool.query(
+          `UPDATE skill_source_bindings SET ${column}='skill-version:missing' WHERE workspace_id=$1 AND source_id=$2`,
+          [owner.workspaceId, a.source.id],
+        ),
+      ).rejects.toMatchObject({ code: "23503" });
+    // A version belonging to another workspace is not a valid reference either.
+    const foreign = await skills.create({
+      ...m(),
+      principal: other,
+      workspaceId: other.workspaceId,
+      archiveBytes: (await bundle(`integrity-${crypto.randomUUID()}`, "# Other")).bytes,
+      visibility: "private",
+      idempotencyKey: crypto.randomUUID(),
+    });
+    await expect(
+      pool.query(
+        "UPDATE skill_source_bindings SET last_version_id=$3 WHERE workspace_id=$1 AND source_id=$2",
+        [owner.workspaceId, a.source.id, foreign.version.id],
+      ),
+    ).rejects.toMatchObject({ code: "23503" });
+    const manual = await skills.create({
+      ...m(),
+      workspaceId: owner.workspaceId,
+      archiveBytes: (await bundle(`integrity-${crypto.randomUUID()}`, "# Manual"))
+        .bytes,
+      visibility: "private",
+      idempotencyKey: crypto.randomUUID(),
+    });
+    const provenance = (sourceId: string, runId: string) =>
+      pool.query(
+        "INSERT INTO skill_version_git_provenance(version_id,workspace_id,source_id,run_id,repository_url,commit_sha,skill_path,bundle_digest) VALUES($1,$2,$3,$4,'https://github.com/a/b',$5,'two',$6)",
+        [
+          manual.version.id,
+          owner.workspaceId,
+          sourceId,
+          runId,
+          "c".repeat(40),
+          manual.version.digest,
+        ],
+      );
+    await expect(provenance(a.source.id, b.runId)).rejects.toMatchObject({
+      code: "23503",
+    });
+    // The matching pair is accepted, and imported bindings keep valid references.
+    await provenance(a.source.id, a.runId);
+    expect((await sources.get(owner, a.source.id)).bindings[0]).toMatchObject({
+      lastVersionId: a.versionId,
+    });
   });
 });

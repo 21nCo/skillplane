@@ -77,6 +77,25 @@ it.each(Object.entries(gitSourceSchema))(
         );
         expect(shape(created.rows[0]?.def ?? "")).toBe(shape(index.def));
       }
+      // Every modeled index exists in the migration, either as a secondary
+      // index of the same name or as a unique constraint on the same columns.
+      const constraints = (
+        await client.query<{ def: string }>(
+          "SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conrelid=$1::regclass AND contype='u'",
+          [name],
+        )
+      ).rows.map((r) => r.def);
+      for (const modeled of config.indexes) {
+        const columns = modeled.config.columns.map((c) => ("name" in c ? c.name : ""));
+        const constraint =
+          modeled.config.unique &&
+          !modeled.config.where &&
+          constraints.includes(`UNIQUE (${columns.join(", ")})`);
+        expect(
+          constraint || migrated.rows.some((r) => r.name === modeled.config.name),
+          `${String(modeled.config.name)} is migrated`,
+        ).toBe(true);
+      }
     } finally {
       await client.query("ROLLBACK");
       client.release();

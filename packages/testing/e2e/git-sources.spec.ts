@@ -110,8 +110,43 @@ test("@sources replays a create after its refresh fails and rotates the key for 
   expect(await sources(second)).toBe(1);
 });
 
+test("@sources keeps settings edited while a save is in flight", async ({
+  context,
+  page,
+}) => {
+  test.setTimeout(120_000);
+  await authenticate(context);
+  const listPath = `/api/v1/workspaces/${encodeURIComponent(harness.workspaceId)}/sources`;
+  let release: () => void = () => undefined;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  let patched: (() => void) | undefined;
+  const patchSeen = new Promise<void>((resolve) => (patched = resolve));
+  await page.route(`**${listPath}/*`, async (route) => {
+    if (route.request().method() !== "PATCH") return route.continue();
+    patched?.();
+    await held;
+    await route.continue();
+  });
+  await page.goto(`${harness.origin}/${harness.workspaceSlug}/sources`);
+  await page
+    .getByLabel("Repository URL")
+    .fill(`https://github.com/e2e-owner/draft-${Date.now().toString(36)}`);
+  await page.getByRole("button", { name: "Save source" }).click();
+  await expect(page.getByRole("heading", { name: "Source settings" })).toBeVisible();
+  const refInput = page.getByLabel("Branch, tag, or commit");
+  await refInput.fill("release-1");
+  await page.getByRole("button", { name: "Save source" }).click();
+  await patchSeen;
+  // The user keeps typing after submitting; the refresh must not discard it.
+  await refInput.fill("release-2");
+  release();
+  await expect(page.getByText("· track · release-1")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Save source" })).toBeEnabled();
+  await expect(refInput).toHaveValue("release-2");
+});
+
 for (const width of [1024, 1100] as const)
-  test(`@sources the catalog filters wrap at ${width}px with the sidebar shown`, async ({
+  test(`@sources the catalog filters fit without horizontal overflow at ${width}px with the sidebar shown`, async ({
     context,
     page,
   }) => {
