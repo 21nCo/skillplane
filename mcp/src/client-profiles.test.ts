@@ -4,11 +4,8 @@ import {
   type McpFnClientProfile,
   type McpFnListedTool,
 } from "@mcpfn/core";
-import {
-  runMcpFnClientProfileContracts,
-  type McpFnClientProfileContractCase,
-} from "@mcpfn/testing";
-import type { Tool } from "@modelcontextprotocol/sdk/types.js";
+import { runMcpFnClientProfileContracts } from "@mcpfn/testing";
+import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
 import { callerDeclarationSchema } from "@skillplane/mcp-schema";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { McpIdentity } from "./auth.js";
@@ -111,66 +108,77 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("authenticated client profiles", () => {
-  it("serves each verified identity its documented effective catalog", async () => {
-    const claude = harness({ kind: "oauth", clientId: CLAUDE_MCP_CLIENT_ID });
-    const linear = harness({ kind: "oauth", clientId: LINEAR_MCP_CLIENT_ID });
-    const generic = harness({ kind: "oauth", clientId: GENERIC_CLIENT_ID });
-    const service = harness({ kind: "service" });
-    // Reported client metadata is deliberately misleading: only verified
-    // identity may select a profile.
-    const cases: McpFnClientProfileContractCase[] = [
-      {
-        id: OAUTH_CLIENT_PROFILES.claude.id,
-        version: "1",
-        target: appTarget(claude),
-        clientInfo: { name: "linear", version: "1" },
-      },
-      {
-        id: OAUTH_CLIENT_PROFILES.linear.id,
-        version: "1",
-        target: appTarget(linear),
-        clientInfo: { name: "claude-ai", version: "1" },
-      },
-      {
-        id: OAUTH_CLIENT_PROFILES.generic.id,
-        version: "1",
-        target: appTarget(generic),
-        clientInfo: { name: "claude-ai", version: "1" },
-      },
-      {
-        id: "skillplane/service-principal",
-        version: "1",
-        target: appTarget(service),
-        clientInfo: { name: "claude-ai", version: "1" },
-      },
-    ];
-    const report = await runMcpFnClientProfileContracts({ profiles: cases });
-    expect(report.ok, JSON.stringify(report)).toBe(true);
+// Reported client metadata is deliberately misleading: only verified identity
+// may select a profile.
+const CATALOG_PROFILES = [
+  {
+    name: "claude",
+    id: OAUTH_CLIENT_PROFILES.claude.id,
+    identity: { kind: "oauth", clientId: CLAUDE_MCP_CLIENT_ID },
+    reported: { name: "linear", version: "1" },
+  },
+  {
+    name: "linear",
+    id: OAUTH_CLIENT_PROFILES.linear.id,
+    identity: { kind: "oauth", clientId: LINEAR_MCP_CLIENT_ID },
+    reported: { name: "claude-ai", version: "1" },
+  },
+  {
+    name: "generic",
+    id: OAUTH_CLIENT_PROFILES.generic.id,
+    identity: { kind: "oauth", clientId: GENERIC_CLIENT_ID },
+    reported: { name: "claude-ai", version: "1" },
+  },
+  {
+    name: "service",
+    id: "skillplane/service-principal",
+    identity: { kind: "service" },
+    reported: { name: "claude-ai", version: "1" },
+  },
+] as const;
 
-    const listed = new Map<string, Tool[]>();
-    for (const [name, target] of Object.entries({ claude, linear, generic, service })) {
-      const client = await connect(target, { name: "claude-ai", version: "1" });
-      listed.set(name, await client.listTools());
-      await client.close();
-    }
-    for (const [name, id] of [
-      ["claude", OAUTH_CLIENT_PROFILES.claude.id],
-      ["linear", OAUTH_CLIENT_PROFILES.linear.id],
-      ["generic", OAUTH_CLIENT_PROFILES.generic.id],
-      ["service", "skillplane/service-principal"],
-    ] as const) {
-      const result = report.profiles.find((entry) => entry.profile.id === id);
-      const tools = listed.get(name) ?? [];
+// McpFn compiles every tool schema of a profile's effective catalog, about one
+// second per profile on an idle host. CI runs workspace packages in parallel,
+// so the catalog tests get an explicit bound instead of the 5 s default.
+const CATALOG_TEST = { timeout: 20_000 };
+
+async function listedTools(target: ReturnType<typeof harness>): Promise<Tool[]> {
+  const client = await connect(target, { name: "claude-ai", version: "1" });
+  try {
+    return await client.listTools();
+  } finally {
+    await client.close();
+  }
+}
+
+describe("authenticated client profiles", () => {
+  it.for(CATALOG_PROFILES)(
+    "serves $name its documented catalog",
+    CATALOG_TEST,
+    async (entry) => {
+      const target = harness(entry.identity);
+      const report = await runMcpFnClientProfileContracts({
+        profiles: [
+          {
+            id: entry.id,
+            version: "1",
+            target: appTarget(target),
+            clientInfo: entry.reported,
+          },
+        ],
+      });
+      expect(report.ok, JSON.stringify(report)).toBe(true);
+      const result = report.profiles.find((profile) => profile.profile.id === entry.id);
+      const tools = await listedTools(target);
       // Reviewed per-profile effective catalog: McpFn hashes plus the input
       // contract each model actually sees.
       const snapshot = {
         ...result?.snapshot,
         catalogBytes: Buffer.byteLength(JSON.stringify({ tools })),
-        tools: result?.snapshot?.tools.map((entry) => {
-          const tool = tools.find((candidate) => candidate.name === entry.name);
+        tools: result?.snapshot?.tools.map((listed) => {
+          const tool = tools.find((candidate) => candidate.name === listed.name);
           return {
-            ...entry,
+            ...listed,
             inputProperties: Object.keys(tool?.inputSchema.properties ?? {}),
             required: tool?.inputSchema.required ?? [],
             outputSchema: tool?.outputSchema !== undefined,
@@ -178,7 +186,18 @@ describe("authenticated client profiles", () => {
         }),
       };
       await expect(`${JSON.stringify(snapshot, null, 2)}\n`).toMatchFileSnapshot(
-        `../tests/conformance/__snapshots__/client-profiles/${id.replace("/", "__")}.json`,
+        `../tests/conformance/__snapshots__/client-profiles/${entry.id.replace("/", "__")}.json`,
+      );
+    },
+  );
+
+  it("keeps caller out of OAuth catalogs only", CATALOG_TEST, async () => {
+    const linear = harness({ kind: "oauth", clientId: LINEAR_MCP_CLIENT_ID });
+    const listed = new Map<string, Tool[]>();
+    for (const entry of CATALOG_PROFILES) {
+      listed.set(
+        entry.name,
+        await listedTools(entry.name === "linear" ? linear : harness(entry.identity)),
       );
     }
     for (const name of ["claude", "linear", "generic"]) {
@@ -364,13 +383,40 @@ describe("authenticated tool calls", () => {
       { kind: "oauth", clientId: GENERIC_CLIENT_ID },
       { databaseRole: "control" },
     );
-    const client = await connect(control);
+    const logs: string[] = [];
+    vi.spyOn(console, "info").mockImplementation((line: unknown) => {
+      logs.push(String(line));
+    });
+    const response = await rawCall(control, {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: { name: "skills_list", arguments: { workspace: { id: WORKSPACE.id } } },
+    });
+    const requestId = response.headers.get("x-skillplane-request-id");
+    expect(requestId).toMatch(/^mcp-request:[0-9a-f-]{36}$/u);
     const refused = toolError(
-      await client.callTool("skills_list", { workspace: { id: WORKSPACE.id } }),
+      (JSON.parse(await response.text()) as { readonly result: CallToolResult }).result,
     );
-    expect(refused.error.code).toBe("VALIDATION_FAILED");
+    expect(refused.error).toMatchObject({ code: "VALIDATION_FAILED", requestId });
+    // The refusal bypasses the execution wrappers, so it logs its own event.
+    expect(logs.map((line) => JSON.parse(line) as unknown)).toEqual([
+      {
+        component: "mcp",
+        requestId,
+        tool: "skills_list",
+        outcome: "error",
+        errorCode: "VALIDATION_FAILED",
+        actorType: "user",
+        actorId: "user:test",
+        durationMs: 0,
+      },
+    ]);
+    expect(logs.join("\n")).not.toContain(WORKSPACE.id);
     expect(control.workspaceReads).toEqual([]);
     expect(control.audit).toEqual([]);
+
+    const client = await connect(control);
     const global = await client.callTool("workspaces_list", {});
     expect(global.isError, JSON.stringify(global)).not.toBe(true);
     await client.close();

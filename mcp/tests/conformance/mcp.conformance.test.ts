@@ -3,6 +3,7 @@ import type { PostHog } from "@posthog/mcp";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { isPostHogSessionId } from "../../src/analytics.js";
 import incident from "../fixtures/oauth-list-skills-incident.json" with { type: "json" };
+import { OAUTH_CLIENT_PROFILES } from "../../src/client-profiles.js";
 import {
   SKILLPLANE_MCP_SERVER_INFO,
   skillplaneMcpDeclaration,
@@ -192,13 +193,18 @@ describe("MCP Streamable HTTP conformance", () => {
     const caller = await auditedCaller(
       parseStructured<SkillsListOutput>(result).requestId,
     );
-    expect(caller).toMatchObject({
-      agentId: "authenticated-oauth-client",
-      agentName: "Authenticated OAuth client",
-      clientName: "OAuth MCP client",
+    // Every supplied field is discarded: the record is exactly the generic
+    // profile's attribution, one fresh per-invocation ID and the audit
+    // writer's existing trust label.
+    const invocation = String(caller.runId).replace(/^oauth-client-run:/u, "");
+    expect(invocation).toMatch(/^[0-9a-f-]{36}$/u);
+    expect(caller).toEqual({
+      ...OAUTH_CLIENT_PROFILES.generic.caller,
+      runId: `oauth-client-run:${invocation}`,
+      sessionId: `oauth-client-session:${invocation}`,
+      conversationId: `oauth-client-conversation:${invocation}`,
+      trust: "caller-declared",
     });
-    expect(String(caller.runId)).toMatch(/^oauth-client-run:/u);
-    expect(JSON.stringify(caller)).not.toContain("orged");
   });
 
   it("searches with either nested workspace selector or the deprecated flat alias", async () => {

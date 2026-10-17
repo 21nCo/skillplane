@@ -5,6 +5,8 @@ import { skillplaneMcpDeclaration } from "./server.js";
 
 const SECRET = "argument-value-must-not-leak";
 const BOUND = 424_242;
+/** A caller-chosen property name, which a diagnostic may legitimately name. */
+const PROPERTY = "caller-chosen-property-name";
 
 /** Malformed calls whose raw issues differ between the two engines. */
 const FIXTURES: readonly (readonly [string, Record<string, unknown>])[] = [
@@ -16,7 +18,10 @@ const FIXTURES: readonly (readonly [string, Record<string, unknown>])[] = [
   ["skills_list", { workspace: { id: "w" }, visibility: [SECRET] }],
   ["skills_list", { workspace: SECRET }],
   ["skills_search", { query: "", workspace: { slug: SECRET.toUpperCase() } }],
-  ["context_create", { metadata: { [SECRET]: BOUND }, slug: SECRET.toUpperCase() }],
+  ["context_create", { metadata: { [PROPERTY]: BOUND }, slug: SECRET.toUpperCase() }],
+  ["skills_list", { workspace: { id: "w" }, "": SECRET }],
+  ["skills_list", { workspace: { id: "w", "": SECRET } }],
+  ["skills_list", { workspace: { slug: BOUND } }],
 ];
 
 function issuesFor(engine: "ajv" | "cfworker", tool: string, args: unknown) {
@@ -35,12 +40,10 @@ describe("schema issue normalization", () => {
       const cfworker = issuesFor("cfworker", tool, args);
       expect(cfworker).toEqual(ajv);
       const text = JSON.stringify(cfworker);
-      expect(text).not.toContain(String(BOUND));
-      expect(text).not.toContain(SECRET.toUpperCase());
       // A property name the caller sent may be named, never a property value.
-      for (const issue of cfworker) {
-        expect(issue.message).not.toContain(SECRET.toUpperCase());
-      }
+      expect(text).not.toContain(String(BOUND));
+      expect(text).not.toContain(SECRET);
+      expect(text).not.toContain(SECRET.toUpperCase());
     },
   );
 
@@ -58,6 +61,46 @@ describe("schema issue normalization", () => {
         }),
       ]),
     );
+  });
+
+  it("restores an empty rejected property name on both engines", () => {
+    for (const engine of ["ajv", "cfworker"] as const) {
+      expect(
+        issuesFor(engine, "skills_list", { workspace: { id: "w", "": SECRET } }),
+      ).toEqual([
+        expect.objectContaining({ missingProperty: "caller" }),
+        expect.objectContaining({
+          instancePath: "/workspace",
+          schemaPath: "#/properties/workspace/anyOf/0/additionalProperties",
+          rejectedProperty: "",
+        }),
+        expect.objectContaining({
+          instancePath: "/workspace",
+          schemaPath: "#/properties/workspace/anyOf/1/additionalProperties",
+          rejectedProperty: "",
+        }),
+        expect.objectContaining({
+          instancePath: "/workspace",
+          schemaPath: "#/properties/workspace/anyOf/1/required",
+          missingProperty: "slug",
+        }),
+      ]);
+    }
+  });
+
+  it("never reports a property declared by a sibling selector branch as unknown", () => {
+    for (const engine of ["ajv", "cfworker"] as const) {
+      const issues = issuesFor(engine, "skills_list", { workspace: { id: BOUND } });
+      expect(issues).not.toContainEqual(
+        expect.objectContaining({ keyword: "additionalProperties" }),
+      );
+      expect(issues).toContainEqual(
+        expect.objectContaining({
+          instancePath: "/workspace/id",
+          schemaPath: "#/properties/workspace/anyOf/0/properties/id/type",
+        }),
+      );
+    }
   });
 
   it("keeps an issue whose schema path was truncated to the root", () => {

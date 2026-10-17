@@ -422,6 +422,18 @@ const UNKNOWN_WORKSPACE_ID_ISSUES = [
   },
 ];
 
+/** McpFn 0.0.5 omits an empty property name; Skillplane restores it. */
+const EMPTY_NAME_ISSUES = [
+  {
+    path: "/",
+    instancePath: "/",
+    schemaPath: "#/additionalProperties",
+    keyword: "additionalProperties",
+    message: 'must not have unknown property ""',
+    rejectedProperty: "",
+  },
+];
+
 const BOUND_VIOLATION = 424_242;
 
 /** Invalid values for declared properties: one bound, one enum member. */
@@ -589,6 +601,25 @@ export function describeDiagnosticContract(engine: SchemaEngine): void {
         expect(text).not.toContain('"rejectedProperty": "limit"');
       }
       expect(target.workspaceReads).toEqual([]);
+    });
+
+    it("names a rejected property whose name is empty", async () => {
+      const target = harness({ kind: "oauth", clientId: GENERIC_CLIENT_ID });
+      const logs = captureInfoLogs();
+      const response = await rawCall(
+        target,
+        toolCall("skills_list", { workspace: { id: WORKSPACE.id }, "": SECRET_VALUE }),
+      );
+      const { body, error } = await protocolToolError(response);
+      expect(error.details.issues).toEqual(EMPTY_NAME_ISSUES);
+      expect(diagnosticEvents(logs)).toEqual([
+        expect.objectContaining({
+          requestId: response.headers.get("x-skillplane-request-id"),
+          issues: structuralIssues(EMPTY_NAME_ISSUES),
+        }),
+      ]);
+      expect(body).not.toContain(SECRET_VALUE);
+      expect(logs.join("\n")).not.toContain(SECRET_VALUE);
     });
 
     it("diagnoses an unroutable discovery call at the gateway without reaching a cell", async () => {

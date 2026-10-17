@@ -35,6 +35,8 @@ export interface McpToolRuntime {
   readonly origin: string;
   readonly fencingEpoch: number;
   readonly now: () => Date;
+  /** Protocol request correlation that the response returns in x-skillplane-request-id. */
+  readonly requestId?: string;
 }
 
 export interface ToolAuditScope {
@@ -189,16 +191,29 @@ function errorResult(error: McpToolError, requestId: string): CallToolResult {
 /**
  * Refuses a workspace tool on a deployment that holds only control-plane data.
  * A gateway serves such a call locally only when its arguments name no
- * workspace, so validation normally rejects it before this point.
+ * workspace, so validation normally rejects it before this point. The refusal
+ * runs outside the execution wrappers, so it logs its own redacted operational
+ * event under the protocol request's correlation ID.
  */
-export function workspaceRouteRequiredResult(): CallToolResult {
-  return errorResult(
-    new McpToolError(
-      "VALIDATION_FAILED",
-      "The MCP tool call does not identify one workspace",
-    ),
-    `mcp:${crypto.randomUUID()}`,
+export function workspaceRouteRequiredResult(
+  runtime: McpToolRuntime,
+  tool: string,
+): CallToolResult {
+  const requestId = runtime.requestId ?? `mcp:${crypto.randomUUID()}`;
+  const error = new McpToolError(
+    "VALIDATION_FAILED",
+    "The MCP tool call does not identify one workspace",
   );
+  emitMcpOperationalEvent({
+    requestId,
+    tool,
+    outcome: "error",
+    errorCode: error.code,
+    actorType: runtime.identity.actorType,
+    actorId: runtime.identity.actorId,
+    latencyMs: 0,
+  });
+  return errorResult(error, requestId);
 }
 
 export async function executeReadTool<T extends object>(

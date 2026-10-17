@@ -103,18 +103,20 @@ A call that McpFn stops before its handler returns `MCPFN_INVALID_ARGUMENTS`
 `schemaPath`, and `rejectedProperty` or `missingProperty`. Argument values are
 never included. The evidence hook also logs one
 `mcp.tool.rejected_before_handler` event carrying the same issue structure,
-the tool, the `profileId`, the lifecycle stage and the code, together with the
-request correlation ID that the response returns in `x-skillplane-request-id`.
-The event uses the same operational log channel and retention as other MCP
-operational events. It is not written to the workspace audit table, because
-the workspace has not been authorized when validation fails.
+the tool and `profileId` when McpFn resolved them, the lifecycle stage and the
+code, together with the request correlation ID that the response returns in
+`x-skillplane-request-id`. The event uses the same operational log channel and
+retention as other MCP operational events rather than the workspace audit
+table, which records only calls whose handler ran.
 
 McpFn validates with Ajv under Node and with `@cfworker/json-schema` on
 Cloudflare Workers. The Workers engine quotes argument values in its messages
 and also reports enclosing subschemas and an `additionalProperties` failure for
 a declared property whose value was invalid. `mcp/src/schema-issues.ts`
 reduces both engines' issues to the same leaf failures, rebuilds each message
-from structural fields only, and sorts them. The client result and the
+from structural fields only, and sorts them. It also drops an `anyOf` branch's
+rejection of a property that a sibling branch declares, and restores the empty
+property name `""`, which McpFn 0.0.5 omits. The client result and the
 evidence event both use this normalized form, so a declared property is never
 reported as unknown.
 
@@ -122,10 +124,13 @@ In a gateway deployment, a workspace tool call whose arguments name no
 workspace (for example `skills_list` with `workspace_id`, or with no selector)
 cannot be routed to a cell. The gateway serves it with its local MCP app. That
 app authenticates the call and McpFn reports the same diagnostic and event.
-Workspace tool handlers never run against control-plane data: on a gateway or
-control deployment they return `VALIDATION_FAILED` without reading workspace
-data. A routed call that fails validation in its cell returns the cell's
-diagnostic and `x-skillplane-request-id` through the gateway unchanged.
+A control deployment rejects a call that names a workspace with
+`CONTROL_ROUTE_NOT_FOUND` before McpFn runs. Workspace tool handlers never run
+against control-plane data: a locally served call that passes validation gets
+`VALIDATION_FAILED` without any workspace read, and one operational event under
+its `x-skillplane-request-id`. A routed call that fails validation in its cell
+returns the cell's diagnostic and `x-skillplane-request-id` through the gateway
+unchanged.
 
 Each stateless request creates its own McpFn server. When a request contains
 only `tools/call` messages, the server's visible catalog is limited to the

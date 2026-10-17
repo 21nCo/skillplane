@@ -185,7 +185,7 @@ function tool<TInput>(options: {
         runtime.services.database.role === "control" &&
         WORKSPACE_ROUTED_MCP_TOOL_NAMES.has(options.name)
       ) {
-        return workspaceRouteRequiredResult();
+        return workspaceRouteRequiredResult(runtime, options.name);
       }
       return (await options.run(runtime, options.input.parse(args))) as Awaited<
         ReturnType<McpFnToolDefinition<McpToolRuntime>["handler"]>

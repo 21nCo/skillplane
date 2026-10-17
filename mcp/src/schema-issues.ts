@@ -21,13 +21,62 @@ function atOrBeneath(path: string, parent: string): boolean {
  * engine-specific and the Workers engine quotes argument values in them.
  */
 function structuralMessage(issue: McpFnSchemaIssue): string {
-  if (issue.keyword === "required" && issue.missingProperty) {
+  if (issue.keyword === "required" && issue.missingProperty !== undefined) {
     return `must have required property "${issue.missingProperty}"`;
   }
-  if (issue.keyword === "additionalProperties" && issue.rejectedProperty) {
+  if (
+    issue.keyword === "additionalProperties" &&
+    issue.rejectedProperty !== undefined
+  ) {
     return `must not have unknown property "${issue.rejectedProperty}"`;
   }
   return `must satisfy the ${issue.keyword} constraint at ${issue.schemaPath}`;
+}
+
+/**
+ * McpFn 0.0.5 treats an empty property name as absent. Both engines name every
+ * property an `additionalProperties` schema rejects, so a rejection without a
+ * name rejected the property named "".
+ */
+function restoreEmptyPropertyName(issue: McpFnSchemaIssue): McpFnSchemaIssue {
+  return issue.keyword === "additionalProperties" &&
+    issue.rejectedProperty === undefined &&
+    issue.schemaPath.endsWith(ADDITIONAL_PROPERTIES)
+    ? { ...issue, rejectedProperty: "" }
+    : issue;
+}
+
+const COMBINATOR_BRANCH = /^(.*\/(?:anyOf|oneOf))\/(\d+)\/additionalProperties$/u;
+
+/**
+ * True when an `anyOf`/`oneOf` branch rejects a property that a sibling branch
+ * accepted. Every branch of a failed combinator reports all of its failures,
+ * so the property is declared there and is not unknown to the tool.
+ */
+function acceptedBySiblingBranch(
+  issue: McpFnSchemaIssue,
+  issues: readonly McpFnSchemaIssue[],
+  leaves: readonly McpFnSchemaIssue[],
+): boolean {
+  const group = COMBINATOR_BRANCH.exec(issue.schemaPath)?.[1];
+  if (group === undefined) return false;
+  const branches = new Set(
+    issues.flatMap((other) => {
+      if (!other.schemaPath.startsWith(`${group}/`)) return [];
+      const branch = /^\d+(?=\/|$)/u.exec(other.schemaPath.slice(group.length + 1));
+      return branch ? [branch[0]] : [];
+    }),
+  );
+  return [...branches].some(
+    (branch) =>
+      !leaves.some(
+        (other) =>
+          other.keyword === "additionalProperties" &&
+          other.instancePath === issue.instancePath &&
+          other.schemaPath === `${group}/${branch}${ADDITIONAL_PROPERTIES}` &&
+          other.rejectedProperty === issue.rejectedProperty,
+      ),
+  );
 }
 
 /**
@@ -35,24 +84,26 @@ function structuralMessage(issue: McpFnSchemaIssue): string {
  * schema engines. Ajv runs under Node; @cfworker/json-schema runs on Workers
  * and additionally reports the subschema that contained a failure, a boolean
  * `false` schema, and an `additionalProperties` failure for a declared property
- * whose own value was invalid. Those additions are dropped so a client is never
- * told that a declared property is unknown.
+ * whose own value was invalid. Those additions are dropped, as is a combinator
+ * branch's rejection of a property its sibling branch declares, so a client is
+ * never told that a declared property is unknown.
  */
 export function normalizeMcpSchemaIssues(
-  issues: readonly McpFnSchemaIssue[],
+  reported: readonly McpFnSchemaIssue[],
 ): McpFnSchemaIssue[] {
+  const issues = reported.map(restoreEmptyPropertyName);
   const rejectedLocations = new Set(
     issues.flatMap((issue) =>
-      issue.keyword === "additionalProperties" && issue.rejectedProperty
+      issue.keyword === "additionalProperties" && issue.rejectedProperty !== undefined
         ? [childInstancePath(issue.instancePath, issue.rejectedProperty)]
         : [],
     ),
   );
-  const leaves = issues.filter((issue) => {
+  const declaredLeaves = issues.filter((issue) => {
     if (issue.keyword === "false") return !rejectedLocations.has(issue.instancePath);
     if (
       issue.keyword !== "additionalProperties" ||
-      !issue.rejectedProperty ||
+      issue.rejectedProperty === undefined ||
       !issue.schemaPath.endsWith(ADDITIONAL_PROPERTIES)
     ) {
       return true;
@@ -61,6 +112,11 @@ export function normalizeMcpSchemaIssues(
     const declared = `${issue.schemaPath.slice(0, -ADDITIONAL_PROPERTIES.length)}/properties/${pointerSegment(issue.rejectedProperty)}/`;
     return !issues.some((other) => other.schemaPath.startsWith(declared));
   });
+  const leaves = declaredLeaves.filter(
+    (issue) =>
+      issue.keyword !== "additionalProperties" ||
+      !acceptedBySiblingBranch(issue, issues, declaredLeaves),
+  );
   return leaves
     .filter(
       (issue) =>
@@ -78,8 +134,12 @@ export function normalizeMcpSchemaIssues(
       schemaPath: issue.schemaPath,
       keyword: issue.keyword,
       message: structuralMessage(issue),
-      ...(issue.rejectedProperty ? { rejectedProperty: issue.rejectedProperty } : {}),
-      ...(issue.missingProperty ? { missingProperty: issue.missingProperty } : {}),
+      ...(issue.rejectedProperty !== undefined
+        ? { rejectedProperty: issue.rejectedProperty }
+        : {}),
+      ...(issue.missingProperty !== undefined
+        ? { missingProperty: issue.missingProperty }
+        : {}),
     }))
     .toSorted(
       (left, right) =>

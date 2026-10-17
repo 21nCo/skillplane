@@ -367,8 +367,12 @@ export function emitMcpDiagnosticEvent(event: {
         keyword: issue.keyword,
         instancePath: issue.instancePath,
         schemaPath: issue.schemaPath,
-        ...(issue.rejectedProperty ? { rejectedProperty: issue.rejectedProperty } : {}),
-        ...(issue.missingProperty ? { missingProperty: issue.missingProperty } : {}),
+        ...(issue.rejectedProperty !== undefined
+          ? { rejectedProperty: issue.rejectedProperty }
+          : {}),
+        ...(issue.missingProperty !== undefined
+          ? { missingProperty: issue.missingProperty }
+          : {}),
       })),
     }),
   );

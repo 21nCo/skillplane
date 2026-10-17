@@ -177,6 +177,7 @@ function createRuntime(
   audit: McpAuditWriter,
   request: Request,
   now: () => Date,
+  requestId?: string,
 ): McpToolRuntime {
   const fencingEpoch = Number(request.headers.get("x-skillplane-routing-epoch") ?? "1");
   if (!Number.isSafeInteger(fencingEpoch) || fencingEpoch < 1) {
@@ -194,6 +195,7 @@ function createRuntime(
     origin: new URL(request.url).origin,
     fencingEpoch,
     now,
+    ...(requestId ? { requestId } : {}),
   };
 }
 
@@ -505,6 +507,7 @@ export function createMcpApp(options: CreateMcpAppOptions = {}) {
             auditFor(currentServices),
             protocolRequest,
             now,
+            requestId,
           );
           const server = createSkillplaneMcpServer(runtime, {
             evidence: skillplaneDiagnosticEvidence({ requestId, identity }),
