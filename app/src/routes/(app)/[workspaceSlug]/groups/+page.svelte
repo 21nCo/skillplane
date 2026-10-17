@@ -376,7 +376,8 @@
       <h3>Members</h3>
       <ul>
         {#each members as m (m.userId)}<li>
-            {m.displayName ?? m.email ?? m.userId} ({m.role}){#if canManage && !selected.archivedAt}<Button
+            <span>{m.displayName ?? m.email ?? m.userId} ({m.role})</span
+            >{#if canManage && !selected.archivedAt}<Button
                 variant="ghost"
                 disabled={busy}
                 onclick={() => void run(() => assign("members", m.userId, false))}
@@ -429,12 +430,27 @@
 </main>
 
 <style>
+  /* Reflow down to 320 CSS px (WCAG 2.2 SC 1.4.10): long names, emails and
+     button labels wrap inside the column instead of widening the page. */
   .groups-page {
     max-width: 70rem;
     margin: 0 auto;
     padding: 2rem;
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: 1rem;
+    overflow-wrap: anywhere;
+  }
+  .groups-page :global(button) {
+    max-width: 100%;
+    min-width: 0;
+    height: auto;
+    min-height: var(--sp-control-height);
+    padding-block: var(--sp-space-1);
+  }
+  .groups-page :global(button .label) {
+    white-space: normal;
+    line-height: 1.25;
   }
   nav,
   form,
@@ -443,12 +459,17 @@
     gap: 0.75rem;
   }
   nav {
-    grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(min(10rem, 100%), 1fr));
   }
   li {
     display: flex;
+    flex-wrap: wrap;
     gap: 1rem;
     align-items: center;
+    min-width: 0;
     padding: 0.5rem 0;
+  }
+  li > * {
+    min-width: 0;
   }
 </style>

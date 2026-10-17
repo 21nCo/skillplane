@@ -952,3 +952,61 @@ test("@groups load more appends groups and a failed page keeps the listed ones",
   await expect(page.getByRole("alert")).toContainText("Group list unavailable");
   await expect(nav.getByRole("button")).toHaveText(["Paged first", "Paged second"]);
 });
+
+for (const width of [390, 320] as const)
+  test(`@groups a selected group with long names reflows at ${width}px without horizontal scrolling`, async ({
+    context,
+    page,
+  }) => {
+    await authenticate(context);
+    await page.setViewportSize({ width, height: 844 });
+    const { owner, viewer } = await workspaceMembers(page);
+    // A 120-character name without spaces is the hardest case for the nav.
+    const name = `Reflow-${crypto.randomUUID()}-`.padEnd(120, "W");
+    const groupId = await createGroup(page, name);
+    const skillId = await createSkill(page, "reflow-long-skill-name-check");
+    await api(
+      page,
+      "PUT",
+      `/groups/${encodeURIComponent(groupId)}/skills/${encodeURIComponent(skillId)}`,
+    );
+    await addMember(page, groupId, owner);
+    await addMember(page, groupId, viewer);
+    const { members } = await api<{
+      members: { displayName: string | null; email: string | null; userId: string }[];
+    }>(page, "GET", `/groups/${encodeURIComponent(groupId)}/members`);
+    const labels = members.map((m) => m.displayName ?? m.email ?? m.userId);
+    expect(labels).toHaveLength(2);
+    for (const label of labels) expect(label.length).toBeGreaterThanOrEqual(30);
+    await page.goto(`${harness.origin}/${harness.workspaceSlug}/groups`);
+    await page
+      .getByRole("navigation", { name: "Skill groups" })
+      .getByRole("button", { name })
+      .click();
+    const detail = page.getByRole("region", { name: "Group detail" });
+    await expect(detail.getByRole("heading", { name })).toBeVisible();
+    await expect(
+      detail.getByRole("link", { name: /^Ungrouped reflow-long-skill-name-check-/u }),
+    ).toBeVisible();
+    await expect(detail.getByRole("listitem")).toHaveCount(3);
+    await settled(page);
+    const overflow = await page.evaluate(() => ({
+      scrollWidth: document.documentElement.scrollWidth,
+      clientWidth: document.documentElement.clientWidth,
+    }));
+    expect(overflow.scrollWidth).toBeLessThanOrEqual(overflow.clientWidth);
+    for (const label of labels)
+      await expect(
+        detail.getByRole("button", { name: `Remove ${label}`, exact: true }),
+      ).toHaveCount(1);
+    const removes = detail.getByRole("button", { name: /^Remove / });
+    await expect(removes).toHaveCount(3);
+    for (const remove of await removes.all()) {
+      await remove.scrollIntoViewIfNeeded();
+      const box = await remove.boundingBox();
+      expect(box).not.toBeNull();
+      expect(box?.x ?? -1).toBeGreaterThanOrEqual(0);
+      expect((box?.x ?? 0) + (box?.width ?? Infinity)).toBeLessThanOrEqual(width);
+      await remove.click({ trial: true });
+    }
+  });
