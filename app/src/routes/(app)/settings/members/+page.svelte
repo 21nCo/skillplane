@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { resolve } from "$app/paths";
   import {
     apiErrorField,
     apiRequest,
@@ -245,7 +246,9 @@
             autocomplete="email"
             placeholder="teammate@company.com"
             bind:value={inviteEmail}
-            error={inviteErrorField === "email" ? (inviteError ?? undefined) : undefined}
+            error={inviteErrorField === "email"
+              ? (inviteError ?? undefined)
+              : undefined}
           />
         </div>
         <div class="field">
@@ -291,6 +294,11 @@
             <div class="identity">
               <strong>{member.displayName ?? member.email ?? "Workspace member"}</strong
               >
+              {#if store.active}<a
+                  href={resolve(
+                    `/${store.active.slug}/groups?memberId=${encodeURIComponent(member.userId)}`,
+                  )}>View groups</a
+                >{/if}
               {#if member.displayName && member.email}<span>{member.email}</span>{/if}
             </div>
             {#if canManage}

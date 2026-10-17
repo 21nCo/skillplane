@@ -57,6 +57,25 @@ export async function workspacePrincipal(
   return principal;
 }
 
+export function optionalIdFilter<K extends string>(
+  context: Context<ApiEnvironment>,
+  name: K,
+): Partial<Record<K, string>> {
+  const value = context.req.query(name)?.trim();
+  if (value === undefined) return {};
+  if (!value || value.length > 200) {
+    throw new DomainError(
+      "VALIDATION_FAILED",
+      `${name} must be a non-empty identifier`,
+      400,
+      {
+        field: name,
+      },
+    );
+  }
+  return { [name]: value } as Partial<Record<K, string>>;
+}
+
 export function requirePrincipal(context: Context<ApiEnvironment>): Principal {
   const principal = context.get("principal");
   if (!principal) {

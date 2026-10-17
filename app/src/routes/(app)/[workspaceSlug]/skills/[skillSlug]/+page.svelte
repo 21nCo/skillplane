@@ -1,4 +1,5 @@
 <script lang="ts">
+  import GroupBadges from "$lib/groups/GroupBadges.svelte";
   import { resolve } from "$app/paths";
   import { page } from "$app/state";
   import { Badge, Button } from "@skillplane/ui";
@@ -164,6 +165,11 @@
       <section class="panel">
         <p class="label">Tags</p>
         <div class="tags">
+          <GroupBadges
+            workspaceId={detail.skill.workspaceId}
+            skillId={detail.skill.id}
+            workspaceSlug={page.params.workspaceSlug ?? ""}
+          />
           {#each detail.skill.tags as tag (tag)}
             <Badge tone="neutral">{tag}</Badge>
           {:else}

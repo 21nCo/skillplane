@@ -133,7 +133,7 @@ export function classifyApiScope(request: Request): ApiScope {
       workspaceId: workspaceId === null ? undefined : segment(workspaceId),
     };
   }
-  let match = /^\/api\/v1\/workspaces\/([^/]+)\/skills(?:\/|$)/u.exec(path);
+  let match = /^\/api\/v1\/workspaces\/([^/]+)\/(?:skills|groups)(?:\/|$)/u.exec(path);
   if (match) return { kind: "workspace", workspaceId: segment(match[1]) };
   match = /^\/api\/v1\/(?:audit|analytics)\/workspaces\/([^/]+)(?:\/|$)/u.exec(path);
   if (match) return { kind: "workspace", workspaceId: segment(match[1]) };

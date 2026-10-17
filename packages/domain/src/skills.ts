@@ -84,6 +84,7 @@ export interface SkillListPage {
 }
 
 interface SkillListCursor {
+  readonly groupId?: string | null;
   readonly version: 1;
   readonly updatedAt: string;
   readonly id: string;
@@ -173,6 +174,7 @@ function parseListCursor(
   value: string,
   archive: SkillArchiveFilter,
   visibility: readonly SkillVisibility[],
+  groupId: string | null = null,
 ): SkillListCursor {
   let parsed: unknown;
   try {
@@ -200,6 +202,7 @@ function parseListCursor(
   }
   const cursor = parsed as SkillListCursor;
   if (
+    (cursor.groupId ?? null) !== groupId ||
     cursor.archive !== archive ||
     stableJson(cursor.visibility) !== stableJson(visibility)
   ) {
@@ -622,6 +625,7 @@ export class SkillService {
 
   async listPage(options: {
     readonly workspaceId: string;
+    readonly groupId?: string;
     readonly principal: Principal;
     readonly archive?: SkillArchiveFilter;
     readonly visibility?: readonly SkillVisibility[];
@@ -636,7 +640,7 @@ export class SkillService {
     const archive = parseSkillArchiveFilter(options.archive ?? "active");
     const visibility = normalizeVisibilityFilter(options.visibility);
     const cursor = options.cursor
-      ? parseListCursor(options.cursor, archive, visibility)
+      ? parseListCursor(options.cursor, archive, visibility, options.groupId ?? null)
       : null;
     const result = await this.pool.query<SkillRow>(
       `SELECT s.id, s.workspace_id, s.slug, s.name, s.description, s.tags,
@@ -646,6 +650,7 @@ export class SkillService {
          LEFT JOIN skill_versions version
            ON version.id = s.current_published_version_id
         WHERE s.workspace_id = $1
+          AND ($7::text IS NULL OR EXISTS(SELECT 1 FROM skill_group_skills gs JOIN skill_groups g ON g.id=gs.group_id AND g.workspace_id=gs.workspace_id WHERE gs.workspace_id=s.workspace_id AND gs.skill_id=s.id AND gs.group_id=$7 AND g.archived_at IS NULL))
           AND (
             ($2::text = 'active' AND s.archived_at IS NULL)
             OR ($2::text = 'archived' AND s.archived_at IS NOT NULL)
@@ -669,6 +674,7 @@ export class SkillService {
         cursor?.updatedAt ?? null,
         cursor?.id ?? null,
         limit + 1,
+        options.groupId ?? null,
       ],
     );
     const hasNext = result.rows.length > limit;
@@ -679,6 +685,7 @@ export class SkillService {
       nextCursor: boundary
         ? encodeListCursor({
             version: 1,
+            groupId: options.groupId ?? null,
             updatedAt: boundary.updatedAt,
             id: boundary.id,
             archive,

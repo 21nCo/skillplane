@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { groupRequest, type Group } from "$lib/groups/api.js";
+  import { untrack } from "svelte";
+  import { SvelteURLSearchParams } from "svelte/reactivity";
   import { resolve } from "$app/paths";
   import { page } from "$app/state";
   import { Badge, Button, Input, Select } from "@skillplane/ui";
@@ -25,6 +28,11 @@
   );
   const canWrite = $derived(Boolean(workspace && workspace.role !== "viewer"));
 
+  let groupsError = $state("");
+  let badgesError = $state("");
+  let groups = $state<Group[]>([]);
+  let groupId = $state("");
+  let skillGroups = $state<Partial<Record<string, { id: string; name: string }[]>>>({});
   let skills = $state<Skill[]>([]);
   let query = $state("");
   let visibility = $state<SkillVisibility | "all">("all");
@@ -35,32 +43,121 @@
   let error = $state<string | null>(null);
   let loadedWorkspaceId = $state<string | null>(null);
 
+  let loadGeneration = 0;
+  // Every reset load (a new filter or workspace) starts a new list generation; the
+  // pages of one list, "load more" included, share it so their badges merge.
+  let listGeneration = 0;
+  // Every workspace change starts a new generation for the group filter options.
+  let optionsGeneration = 0;
+  // Requests still running (skills, badges and group options), superseded ones
+  // included, so a caller can tell when every response has been handled.
+  let pendingLoads = $state(0);
+  async function tracked(fn: () => Promise<void>) {
+    pendingLoads += 1;
+    try {
+      await fn();
+    } finally {
+      pendingLoads -= 1;
+    }
+  }
+
+  // Only the latest request may update the list, cursor, error, or loading state;
+  // a slower response for a superseded filter or workspace is discarded.
   async function load(reset = true) {
     if (!workspace) return;
+    const workspaceId = workspace.id;
+    const generation = ++loadGeneration;
     if (reset) {
+      listGeneration += 1;
       loading = true;
       nextCursor = null;
+      badgesError = "";
     } else {
       loadingMore = true;
     }
+    const list = listGeneration;
     error = null;
-    try {
-      const result = await listSkills({
-        workspaceId: workspace.id,
-        query,
-        archive,
-        visibility: visibility === "all" ? [] : [visibility],
-        cursor: reset ? null : nextCursor,
-        limit: 20,
-      });
-      skills = reset ? [...result.skills] : [...skills, ...result.skills];
-      nextCursor = result.nextCursor;
-    } catch (cause) {
-      error = cause instanceof Error ? cause.message : "Skills could not be loaded.";
-    } finally {
-      loading = false;
-      loadingMore = false;
-    }
+    await tracked(async () => {
+      try {
+        const result = await listSkills({
+          workspaceId,
+          ...(groupId ? { groupId } : {}),
+          query,
+          archive,
+          visibility: visibility === "all" ? [] : [visibility],
+          cursor: reset ? null : nextCursor,
+          limit: 20,
+        });
+        if (generation !== loadGeneration) return;
+        skills = reset ? [...result.skills] : [...skills, ...result.skills];
+        // A reset list starts with no badges, so a skill shown again never keeps a
+        // badge from the earlier list; its own badge request supplies them.
+        if (reset) skillGroups = {};
+        nextCursor = result.nextCursor;
+        void loadSkillGroups(
+          workspaceId,
+          list,
+          result.skills.map((skill) => skill.id),
+        );
+      } catch (cause) {
+        if (generation !== loadGeneration) return;
+        error = cause instanceof Error ? cause.message : "Skills could not be loaded.";
+      } finally {
+        if (generation === loadGeneration) {
+          loading = false;
+          loadingMore = false;
+        }
+      }
+    });
+  }
+
+  // One request per loaded page fetches the active groups of every skill on it.
+  // Badges merge only while the list they were requested for is still current.
+  async function loadSkillGroups(
+    workspaceId: string,
+    list: number,
+    skillIds: string[],
+  ) {
+    if (!skillIds.length) return;
+    await tracked(async () => {
+      try {
+        const q = new SvelteURLSearchParams();
+        for (const id of skillIds) q.append("skillId", id);
+        const r = await groupRequest<{
+          skills: { skillId: string; groups: { id: string; name: string }[] }[];
+        }>(workspaceId, `/skill-assignments?${q}`);
+        if (list !== listGeneration) return;
+        skillGroups = {
+          ...skillGroups,
+          ...Object.fromEntries(r.skills.map((entry) => [entry.skillId, entry.groups])),
+        };
+      } catch {
+        if (list === listGeneration) badgesError = "Groups could not be loaded";
+      }
+    });
+  }
+
+  async function loadGroupOptions(workspaceId: string) {
+    const generation = ++optionsGeneration;
+    await tracked(async () => {
+      try {
+        let cursor: string | null = null;
+        const all: Group[] = [];
+        do {
+          const r: { groups: Group[]; nextCursor: string | null } = await groupRequest<{
+            groups: Group[];
+            nextCursor: string | null;
+          }>(workspaceId, cursor ? `?cursor=${encodeURIComponent(cursor)}` : "");
+          if (generation !== optionsGeneration) return;
+          all.push(...r.groups);
+          cursor = r.nextCursor;
+        } while (cursor);
+        groups = all;
+      } catch {
+        if (generation === optionsGeneration)
+          groupsError = "Groups could not be loaded";
+      }
+    });
   }
 
   function search(event: SubmitEvent) {
@@ -71,7 +168,16 @@
   $effect(() => {
     if (workspace && loadedWorkspaceId !== workspace.id) {
       loadedWorkspaceId = workspace.id;
-      void load();
+      const workspaceId = workspace.id;
+      groupsError = "";
+      groupId = "";
+      groups = [];
+      skillGroups = {};
+      // The loads track their own state; keep them out of this effect's dependencies.
+      untrack(() => {
+        void loadGroupOptions(workspaceId);
+        void load();
+      });
     }
   });
 
@@ -86,7 +192,7 @@
   <title>Skills · {workspace?.name ?? "Skillplane"}</title>
 </svelte:head>
 
-<main class="skill-page">
+<main class="skill-page" data-pending-loads={pendingLoads}>
   <header class="page-heading">
     <div>
       <p class="eyebrow">Knowledge plane</p>
@@ -127,27 +233,46 @@
         Search
       </Button>
     </form>
-    <Select
-      label="Visibility"
-      options={[
-        { value: "all", label: "All visibility" },
-        { value: "private", label: "Private" },
-        { value: "workspace", label: "Workspace" },
-        { value: "public", label: "Public" },
-      ]}
-      bind:value={visibility}
-      onchange={() => void load()}
-    />
-    <Select
-      label="Lifecycle state"
-      options={[
-        { value: "active", label: "Active" },
-        { value: "archived", label: "Archived" },
-        { value: "all", label: "Active and archived" },
-      ]}
-      bind:value={archive}
-      onchange={() => void load()}
-    />
+    <!-- Each filter keeps its label and control together in one grid cell. -->
+    <div class="filter">
+      <Select
+        label="Skill group"
+        options={[
+          { value: "", label: "All groups" },
+          ...groups.map((g) => ({ value: g.id, label: g.name })),
+        ]}
+        bind:value={groupId}
+        onchange={() => void load()}
+      />
+      {#if groupsError || badgesError}<p role="status">
+          {groupsError || badgesError}
+        </p>{/if}
+    </div>
+    <div class="filter">
+      <Select
+        label="Visibility"
+        options={[
+          { value: "all", label: "All visibility" },
+          { value: "private", label: "Private" },
+          { value: "workspace", label: "Workspace" },
+          { value: "public", label: "Public" },
+        ]}
+        bind:value={visibility}
+        onchange={() => void load()}
+      />
+    </div>
+    <div class="filter">
+      <Select
+        label="Lifecycle state"
+        options={[
+          { value: "active", label: "Active" },
+          { value: "archived", label: "Archived" },
+          { value: "all", label: "Active and archived" },
+        ]}
+        bind:value={archive}
+        onchange={() => void load()}
+      />
+    </div>
   </section>
 
   {#if loading}
@@ -166,10 +291,10 @@
   {:else if skills.length === 0}
     <SkillState
       kind="empty"
-      title={query || visibility !== "all" || archive !== "active"
+      title={query || groupId || visibility !== "all" || archive !== "active"
         ? "No skills match these filters"
         : "Create your first skill"}
-      message={query || visibility !== "all" || archive !== "active"
+      message={query || groupId || visibility !== "all" || archive !== "active"
         ? "Change the search or filters and try again."
         : canWrite
           ? "Author Markdown directly or upload a portable Skillplane bundle."
@@ -210,6 +335,12 @@
                   {skill.visibility}
                 </Badge>
                 {#if skill.archivedAt}<Badge tone="warning">Archived</Badge>{/if}
+                {#if skillGroups[skill.id]?.length}<span class="group-badges"
+                    ><span class="sr-only">Groups:</span
+                    >{#each skillGroups[skill.id] ?? [] as group (group.id)}<Badge
+                        tone="accent">{group.name}</Badge
+                      >{/each}</span
+                  >{/if}
               </span>
               <span class="description">
                 {skill.description || "No description provided."}
@@ -300,10 +431,16 @@
 
   .filters {
     display: grid;
-    grid-template-columns: minmax(18rem, 1fr) 11rem 12rem;
+    grid-template-columns: minmax(18rem, 1fr) repeat(3, minmax(9rem, 1fr));
     gap: var(--sp-space-3);
     align-items: end;
     margin: var(--sp-space-6) 0 var(--sp-space-4);
+  }
+
+  .filter {
+    display: grid;
+    gap: var(--sp-space-1);
+    min-width: 0;
   }
 
   form {
@@ -360,11 +497,21 @@
   }
 
   .title-row,
-  .meta {
+  .meta,
+  .group-badges {
     display: flex;
     flex-wrap: wrap;
     gap: var(--sp-space-2);
     align-items: center;
+  }
+
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
   }
 
   .description {

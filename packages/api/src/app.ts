@@ -1,3 +1,4 @@
+import { registerSkillGroupRoutes } from "./routes/skill-groups.js";
 import { registerCompositionRoutes } from "./routes/composition.js";
 import type { MiddlewareHandler } from "hono";
 import { Hono } from "hono";
@@ -132,6 +133,7 @@ export function createApiApp(options: ApiOptions = {}) {
   registerServicePrincipalRoutes(app);
   registerSkillSearchRoutes(app);
   registerSkillRoutes(app);
+  registerSkillGroupRoutes(app);
   registerSkillVersionRoutes(app);
   registerCompositionRoutes(app);
   registerAmendmentRoutes(app);
