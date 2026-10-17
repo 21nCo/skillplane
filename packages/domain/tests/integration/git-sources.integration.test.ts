@@ -1145,6 +1145,139 @@ describe("Git source persistence and recovery", () => {
       await injected.end();
     }
   });
+  it("keeps a committed item result when its COMMIT acknowledgement is lost", async () => {
+    // A dedicated pool whose clients commit the first per-item result write on
+    // the server, then report a failure to the caller once.
+    const lost = new Pool({ connectionString: url, max: 2 });
+    let failures = 0;
+    lost.on("connect", (client) => {
+      const query = client.query.bind(client) as (
+        ...args: unknown[]
+      ) => Promise<unknown>;
+      let wroteResult = false;
+      (client as { query: unknown }).query = async (...args: unknown[]) => {
+        const text = typeof args[0] === "string" ? args[0] : "";
+        if (text === "BEGIN") wroteResult = false;
+        if (text.startsWith("UPDATE skill_source_runs SET results=$4,status='partial'"))
+          wroteResult = true;
+        const output = await query(...args);
+        if (text === "COMMIT" && wroteResult && failures > 0) {
+          failures--;
+          throw new Error("commit acknowledgement lost");
+        }
+        return output;
+      };
+    });
+    const ambiguous = new GitSourceService(lost, skills, versions, provider);
+    const count = async (skillId: string) =>
+      (await pool.query("SELECT 1 FROM skill_versions WHERE skill_id=$1", [skillId]))
+        .rowCount;
+    const applyLosingCommit = async (sourceId: string) => {
+      const preview = await ambiguous.preview({ ...m(), sourceId });
+      failures = 1;
+      const applied = await ambiguous.apply({ ...m(), sourceId, runId: preview.id });
+      expect(failures).toBe(0);
+      const stored = await pool.query<{ status: string; results: unknown[] }>(
+        "SELECT status,results FROM skill_source_runs WHERE id=$1",
+        [preview.id],
+      );
+      expect(stored.rows[0]?.status).toBe("complete");
+      expect(stored.rows[0]?.results).toEqual(applied.results);
+      const replayed = await ambiguous.apply({ ...m(), sourceId, runId: preview.id });
+      expect(replayed.results).toEqual(applied.results);
+      return { preview, applied };
+    };
+    try {
+      // An explicit bind whose published bundle equals upstream.
+      const slug = `lost-bind-${crypto.randomUUID()}`,
+        content = await bundle(slug, "# Lost bind\nReview.");
+      const manual = await skills.create({
+        ...m(),
+        workspaceId: owner.workspaceId,
+        archiveBytes: content.bytes,
+        visibility: "private",
+        idempotencyKey: crypto.randomUUID(),
+      });
+      const bound = await ambiguous.create({
+        ...m(),
+        config: { repositoryUrl: "https://github.com/a/lost-bind" },
+        idempotencyKey: crypto.randomUUID(),
+      });
+      await ambiguous.bind({
+        ...m(),
+        sourceId: bound.id,
+        path: "review",
+        skillId: manual.skill.id,
+      });
+      snapshot = {
+        commitSha: "e".repeat(40),
+        skills: [{ path: "review", bundle: content, error: null }],
+      };
+      const explicit = await applyLosingCommit(bound.id);
+      expect(explicit.preview.plan[0]).toMatchObject({
+        action: "unchanged",
+        bindingVersionId: null,
+      });
+      expect(explicit.applied.status).toBe("complete");
+      expect(explicit.applied.results[0]).toMatchObject({
+        status: "unchanged",
+        message: null,
+      });
+      expect((await ambiguous.get(owner, bound.id)).bindings[0]).toMatchObject({
+        status: "unchanged",
+        lastVersionId: manual.version.id,
+        lastCommitSha: "e".repeat(40),
+      });
+      expect(await count(manual.skill.id)).toBe(1);
+
+      // Returning to the content of an earlier, still-pending candidate.
+      const reuseSlug = `lost-reuse-${crypto.randomUUID()}`;
+      const reuse = await sources.create({
+        ...m(),
+        config: { repositoryUrl: "https://github.com/a/lost-reuse" },
+        idempotencyKey: crypto.randomUUID(),
+      });
+      const sync = async (commit: string, body: string) => {
+        snapshot = {
+          commitSha: commit.repeat(40),
+          skills: [
+            { path: "review", bundle: await bundle(reuseSlug, body), error: null },
+          ],
+        };
+        const preview = await sources.preview({ ...m(), sourceId: reuse.id });
+        return (await sources.apply({ ...m(), sourceId: reuse.id, runId: preview.id }))
+          .results[0];
+      };
+      const published = await sync("1", "# One");
+      const first = await sync("2", "# Two");
+      expect((await sync("3", "# Three"))?.status).toBe("pending_review");
+      snapshot = {
+        commitSha: "4".repeat(40),
+        skills: [
+          { path: "review", bundle: await bundle(reuseSlug, "# Two"), error: null },
+        ],
+      };
+      const candidate = await applyLosingCommit(reuse.id);
+      expect(candidate.preview.plan[0]).toMatchObject({
+        action: "unchanged",
+        candidateVersionId: first?.versionId,
+      });
+      expect(candidate.applied.status).toBe("complete");
+      expect(candidate.applied.results[0]).toMatchObject({
+        status: "unchanged",
+        versionId: first?.versionId,
+        message: "The imported candidate is awaiting review",
+      });
+      expect((await sources.get(owner, reuse.id)).bindings[0]).toMatchObject({
+        status: "pending_review",
+        lastVersionId: first?.versionId,
+        lastCommitSha: "4".repeat(40),
+      });
+      expect(await count(published?.skillId ?? "")).toBe(3);
+    } finally {
+      await lost.end();
+    }
+  });
   it("keeps a pending imported candidate in review when identical content syncs again", async () => {
     const slug = `pending-${crypto.randomUUID()}`;
     const source = await sources.create({

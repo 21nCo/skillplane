@@ -489,10 +489,15 @@
 
   .filters {
     display: grid;
-    grid-template-columns: minmax(18rem, 1fr) repeat(4, minmax(9rem, 1fr));
+    /* Search spans its own row so the four filters wrap instead of overflowing. */
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
     gap: var(--sp-space-3);
     align-items: end;
     margin: var(--sp-space-6) 0 var(--sp-space-4);
+  }
+
+  .filters form {
+    grid-column: 1 / -1;
   }
 
   .filter {
@@ -609,10 +614,6 @@
 
     .filters {
       grid-template-columns: 1fr 1fr;
-    }
-
-    .filters form {
-      grid-column: 1 / -1;
     }
   }
 

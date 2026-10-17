@@ -109,3 +109,24 @@ test("@sources replays a create after its refresh fails and rotates the key for 
   expect(createKeys[2]).not.toBe(createKeys[0]);
   expect(await sources(second)).toBe(1);
 });
+
+for (const width of [1024, 1100] as const)
+  test(`@sources the catalog filters wrap at ${width}px with the sidebar shown`, async ({
+    context,
+    page,
+  }) => {
+    await authenticate(context);
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto(`${harness.origin}/${harness.workspaceSlug}/skills`);
+    const filters = page.getByRole("region", { name: "Skill filters" });
+    await expect(filters.getByLabel("Git source")).toBeVisible();
+    await expect(filters.getByLabel("Lifecycle state")).toBeVisible();
+    await expect(
+      page.getByRole("complementary", { name: "Application navigation" }),
+    ).toBeInViewport({ ratio: 0.95 });
+    const overflow = await page.evaluate(() => ({
+      scrollWidth: document.documentElement.scrollWidth,
+      clientWidth: document.documentElement.clientWidth,
+    }));
+    expect(overflow.scrollWidth).toBeLessThanOrEqual(overflow.clientWidth);
+  });

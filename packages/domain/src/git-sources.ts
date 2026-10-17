@@ -677,15 +677,37 @@ export class GitSourceService {
       });
     // Binding transitions commit with their item result, so a same-run retry
     // never sees a binding this run already moved without the matching result.
+    // The run's committed results are the source of truth: writes merge into
+    // them under lock, and in-memory results follow only committed writes. An
+    // error never replaces a committed result, even after a lost COMMIT reply.
+    const durableResults = async (c: PoolClient) =>
+      (
+        await c.query<{ results: GitApplyResult[] }>(
+          "SELECT results FROM skill_source_runs WHERE workspace_id=$1 AND source_id=$2 AND id=$3 FOR UPDATE",
+          [m.principal.workspaceId, source.id, run.id],
+        )
+      ).rows[0]?.results ?? [];
     const saveResult = async (c: PoolClient, result: GitApplyResult) => {
-      const previous = results.findIndex((r) => r.path === result.path);
-      if (previous >= 0) results[previous] = result;
-      else results.push(result);
+      const durable = await durableResults(c);
+      const previous = durable.findIndex((r) => r.path === result.path);
+      if (
+        result.status === "error" &&
+        previous >= 0 &&
+        durable[previous]?.status !== "error"
+      )
+        return durable;
+      const next =
+        previous >= 0
+          ? durable.map((r, i) => (i === previous ? result : r))
+          : [...durable, result];
       await c.query(
         "UPDATE skill_source_runs SET results=$4,status='partial',failure_message=NULL,applied_at=now() WHERE workspace_id=$1 AND source_id=$2 AND id=$3",
-        [m.principal.workspaceId, source.id, run.id, JSON.stringify(results)],
+        [m.principal.workspaceId, source.id, run.id, JSON.stringify(next)],
       );
+      return next;
     };
+    const adopt = (committed: GitApplyResult[]) =>
+      results.splice(0, results.length, ...committed);
     try {
       const snapshot = await this.provider.snapshot(
         this.config(source),
@@ -715,7 +737,7 @@ export class GitSourceService {
             versionId: null,
             message: entry.message,
           },
-          saved = false;
+          saved: GitApplyResult[] | undefined;
         try {
           const bundle = snapshot.skills.find((s) => s.path === entry.path)?.bundle;
           if (
@@ -885,8 +907,7 @@ export class GitSourceService {
                   ],
                 );
               }
-              await saveResult(c, result);
-              return true;
+              return saveResult(c, result);
             });
           } else if (entry.skillId)
             saved = await fenced(async (c) => {
@@ -1009,8 +1030,7 @@ export class GitSourceService {
                     entry.action,
                   ],
                 );
-              await saveResult(c, result);
-              return true;
+              return saveResult(c, result);
             });
         } catch (e) {
           if (e instanceof DomainError && e.code === "GIT_SOURCE_LEASE_LOST") throw e;
@@ -1023,10 +1043,13 @@ export class GitSourceService {
                 : "Import failed; retry this preview",
           };
         }
-        if (!saved) await fenced((c) => saveResult(c, result));
+        adopt(saved ?? (await fenced((c) => saveResult(c, result))));
       }
-      const status = results.some((r) => r.status === "error") ? "partial" : "complete";
-      await fenced(async (c) => {
+      const status = await fenced(async (c) => {
+        adopt(await durableResults(c));
+        const status = results.some((r) => r.status === "error")
+          ? "partial"
+          : "complete";
         await c.query(
           "UPDATE skill_source_runs SET results=$4,status=$5,failure_message=NULL,applied_at=now() WHERE workspace_id=$1 AND source_id=$2 AND id=$3",
           [m.principal.workspaceId, source.id, run.id, JSON.stringify(results), status],
@@ -1036,6 +1059,7 @@ export class GitSourceService {
           commitSha: run.commit_sha,
           status,
         });
+        return status;
       });
       return runRecord({
         ...run,
