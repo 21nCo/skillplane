@@ -448,11 +448,12 @@ describe("Git source persistence and recovery", () => {
           "UPDATE skill_sources SET sync_expires_at=clock_timestamp()-interval '1 second' WHERE id=$1",
           [source.id],
         );
+        // Apply bumped the revision on claim; archive at the current one.
         if (mode === "archive")
           await sources.update({
             ...m(),
             sourceId: source.id,
-            expectedRevision: source.revision,
+            expectedRevision: (await sources.get(owner, source.id)).source.revision,
             config: { repositoryUrl: source.repositoryUrl },
             archived: true,
           });
@@ -486,6 +487,7 @@ describe("Git source persistence and recovery", () => {
       const detail = await sources.get(owner, source.id);
       expect(detail.bindings).toHaveLength(0);
       expect(detail.runs[0]?.results).toEqual([]);
+      if (mode === "archive") expect(detail.source.archivedAt).not.toBeNull();
       if (mode === "takeover") {
         expect(detail.runs[0]?.failureMessage).toBe("new owner state");
         expect(
@@ -1066,5 +1068,129 @@ describe("Git source persistence and recovery", () => {
         (p) => p.action,
       ),
     ).toEqual(["invalid", "unchanged"]);
+  });
+  it("commits an unchanged binding transition with its result so an interrupted retry converges", async () => {
+    const slug = `interrupted-${crypto.randomUUID()}`,
+      content = await bundle(slug, "# Interrupted\nReview.");
+    const manual = await skills.create({
+      ...m(),
+      workspaceId: owner.workspaceId,
+      archiveBytes: content.bytes,
+      visibility: "private",
+      idempotencyKey: crypto.randomUUID(),
+    });
+    // A dedicated pool whose clients fail the first per-item result write.
+    const injected = new Pool({ connectionString: url, max: 2 });
+    let failures = 1;
+    injected.on("connect", (client) => {
+      const query = client.query.bind(client) as (...args: unknown[]) => unknown;
+      (client as { query: unknown }).query = (...args: unknown[]) => {
+        if (
+          failures > 0 &&
+          typeof args[0] === "string" &&
+          args[0].startsWith("UPDATE skill_source_runs SET results=$4,status='partial'")
+        ) {
+          failures--;
+          return Promise.reject(new Error("result write interrupted"));
+        }
+        return query(...args);
+      };
+    });
+    const interrupted = new GitSourceService(injected, skills, versions, provider);
+    try {
+      const source = await interrupted.create({
+        ...m(),
+        config: { repositoryUrl: "https://github.com/a/interrupted" },
+        idempotencyKey: crypto.randomUUID(),
+      });
+      await interrupted.bind({
+        ...m(),
+        sourceId: source.id,
+        path: "review",
+        skillId: manual.skill.id,
+      });
+      snapshot = {
+        commitSha: "d".repeat(40),
+        skills: [{ path: "review", bundle: content, error: null }],
+      };
+      const preview = await interrupted.preview({ ...m(), sourceId: source.id });
+      expect(preview.plan[0]).toMatchObject({
+        action: "unchanged",
+        bindingVersionId: null,
+      });
+      await interrupted
+        .apply({ ...m(), sourceId: source.id, runId: preview.id })
+        .catch(() => undefined);
+      expect(failures).toBe(0);
+      const retried = await interrupted.apply({
+        ...m(),
+        sourceId: source.id,
+        runId: preview.id,
+      });
+      expect(retried.status).toBe("complete");
+      expect(retried.results[0]).toMatchObject({ status: "unchanged", message: null });
+      expect((await interrupted.get(owner, source.id)).bindings[0]).toMatchObject({
+        status: "unchanged",
+        lastVersionId: manual.version.id,
+        lastCommitSha: "d".repeat(40),
+      });
+      expect(
+        (
+          await pool.query("SELECT 1 FROM skill_versions WHERE skill_id=$1", [
+            manual.skill.id,
+          ])
+        ).rowCount,
+      ).toBe(1);
+    } finally {
+      await injected.end();
+    }
+  });
+  it("keeps a pending imported candidate in review when identical content syncs again", async () => {
+    const slug = `pending-${crypto.randomUUID()}`;
+    const source = await sources.create({
+      ...m(),
+      config: { repositoryUrl: "https://github.com/a/pending" },
+      idempotencyKey: crypto.randomUUID(),
+    });
+    const sync = async (commit: string, content: string) => {
+      snapshot = {
+        commitSha: commit.repeat(40),
+        skills: [{ path: "review", bundle: await bundle(slug, content), error: null }],
+      };
+      const preview = await sources.preview({ ...m(), sourceId: source.id });
+      return {
+        preview,
+        applied: await sources.apply({
+          ...m(),
+          sourceId: source.id,
+          runId: preview.id,
+        }),
+      };
+    };
+    await sync("1", "# One");
+    const candidate = (await sync("2", "# Two")).applied.results[0];
+    expect(candidate?.status).toBe("pending_review");
+    const { preview, applied } = await sync("3", "# Two");
+    expect(preview.plan[0]).toMatchObject({
+      action: "unchanged",
+      message: "The imported candidate is awaiting review",
+    });
+    expect(applied.status).toBe("complete");
+    expect(applied.results[0]).toMatchObject({
+      status: "unchanged",
+      versionId: candidate?.versionId,
+    });
+    expect((await sources.get(owner, source.id)).bindings[0]).toMatchObject({
+      status: "pending_review",
+      lastVersionId: candidate?.versionId,
+      lastCommitSha: "3".repeat(40),
+    });
+    expect(
+      (
+        await pool.query("SELECT 1 FROM skill_versions WHERE skill_id=$1", [
+          candidate?.skillId,
+        ])
+      ).rowCount,
+    ).toBe(2);
   });
 });

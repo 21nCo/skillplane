@@ -269,3 +269,100 @@ it("filters the catalog list and query search by source", async () => {
   ).toEqual([]);
   expect(await list("")).toEqual(expect.arrayContaining([imported, owner.skillId]));
 });
+
+it("serves version provenance only for the owning skill and workspace members", async () => {
+  const principal: Principal = {
+    kind: "user",
+    role: "owner",
+    workspaceId: owner.workspaceId,
+    userId: owner.userId,
+    actorId: owner.userId,
+    sessionId: "provenance-test",
+  };
+  const mutation = { principal, requestId: crypto.randomUUID() };
+  const bundle = await canonicalizeBundle(
+    await createSkillBundleFixture({
+      name: "Provenance import",
+      slug: `provenance-${crypto.randomUUID()}`,
+      description: "Source provenance",
+      tags: [],
+      skillMarkdown: "# Provenance import",
+    }),
+  );
+  const sources = new GitSourceService(
+    services.database.pool,
+    services.skillService,
+    services.skillVersionService,
+    {
+      snapshot: async () => ({
+        commitSha: "d".repeat(40),
+        skills: [{ path: "skills/provenance", bundle, error: null }],
+      }),
+    },
+  );
+  const source = await sources.create({
+    ...mutation,
+    config: { repositoryUrl: "https://github.com/a/provenance" },
+    idempotencyKey: crypto.randomUUID(),
+  });
+  const preview = await sources.preview({ ...mutation, sourceId: source.id });
+  const result = (
+    await sources.apply({ ...mutation, sourceId: source.id, runId: preview.id })
+  ).results[0];
+  if (!result?.skillId || !result.versionId)
+    throw new Error("Import did not create a version");
+  const get = (
+    token: string,
+    skillId: string,
+    versionId: string,
+    workspaceId = owner.workspaceId,
+  ) =>
+    app.request(
+      `/api/v1/workspaces/${workspaceId}/skills/${encodeURIComponent(skillId)}/versions/${encodeURIComponent(versionId)}/source`,
+      {
+        headers: {
+          authorization: `Bearer ${token}`,
+          "x-skillplane-workspace-id": workspaceId,
+        },
+      },
+    );
+  for (const token of [owner.sessionToken, viewer.sessionToken]) {
+    const response = await get(token, result.skillId, result.versionId);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect(
+      ((await response.json()) as { data: { provenance: unknown } }).data.provenance,
+    ).toMatchObject({
+      repository_url: "https://github.com/a/provenance",
+      commit_sha: "d".repeat(40),
+      skill_path: "skills/provenance",
+      bundle_digest: expect.stringMatching(/^sha256:/),
+      source_id: source.id,
+    });
+  }
+  const manual = await get(
+    owner.sessionToken,
+    owner.skillId,
+    `skill-version:${fixtureSuffixes[0]}`,
+  );
+  expect(manual.status).toBe(200);
+  expect(
+    ((await manual.json()) as { data: { provenance: unknown } }).data.provenance,
+  ).toBeNull();
+  expect((await get(owner.sessionToken, owner.skillId, result.versionId)).status).toBe(
+    404,
+  );
+  expect(
+    (await get(outsider.sessionToken, result.skillId, result.versionId)).status,
+  ).toBe(404);
+  expect(
+    (
+      await get(
+        outsider.sessionToken,
+        result.skillId,
+        result.versionId,
+        outsider.workspaceId,
+      )
+    ).status,
+  ).toBe(404);
+});

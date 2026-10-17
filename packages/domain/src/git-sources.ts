@@ -496,7 +496,16 @@ export class GitSourceService {
             if (!(e instanceof DomainError)) throw e;
           }
       }
-      plan.push({ ...base, action, message: null });
+      plan.push({
+        ...base,
+        action,
+        message:
+          action === "unchanged" &&
+          binding?.last_digest === item.bundle.digest &&
+          last?.rows[0]?.status === "pending_review"
+            ? "The imported candidate is awaiting review"
+            : null,
+      });
     }
     for (const binding of bindings)
       if (!seen.has(binding.skill_path))
@@ -625,6 +634,17 @@ export class GitSourceService {
         await assertGitSourceLease(c, m.principal.workspaceId, lease);
         return fn(c);
       });
+    // Binding transitions commit with their item result, so a same-run retry
+    // never sees a binding this run already moved without the matching result.
+    const saveResult = async (c: PoolClient, result: GitApplyResult) => {
+      const previous = results.findIndex((r) => r.path === result.path);
+      if (previous >= 0) results[previous] = result;
+      else results.push(result);
+      await c.query(
+        "UPDATE skill_source_runs SET results=$4,status='partial',failure_message=NULL,applied_at=now() WHERE workspace_id=$1 AND source_id=$2 AND id=$3",
+        [m.principal.workspaceId, source.id, run.id, JSON.stringify(results)],
+      );
+    };
     try {
       const snapshot = await this.provider.snapshot(
         this.config(source),
@@ -648,12 +668,13 @@ export class GitSourceService {
             );
         });
         let result: GitApplyResult = {
-          path: entry.path,
-          status: entry.action,
-          skillId: entry.skillId,
-          versionId: null,
-          message: entry.message,
-        };
+            path: entry.path,
+            status: entry.action,
+            skillId: entry.skillId,
+            versionId: null,
+            message: entry.message,
+          },
+          saved = false;
         try {
           const bundle = snapshot.skills.find((s) => s.path === entry.path)?.bundle;
           if (
@@ -754,7 +775,7 @@ export class GitSourceService {
               versionId,
               message: null,
             };
-            await fenced(async (c) => {
+            saved = await fenced(async (c) => {
               const committed = await c.query<{
                 status: string;
                 archived_at: Date | null;
@@ -823,9 +844,11 @@ export class GitSourceService {
                   ],
                 );
               }
+              await saveResult(c, result);
+              return true;
             });
           } else if (entry.skillId)
-            await fenced(async (c) => {
+            saved = await fenced(async (c) => {
               if (entry.action === "unchanged") {
                 const target = await c.query<{
                   id: string;
@@ -849,26 +872,36 @@ export class GitSourceService {
                     "Skill changed after preview; preview again",
                     409,
                   );
-                // As in preview, a rejected candidate blocks only its own content.
-                // Upstream content equal to the published head converges the
-                // binding to that head instead.
+                // As in preview, a rejected candidate blocks only its own content,
+                // and a pending one keeps its review state. Upstream content equal
+                // to the published head converges the binding to that head instead.
                 if (t.last_digest === entry.digest) {
-                  if (t.last_version_id) {
-                    const last = await c.query<{ status: string }>(
-                      "SELECT status FROM skill_versions WHERE workspace_id=$1 AND id=$2 FOR UPDATE",
-                      [m.principal.workspaceId, t.last_version_id],
+                  const last = t.last_version_id
+                    ? (
+                        await c.query<{ status: string }>(
+                          "SELECT status FROM skill_versions WHERE workspace_id=$1 AND id=$2 FOR UPDATE",
+                          [m.principal.workspaceId, t.last_version_id],
+                        )
+                      ).rows[0]?.status
+                    : undefined;
+                  if (last === "rejected")
+                    throw new DomainError(
+                      "CONFLICT",
+                      "The imported candidate was rejected; preview again",
+                      409,
                     );
-                    if (last.rows[0]?.status === "rejected")
-                      throw new DomainError(
-                        "CONFLICT",
-                        "The imported candidate was rejected; preview again",
-                        409,
-                      );
-                  }
+                  const status =
+                    last === "pending_review" ? "pending_review" : "unchanged";
                   await c.query(
-                    "UPDATE skill_source_bindings SET status='unchanged',last_commit_sha=$2,updated_at=now() WHERE id=$1",
-                    [t.id, run.commit_sha],
+                    "UPDATE skill_source_bindings SET status=$3,last_commit_sha=$2,updated_at=now() WHERE id=$1",
+                    [t.id, run.commit_sha, status],
                   );
+                  if (status === "pending_review")
+                    result = {
+                      ...result,
+                      versionId: t.last_version_id,
+                      message: "The imported candidate is awaiting review",
+                    };
                 } else
                   await c.query(
                     "UPDATE skill_source_bindings SET status='unchanged',last_commit_sha=$2,last_digest=$3,last_version_id=$4,base_version_id=$4,updated_at=now() WHERE id=$1",
@@ -890,6 +923,8 @@ export class GitSourceService {
                     entry.action,
                   ],
                 );
+              await saveResult(c, result);
+              return true;
             });
         } catch (e) {
           if (e instanceof DomainError && e.code === "GIT_SOURCE_LEASE_LOST") throw e;
@@ -902,15 +937,7 @@ export class GitSourceService {
                 : "Import failed; retry this preview",
           };
         }
-        const previous = results.findIndex((r) => r.path === entry.path);
-        if (previous >= 0) results[previous] = result;
-        else results.push(result);
-        await fenced(async (c) => {
-          await c.query(
-            "UPDATE skill_source_runs SET results=$4,status='partial',failure_message=NULL,applied_at=now() WHERE workspace_id=$1 AND source_id=$2 AND id=$3",
-            [m.principal.workspaceId, source.id, run.id, JSON.stringify(results)],
-          );
-        });
+        if (!saved) await fenced((c) => saveResult(c, result));
       }
       const status = results.some((r) => r.status === "error") ? "partial" : "complete";
       await fenced(async (c) => {
