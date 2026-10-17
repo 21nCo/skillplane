@@ -127,10 +127,12 @@ export function registerSkillRoutes(app: Hono<ApiEnvironment>): void {
     const query = context.req.query("q")?.trim() ?? "";
     const visibility = parseVisibilityFilter(context);
     const groupFilter = optionalIdFilter(context, "groupId");
+    const sourceFilter = optionalIdFilter(context, "sourceId");
     if (query) {
       const page = await services.skillSearchService.search({
         query,
         ...groupFilter,
+        ...sourceFilter,
         principal,
         visibility,
         archive,
@@ -160,6 +162,7 @@ export function registerSkillRoutes(app: Hono<ApiEnvironment>): void {
     }
     const page = await services.skillService.listPage({
       ...groupFilter,
+      ...sourceFilter,
       workspaceId: context.req.param("workspaceId"),
       principal,
       archive,

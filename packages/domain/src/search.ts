@@ -265,15 +265,17 @@ function searchScope(options: {
   readonly principal?: Principal | null;
   readonly workspaceId?: string;
   readonly groupId?: string;
+  readonly sourceId?: string;
 }): string {
   if (options.principal) {
     const group = options.groupId ? `:group:${options.groupId}` : "";
-    return `workspace:${options.principal.workspaceId}${group}`;
+    const source = options.sourceId ? `:source:${options.sourceId}` : "";
+    return `workspace:${options.principal.workspaceId}${group}${source}`;
   }
-  if (options.groupId)
+  if (options.groupId || options.sourceId)
     throw new DomainError(
       "AUTHENTICATION_REQUIRED",
-      "Group discovery requires workspace membership",
+      "Group and source discovery require workspace membership",
       401,
     );
   return options.workspaceId ? `public-workspace:${options.workspaceId}` : "public";
@@ -289,6 +291,7 @@ export class SkillSearchService {
   async search(options: {
     readonly query: string;
     readonly groupId?: string;
+    readonly sourceId?: string;
     readonly workspaceId?: string;
     readonly tags?: readonly string[];
     readonly visibility?: readonly SkillVisibility[];
@@ -327,6 +330,7 @@ export class SkillSearchService {
     options: {
       readonly query: string;
       readonly groupId?: string;
+      readonly sourceId?: string;
       readonly workspaceId?: string;
       readonly tags?: readonly string[];
       readonly visibility?: readonly SkillVisibility[];
@@ -388,6 +392,7 @@ export class SkillSearchService {
           WHERE ${authorization}
             AND $8::text IN ('active','archived','all')
             AND ($9::text IS NULL OR EXISTS(SELECT 1 FROM skill_group_skills gs JOIN skill_groups g ON g.id=gs.group_id AND g.workspace_id=gs.workspace_id WHERE gs.workspace_id=skill.workspace_id AND gs.skill_id=skill.id AND gs.group_id=$9 AND g.archived_at IS NULL))
+            AND ($10::text IS NULL OR EXISTS(SELECT 1 FROM skill_source_bindings b WHERE b.workspace_id=skill.workspace_id AND b.skill_id=skill.id AND b.source_id=$10 AND b.disconnected_at IS NULL))
             AND ($2::text[] = '{}'::text[] OR skill.tags @> $2::text[])
             AND (
               cardinality($7::text[]) = 0
@@ -432,6 +437,7 @@ export class SkillSearchService {
         normalized.visibility,
         normalized.archive,
         options.groupId ?? null,
+        options.sourceId ?? null,
       ],
     );
     const hasNext = result.rows.length > normalized.limit;

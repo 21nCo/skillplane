@@ -1,5 +1,6 @@
 <script lang="ts">
   import GroupBadges from "$lib/groups/GroupBadges.svelte";
+  import VersionSource from "$lib/sources/VersionSource.svelte";
   import { resolve } from "$app/paths";
   import { page } from "$app/state";
   import { Badge, Button } from "@skillplane/ui";
@@ -63,6 +64,11 @@
 </svelte:head>
 
 {#if detail.skill && detail.currentVersion && workspace}
+  <VersionSource
+    workspaceId={workspace.id}
+    skillId={detail.skill.id}
+    versionId={detail.currentVersion.id}
+  />
   <section class="overview-grid">
     <div class="main-column">
       <section class="panel">

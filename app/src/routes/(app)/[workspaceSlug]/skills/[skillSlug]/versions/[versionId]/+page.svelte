@@ -1,4 +1,5 @@
 <script lang="ts">
+  import VersionSource from "$lib/sources/VersionSource.svelte";
   import { goto } from "$app/navigation";
   import { resolve } from "$app/paths";
   import { page } from "$app/state";
@@ -318,6 +319,11 @@
       }}
     />
 
+    <VersionSource
+      workspaceId={workspace.id}
+      skillId={detail.skill.id}
+      versionId={version.id}
+    />
     {#if version.source === "agent_amendment"}
       <section class="panel learning-panel">
         <LearningMetadata metadata={version.learningMetadata} />

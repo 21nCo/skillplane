@@ -194,6 +194,12 @@ pnpm deploy:all
 pnpm smoke:production:release
 ```
 
+`pnpm deploy:check` also runs `pnpm test:worker`: it starts the built app Worker
+in workerd and runs a Git source provider snapshot there against a stubbed GitHub,
+catching Worker-only failures that Node tests cannot see. Set
+`SKILLPLANE_SMOKE_DATABASE_URL` to a migrated database to also require a
+`200` from `/auth/session`.
+
 The same sequence is automated for production tags, together with the docs web
 app deployment. See [`tagged-releases.md`](./tagged-releases.md). The local
 commands remain the recovery path when GitHub Actions is unavailable.

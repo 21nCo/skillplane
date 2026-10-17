@@ -1,5 +1,6 @@
 <script lang="ts">
   import { groupRequest, type Group } from "$lib/groups/api.js";
+  import { sourceRequest, type Source } from "$lib/sources/api.js";
   import { untrack } from "svelte";
   import { SvelteURLSearchParams } from "svelte/reactivity";
   import { resolve } from "$app/paths";
@@ -32,6 +33,9 @@
   let badgesError = $state("");
   let groups = $state<Group[]>([]);
   let groupId = $state("");
+  let sourcesError = $state("");
+  let sources = $state<Source[]>([]);
+  let sourceId = $state("");
   let skillGroups = $state<Partial<Record<string, { id: string; name: string }[]>>>({});
   let skills = $state<Skill[]>([]);
   let query = $state("");
@@ -47,9 +51,11 @@
   // Every reset load (a new filter or workspace) starts a new list generation; the
   // pages of one list, "load more" included, share it so their badges merge.
   let listGeneration = 0;
-  // Every workspace change starts a new generation for the group filter options.
+  // Every workspace change starts a new generation for the group and source
+  // filter options.
   let optionsGeneration = 0;
-  // Requests still running (skills, badges and group options), superseded ones
+  let sourceOptionsGeneration = 0;
+  // Requests still running (skills, badges and filter options), superseded ones
   // included, so a caller can tell when every response has been handled.
   let pendingLoads = $state(0);
   async function tracked(fn: () => Promise<void>) {
@@ -82,6 +88,7 @@
         const result = await listSkills({
           workspaceId,
           ...(groupId ? { groupId } : {}),
+          ...(sourceId ? { sourceId } : {}),
           query,
           archive,
           visibility: visibility === "all" ? [] : [visibility],
@@ -160,6 +167,30 @@
     });
   }
 
+  async function loadSourceOptions(workspaceId: string) {
+    const generation = ++sourceOptionsGeneration;
+    await tracked(async () => {
+      try {
+        let cursor: string | null = null;
+        const all: Source[] = [];
+        do {
+          const r: { sources: Source[]; nextCursor: string | null } =
+            await sourceRequest(
+              workspaceId,
+              cursor ? `?cursor=${encodeURIComponent(cursor)}` : "",
+            );
+          if (generation !== sourceOptionsGeneration) return;
+          all.push(...r.sources);
+          cursor = r.nextCursor;
+        } while (cursor);
+        sources = all;
+      } catch {
+        if (generation === sourceOptionsGeneration)
+          sourcesError = "Sources could not be loaded";
+      }
+    });
+  }
+
   function search(event: SubmitEvent) {
     event.preventDefault();
     void load();
@@ -172,10 +203,14 @@
       groupsError = "";
       groupId = "";
       groups = [];
+      sourcesError = "";
+      sourceId = "";
+      sources = [];
       skillGroups = {};
       // The loads track their own state; keep them out of this effect's dependencies.
       untrack(() => {
         void loadGroupOptions(workspaceId);
+        void loadSourceOptions(workspaceId);
         void load();
       });
     }
@@ -236,6 +271,21 @@
     <!-- Each filter keeps its label and control together in one grid cell. -->
     <div class="filter">
       <Select
+        label="Git source"
+        options={[
+          { value: "", label: "All sources" },
+          ...sources.map((source) => ({
+            value: source.id,
+            label: `${source.repositoryUrl.replace("https://github.com/", "")} ${source.path ?? "(all skills)"} · ${source.refPolicy}: ${source.ref}`,
+          })),
+        ]}
+        bind:value={sourceId}
+        onchange={() => void load()}
+      />
+      {#if sourcesError}<p role="status">{sourcesError}</p>{/if}
+    </div>
+    <div class="filter">
+      <Select
         label="Skill group"
         options={[
           { value: "", label: "All groups" },
@@ -291,10 +341,18 @@
   {:else if skills.length === 0}
     <SkillState
       kind="empty"
-      title={query || groupId || visibility !== "all" || archive !== "active"
+      title={query ||
+      groupId ||
+      sourceId ||
+      visibility !== "all" ||
+      archive !== "active"
         ? "No skills match these filters"
         : "Create your first skill"}
-      message={query || groupId || visibility !== "all" || archive !== "active"
+      message={query ||
+      groupId ||
+      sourceId ||
+      visibility !== "all" ||
+      archive !== "active"
         ? "Change the search or filters and try again."
         : canWrite
           ? "Author Markdown directly or upload a portable Skillplane bundle."
@@ -431,10 +489,15 @@
 
   .filters {
     display: grid;
-    grid-template-columns: minmax(18rem, 1fr) repeat(3, minmax(9rem, 1fr));
+    /* Search spans its own row so the four filters wrap instead of overflowing. */
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
     gap: var(--sp-space-3);
     align-items: end;
     margin: var(--sp-space-6) 0 var(--sp-space-4);
+  }
+
+  .filters form {
+    grid-column: 1 / -1;
   }
 
   .filter {
@@ -551,10 +614,6 @@
 
     .filters {
       grid-template-columns: 1fr 1fr;
-    }
-
-    .filters form {
-      grid-column: 1 / -1;
     }
   }
 

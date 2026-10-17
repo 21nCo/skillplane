@@ -1,4 +1,5 @@
 import { registerSkillGroupRoutes } from "./routes/skill-groups.js";
+import { registerGitSourceRoutes } from "./routes/git-sources.js";
 import { registerCompositionRoutes } from "./routes/composition.js";
 import type { MiddlewareHandler } from "hono";
 import { Hono } from "hono";
@@ -134,6 +135,7 @@ export function createApiApp(options: ApiOptions = {}) {
   registerSkillSearchRoutes(app);
   registerSkillRoutes(app);
   registerSkillGroupRoutes(app);
+  registerGitSourceRoutes(app);
   registerSkillVersionRoutes(app);
   registerCompositionRoutes(app);
   registerAmendmentRoutes(app);

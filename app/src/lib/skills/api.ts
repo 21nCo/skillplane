@@ -42,6 +42,7 @@ function encodePath(path: string): string {
 
 export async function listSkills(options: {
   readonly groupId?: string;
+  readonly sourceId?: string;
   readonly workspaceId: string;
   readonly query?: string;
   readonly visibility?: readonly SkillVisibility[];
@@ -49,9 +50,10 @@ export async function listSkills(options: {
   readonly cursor?: string | null;
   readonly limit?: number;
 }): Promise<SkillPage> {
-  if (options.groupId) {
+  if (options.groupId || options.sourceId) {
     const q = new URLSearchParams({
-      groupId: options.groupId,
+      ...(options.groupId ? { groupId: options.groupId } : {}),
+      ...(options.sourceId ? { sourceId: options.sourceId } : {}),
       state: options.archive ?? "active",
       limit: String(options.limit ?? 20),
     });
@@ -60,6 +62,7 @@ export async function listSkills(options: {
     for (const v of options.visibility ?? []) q.append("visibility", v);
     return apiRequest<SkillPage>(
       `/api/v1/workspaces/${encodeURIComponent(options.workspaceId)}/skills?${q}`,
+      { headers: workspaceHeaders(options.workspaceId) },
     );
   }
   return listSkillsWithDatafn(options);
