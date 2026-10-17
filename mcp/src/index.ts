@@ -6,7 +6,7 @@ import {
 } from "@skillplane/api";
 import { metadataResponse, protectedResourceMetadata } from "@skillplane/auth";
 import { parseOAuthEndpoints, type RuntimeBindings } from "@skillplane/config";
-import { McpToolError, type CallerDeclaration } from "@skillplane/mcp-schema";
+import { McpToolError } from "@skillplane/mcp-schema";
 import { normalizeBundlePath } from "@skillplane/storage";
 import { instrument, type PostHog } from "@posthog/mcp";
 import { Hono } from "hono";
@@ -35,6 +35,11 @@ import {
   flushPostHog,
   isPostHogSessionId,
 } from "./analytics.js";
+import {
+  finalizeMcpProtocolResponse,
+  prepareMcpToolCallRequest,
+  skillplaneDiagnosticEvidence,
+} from "./client-profiles.js";
 import { verifyDownloadGrant } from "./downloads.js";
 import { McpCursorCodec } from "./pagination.js";
 import { createSkillplaneMcpServer } from "./server.js";
@@ -50,9 +55,6 @@ import {
 
 const MCP_ISSUER = "https://app.skillplane.dev";
 const MCP_RESOURCE = "https://mcp.skillplane.dev/mcp";
-const LINEAR_MCP_CLIENT_ID =
-  "https://linear.app/.well-known/oauth-client-metadata/mcp.json";
-const CLAUDE_MCP_CLIENT_ID = "https://claude.ai/oauth/mcp-oauth-client-metadata";
 
 const BRAND_CACHE_CONTROL = "public, max-age=604800, immutable";
 
@@ -135,228 +137,6 @@ function secureProtocolResponse(response: Response): Response {
 
 function isJsonObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-const LINEAR_OMITTED_SCHEMA_KEYWORDS = new Set([
-  "$schema",
-  "description",
-  "additionalProperties",
-  "default",
-  "exclusiveMaximum",
-  "exclusiveMinimum",
-  "format",
-  "maxItems",
-  "maxLength",
-  "maximum",
-  "minItems",
-  "minLength",
-  "minimum",
-  "pattern",
-]);
-
-interface OAuthMcpClientProfile {
-  readonly compactToolCatalog: boolean;
-  readonly invocationPrefix: string;
-  readonly caller: Omit<CallerDeclaration, "runId" | "sessionId" | "conversationId">;
-}
-
-const OAUTH_MCP_CLIENT_PROFILES = {
-  claude: {
-    compactToolCatalog: false,
-    invocationPrefix: "claude",
-    caller: {
-      agentId: "claude",
-      agentName: "Claude",
-      modelProvider: "Anthropic",
-      modelName: "Claude",
-      modelVersion: "unknown",
-      clientName: "Claude",
-      clientVersion: "unknown",
-    },
-  },
-  generic: {
-    compactToolCatalog: false,
-    invocationPrefix: "oauth-client",
-    caller: {
-      agentId: "authenticated-oauth-client",
-      agentName: "Authenticated OAuth client",
-      modelProvider: "unknown",
-      modelName: "unknown",
-      modelVersion: "unknown",
-      clientName: "OAuth MCP client",
-      clientVersion: "unknown",
-    },
-  },
-  linear: {
-    compactToolCatalog: true,
-    invocationPrefix: "linear",
-    caller: {
-      agentId: "linear-agent",
-      agentName: "Linear Agent",
-      modelProvider: "Linear",
-      modelName: "Linear Agent",
-      modelVersion: "unknown",
-      clientName: "Linear",
-      clientVersion: "unknown",
-    },
-  },
-} as const satisfies Record<string, OAuthMcpClientProfile>;
-
-function oauthMcpClientProfile(identity: McpIdentity): OAuthMcpClientProfile | null {
-  if (identity.kind !== "oauth") return null;
-  if (identity.clientId === LINEAR_MCP_CLIENT_ID) {
-    return OAUTH_MCP_CLIENT_PROFILES.linear;
-  }
-  if (identity.clientId === CLAUDE_MCP_CLIENT_ID) {
-    return OAUTH_MCP_CLIENT_PROFILES.claude;
-  }
-  return OAUTH_MCP_CLIENT_PROFILES.generic;
-}
-
-function compactLinearInputSchema(value: unknown): void {
-  if (Array.isArray(value)) {
-    for (const item of value) compactLinearInputSchema(item);
-    return;
-  }
-  if (!isJsonObject(value)) return;
-  if ("enum" in value || "const" in value) delete value.type;
-  for (const [key, child] of Object.entries(value)) {
-    if (LINEAR_OMITTED_SCHEMA_KEYWORDS.has(key)) {
-      value[key] = undefined;
-    } else {
-      compactLinearInputSchema(child);
-    }
-  }
-}
-
-export async function projectMcpToolCatalogResponse(
-  response: Response,
-  identity: McpIdentity,
-): Promise<Response> {
-  const profile = oauthMcpClientProfile(identity);
-  if (!profile || !response.headers.get("content-type")?.includes("application/json")) {
-    return response;
-  }
-
-  const body = await response.text();
-  let payload: unknown;
-  try {
-    payload = JSON.parse(body);
-  } catch {
-    return new Response(body, response);
-  }
-
-  if (
-    !isJsonObject(payload) ||
-    !isJsonObject(payload.result) ||
-    !Array.isArray(payload.result.tools)
-  ) {
-    return new Response(body, response);
-  }
-
-  for (const tool of payload.result.tools) {
-    if (!isJsonObject(tool)) continue;
-    // Authenticated OAuth clients cannot author trusted caller provenance. Keep
-    // the canonical caller contract server-side and inject it before validation.
-    if (isJsonObject(tool.inputSchema)) {
-      if (isJsonObject(tool.inputSchema.properties)) {
-        delete tool.inputSchema.properties.caller;
-      }
-      if (Array.isArray(tool.inputSchema.required)) {
-        const required = tool.inputSchema.required.filter((name) => name !== "caller");
-        if (required.length > 0) {
-          tool.inputSchema.required = required;
-        } else {
-          delete tool.inputSchema.required;
-        }
-      }
-    }
-    if (profile.compactToolCatalog) {
-      // Linear only needs names, descriptions, and input contracts. Keep optional
-      // MCP presentation and output metadata server-side to stay within its budget.
-      if (typeof tool.description === "string")
-        tool.description =
-          typeof tool.title === "string"
-            ? tool.title
-            : tool.description.split(/(?<=\.)\s/)[0]?.slice(0, 40);
-      delete tool.outputSchema;
-      delete tool.execution;
-      delete tool.annotations;
-      delete tool.title;
-      compactLinearInputSchema(tool.inputSchema);
-    }
-  }
-
-  const headers = new Headers(response.headers);
-  headers.delete("content-length");
-  return new Response(JSON.stringify(payload), {
-    status: response.status,
-    statusText: response.statusText,
-    headers,
-  });
-}
-
-export async function prepareMcpProtocolRequest(
-  request: Request,
-  identity: McpIdentity,
-): Promise<Request> {
-  const profile = oauthMcpClientProfile(identity);
-  if (
-    !profile ||
-    request.method !== "POST" ||
-    !request.headers.get("content-type")?.includes("application/json")
-  ) {
-    return request;
-  }
-
-  let payload: unknown;
-  try {
-    payload = await request.clone().json();
-  } catch {
-    return request;
-  }
-  if (
-    !isJsonObject(payload) ||
-    payload.method !== "tools/call" ||
-    !isJsonObject(payload.params)
-  ) {
-    return request;
-  }
-
-  if (
-    payload.params.arguments !== undefined &&
-    !isJsonObject(payload.params.arguments)
-  ) {
-    return request;
-  }
-
-  const arguments_ = payload.params.arguments ?? {};
-  if (
-    payload.params.name === "skills_list" &&
-    !("workspace" in arguments_) &&
-    typeof arguments_.workspaceId === "string"
-  ) {
-    arguments_.workspace = { id: arguments_.workspaceId };
-    delete arguments_.workspaceId;
-  }
-
-  // OAuth client identity is authenticated before this point. Always replace a
-  // supplied caller so model-authored provenance cannot reach handlers or audit.
-  const invocationId = crypto.randomUUID();
-  arguments_.caller = {
-    ...profile.caller,
-    runId: `${profile.invocationPrefix}-run:${invocationId}`,
-    sessionId: `${profile.invocationPrefix}-session:${invocationId}`,
-    conversationId: `${profile.invocationPrefix}-conversation:${invocationId}`,
-  };
-  payload.params.arguments = arguments_;
-
-  const headers = new Headers(request.headers);
-  headers.delete("content-length");
-  return new Request(request, {
-    body: JSON.stringify(payload),
-    headers,
-  });
 }
 
 function statelessMethodNotAllowedResponse(): Response {
@@ -716,7 +496,9 @@ export function createMcpApp(options: CreateMcpAppOptions = {}) {
           if (request.method !== "POST") {
             return statelessMethodNotAllowedResponse();
           }
-          const protocolRequest = await prepareMcpProtocolRequest(request, identity);
+          const requestId = `mcp-request:${crypto.randomUUID()}`;
+          const { request: protocolRequest, calledTools } =
+            await prepareMcpToolCallRequest(request, identity);
           const runtime = createRuntime(
             currentServices,
             identity,
@@ -724,7 +506,10 @@ export function createMcpApp(options: CreateMcpAppOptions = {}) {
             protocolRequest,
             now,
           );
-          const server = createSkillplaneMcpServer(runtime);
+          const server = createSkillplaneMcpServer(runtime, {
+            evidence: skillplaneDiagnosticEvidence({ requestId, identity }),
+            calledTools,
+          });
           const posthog = resolvePostHog(context.env);
           const protocolHandler = await server.createWebStandardHandler({
             enableJsonResponse: true,
@@ -743,8 +528,10 @@ export function createMcpApp(options: CreateMcpAppOptions = {}) {
           });
           const response = await protocolHandler(protocolRequest, handleOptions);
           const protocolResponse = secureProtocolResponse(
-            await projectMcpToolCatalogResponse(response, identity),
+            await finalizeMcpProtocolResponse(response, identity),
           );
+          // Correlates client-visible failures with mcp.tool.rejected_before_handler.
+          protocolResponse.headers.set("x-skillplane-request-id", requestId);
           if (posthog) {
             let waitUntil: ((promise: Promise<unknown>) => void) | undefined;
             try {

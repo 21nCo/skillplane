@@ -1,0 +1,147 @@
+{
+  "description": "SKI-14 incident: an authenticated OAuth client asked to list available skills. Before 54edc65 it received the canonical skills_list schema (caller required, nested workspace selector) and the model sent a flat workspaceId without caller; McpFn rejected the call before the handler. Argument values are redacted; the workspace ID placeholder is replaced with a seeded workspace at test time.",
+  "tool": "skills_list",
+  "redactedWorkspaceId": "<redacted-workspace-id>",
+  "rejectedArguments": {
+    "workspaceId": "<redacted-workspace-id>"
+  },
+  "effectiveInputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "type": "object",
+    "properties": {
+      "workspace": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              }
+            },
+            "required": ["id"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "slug": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120,
+                "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+              }
+            },
+            "required": ["slug"],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "visibility": {
+        "default": ["private", "workspace", "public"],
+        "minItems": 1,
+        "maxItems": 3,
+        "type": "array",
+        "items": {
+          "type": "string",
+          "enum": ["private", "workspace", "public"]
+        }
+      },
+      "state": {
+        "default": "active",
+        "type": "string",
+        "enum": ["active", "archived", "all"]
+      },
+      "cursor": {
+        "default": null,
+        "anyOf": [
+          {
+            "type": "string",
+            "minLength": 32,
+            "maxLength": 4096
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "limit": {
+        "default": 20,
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 100
+      },
+      "caller": {
+        "type": "object",
+        "properties": {
+          "agentId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "agentName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "modelProvider": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "modelName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "modelVersion": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "clientName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "clientVersion": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "runId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "sessionId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "conversationId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "agentId",
+          "agentName",
+          "modelProvider",
+          "modelName",
+          "modelVersion",
+          "clientName",
+          "clientVersion",
+          "runId",
+          "sessionId",
+          "conversationId"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "required": ["workspace", "caller"],
+    "additionalProperties": false
+  }
+}

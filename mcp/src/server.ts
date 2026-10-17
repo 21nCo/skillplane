@@ -26,6 +26,7 @@ import {
 } from "@skillplane/mcp-schema";
 import {
   defineMcpFnServer,
+  type McpFnClientProfileEvidence,
   type McpFnObjectSchema,
   type McpFnServerInfo,
   type McpFnToolDefinition,
@@ -79,6 +80,8 @@ import {
   skillVersionsDiffInputSchema,
   skillVersionsDiffOutputSchema,
 } from "@skillplane/mcp-schema";
+import { skillplaneClientProfiles } from "./client-profiles.js";
+import { WORKSPACE_ROUTED_MCP_TOOL_NAMES } from "./tool-catalog.js";
 import { skillAmend } from "./tools/amend.js";
 import { skillAssetRetrieve } from "./tools/assets.js";
 import { skillsList, workspacesList } from "./tools/catalog.js";
@@ -109,7 +112,7 @@ import {
   skillVersionsDiff,
   skillVisibilityUpdate,
 } from "./tools/skill-lifecycle.js";
-import type { McpToolRuntime } from "./tools/shared.js";
+import { workspaceRouteRequiredResult, type McpToolRuntime } from "./tools/shared.js";
 import { skillVersionsList } from "./tools/versions.js";
 import { z, type ZodType } from "zod";
 
@@ -177,10 +180,17 @@ function tool<TInput>(options: {
     inputSchema: objectSchema(options.input, "input"),
     outputSchema: objectSchema(options.output, "output"),
     annotations: options.annotations,
-    handler: async (args, runtime) =>
-      (await options.run(runtime, options.input.parse(args))) as Awaited<
+    handler: async (args, runtime) => {
+      if (
+        runtime.services.database.role === "control" &&
+        WORKSPACE_ROUTED_MCP_TOOL_NAMES.has(options.name)
+      ) {
+        return workspaceRouteRequiredResult();
+      }
+      return (await options.run(runtime, options.input.parse(args))) as Awaited<
         ReturnType<McpFnToolDefinition<McpToolRuntime>["handler"]>
-      >,
+      >;
+    },
   };
 }
 
@@ -188,7 +198,7 @@ export const skillplaneMcpDeclaration = defineMcpFnServer<McpToolRuntime>({
   info: {
     ...SKILLPLANE_MCP_SERVER_INFO,
     instructions:
-      "Discover, retrieve, and manage versioned Skillplane skills and their authorized context knowledge. Start with workspaces_list, skills_list, and contexts_list when identifiers are unknown. Caller attribution is either client-declared or derived server-side from the authenticated OAuth client profile; authentication remains server-derived.",
+      "Discover, retrieve, and manage versioned Skillplane skills and their authorized context knowledge. To find skills, call workspaces_list first, then pass one returned workspace to skills_list (complete inventory) or skills_search (ranked text query) as workspace: { id } or workspace: { slug }; a flat workspaceId string is a deprecated alias for workspace: { id }. Use contexts_list when context identifiers are unknown. If a call is rejected for an unknown property, refresh your cached tool list because these contracts can change between releases. Caller attribution is either client-declared or derived server-side from the authenticated OAuth client profile; authentication remains server-derived.",
   },
   transports: ["streamable-http"],
   tools: [
@@ -206,7 +216,7 @@ export const skillplaneMcpDeclaration = defineMcpFnServer<McpToolRuntime>({
       name: "skills_list",
       title: "List workspace skills",
       description:
-        "Enumerate authorized skills in one workspace without a search query. Includes active unpublished skill records, supports visibility and archive filters, and returns an opaque cursor until every matching skill has been listed.",
+        "Enumerate authorized skills in one workspace without a search query. Select the workspace returned by workspaces_list with workspace: { id } or workspace: { slug }. Includes active unpublished skill records, supports visibility and archive filters, and returns an opaque cursor until every matching skill has been listed.",
       input: skillsListInputSchema,
       output: skillsListOutputSchema,
       annotations: READ_ONLY_ANNOTATIONS,
@@ -216,7 +226,7 @@ export const skillplaneMcpDeclaration = defineMcpFnServer<McpToolRuntime>({
       name: "skills_search",
       title: "Search skills",
       description:
-        "Search one workspace using authorization-filtered Postgres full-text ranking. Returns only stable skill metadata, current published version IDs, semantic versions, digests, and an opaque cursor.",
+        "Search one workspace using authorization-filtered Postgres full-text ranking. Select the workspace returned by workspaces_list with workspace: { id } or workspace: { slug }. Returns only stable skill metadata, current published version IDs, semantic versions, digests, and an opaque cursor.",
       input: skillsSearchInputSchema,
       output: skillsSearchOutputSchema,
       annotations: READ_ONLY_ANNOTATIONS,
@@ -585,8 +595,22 @@ export const skillplaneMcpDeclaration = defineMcpFnServer<McpToolRuntime>({
   ],
 });
 
-export function createSkillplaneMcpServer(runtime: McpToolRuntime) {
-  return skillplaneMcpDeclaration.createServer({ context: () => runtime });
+export function createSkillplaneMcpServer(
+  runtime: McpToolRuntime,
+  options: {
+    readonly evidence?: (event: McpFnClientProfileEvidence) => void;
+    /** Limits this request's effective catalog to the tools it calls. */
+    readonly calledTools?: ReadonlySet<string> | null;
+  } = {},
+) {
+  const calledTools = options.calledTools;
+  return skillplaneMcpDeclaration.createServer({
+    context: () => runtime,
+    clientProfiles: skillplaneClientProfiles(options.evidence),
+    ...(calledTools
+      ? { toolVisibility: ({ tool }) => calledTools.has(tool.name) }
+      : {}),
+  });
 }
 
 export {

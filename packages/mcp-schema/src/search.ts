@@ -7,12 +7,13 @@ import {
   skillVisibilitySchema,
   slugSchema,
   stableIdSchema,
+  workspaceSelectorSchema,
 } from "./common.js";
 
 export const skillsSearchInputSchema = z
   .object({
     query: z.string().trim().min(1).max(500),
-    workspaceId: stableIdSchema,
+    workspace: workspaceSelectorSchema,
     visibility: z
       .array(skillVisibilitySchema)
       .min(1)

@@ -1,0 +1,671 @@
+{
+  "formatVersion": 1,
+  "kind": "mcpfn.client-profile-snapshot",
+  "profile": {
+    "id": "skillplane/oauth-linear",
+    "version": "1"
+  },
+  "catalogHash": "a9fd65be211a426f23e2fb6f9ca73b03dcd08553762c2c07b7a39ddc8365fba6",
+  "tools": [
+    {
+      "name": "context_archive",
+      "hash": "5513c643692390cfa41252965017426dd739eaf2533e43b8d18e34e60c64fb52",
+      "inputProperties": [
+        "skill",
+        "context",
+        "expectedUpdatedAt",
+        "idempotencyKey"
+      ],
+      "required": [
+        "skill",
+        "context",
+        "expectedUpdatedAt",
+        "idempotencyKey"
+      ],
+      "outputSchema": false
+    },
+    {
+      "name": "context_create",
+      "hash": "32ba9b3c070232a63b5c7828b1d8e6b89273a5d426d706485ea27f5b5d18f817",
+      "inputProperties": [
+        "skill",
+        "slug",
+        "name",
+        "type",
+        "externalReference",
+        "description",
+        "metadata",
+        "initialKnowledge",
+        "learningMetadata",
+        "idempotencyKey"
+      ],
+      "required": [
+        "skill",
+        "slug",
+        "name",
+        "type",
+        "initialKnowledge",
+        "idempotencyKey"
+      ],
+      "outputSchema": false
+    },
+    {
+      "name": "context_get",
+      "hash": "1457713f5f8752bb654dd7af4091f3fc45d7e00931c4b16cb4085d53181e0313",
+      "inputProperties": [
+        "skill",
+        "context",
+        "knowledge",
+        "includeNotes"
+      ],
+      "required": [
+        "skill",
+        "context"
+      ],
+      "outputSchema": false
+    },
+    {
+      "name": "context_knowledge_history",
+      "hash": "956e5562270072ed45c1741d8a832c203684028fb127c9850d52f247985eb5e9",
+      "inputProperties": [
+        "skill",
+        "context",
+        "cursor",
+        "limit"
+      ],
+      "required": [
+        "skill",
+        "context"
+      ],
+      "outputSchema": false
+    },
+    {
+      "name": "context_knowledge_update",
+      "hash": "80aa630d5852267305e93ae11751d265dac82cdb2baef98f556d802096f96f8a",
+      "inputProperties": [
+        "skill",
+        "context",
+        "expectedRevision",
+        "markdown",
+        "learningMetadata",
+        "idempotencyKey"
+      ],
+      "required": [
+        "skill",
+        "context",
+        "expectedRevision",
+        "markdown",
+        "idempotencyKey"
+      ],
+      "outputSchema": false
+    },
+    {
+      "name": "context_note_upsert",
+      "hash": "ac488ad07dddfb328b3ef621b5b06cf6678b0991b14f0cf693711da255039323",
+      "inputProperties": [
+        "skill",
+        "context",
+        "noteId",
+        "expectedRevision",
+        "title",
+        "markdown",
+        "learningMetadata",
+        "idempotencyKey"
+      ],
+      "required": [
+        "skill",
+        "context",
+        "title",
+        "markdown",
+        "idempotencyKey"
+      ],
+      "outputSchema": false
+    },
+    {
+      "name": "context_notes_list",
+      "hash": "9947662169b10f1818ee357755377260e773c8097feb790aaeb7dcde86e08ee5",
+      "inputProperties": [
+        "skill",
+        "context",
+        "state",
+        "cursor",
+        "limit"
+      ],
+      "required": [
+        "skill",
+        "context"
+      ],
+      "outputSchema": false
+    },
+    {
+      "name": "context_restore",
+      "hash": "9dbdd36ef0e895192125cc01c7fbc1c0323696c135a55085b09ead9c59440613",
+      "inputProperties": [
+        "skill",
+        "context",
+        "expectedUpdatedAt",
+        "idempotencyKey"
+      ],
+      "required": [
+        "skill",
+        "context",
+        "expectedUpdatedAt",
+        "idempotencyKey"
+      ],
+      "outputSchema": false
+    },
+    {
+      "name": "context_update",
+      "hash": "6cee3c3d873d6a6ae83a3068b2edc832958cdada82b42daa0abe439816a203d4",
+      "inputProperties": [
+        "skill",
+        "context",
+        "expectedUpdatedAt",
+        "patch",
+        "idempotencyKey"
+      ],
+      "required": [
+        "skill",
+        "context",
+        "expectedUpdatedAt",
+        "patch",
+        "idempotencyKey"
+      ],
+      "outputSchema": false
+    },
+    {
+      "name": "contexts_list",
+      "hash": "934461f0d1afaa3539635ab9d0b9fdf9ea2570f80fa9597225e746a6cb0214c1",
+      "inputProperties": [
+        "skill",
+        "state",
+        "cursor",
+        "limit"
+      ],
+      "required": [
+        "skill"
+      ],
+      "outputSchema": false
+    },
+    {
+      "name": "skill_amend",
+      "hash": "fafa7a660f13bdb293ac0ec91d0e17a7c9289b89b12de349041af543ca34b7c4",
+      "inputProperties": [
+        "skillId",
+        "baseVersionId",
+        "idempotencyKey",
+        "proposedBump",
+        "changes",
+        "learning"
+      ],
+      "required": [
+        "skillId",
+        "baseVersionId",
+        "idempotencyKey",
+        "changes",
+        "learning"
+      ],
+      "outputSchema": false
+    },
+    {
+      "name": "skill_amendment_policy_get",
+      "hash": "e7854627cae2652dbe0628142bc57042aeb9d6e1ede5fa0220c97b44855d92bb",
+      "inputProperties": [
+        "skill"
+      ],
+      "required": [
+        "skill"
+      ],
+      "outputSchema": false
+    },
+    {
+      "name": "skill_amendment_policy_update",
+      "hash": "2b5c43407faf694f92cf223bed633819202c13d8605fad9319e9869c0aad63b0",
+      "inputProperties": [
+        "skill",
+        "policy",
+        "expectedUpdatedAt",
+        "idempotencyKey"
+      ],
+      "required": [
+        "skill",
+        "policy",
+        "expectedUpdatedAt",
+        "idempotencyKey"
+      ],
+      "outputSchema": false
+    },
+    {
+      "name": "skill_archive",
+      "hash": "70a9b182481a6ad69d02a9e6d073e165641092499c01c308e22f419ee4be81b3",
+      "inputProperties": [
+        "skill",
+        "expectedUpdatedAt",
+        "idempotencyKey"
+      ],
+      "required": [
+        "skill",
+        "expectedUpdatedAt",
+        "idempotencyKey"
+      ],
+      "outputSchema": false
+    },
+    {
+      "name": "skill_asset_retrieve",
+      "hash": "b1b581d98acc383ad44746676d48724dd435b07ecaefe04a40c69fa17714b8f8",
+      "inputProperties": [
+        "skill",
+        "version",
+        "path",
+        "responseMode"
+      ],
+      "required": [
+        "skill",
+        "version",
+        "path"
+      ],
+      "outputSchema": false
+    },
+    {
+      "name": "skill_candidate_approve",
+      "hash": "eea6f471208cde8057425b11fdf45e72b25e2a20091b2683235f32be3509ea7e",
+      "inputProperties": [
+        "skill",
+        "reviewId",
+        "expectedUpdatedAt",
+        "reason",
+        "idempotencyKey"
+      ],
+      "required": [
+        "skill",
+        "reviewId",
+        "expectedUpdatedAt",
+        "reason",
+        "idempotencyKey"
+      ],
+      "outputSchema": false
+    },
+    {
+      "name": "skill_candidate_reject",
+      "hash": "f07935c8193e3d8fd3e0e18776f5b2e876eb133276ec0ae9365464191e764cf8",
+      "inputProperties": [
+        "skill",
+        "reviewId",
+        "expectedUpdatedAt",
+        "reason",
+        "idempotencyKey"
+      ],
+      "required": [
+        "skill",
+        "reviewId",
+        "expectedUpdatedAt",
+        "reason",
+        "idempotencyKey"
+      ],
+      "outputSchema": false
+    },
+    {
+      "name": "skill_candidates_list",
+      "hash": "3ba71d89c53efdc39479d0a40a811b6eec8943d8837f284b80ce01ab9843365f",
+      "inputProperties": [
+        "skill",
+        "status",
+        "cursor",
+        "limit"
+      ],
+      "required": [
+        "skill"
+      ],
+      "outputSchema": false
+    },
+    {
+      "name": "skill_composition_candidate_create",
+      "hash": "9cd68f6d33e9cec95058c4d60916e56fc346bb60244143b78fe02dae623dca23",
+      "inputProperties": [
+        "skill",
+        "version",
+        "dependencies",
+        "verifierInstructions",
+        "claimsJson",
+        "proposedBump",
+        "changeSummary",
+        "idempotencyKey"
+      ],
+      "required": [
+        "skill",
+        "version",
+        "dependencies",
+        "proposedBump",
+        "changeSummary",
+        "idempotencyKey"
+      ],
+      "outputSchema": false
+    },
+    {
+      "name": "skill_create",
+      "hash": "eacb175ed39480b0bfe78ac49c97c6b9577fed66e4f3a2a0949f0adac9f6dae9",
+      "inputProperties": [
+        "workspace",
+        "slug",
+        "name",
+        "description",
+        "tags",
+        "visibility",
+        "instructions",
+        "assets",
+        "composition",
+        "idempotencyKey"
+      ],
+      "required": [
+        "workspace",
+        "slug",
+        "name",
+        "instructions",
+        "idempotencyKey"
+      ],
+      "outputSchema": false
+    },
+    {
+      "name": "skill_dependency_upgrade",
+      "hash": "cfb28ebbb52105f4c6e39be999c32ba17905b5c2ef0e3326ff31d0fe2ffd9b59",
+      "inputProperties": [
+        "skill",
+        "version",
+        "proposedBump",
+        "idempotencyKey"
+      ],
+      "required": [
+        "skill",
+        "version",
+        "idempotencyKey"
+      ],
+      "outputSchema": false
+    },
+    {
+      "name": "skill_dependency_upgrades_get",
+      "hash": "93a080b1c09725effa0260df92bfee8bdecc91df1af2da0fec5a7ed73d7adb0f",
+      "inputProperties": [
+        "skill",
+        "version",
+        "purpose"
+      ],
+      "required": [
+        "skill",
+        "version"
+      ],
+      "outputSchema": false
+    },
+    {
+      "name": "skill_execution_report",
+      "hash": "600e8fc99daa432c10aea841b8bba5fed8c529d48bc1a1425cafe4d4df021380",
+      "inputProperties": [
+        "skill",
+        "version",
+        "repository",
+        "commit",
+        "environment",
+        "idempotencyKey"
+      ],
+      "required": [
+        "skill",
+        "version",
+        "repository",
+        "commit",
+        "environment",
+        "idempotencyKey"
+      ],
+      "outputSchema": false
+    },
+    {
+      "name": "skill_resolve",
+      "hash": "8d40968bff34eb7c012250693f6de422f7784e6e8478f988458c754f03931a69",
+      "inputProperties": [
+        "skill",
+        "version",
+        "purpose"
+      ],
+      "required": [
+        "skill",
+        "version"
+      ],
+      "outputSchema": false
+    },
+    {
+      "name": "skill_restore",
+      "hash": "a194a295ff24ad0c8c31112b0798644546f344ab5f21d4068f298d0f25d25451",
+      "inputProperties": [
+        "skill",
+        "expectedUpdatedAt",
+        "idempotencyKey"
+      ],
+      "required": [
+        "skill",
+        "expectedUpdatedAt",
+        "idempotencyKey"
+      ],
+      "outputSchema": false
+    },
+    {
+      "name": "skill_retrieve",
+      "hash": "488d95d03613626be3a1d8b12a86178bbab9fa1d24cfeb2f73ffd5f353ba6be7",
+      "inputProperties": [
+        "skill",
+        "version",
+        "context"
+      ],
+      "required": [
+        "skill"
+      ],
+      "outputSchema": false
+    },
+    {
+      "name": "skill_usage_report",
+      "hash": "54dcbb07a0edba6cd7cafb172d646d6116457160cef0e920ecfc75aaa7780f56",
+      "inputProperties": [
+        "skill",
+        "versionId",
+        "event"
+      ],
+      "required": [
+        "skill",
+        "versionId",
+        "event"
+      ],
+      "outputSchema": false
+    },
+    {
+      "name": "skill_verification_evidence_add",
+      "hash": "50ecbd2a41bf6f38f892513db9b4ff1480a628ed4d101176d2c2afb715cbc007",
+      "inputProperties": [
+        "skill",
+        "runId",
+        "idempotencyKey",
+        "result"
+      ],
+      "required": [
+        "skill",
+        "runId",
+        "idempotencyKey",
+        "result"
+      ],
+      "outputSchema": false
+    },
+    {
+      "name": "skill_verification_plan_get",
+      "hash": "c72c716f4bbca9015636792e7e3a88331ba632dbe55825ac8a62115e836148aa",
+      "inputProperties": [
+        "skill",
+        "version",
+        "purpose"
+      ],
+      "required": [
+        "skill",
+        "version"
+      ],
+      "outputSchema": false
+    },
+    {
+      "name": "skill_verification_run_complete",
+      "hash": "d508517028a7456d75996e7213fd53080bc3596e7fcf8bad32a63914a910e08c",
+      "inputProperties": [
+        "skill",
+        "runId",
+        "idempotencyKey"
+      ],
+      "required": [
+        "skill",
+        "runId",
+        "idempotencyKey"
+      ],
+      "outputSchema": false
+    },
+    {
+      "name": "skill_verification_run_get",
+      "hash": "a95080893a838985b376a674a6c2e4dcfc4539beb91936476b8500b8a5cb6b97",
+      "inputProperties": [
+        "skill",
+        "runId"
+      ],
+      "required": [
+        "skill",
+        "runId"
+      ],
+      "outputSchema": false
+    },
+    {
+      "name": "skill_verification_run_start",
+      "hash": "b98ac91367309435a81a324d963550aef00982e3b325fefbbf9b7b4027c98393",
+      "inputProperties": [
+        "skill",
+        "version",
+        "repository",
+        "commit",
+        "environment",
+        "executionId",
+        "agent",
+        "model",
+        "idempotencyKey"
+      ],
+      "required": [
+        "skill",
+        "version",
+        "repository",
+        "commit",
+        "environment",
+        "executionId",
+        "agent",
+        "model",
+        "idempotencyKey"
+      ],
+      "outputSchema": false
+    },
+    {
+      "name": "skill_version_lifecycle_update",
+      "hash": "2f21d479341b94c48619d4e2f6ed911b8dbde94a3a9b7087a692eb758119fb96",
+      "inputProperties": [
+        "skill",
+        "version",
+        "state",
+        "reason",
+        "idempotencyKey"
+      ],
+      "required": [
+        "skill",
+        "version",
+        "state",
+        "reason",
+        "idempotencyKey"
+      ],
+      "outputSchema": false
+    },
+    {
+      "name": "skill_versions_diff",
+      "hash": "85b946a1067b2162358a198fcdfbc169946da42714338cc6bcd00df40a2ccd2d",
+      "inputProperties": [
+        "skill",
+        "fromVersionId",
+        "toVersionId"
+      ],
+      "required": [
+        "skill",
+        "fromVersionId",
+        "toVersionId"
+      ],
+      "outputSchema": false
+    },
+    {
+      "name": "skill_versions_list",
+      "hash": "73457b335a6f20e183efa70f187119ea33c89ccefb215a5a81e1a9932babd8be",
+      "inputProperties": [
+        "skill",
+        "states",
+        "cursor",
+        "limit"
+      ],
+      "required": [
+        "skill"
+      ],
+      "outputSchema": false
+    },
+    {
+      "name": "skill_visibility_update",
+      "hash": "8355da1df28f6bb1fc0b58b8848861f973ea32114c95b03e73dbb7054a068add",
+      "inputProperties": [
+        "skill",
+        "visibility",
+        "expectedUpdatedAt",
+        "idempotencyKey"
+      ],
+      "required": [
+        "skill",
+        "visibility",
+        "expectedUpdatedAt",
+        "idempotencyKey"
+      ],
+      "outputSchema": false
+    },
+    {
+      "name": "skills_list",
+      "hash": "1f4b72cad7aa00459f19bb5652a9af4cda33b883dc09bdb60827d86c7cb34844",
+      "inputProperties": [
+        "workspace",
+        "visibility",
+        "state",
+        "cursor",
+        "limit"
+      ],
+      "required": [
+        "workspace"
+      ],
+      "outputSchema": false
+    },
+    {
+      "name": "skills_search",
+      "hash": "829ebf48ded2491da32ee8650a33fb9cfb47f8b72cb65d3056e546d7f6823c4a",
+      "inputProperties": [
+        "query",
+        "workspace",
+        "visibility",
+        "tags",
+        "cursor",
+        "limit"
+      ],
+      "required": [
+        "query",
+        "workspace"
+      ],
+      "outputSchema": false
+    },
+    {
+      "name": "workspaces_list",
+      "hash": "32eb1d72302147db2b139a44ad515185dd9b1d8786da0ca0a024b849d1ce4963",
+      "inputProperties": [
+        "cursor",
+        "limit"
+      ],
+      "required": [],
+      "outputSchema": false
+    }
+  ],
+  "catalogBytes": 32195
+}

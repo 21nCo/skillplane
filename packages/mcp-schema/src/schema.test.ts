@@ -103,7 +103,7 @@ describe("MCP read schemas", () => {
     expect(
       skillsSearchInputSchema.parse({
         query: "pull request review",
-        workspaceId: "workspace:acme",
+        workspace: { id: "workspace:acme" },
         caller,
       }),
     ).toMatchObject({
@@ -115,11 +115,32 @@ describe("MCP read schemas", () => {
     expect(
       skillsSearchInputSchema.safeParse({
         query: "review",
-        workspaceId: "workspace:acme",
+        workspace: { id: "workspace:acme" },
         limit: 101,
         caller,
       }).success,
     ).toBe(false);
+  });
+
+  it("shares the nested workspace selector between listing and search", () => {
+    for (const workspace of [{ id: "workspace:acme" }, { slug: "acme" }]) {
+      expect(
+        skillsSearchInputSchema.safeParse({ query: "review", workspace, caller })
+          .success,
+      ).toBe(true);
+      expect(skillsListInputSchema.safeParse({ workspace, caller }).success).toBe(true);
+    }
+    for (const input of [
+      { workspaceId: "workspace:acme" },
+      { workspace: { id: "workspace:acme" }, workspaceId: "workspace:acme" },
+      { workspace_id: "workspace:acme" },
+    ]) {
+      expect(
+        skillsSearchInputSchema.safeParse({ query: "review", ...input, caller })
+          .success,
+      ).toBe(false);
+      expect(skillsListInputSchema.safeParse({ ...input, caller }).success).toBe(false);
+    }
   });
 
   it("requires unambiguous skill and version selectors", () => {
