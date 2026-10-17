@@ -4,22 +4,26 @@ import { executeReadTool, type McpToolRuntime } from "./shared.js";
 
 export function skillsSearch(runtime: McpToolRuntime, input: SkillsSearchInput) {
   return executeReadTool(runtime, "skills_search", input.caller, async (execution) => {
-    const workspace = await runtime.services.controlDatabase.pool.query(
-      "SELECT 1 FROM workspaces WHERE id = $1",
-      [input.workspaceId],
-    );
-    if (workspace.rowCount !== 1) {
+    const selector = input.workspace;
+    const byId = "id" in selector;
+    const workspace = await runtime.services.controlDatabase.pool.query<{
+      readonly id: string;
+    }>(`SELECT id FROM workspaces WHERE ${byId ? "id" : "slug"} = $1 LIMIT 1`, [
+      byId ? selector.id : selector.slug,
+    ]);
+    const workspaceId = workspace.rows[0]?.id;
+    if (!workspaceId) {
       throw new Error("WORKSPACE_FORBIDDEN");
     }
     execution.setScope({
-      workspaceId: input.workspaceId,
+      workspaceId,
       resourceType: "workspace",
-      resourceId: input.workspaceId,
+      resourceId: workspaceId,
     });
     const principal = await principalForWorkspace(
       runtime.services,
       runtime.identity,
-      input.workspaceId,
+      workspaceId,
       "skills:read",
       { allowPublicWithoutMembership: true },
     );
@@ -36,7 +40,7 @@ export function skillsSearch(runtime: McpToolRuntime, input: SkillsSearchInput) 
     }
     const page = await runtime.services.skillSearchService.search({
       query: input.query,
-      workspaceId: input.workspaceId,
+      workspaceId,
       tags: input.tags,
       visibility,
       archive: "active",

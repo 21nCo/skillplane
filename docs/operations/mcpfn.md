@@ -64,6 +64,61 @@ startup, Cloudflare development upload, and deployed authentication smoke
 results separately. A dry-run or a selective deployment does not complete
 this rollout, and production deployment requires separate authorization.
 
+## Authenticated client profiles
+
+`mcp/src/client-profiles.ts` declares the McpFn client profiles. McpFn selects
+one from the verified identity that AuthFn established, never from the client's
+self-reported `initialize` metadata:
+
+| Verified identity                                                            | Profile                          |
+| ---------------------------------------------------------------------------- | -------------------------------- |
+| OAuth client `https://claude.ai/oauth/mcp-oauth-client-metadata`             | `skillplane/oauth-claude@1`      |
+| OAuth client `https://linear.app/.well-known/oauth-client-metadata/mcp.json` | `skillplane/oauth-linear@1`      |
+| Any other OAuth client                                                       | `skillplane/oauth-generic@1`     |
+| Service principal (agent credential)                                         | `skillplane/service-principal@1` |
+
+Caller policy: for every OAuth profile, `caller` is server-owned. It is removed
+from every model-visible input schema, and a supplied `caller` is discarded
+before McpFn enrichment, so it is overwritten rather than rejected. Enrichment
+then writes the profile's attribution with fresh per-invocation run, session
+and conversation IDs before canonical validation. Service principals keep the
+canonical contract: `caller` remains visible, required and client-declared.
+
+Linear rejects `tools/list` payloads above 32 KiB. McpFn projection must keep
+output schemas and model-owned input constraints, so the Linear profile adds a
+wire compaction after McpFn builds its effective catalog. Compaction drops
+presentation metadata and constraint keywords only; tool names, property names
+and required sets match the other OAuth profiles, and calls are still
+validated against the canonical schema.
+
+Discovery tools share one workspace selector: `skills_list` and
+`skills_search` take `workspace: { id }` or `workspace: { slug }`. For every
+identity, an unambiguous flat string `workspaceId` on either tool is rewritten
+to `workspace: { id }` before validation. This is a deprecated alias. Sending
+both forms, or another spelling such as `workspace_id`, is still rejected by
+the strict schema. Other workspace-aware tools keep their current selectors.
+
+A call that McpFn stops before its handler returns `MCPFN_INVALID_ARGUMENTS`
+(or another McpFn lifecycle code) with each issue's `keyword`, `instancePath`,
+`schemaPath`, and `rejectedProperty` or `missingProperty`. Argument values are
+never included. The evidence hook also logs one
+`mcp.tool.rejected_before_handler` event carrying the same issue structure,
+the tool, the `profileId`, the lifecycle stage and the code, together with the
+request correlation ID that the response returns in `x-skillplane-request-id`.
+The event uses the same operational log channel and retention as other MCP
+operational events. It is not written to the workspace audit table, because
+the workspace has not been authorized when validation fails.
+
+Each stateless request creates its own McpFn server. When a request contains
+only `tools/call` messages, the server's visible catalog is limited to the
+called tools, so McpFn does not re-project the full catalog for every call.
+
+`mcp/src/client-profiles.test.ts` runs the `@mcpfn/testing` client-profile
+contract against the production Hono app. Reviewed per-profile effective
+catalog snapshots live in `mcp/tests/conformance/__snapshots__/client-profiles`.
+Regenerate them with `vitest run -u` only after reviewing an intended catalog
+change.
+
 ## Required release gates
 
 Run these before deploying either the app authorization server or MCP Worker:
