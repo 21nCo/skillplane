@@ -145,6 +145,104 @@ test("@sources keeps settings edited while a save is in flight", async ({
   await expect(refInput).toHaveValue("release-2");
 });
 
+test("@sources a draft typed while switching sources is not carried to the new source", async ({
+  context,
+  page,
+}) => {
+  test.setTimeout(120_000);
+  await authenticate(context);
+  const suffix = Date.now().toString(36);
+  const listPath = `/api/v1/workspaces/${encodeURIComponent(harness.workspaceId)}/sources`;
+  let hold = false,
+    release: () => void = () => undefined,
+    requested: () => void = () => undefined;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  const detailSeen = new Promise<void>((resolve) => (requested = resolve));
+  const patches: { ref?: string }[] = [];
+  await page.route(`**${listPath}/*`, async (route) => {
+    const request = route.request();
+    if (request.method() === "PATCH")
+      patches.push(request.postDataJSON() as { ref?: string });
+    if (request.method() === "GET" && hold) {
+      hold = false;
+      requested();
+      await held;
+    }
+    await route.continue();
+  });
+  await page.goto(`${harness.origin}/${harness.workspaceSlug}/sources`);
+  for (const name of [`switch-a-${suffix}`, `switch-b-${suffix}`]) {
+    await page.getByRole("button", { name: "New source" }).click();
+    await page
+      .getByLabel("Repository URL")
+      .fill(`https://github.com/e2e-owner/${name}`);
+    await page.getByRole("button", { name: "Save source" }).click();
+    await expect(page.getByLabel("Repository URL")).toHaveValue(
+      `https://github.com/e2e-owner/${name}`,
+    );
+  }
+  const nav = page.getByRole("navigation", { name: "Git sources" });
+  await nav.getByRole("button", { name: new RegExp(`switch-a-${suffix}`) }).click();
+  await expect(page.getByLabel("Repository URL")).toHaveValue(
+    `https://github.com/e2e-owner/switch-a-${suffix}`,
+  );
+  const refInput = page.getByLabel("Branch, tag, or commit");
+  hold = true;
+  await nav.getByRole("button", { name: new RegExp(`switch-b-${suffix}`) }).click();
+  await detailSeen;
+  // Typed for source A while B loads; it must not become B's settings.
+  await refInput.fill("draft-for-a");
+  release();
+  await expect(page.getByLabel("Repository URL")).toHaveValue(
+    `https://github.com/e2e-owner/switch-b-${suffix}`,
+  );
+  await expect(refInput).toHaveValue("HEAD");
+  await page.getByRole("button", { name: "Save source" }).click();
+  await expect(page.getByRole("button", { name: "Save source" })).toBeEnabled();
+  expect(patches.map((p) => p.ref)).not.toContain("draft-for-a");
+});
+
+test("@sources a scope edited while a create is in flight shows the created scope", async ({
+  context,
+  page,
+}) => {
+  test.setTimeout(120_000);
+  await authenticate(context);
+  const suffix = Date.now().toString(36);
+  const listPath = `/api/v1/workspaces/${encodeURIComponent(harness.workspaceId)}/sources`;
+  let release: () => void = () => undefined,
+    requested: () => void = () => undefined;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  const createSeen = new Promise<void>((resolve) => (requested = resolve));
+  await page.route(`**${listPath}`, async (route) => {
+    if (route.request().method() === "POST") {
+      requested();
+      await held;
+    }
+    await route.continue();
+  });
+  const created = `https://github.com/e2e-owner/created-${suffix}`;
+  await page.goto(`${harness.origin}/${harness.workspaceSlug}/sources`);
+  const urlInput = page.getByLabel("Repository URL");
+  await urlInput.fill(created);
+  await page.getByRole("button", { name: "Save source" }).click();
+  await createSeen;
+  await urlInput.fill(`https://github.com/e2e-owner/edited-${suffix}`);
+  release();
+  await expect(page.getByRole("heading", { name: "Source settings" })).toBeVisible();
+  // The read-only scope must be the persisted one, so later saves succeed.
+  await expect(urlInput).toHaveValue(created);
+  await page.getByLabel("Branch, tag, or commit").fill("release-c");
+  const patched = page.waitForResponse(
+    (response) =>
+      response.request().method() === "PATCH" && response.url().includes(listPath),
+  );
+  await page.getByRole("button", { name: "Save source" }).click();
+  expect((await patched).status()).toBe(200);
+  await expect(page.getByText("· track · release-c")).toBeVisible();
+  await expect(page.getByRole("alert")).toHaveCount(0);
+});
+
 for (const width of [1024, 1100] as const)
   test(`@sources the catalog filters fit without horizontal overflow at ${width}px with the sidebar shown`, async ({
     context,

@@ -385,7 +385,9 @@ it("reports a missing repository or ref as a permanent preview error", async () 
   });
   const { id } = ((await created.json()) as { data: { source: { id: string } } }).data
     .source;
-  const preview = async (upstream: () => Promise<Response>) => {
+  const preview = async (
+    upstream: (input: string | URL | Request) => Promise<Response>,
+  ) => {
     vi.stubGlobal("fetch", upstream);
     try {
       const response = await app.request(`${base}/${id}/preview`, {
@@ -400,10 +402,23 @@ it("reports a missing repository or ref as a permanent preview error", async () 
       vi.unstubAllGlobals();
     }
   };
-  expect(await preview(async () => new Response("{}", { status: 404 }))).toEqual({
-    status: 400,
-    code: "VALIDATION_FAILED",
-  });
+  // GitHub answers an unknown repository with 404 and an unknown branch with 422.
+  for (const status of [404, 422])
+    expect(await preview(async () => new Response("{}", { status }))).toEqual({
+      status: 400,
+      code: "VALIDATION_FAILED",
+    });
+  // Once the ref resolved, missing repository content is retryable.
+  const commit = "c".repeat(40);
+  expect(
+    await preview(async (input) => {
+      const url = String(input);
+      if (url.includes("/git/commits/"))
+        return Response.json({ sha: commit, tree: { sha: "d".repeat(40) } });
+      if (url.includes("/commits/")) return new Response(commit);
+      return new Response("{}", { status: 404 });
+    }),
+  ).toEqual({ status: 503, code: "SERVICE_UNAVAILABLE" });
   expect(await preview(async () => new Response("{}", { status: 429 }))).toEqual({
     status: 503,
     code: "SERVICE_UNAVAILABLE",

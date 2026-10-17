@@ -1,4 +1,4 @@
-import { assertGitSourceLease } from "./git-provenance.js";
+import { assertGitSourceLease, PREVIEW_CHANGED } from "./git-provenance.js";
 import type { Pool, PoolClient } from "pg";
 import { authorize } from "./authorization.js";
 import { DomainError } from "./errors.js";
@@ -51,8 +51,7 @@ const MAX_BINDINGS = 32,
   MAX_PLAN_MESSAGE = 500,
   AWAITING_REVIEW = "The imported candidate is awaiting review",
   PUBLISHED_WHILE_PENDING =
-    "Upstream matches the published version; the imported candidate is still awaiting review",
-  PREVIEW_CHANGED = "Preview content changed; preview again";
+    "Upstream matches the published version; the imported candidate is still awaiting review";
 // Bindings use the same skill-directory form as source configuration and discovery.
 function bindingPath(path: string) {
   const normalized = gitSourceConfig({

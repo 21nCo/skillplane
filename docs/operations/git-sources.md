@@ -60,9 +60,14 @@ a pending candidate) stores its `preparedDigest` beside the raw repository
 `digest`. Apply prepares the bundle again and imports, reuses or converges only
 when that digest still matches; a dependency published in between fails the entry
 with "Preview content changed; preview again" and creates nothing. Additions resolve
-their lock at apply. A missing repository or ref is a permanent `VALIDATION_FAILED`
-(400) error; network failures and GitHub throttling (403/429) stay retryable
-`SERVICE_UNAVAILABLE` (503).
+their lock at apply.
+
+Provider errors are classified by request stage. A repository, branch, tag or
+commit that GitHub reports missing (404 or 422) while resolving the ref, or the
+pinned preview commit at apply, is a permanent `VALIDATION_FAILED` (400) error.
+Once the commit resolved, a failed tree or blob request aborts the whole snapshot
+as a retryable `SERVICE_UNAVAILABLE` (503), never a partial plan with invalid
+skills; network failures, throttling (403/429) and server errors are 503 too.
 
 ## Provenance and storage
 

@@ -10,6 +10,8 @@ function fixture(
     truncated?: boolean;
     wrongBlob?: boolean;
     status?: number;
+    // Fail only requests whose URL matches, with the given status.
+    fail?: { url: RegExp; status: number };
     extra?: { path: string; mode: string; type: string; sha: string; size?: number }[];
   } = {},
 ) {
@@ -34,6 +36,10 @@ function fixture(
   const fetcher: typeof fetch = async (input, init) => {
     const url = String(input);
     calls.push(url);
+    if (options.fail?.url.test(url))
+      return new Response(JSON.stringify({ message: "Not Found" }), {
+        status: options.fail.status,
+      });
     let data: unknown;
     if (url.includes("/git/commits/")) data = { sha, tree: { sha: treeSha } };
     else if (url.includes("/commits/")) {
@@ -243,17 +249,37 @@ describe("public GitHub source provider", () => {
     ).rejects.toThrow("incomplete");
     // A missing repository or ref is permanent; throttling and transport
     // failures stay retryable.
-    await expect(
-      fixture({}, { status: 404 }).provider.snapshot(config),
-    ).rejects.toMatchObject({
+    const notFound = {
       code: "VALIDATION_FAILED",
       status: 400,
       message: "Public repository or ref was not found",
-    });
-    for (const status of [403, 429])
+    };
+    const retryable = { code: "SERVICE_UNAVAILABLE", status: 503 };
+    // GitHub answers an unknown repository with 404 and an unknown branch with 422.
+    for (const status of [404, 422])
       await expect(
         fixture({}, { status }).provider.snapshot(config),
-      ).rejects.toMatchObject({ code: "SERVICE_UNAVAILABLE", status: 503 });
+      ).rejects.toMatchObject(notFound);
+    // A pinned commit that no longer exists is resolved through git/commits.
+    for (const status of [404, 422])
+      await expect(
+        fixture({}, { fail: { url: /\/git\/commits\//, status } }).provider.snapshot(
+          config,
+          sha,
+        ),
+      ).rejects.toMatchObject(notFound);
+    for (const status of [403, 429, 500])
+      await expect(
+        fixture({}, { status }).provider.snapshot(config),
+      ).rejects.toMatchObject(retryable);
+    // Content missing after the commit resolved aborts the whole snapshot,
+    // rather than reporting a partial result with an invalid skill.
+    const files = { "a/SKILL.md": markdown("Alpha"), "b/SKILL.md": markdown("Beta") };
+    for (const url of [/\/git\/trees\//, /\/git\/blobs\//, /\/git\/commits\//])
+      for (const status of [404, 422])
+        await expect(
+          fixture(files, { fail: { url, status } }).provider.snapshot(config),
+        ).rejects.toMatchObject(retryable);
     await expect(
       new PublicGitHubSourceProvider(async () => {
         throw new TypeError("fetch failed");

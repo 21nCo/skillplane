@@ -133,9 +133,13 @@ export class PublicGitHubSourceProvider implements GitSourceProvider {
     let requests = 0,
       totalBytes = 0;
     const deadline = Date.now() + 90000;
+    // Resolving the configured ref or pinned commit can fail permanently when
+    // the repository or ref does not exist. A failed tree or blob request after
+    // resolution is an incomplete snapshot and aborts the whole import.
     const fetchBytes = async (
       path: string,
       maxBytes: number,
+      stage: "resolve" | "content",
       accept = "application/vnd.github+json",
     ) => {
       const remaining = deadline - Date.now();
@@ -168,8 +172,10 @@ export class PublicGitHubSourceProvider implements GitSourceProvider {
       }
       if (!response.ok) {
         await response.body?.cancel();
-        // A missing repository or ref is a configuration error, not an outage.
-        if (response.status === 404) invalid("Public repository or ref was not found");
+        // GitHub answers an unknown repository with 404 and an unknown
+        // branch, tag or commit with 404 or 422.
+        if (stage === "resolve" && (response.status === 404 || response.status === 422))
+          invalid("Public repository or ref was not found");
         throw new DomainError(
           "SERVICE_UNAVAILABLE",
           "GitHub rejected the request; check its availability or rate limit",
@@ -209,8 +215,12 @@ export class PublicGitHubSourceProvider implements GitSourceProvider {
       }
       return new TextDecoder().decode(bytes);
     };
-    const read = async (path: string, maxBytes: number) => {
-      const body = await fetchBytes(path, maxBytes);
+    const read = async (
+      path: string,
+      maxBytes: number,
+      stage: "resolve" | "content",
+    ) => {
+      const body = await fetchBytes(path, maxBytes, stage);
       try {
         return object(JSON.parse(body) as unknown);
       } catch {
@@ -225,15 +235,24 @@ export class PublicGitHubSourceProvider implements GitSourceProvider {
           await fetchBytes(
             `commits/${encodeURIComponent(config.ref)}`,
             1024,
+            "resolve",
             "application/vnd.github.sha",
           )
         ).trim();
     if (!/^[a-f0-9]{40}$/.test(sha)) invalid("GitHub returned an invalid commit");
-    const commit = await read(`git/commits/${sha}`, 256 * 1024);
+    const commit = await read(
+      `git/commits/${sha}`,
+      256 * 1024,
+      pinned ? "resolve" : "content",
+    );
     if (commit.sha !== sha) invalid("GitHub returned a different commit");
     const treeSha = text(object(commit.tree).sha);
     if (!/^[a-f0-9]{40}$/.test(treeSha)) invalid("Invalid Git tree identity");
-    const tree = await read(`git/trees/${treeSha}?recursive=1`, 8 * 1024 * 1024);
+    const tree = await read(
+      `git/trees/${treeSha}?recursive=1`,
+      8 * 1024 * 1024,
+      "content",
+    );
     if (
       tree.truncated !== false ||
       !Array.isArray(tree.tree) ||
@@ -333,6 +352,7 @@ export class PublicGitHubSourceProvider implements GitSourceProvider {
             const blob = await read(
               `git/blobs/${entry.sha}`,
               Math.ceil(MAX_BLOB_BYTES * 1.5) + 4096,
+              "content",
             );
             if (blob.sha !== entry.sha || blob.encoding !== "base64")
               invalid("GitHub returned a different blob");

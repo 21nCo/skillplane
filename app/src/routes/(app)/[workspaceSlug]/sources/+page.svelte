@@ -62,9 +62,12 @@
   function form() {
     return { repositoryUrl, ref, refPolicy, singlePath, path, bindPath };
   }
-  // Form values when the running request began. A refresh adopts server values
-  // only for fields not edited since, so typing during a request is kept.
-  let started: ReturnType<typeof form> | null = null;
+  // The selected source and form values when the running request began. A draft
+  // belongs to the source it was typed for: a refresh of that same source keeps
+  // editable fields changed since the request began, while selecting another
+  // source or the source a create made adopts every persisted value. Scope
+  // fields are read-only once selected, so they always show the persisted scope.
+  let started: { source: string | null; fields: ReturnType<typeof form> } | null = null;
   async function detail(source: Source) {
     if (!workspace) return;
     const id = workspace.id,
@@ -75,14 +78,16 @@
     );
     if (!current(id, g)) return;
     const now = form(),
-      adopt = (field: keyof typeof now) => !started || started[field] === now[field];
+      draft = started?.source === r.source.id ? started.fields : null,
+      adopt = (field: "ref" | "refPolicy" | "bindPath") =>
+        !draft || draft[field] === now[field];
     selected = r;
     preview = null;
-    if (adopt("repositoryUrl")) repositoryUrl = r.source.repositoryUrl;
+    repositoryUrl = r.source.repositoryUrl;
+    singlePath = r.source.path !== null;
+    path = r.source.path ?? "";
     if (adopt("ref")) ref = r.source.ref;
     if (adopt("refPolicy")) refPolicy = r.source.refPolicy;
-    if (adopt("singlePath")) singlePath = r.source.path !== null;
-    if (adopt("path")) path = r.source.path ?? "";
     if (adopt("bindPath")) bindPath = r.source.path ?? "";
     bindSkillId = "";
     if (canManage) await findSkills();
@@ -93,7 +98,7 @@
       g = generation;
     busy = true;
     error = "";
-    started = form();
+    started = { source: selected?.source.id ?? null, fields: form() };
     try {
       await action();
     } catch (e) {

@@ -1,4 +1,8 @@
-import { assertGitSourceLease, type GitSourceLease } from "./git-provenance.js";
+import {
+  assertGitSourceLease,
+  PREVIEW_CHANGED,
+  type GitSourceLease,
+} from "./git-provenance.js";
 import {
   insertGitVersionProvenance,
   type GitVersionProvenance,
@@ -233,11 +237,7 @@ export class SkillVersionService {
         options.expectedPreparedDigest !== undefined &&
         canonical.digest !== options.expectedPreparedDigest
       )
-        throw new DomainError(
-          "CONFLICT",
-          "Preview content changed; preview again",
-          409,
-        );
+        throw new DomainError("CONFLICT", PREVIEW_CHANGED, 409);
       const reservedRevision = await withTransaction(
         this.pool,
         `${options.requestId}:reserve`,

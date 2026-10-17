@@ -1,5 +1,8 @@
 import type { PoolClient } from "pg";
 import { DomainError } from "./errors.js";
+// Apply and version creation both report a prepared bundle that no longer
+// matches its preview with this message.
+export const PREVIEW_CHANGED = "Preview content changed; preview again";
 export interface GitSourceLease {
   sourceId: string;
   token: string;
