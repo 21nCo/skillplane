@@ -115,6 +115,7 @@ export interface SkillInfo {
   slug: string;
   name: string;
   description: string;
+  kind: "skill" | "instructions";
 }
 export interface Snapshot {
   workspace: WorkspaceRef;
@@ -122,7 +123,9 @@ export interface Snapshot {
   version: VersionInfo;
   bundle: CanonicalBundle;
 }
-export type CreateRequest = Omit<SkillCreateInput, "workspace" | "caller">;
+export type CreateRequest = Omit<SkillCreateInput, "workspace" | "caller" | "kind"> & {
+  kind?: SkillCreateInput["kind"];
+};
 export type AmendRequest = Omit<SkillAmendInput, "caller">;
 export interface WorkspaceProvider {
   readonly workspace: WorkspaceRef;

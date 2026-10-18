@@ -1,4 +1,5 @@
 import {
+  bundleKind,
   canonicalizeBundle,
   canonicalizeBundleFiles,
   stableJson,
@@ -36,6 +37,7 @@ interface Source {
   content_digest: `sha256:${string}`;
   r2_object_key: string;
   visibility: string;
+  kind: string;
   archived_at: Date | null;
   status: string;
   deprecated_at: Date | null;
@@ -136,7 +138,7 @@ export class CompositionService {
       ? { rows: [] }
       : await db.query<Omit<Source, "bundle" | "workspace_slug" | "publicSource">>(
           `SELECT v.id, v.workspace_id, v.skill_id, s.slug AS skill_slug,
-              v.semantic_version, v.content_digest, v.r2_object_key, s.visibility, s.archived_at, v.status,
+              v.semantic_version, v.content_digest, v.r2_object_key, s.visibility, s.kind, s.archived_at, v.status,
               lifecycle.deprecated_at, lifecycle.revoked_at
          FROM skill_versions v JOIN skills s ON s.id = v.skill_id
          LEFT JOIN skill_version_lifecycle lifecycle ON lifecycle.version_id = v.id
@@ -208,6 +210,8 @@ export class CompositionService {
       content_digest: remote.digest,
       r2_object_key: remote.object_key,
       visibility: "public",
+      // Instructions can never be public, so public projections are skills.
+      kind: "skill",
       archived_at: null,
       status: "published",
       deprecated_at: globalLifecycle.deprecated_at,
@@ -234,6 +238,8 @@ export class CompositionService {
     }
   }
   private async node(source: Source): Promise<DependencyNode> {
+    if (source.kind !== "skill" || bundleKind(source.bundle.skill) !== "skill")
+      this.denied();
     const lock = this.lock(source.bundle);
     validateLock(lock, {
       workspace: source.workspace_slug,
@@ -264,6 +270,19 @@ export class CompositionService {
     );
     const workspaceId = workspace.rows[0]?.id;
     if (!workspaceId) this.denied();
+    if (workspaceId === principal.workspaceId) {
+      const target = await this.pool.query<{ kind: string }>(
+        "SELECT kind FROM skills WHERE workspace_id = $1 AND slug = $2",
+        [workspaceId, dependency.skill],
+      );
+      if (target.rows[0]?.kind === "instructions")
+        throw new DomainError(
+          "SKILL_DEPENDENCY_CONFLICT",
+          `Dependency ${dependency.alias} (${dependency.workspace}/${dependency.skill}) is an instructions document; only skills can be dependencies`,
+          409,
+          { alias: dependency.alias, kind: "instructions" },
+        );
+    }
     const rows = await this.pool.query<{
       id: string;
       semantic_version: string;
@@ -583,6 +602,13 @@ export class CompositionService {
   ): Promise<CompositionPlan> {
     if (principal) authorize(principal, "skills:read");
     const source = await this.source(versionId, principal, db);
+    if (source.kind === "instructions")
+      throw new DomainError(
+        "SKILL_KIND_UNSUPPORTED",
+        "Instructions documents cannot be resolved, composed or verified as skills",
+        400,
+        { kind: "instructions" },
+      );
     if (
       source.status !== "published" &&
       !(

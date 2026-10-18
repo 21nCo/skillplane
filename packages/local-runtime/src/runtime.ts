@@ -113,6 +113,8 @@ export class Runtime {
     for (const source of sources) {
       const provider = this.provider(source.workspace);
       for (const skill of await provider.list()) {
+        // Only skills are projected; instructions documents are a separate kind.
+        if (skill.kind !== "skill") continue;
         const qualified = `${workspaceKey(source.workspace)}/${skill.id}`;
         const name =
           context.aliases[qualified] ??

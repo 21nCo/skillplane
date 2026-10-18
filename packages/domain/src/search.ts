@@ -3,10 +3,11 @@ import type { Pool } from "pg";
 import { authorize } from "./authorization.js";
 import { DomainError } from "./errors.js";
 import type { Principal } from "./principal.js";
-import type { SkillVisibility } from "./skills.js";
+import type { SkillKind, SkillVisibility } from "./skills.js";
 import {
   SKILL_ARCHIVE_FILTERS,
   SKILL_VISIBILITIES,
+  parseSkillKind,
   type SkillArchiveFilter,
 } from "./skills.js";
 
@@ -27,6 +28,7 @@ export interface SkillSearchResult {
   readonly description: string;
   readonly tags: readonly string[];
   readonly visibility: SkillVisibility;
+  readonly kind: SkillKind;
   readonly currentVersionId: string;
   readonly semanticVersion: string;
   readonly digest: `sha256:${string}`;
@@ -49,6 +51,7 @@ interface SearchRow {
   readonly description: string;
   readonly tags: string[];
   readonly visibility: SkillVisibility;
+  readonly kind: SkillKind;
   readonly current_published_version_id: string;
   readonly semantic_version: string;
   readonly content_digest: `sha256:${string}`;
@@ -292,6 +295,7 @@ export class SkillSearchService {
     readonly query: string;
     readonly groupId?: string;
     readonly sourceId?: string;
+    readonly kind?: SkillKind;
     readonly workspaceId?: string;
     readonly tags?: readonly string[];
     readonly visibility?: readonly SkillVisibility[];
@@ -331,6 +335,7 @@ export class SkillSearchService {
       readonly query: string;
       readonly groupId?: string;
       readonly sourceId?: string;
+      readonly kind?: SkillKind;
       readonly workspaceId?: string;
       readonly tags?: readonly string[];
       readonly visibility?: readonly SkillVisibility[];
@@ -351,6 +356,7 @@ export class SkillSearchService {
       throw new DomainError("NOT_FOUND", "Workspace resource was not found", 404);
     }
     const normalized = normalizeSearchInput({ ...options, allowEmptyQuery });
+    const kind = options.kind === undefined ? null : parseSkillKind(options.kind);
     const scope = searchScope(options);
     const digest = await filterHash({
       query: normalized.query,
@@ -358,6 +364,7 @@ export class SkillSearchService {
       visibility: normalized.visibility,
       archive: normalized.archive,
       scope,
+      ...(kind ? { kind } : {}),
     });
     const now = options.now ?? new Date();
     const cursor = options.cursor
@@ -382,7 +389,7 @@ export class SkillSearchService {
       `WITH authorized AS MATERIALIZED (
          SELECT skill.id, skill.workspace_id, skill.slug, skill.name,
                 skill.description, skill.tags,
-                skill.visibility, skill.current_published_version_id,
+                skill.visibility, skill.kind, skill.current_published_version_id,
                 version.semantic_version, version.content_digest,
                 skill.archived_at, skill.created_at, skill.updated_at,
                 skill.${document} AS document
@@ -394,6 +401,7 @@ export class SkillSearchService {
             AND ($9::text IS NULL OR EXISTS(SELECT 1 FROM skill_group_skills gs JOIN skill_groups g ON g.id=gs.group_id AND g.workspace_id=gs.workspace_id WHERE gs.workspace_id=skill.workspace_id AND gs.skill_id=skill.id AND gs.group_id=$9 AND g.archived_at IS NULL))
             AND ($10::text IS NULL OR EXISTS(SELECT 1 FROM skill_source_bindings b WHERE b.workspace_id=skill.workspace_id AND b.skill_id=skill.id AND b.source_id=$10 AND b.disconnected_at IS NULL))
             AND ($2::text[] = '{}'::text[] OR skill.tags @> $2::text[])
+            AND ($11::text IS NULL OR skill.kind = $11)
             AND (
               cardinality($7::text[]) = 0
               OR skill.visibility = ANY($7::text[])
@@ -417,7 +425,7 @@ export class SkillSearchService {
           )
        )
        SELECT id, workspace_id, slug, name, description, tags,
-              visibility, current_published_version_id, semantic_version,
+              visibility, kind, current_published_version_id, semantic_version,
               content_digest, archived_at, created_at, updated_at, score::text
          FROM ranked
         WHERE (
@@ -438,6 +446,7 @@ export class SkillSearchService {
         normalized.archive,
         options.groupId ?? null,
         options.sourceId ?? null,
+        kind,
       ],
     );
     const hasNext = result.rows.length > normalized.limit;
@@ -470,6 +479,7 @@ export class SkillSearchService {
         description: row.description,
         tags: row.tags,
         visibility: row.visibility,
+        kind: row.kind,
         currentVersionId: row.current_published_version_id,
         semanticVersion: row.semantic_version,
         digest: row.content_digest,

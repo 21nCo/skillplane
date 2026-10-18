@@ -3,7 +3,12 @@ import { requireValue } from "./contracts.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { canonicalizeBundleFiles, skillJsonSchema } from "@skillplane/storage";
+import {
+  bundleEntrypoint,
+  bundleJsonSchema,
+  bundleKind,
+  canonicalizeBundleFiles,
+} from "@skillplane/storage";
 import {
   mcpErrorSchema,
   skillRetrieveOutputSchema,
@@ -171,6 +176,7 @@ export class CloudWorkspaceProvider implements WorkspaceProvider {
           slug: s.slug,
           name: s.name,
           description: s.summary,
+          kind: s.kind ?? ("skill" as const),
         })),
       );
       cursor = page.nextCursor;
@@ -217,11 +223,13 @@ export class CloudWorkspaceProvider implements WorkspaceProvider {
       (versionId && output.version.id !== versionId)
     )
       throw new RuntimeError("WORKSPACE_MISMATCH");
+    const kind = output.skill.kind ?? ("skill" as const);
+    const entrypoint = kind === "instructions" ? "AGENTS.md" : "SKILL.md";
     const files = new Map<string, Uint8Array>([
-      ["SKILL.md", Buffer.from(output.instructions)],
+      [entrypoint, Buffer.from(output.instructions)],
     ]);
     for (const descriptor of output.files) {
-      if (descriptor.path === "SKILL.md") continue;
+      if (descriptor.path === entrypoint) continue;
       const asset = skillAssetRetrieveOutputSchema.parse(
         await this.call("skill_asset_retrieve", {
           skill: { id: skillId },
@@ -258,9 +266,14 @@ export class CloudWorkspaceProvider implements WorkspaceProvider {
         throw new RuntimeError("DIGEST_MISMATCH");
       files.set(descriptor.path, bytes);
     }
-    const immutableSkill = skillJsonSchema.parse(
+    const immutableSkill = bundleJsonSchema.parse(
       JSON.parse(new TextDecoder().decode(files.get("skill.json"))),
     );
+    if (
+      bundleKind(immutableSkill) !== kind ||
+      bundleEntrypoint(immutableSkill) !== entrypoint
+    )
+      throw new RuntimeError("DIGEST_MISMATCH");
     const bundle = await canonicalizeBundleFiles({ skill: immutableSkill, files });
     if (bundle.digest !== output.version.digest)
       throw new RuntimeError("DIGEST_MISMATCH");
@@ -271,6 +284,7 @@ export class CloudWorkspaceProvider implements WorkspaceProvider {
         slug: immutableSkill.slug,
         name: immutableSkill.name,
         description: immutableSkill.description,
+        kind,
       },
       version: output.version,
       bundle,

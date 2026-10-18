@@ -4,6 +4,7 @@ import {
   digestSchema,
   limitSchema,
   nullableCursorSchema,
+  reportedSkillKindSchema,
   skillVisibilitySchema,
   slugSchema,
   stableIdSchema,
@@ -46,6 +47,7 @@ export const skillSearchItemSchema = z
     summary: z.string().max(20_000),
     tags: z.array(z.string().max(80)).max(30),
     visibility: skillVisibilitySchema,
+    kind: reportedSkillKindSchema,
     currentVersion: z
       .object({
         id: stableIdSchema,

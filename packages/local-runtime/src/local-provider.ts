@@ -62,7 +62,7 @@ export class LocalWorkspaceProvider implements WorkspaceProvider {
   async list(): Promise<SkillInfo[]> {
     return this.store.db
       .prepare(
-        "SELECT id,slug,name,description FROM skill WHERE workspace=? ORDER BY slug",
+        "SELECT id,slug,name,description,kind FROM skill WHERE workspace=? ORDER BY slug",
       )
       .all(this.workspace.id) as unknown as SkillInfo[];
   }
@@ -93,6 +93,7 @@ export class LocalWorkspaceProvider implements WorkspaceProvider {
         slug: String(skill.slug),
         name: String(skill.name),
         description: String(skill.description),
+        kind: skill.kind === "instructions" ? "instructions" : "skill",
       },
       version: version(row),
       bundle: await this.store.bundle(String(row.digest)),
@@ -137,7 +138,9 @@ export class LocalWorkspaceProvider implements WorkspaceProvider {
         versionId: `skill-version:${randomUUID()}`,
       };
       this.store.db
-        .prepare("INSERT INTO skill VALUES(?,?,?,?,?,?)")
+        .prepare(
+          "INSERT INTO skill (id,workspace,slug,name,description,current,kind) VALUES(?,?,?,?,?,?,?)",
+        )
         .run(
           result.skillId,
           this.workspace.id,
@@ -145,6 +148,7 @@ export class LocalWorkspaceProvider implements WorkspaceProvider {
           input.name,
           input.description,
           result.versionId,
+          input.kind,
         );
       const now = new Date().toISOString();
       this.store.db

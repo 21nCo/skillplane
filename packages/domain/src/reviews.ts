@@ -1,5 +1,9 @@
 import { CompositionService } from "./composition-service.js";
-import { validateBundleArchive, type R2BundleRepository } from "@skillplane/storage";
+import {
+  bundleEntrypoint,
+  validateBundleArchive,
+  type R2BundleRepository,
+} from "@skillplane/storage";
 import type { Pool } from "pg";
 import { authorize } from "./authorization.js";
 import type { AmendmentPolicyDecision } from "./amendment-policy.js";
@@ -101,6 +105,7 @@ interface ReviewSkillRow {
   readonly description: string;
   readonly tags: string[];
   readonly visibility: SkillRecord["visibility"];
+  readonly kind: SkillRecord["kind"];
   readonly current_published_version_id: string | null;
   readonly semantic_version: string | null;
   readonly archived_at: Date | null;
@@ -342,11 +347,12 @@ export class AmendmentReviewService {
         );
         const bundle = await validateBundleArchive(stored.bytes);
         composite = bundle.skill.formatVersion === 2;
-        const markdown = bundle.files.get("SKILL.md");
+        const entrypoint = bundleEntrypoint(bundle.skill);
+        const markdown = bundle.files.get(entrypoint);
         if (!markdown) {
           throw new DomainError(
             "SKILL_BUNDLE_INVALID",
-            "Candidate bundle is missing SKILL.md",
+            `Candidate bundle is missing ${entrypoint}`,
             400,
           );
         }
@@ -516,7 +522,7 @@ export class AmendmentReviewService {
             const skillResult = await client.query<ReviewSkillRow>(
               `SELECT skill.id, skill.workspace_id, skill.slug, skill.name,
                       skill.description, skill.tags, skill.visibility,
-                      skill.current_published_version_id,
+                      skill.kind, skill.current_published_version_id,
                       version.semantic_version, skill.archived_at,
                       skill.created_at, skill.updated_at
                  FROM skills skill
@@ -539,6 +545,7 @@ export class AmendmentReviewService {
                 description: projected.description,
                 tags: projected.tags,
                 visibility: projected.visibility,
+                kind: projected.kind,
                 currentPublishedVersionId: projected.current_published_version_id,
                 currentSemanticVersion: projected.semantic_version,
                 archivedAt: projected.archived_at?.toISOString() ?? null,

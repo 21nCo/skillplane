@@ -5,10 +5,14 @@ import {
 } from "./git-provenance.js";
 import { CompositionService } from "./composition-service.js";
 import {
+  ARTIFACT_KINDS,
   BundleValidationError,
   StorageError,
+  bundleEntrypoint,
+  bundleKind,
   canonicalizeBundle,
   stableJson,
+  type ArtifactKind,
   type BundleManifest,
   type CanonicalBundle,
   type R2BundleRepository,
@@ -39,6 +43,8 @@ export const SKILL_VISIBILITIES = ["private", "workspace", "public"] as const;
 export type SkillVisibility = (typeof SKILL_VISIBILITIES)[number];
 export const SKILL_ARCHIVE_FILTERS = ["active", "archived", "all"] as const;
 export type SkillArchiveFilter = (typeof SKILL_ARCHIVE_FILTERS)[number];
+export const SKILL_KINDS = ARTIFACT_KINDS;
+export type SkillKind = ArtifactKind;
 
 export interface SkillRecord {
   readonly id: string;
@@ -48,6 +54,7 @@ export interface SkillRecord {
   readonly description: string;
   readonly tags: readonly string[];
   readonly visibility: SkillVisibility;
+  readonly kind: SkillKind;
   readonly currentPublishedVersionId: string | null;
   readonly currentSemanticVersion: string | null;
   readonly archivedAt: string | null;
@@ -96,6 +103,7 @@ interface SkillListCursor {
   readonly id: string;
   readonly archive: SkillArchiveFilter;
   readonly visibility: readonly SkillVisibility[];
+  readonly kind?: SkillKind | null;
 }
 
 interface SkillRow {
@@ -106,6 +114,7 @@ interface SkillRow {
   readonly description: string;
   readonly tags: string[];
   readonly visibility: string;
+  readonly kind: string;
   readonly current_published_version_id: string | null;
   readonly semantic_version: string | null;
   readonly archived_at: Date | null;
@@ -126,6 +135,36 @@ export function parseSkillVisibility(value: unknown): SkillVisibility {
     );
   }
   return value as SkillVisibility;
+}
+
+export function parseSkillKind(value: unknown): SkillKind {
+  if (
+    typeof value !== "string" ||
+    !(SKILL_KINDS as readonly string[]).includes(value)
+  ) {
+    throw new DomainError(
+      "VALIDATION_FAILED",
+      "Skill kind must be skill or instructions",
+      400,
+      { field: "kind" },
+    );
+  }
+  return value as SkillKind;
+}
+
+/** Instructions are never public, so they can never reach public projection. */
+export function assertKindVisibility(
+  kind: SkillKind,
+  visibility: SkillVisibility,
+): void {
+  if (kind === "instructions" && visibility === "public") {
+    throw new DomainError(
+      "SKILL_VISIBILITY_INVALID",
+      "Instructions visibility must be private or workspace",
+      400,
+      { field: "visibility" },
+    );
+  }
 }
 
 export function parseSkillArchiveFilter(value: unknown): SkillArchiveFilter {
@@ -181,6 +220,7 @@ function parseListCursor(
   archive: SkillArchiveFilter,
   visibility: readonly SkillVisibility[],
   groupId: string | null = null,
+  kind: SkillKind | null = null,
 ): SkillListCursor {
   let parsed: unknown;
   try {
@@ -209,6 +249,7 @@ function parseListCursor(
   const cursor = parsed as SkillListCursor;
   if (
     (cursor.groupId ?? null) !== groupId ||
+    (cursor.kind ?? null) !== kind ||
     cursor.archive !== archive ||
     stableJson(cursor.visibility) !== stableJson(visibility)
   ) {
@@ -228,6 +269,7 @@ function id(prefix: string): string {
 function safeSkill(row: SkillRow): SkillRecord {
   if (
     !(SKILL_VISIBILITIES as readonly string[]).includes(row.visibility) ||
+    !(SKILL_KINDS as readonly string[]).includes(row.kind) ||
     !Array.isArray(row.tags)
   ) {
     throw new DomainError("SKILL_NOT_FOUND", "Skill was not found", 404);
@@ -240,6 +282,7 @@ function safeSkill(row: SkillRow): SkillRecord {
     description: row.description,
     tags: row.tags,
     visibility: row.visibility as SkillVisibility,
+    kind: row.kind as SkillKind,
     currentPublishedVersionId: row.current_published_version_id,
     currentSemanticVersion: row.semantic_version,
     archivedAt: row.archived_at?.toISOString() ?? null,
@@ -352,6 +395,8 @@ export class SkillService {
     } catch (error) {
       return mapSkillInfrastructureError(error);
     }
+    const kind = bundleKind(canonical.skill);
+    assertKindVisibility(kind, visibility);
     const requestHash = await hashIdempotentRequest({
       operation: "skill.create",
       workspaceId: options.workspaceId,
@@ -391,11 +436,12 @@ export class SkillService {
         canonical.bytes,
       );
       stored = storedBundle;
-      const skillMarkdown = canonical.files.get("SKILL.md");
+      const entrypoint = bundleEntrypoint(canonical.skill);
+      const skillMarkdown = canonical.files.get(entrypoint);
       if (!skillMarkdown) {
         throw new DomainError(
           "SKILL_BUNDLE_INVALID",
-          "Canonical bundle is missing SKILL.md",
+          `Canonical bundle is missing ${entrypoint}`,
           400,
         );
       }
@@ -410,8 +456,8 @@ export class SkillService {
           await client.query(
             `INSERT INTO skills
                (id, workspace_id, slug, name, description, tags, visibility,
-                next_revision, created_by_user_id)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, 2, $8)`,
+                next_revision, created_by_user_id, kind)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, 2, $8, $9)`,
             [
               skillId,
               options.workspaceId,
@@ -423,6 +469,7 @@ export class SkillService {
               options.principal.kind === "user"
                 ? options.principal.userId
                 : (options.principal.delegatedUserId ?? null),
+              kind,
             ],
           );
           await client.query(
@@ -525,6 +572,7 @@ export class SkillService {
               semanticVersion: "1.0.0",
               digest: canonical.digest,
               visibility,
+              kind,
             },
           });
           const timestamps = await client.query<{
@@ -560,6 +608,7 @@ export class SkillService {
               description: canonical.skill.description,
               tags: canonical.skill.tags,
               visibility,
+              kind,
               currentPublishedVersionId: versionId,
               currentSemanticVersion: "1.0.0",
               archivedAt: null,
@@ -663,6 +712,7 @@ export class SkillService {
     readonly groupId?: string;
     readonly principal: Principal;
     readonly sourceId?: string;
+    readonly kind?: SkillKind;
     readonly archive?: SkillArchiveFilter;
     readonly visibility?: readonly SkillVisibility[];
     readonly cursor?: string | null;
@@ -675,8 +725,15 @@ export class SkillService {
     const limit = Math.max(1, Math.min(100, Math.floor(options.limit ?? 20)));
     const archive = parseSkillArchiveFilter(options.archive ?? "active");
     const visibility = normalizeVisibilityFilter(options.visibility);
+    const kind = options.kind === undefined ? null : parseSkillKind(options.kind);
     const cursor = options.cursor
-      ? parseListCursor(options.cursor, archive, visibility, options.groupId ?? null)
+      ? parseListCursor(
+          options.cursor,
+          archive,
+          visibility,
+          options.groupId ?? null,
+          kind,
+        )
       : null;
     if (cursor && (cursor.sourceId ?? null) !== (options.sourceId ?? null))
       throw new DomainError(
@@ -686,7 +743,7 @@ export class SkillService {
       );
     const result = await this.pool.query<SkillRow>(
       `SELECT s.id, s.workspace_id, s.slug, s.name, s.description, s.tags,
-              s.visibility, s.current_published_version_id,
+              s.visibility, s.kind, s.current_published_version_id,
               version.semantic_version, s.archived_at, s.created_at, s.updated_at
          FROM skills s
          LEFT JOIN skill_versions version
@@ -703,6 +760,7 @@ export class SkillService {
             cardinality($3::text[]) = 0
             OR s.visibility = ANY($3::text[])
           )
+          AND ($9::text IS NULL OR s.kind = $9)
           AND (
             $4::timestamptz IS NULL
             OR s.updated_at < $4::timestamptz
@@ -719,6 +777,7 @@ export class SkillService {
         limit + 1,
         options.groupId ?? null,
         options.sourceId ?? null,
+        kind,
       ],
     );
     const hasNext = result.rows.length > limit;
@@ -735,6 +794,7 @@ export class SkillService {
             archive,
             visibility,
             sourceId: options.sourceId ?? null,
+            ...(kind ? { kind } : {}),
           })
         : null,
     };
@@ -752,7 +812,7 @@ export class SkillService {
     authorize(options.principal, "skills:read");
     const result = await this.pool.query<SkillRow>(
       `SELECT s.id, s.workspace_id, s.slug, s.name, s.description, s.tags,
-              s.visibility, s.current_published_version_id,
+              s.visibility, s.kind, s.current_published_version_id,
               version.semantic_version, s.archived_at, s.created_at, s.updated_at
          FROM skills s
          LEFT JOIN skill_versions version
@@ -781,7 +841,7 @@ export class SkillService {
     }
     const result = await this.pool.query<SkillRow>(
       `SELECT s.id, s.workspace_id, s.slug, s.name, s.description, s.tags,
-              s.visibility, s.current_published_version_id,
+              s.visibility, s.kind, s.current_published_version_id,
               version.semantic_version, s.archived_at, s.created_at, s.updated_at
          FROM skills s
          JOIN skill_versions version
@@ -805,7 +865,7 @@ export class SkillService {
   }): Promise<SkillRecord> {
     const result = await this.pool.query<SkillRow>(
       `SELECT s.id, s.workspace_id, s.slug, s.name, s.description, s.tags,
-              s.visibility, s.current_published_version_id,
+              s.visibility, s.kind, s.current_published_version_id,
               version.semantic_version, s.archived_at, s.created_at, s.updated_at
          FROM skills s
          LEFT JOIN skill_versions version
@@ -871,7 +931,7 @@ export class SkillService {
         async ({ client }) => {
           const current = await client.query<SkillRow>(
             `SELECT s.id, s.workspace_id, s.slug, s.name, s.description, s.tags,
-                  s.visibility, s.current_published_version_id,
+                  s.visibility, s.kind, s.current_published_version_id,
                   version.semantic_version, s.archived_at, s.created_at,
                   s.updated_at
              FROM skills s
@@ -886,6 +946,7 @@ export class SkillService {
             throw new DomainError("SKILL_NOT_FOUND", "Skill was not found", 404);
           }
           assertExpectedUpdatedAt(previous, expectedUpdatedAt);
+          assertKindVisibility(safeSkill(previous).kind, visibility);
 
           const widensVisibility =
             (visibility === "public" && previous.visibility !== "public") ||
@@ -914,7 +975,7 @@ export class SkillService {
             WHERE s.id = $1 AND s.workspace_id = $2
               AND version.id = s.current_published_version_id
             RETURNING s.id, s.workspace_id, s.slug, s.name, s.description, s.tags,
-                      s.visibility, s.current_published_version_id,
+                      s.visibility, s.kind, s.current_published_version_id,
                       version.semantic_version, s.archived_at, s.created_at,
                       s.updated_at`,
             [options.skillId, options.principal.workspaceId, visibility],
@@ -990,7 +1051,7 @@ export class SkillService {
         async ({ client }) => {
           const current = await client.query<SkillRow>(
             `SELECT s.id, s.workspace_id, s.slug, s.name, s.description, s.tags,
-                  s.visibility, s.current_published_version_id,
+                  s.visibility, s.kind, s.current_published_version_id,
                   version.semantic_version, s.archived_at, s.created_at,
                   s.updated_at
              FROM skills s
@@ -1017,7 +1078,7 @@ export class SkillService {
           WHERE s.id = $1 AND s.workspace_id = $2
             AND version.id = s.current_published_version_id
           RETURNING s.id, s.workspace_id, s.slug, s.name, s.description, s.tags,
-                    s.visibility, s.current_published_version_id,
+                    s.visibility, s.kind, s.current_published_version_id,
                     version.semantic_version, s.archived_at, s.created_at,
                     s.updated_at`,
             [options.skillId, options.principal.workspaceId, options.archived],

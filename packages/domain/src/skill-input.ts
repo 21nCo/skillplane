@@ -1,11 +1,13 @@
 import {
   canonicalizeBundleFiles,
+  type ArtifactKind,
   type SkillDependency,
   type CanonicalBundle,
 } from "@skillplane/storage";
 
 /** Shared initial immutable bundle construction for local, API and MCP adapters. */
 export function createSkillBundle(input: {
+  kind?: ArtifactKind | undefined;
   composition?:
     | { dependencies: readonly SkillDependency[]; verify: boolean; blocking: boolean }
     | undefined;
@@ -20,6 +22,24 @@ export function createSkillBundle(input: {
     contentBase64?: string | undefined;
   }[];
 }): Promise<CanonicalBundle> {
+  if (input.kind === "instructions") {
+    if (input.composition || input.assets.length > 0)
+      throw new Error(
+        "Instructions are a single AGENTS.md without assets or composition",
+      );
+    return canonicalizeBundleFiles({
+      skill: {
+        formatVersion: 1,
+        kind: "instructions",
+        entrypoint: "AGENTS.md",
+        name: input.name,
+        slug: input.slug,
+        description: input.description,
+        tags: input.tags,
+      },
+      files: new Map([["AGENTS.md", new TextEncoder().encode(input.instructions)]]),
+    });
+  }
   if (input.composition?.blocking && !input.composition.verify)
     throw new Error("blocking requires verification");
   const files = new Map<string, Uint8Array>([

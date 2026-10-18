@@ -32,6 +32,7 @@ import {
   executeMutationTool,
   executeReadTool,
   mutationAuditContext,
+  reportedKind,
   roleCanReadCandidates,
   type McpToolRuntime,
   type ToolExecution,
@@ -93,6 +94,7 @@ function lifecycleSkill(
     description: skill.description,
     tags: [...skill.tags],
     visibility: skill.visibility,
+    ...reportedKind(skill.kind),
     currentVersion:
       currentPublishedVersionId && currentSemanticVersion
         ? { id: currentPublishedVersionId, semanticVersion: currentSemanticVersion }
@@ -233,6 +235,15 @@ export function skillCreate(runtime: McpToolRuntime, input: SkillCreateInput) {
         execution,
         input.workspace,
       );
+      if (
+        input.kind === "instructions" &&
+        (input.assets.length > 0 || input.composition)
+      )
+        throw new McpToolError(
+          "VALIDATION_FAILED",
+          "Instructions are a single AGENTS.md document without assets or composition",
+          { details: { field: "kind" } },
+        );
       const canonical = await createSkillBundle(input);
       const created = await runtime.services.skillService.create({
         workspaceId: resolved.workspace.id,

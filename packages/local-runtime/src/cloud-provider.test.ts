@@ -4,6 +4,7 @@ import { mkdtempSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { bundleEntrypoint } from "@skillplane/storage";
 import {
   CloudWorkspaceProvider,
   LocalWorkspaceProvider,
@@ -110,6 +111,7 @@ function fixture() {
                 summary: s.description,
                 tags: [],
                 visibility: "private",
+                ...(s.kind === "instructions" ? { kind: s.kind } : {}),
                 currentVersion: { id: v.id, semanticVersion: v.semanticVersion },
                 archivedAt: null,
                 updatedAt: v.createdAt,
@@ -161,7 +163,9 @@ function fixture() {
             manifest: bundle.manifest,
             publishedAt: version.createdAt,
           },
-          instructions: new TextDecoder().decode(bundle.files.get("SKILL.md")),
+          instructions: new TextDecoder().decode(
+            bundle.files.get(bundleEntrypoint(bundle.skill)),
+          ),
           files: bundle.manifest.files,
           context: null,
         };
@@ -208,6 +212,22 @@ function fixture() {
   };
 }
 describe("cloud provider transport contract", () => {
+  it("rebuilds an instructions document from its AGENTS.md entrypoint", async () => {
+    const { local, cloud, calls } = fixture();
+    const created = await local.create({
+      ...request,
+      kind: "instructions",
+      assets: [],
+      instructions: "# Agents\n\nRun the tests.\n",
+    });
+    const snapshot = await cloud.retrieve(created.skillId);
+    expect(snapshot.skill.kind).toBe("instructions");
+    expect(snapshot.bundle.digest).toBe(
+      (await local.retrieve(created.skillId)).bundle.digest,
+    );
+    expect(calls.filter((name) => name === "skill_asset_retrieve")).toHaveLength(1);
+    expect((await cloud.list()).map((skill) => skill.kind)).toEqual(["instructions"]);
+  });
   it("creates through the shared immutable bundle contract", async () => {
     const { cloud } = fixture();
     const created = await cloud.create(request);

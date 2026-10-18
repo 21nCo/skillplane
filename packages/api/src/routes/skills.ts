@@ -1,6 +1,7 @@
 import {
   DomainError,
   parseSkillArchiveFilter,
+  parseSkillKind,
   parseSkillVisibility,
   type SkillVisibility,
 } from "@skillplane/domain";
@@ -128,11 +129,15 @@ export function registerSkillRoutes(app: Hono<ApiEnvironment>): void {
     const visibility = parseVisibilityFilter(context);
     const groupFilter = optionalIdFilter(context, "groupId");
     const sourceFilter = optionalIdFilter(context, "sourceId");
+    const kindQuery = context.req.query("kind");
+    const kindFilter =
+      kindQuery === undefined ? {} : { kind: parseSkillKind(kindQuery) };
     if (query) {
       const page = await services.skillSearchService.search({
         query,
         ...groupFilter,
         ...sourceFilter,
+        ...kindFilter,
         principal,
         visibility,
         archive,
@@ -150,6 +155,7 @@ export function registerSkillRoutes(app: Hono<ApiEnvironment>): void {
             description: skill.description,
             tags: skill.tags,
             visibility: skill.visibility,
+            kind: skill.kind,
             currentPublishedVersionId: skill.currentVersionId,
             currentSemanticVersion: skill.semanticVersion,
             archivedAt: skill.archivedAt,
@@ -163,6 +169,7 @@ export function registerSkillRoutes(app: Hono<ApiEnvironment>): void {
     const page = await services.skillService.listPage({
       ...groupFilter,
       ...sourceFilter,
+      ...kindFilter,
       workspaceId: context.req.param("workspaceId"),
       principal,
       archive,

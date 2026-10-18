@@ -13,7 +13,18 @@ import {
 } from "@skillplane/mcp-schema";
 import { registerResourceRoutes } from "@skillplane/api";
 import { executeReadTool, executeMutationTool, type McpToolRuntime } from "./shared.js";
-import { resolveSkill, resolveVersion } from "./resolve.js";
+import { resolveSkill, resolveVersion, type ResolvedSkill } from "./resolve.js";
+
+// Instructions share the version lifecycle but are never resolved or composed.
+function requireSkillKind(skill: ResolvedSkill): void {
+  if (skill.kind !== "skill")
+    throw new McpToolError(
+      "VALIDATION_FAILED",
+      "Instructions documents cannot be resolved, composed or verified as skills",
+      { details: { kind: skill.kind } },
+    );
+}
+
 export function skillResolve(runtime: McpToolRuntime, input: SkillResolveInput) {
   return executeReadTool(
     runtime,
@@ -24,6 +35,7 @@ export function skillResolve(runtime: McpToolRuntime, input: SkillResolveInput) 
         action: "skills:read",
         allowPublic: true,
       });
+      requireSkillKind(skill);
       const version = await resolveVersion(runtime, execution, skill, input.version, {
         forDependencyUpgrade: true,
       });
@@ -192,6 +204,7 @@ export function dependencyUpgrade(
       });
       if (!skill.principal)
         throw new McpToolError("WORKSPACE_FORBIDDEN", "Workspace access is required");
+      requireSkillKind(skill);
       const version = await resolveVersion(runtime, execution, skill, input.version, {
         forDependencyUpgrade: true,
       });
@@ -249,6 +262,7 @@ export function dependencyUpgradePreview(
       });
       if (!skill.principal)
         throw new McpToolError("WORKSPACE_FORBIDDEN", "Workspace access is required");
+      requireSkillKind(skill);
       const version = await resolveVersion(runtime, execution, skill, input.version, {
         forDependencyUpgrade: true,
       });
@@ -309,6 +323,7 @@ export function compositionCandidate(
       });
       if (!skill.principal)
         throw new McpToolError("WORKSPACE_FORBIDDEN", "Workspace access is required");
+      requireSkillKind(skill);
       const version = await resolveVersion(runtime, execution, skill, input.version, {
         forDependencyUpgrade: true,
       });

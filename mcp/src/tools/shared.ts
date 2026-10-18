@@ -441,3 +441,10 @@ export function roleCanReadCandidates(
   if (role === "viewer") return false;
   return principal.kind === "user" || principal.scopes.includes("skills:amend");
 }
+
+/** Outputs report kind only for non-skill artifacts; see reportedSkillKindSchema. */
+export function reportedKind(kind: "skill" | "instructions"): {
+  readonly kind?: "instructions";
+} {
+  return kind === "instructions" ? { kind } : {};
+}

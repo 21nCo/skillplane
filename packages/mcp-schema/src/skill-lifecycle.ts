@@ -7,6 +7,8 @@ import {
   fileDigestSchema,
   limitSchema,
   nullableCursorSchema,
+  reportedSkillKindSchema,
+  skillKindSchema,
   skillSelectorSchema,
   skillVisibilitySchema,
   slugSchema,
@@ -38,6 +40,7 @@ export const skillLifecycleRecordSchema = z
     description: skillDescriptionSchema,
     tags: z.array(skillTagSchema).max(30),
     visibility: skillVisibilitySchema,
+    kind: reportedSkillKindSchema,
     currentVersion: z
       .object({
         id: stableIdSchema,
@@ -86,6 +89,7 @@ const skillCreateFileSchema = z
 export const skillCreateInputSchema = z
   .object({
     workspace: workspaceSelectorSchema,
+    kind: skillKindSchema.default("skill"),
     slug: slugSchema,
     name: skillNameSchema,
     description: skillDescriptionSchema.default(""),

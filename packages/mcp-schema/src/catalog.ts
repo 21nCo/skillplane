@@ -3,6 +3,7 @@ import { callerDeclarationSchema } from "./caller.js";
 import {
   limitSchema,
   nullableCursorSchema,
+  reportedSkillKindSchema,
   skillVisibilitySchema,
   slugSchema,
   stableIdSchema,
@@ -58,6 +59,7 @@ export const listedSkillSchema = z
     summary: z.string().max(20_000),
     tags: z.array(z.string().max(80)).max(30),
     visibility: skillVisibilitySchema,
+    kind: reportedSkillKindSchema,
     currentVersion: listedCurrentVersionSchema.nullable(),
     archivedAt: timestampSchema.nullable(),
     updatedAt: timestampSchema,

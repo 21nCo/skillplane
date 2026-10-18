@@ -5,7 +5,7 @@
     "id": "skillplane/oauth-linear",
     "version": "1"
   },
-  "catalogHash": "a9fd65be211a426f23e2fb6f9ca73b03dcd08553762c2c07b7a39ddc8365fba6",
+  "catalogHash": "756aa8a8a4a1314e2bbcd54eb38ff57f5f5fb658e9fa6fcc3eca18a5b7b3f158",
   "tools": [
     {
       "name": "context_archive",
@@ -343,9 +343,10 @@
     },
     {
       "name": "skill_create",
-      "hash": "eacb175ed39480b0bfe78ac49c97c6b9577fed66e4f3a2a0949f0adac9f6dae9",
+      "hash": "0887279f55e1a89c15a2b9e0c84899be023df0c0333b0487468d31af8fa70575",
       "inputProperties": [
         "workspace",
+        "kind",
         "slug",
         "name",
         "description",
@@ -667,5 +668,5 @@
       "outputSchema": false
     }
   ],
-  "catalogBytes": 32195
+  "catalogBytes": 32236
 }

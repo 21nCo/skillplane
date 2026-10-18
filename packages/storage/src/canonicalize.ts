@@ -2,10 +2,10 @@ import { zipSync, type Zippable } from "fflate";
 import {
   canonicalSkillJson,
   stableJson,
+  type BundleJsonIdentity,
   type BundleManifest,
   type CanonicalBundle,
   type SkillFileManifestEntry,
-  type SkillJson,
 } from "./manifest.js";
 import {
   bundlePathCollisionKey,
@@ -102,11 +102,7 @@ export async function canonicalizeBundle(
  * file amendment.
  */
 export async function canonicalizeBundleFiles(options: {
-  readonly skill: SkillJson extends infer S
-    ? S extends SkillJson
-      ? Omit<S, "files">
-      : never
-    : never;
+  readonly skill: BundleJsonIdentity;
   readonly files: ReadonlyMap<string, Uint8Array>;
 }): Promise<CanonicalBundle> {
   const contentFiles = new Map<string, Uint8Array>();

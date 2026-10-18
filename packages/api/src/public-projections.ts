@@ -169,6 +169,8 @@ function skill(row: ProjectionRow): SkillRecord & { readonly workspaceSlug: stri
     workspaceSlug: row.workspace_slug,
     slug: row.skill_slug,
     visibility: "public" as const,
+    // Instructions can never be public; every public projection is a skill.
+    kind: "skill" as const,
     currentPublishedVersionId: row.version_id,
     currentSemanticVersion: row.semantic_version,
     archivedAt: null,

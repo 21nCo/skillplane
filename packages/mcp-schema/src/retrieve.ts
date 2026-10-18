@@ -7,6 +7,7 @@ import {
   fileDescriptorSchema,
   knowledgeSelectorSchema,
   manifestSchema,
+  reportedSkillKindSchema,
   skillSelectorSchema,
   skillVisibilitySchema,
   slugSchema,
@@ -88,6 +89,7 @@ export const skillRetrieveOutputSchema = z
         description: z.string().max(20_000),
         tags: z.array(z.string().max(80)).max(30),
         visibility: skillVisibilitySchema,
+        kind: reportedSkillKindSchema,
       })
       .strict(),
     version: z

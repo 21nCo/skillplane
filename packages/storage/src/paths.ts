@@ -1,7 +1,9 @@
 const encoder = new TextEncoder();
 
+// AGENTS.md is accepted here and restricted to instructions bundles by validation.
 const ROOT_FILES = new Set([
   "SKILL.md",
+  "AGENTS.md",
   "skill.json",
   "skill.lock.json",
   "LICENSE",

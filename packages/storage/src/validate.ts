@@ -1,11 +1,11 @@
 import { Unzip, UnzipInflate } from "fflate";
 import { verificationClaimsSchema } from "./composition.js";
 import {
+  bundleJsonSchema,
   canonicalSkillJson,
   fileManifestEntrySchema,
-  skillJsonSchema,
+  type BundleJson,
   type SkillFileManifestEntry,
-  type SkillJson,
 } from "./manifest.js";
 import {
   BundlePathError,
@@ -53,7 +53,7 @@ interface CentralEntry {
 }
 
 export interface ValidatedBundle {
-  readonly skill: SkillJson;
+  readonly skill: BundleJson;
   readonly files: ReadonlyMap<string, Uint8Array>;
   readonly fileManifest: readonly SkillFileManifestEntry[];
   readonly expandedByteSize: number;
@@ -404,7 +404,7 @@ export function mediaTypeForPath(path: string): string {
   return known[extension ?? ""] ?? "application/octet-stream";
 }
 
-function parseSkillJson(bytes: Uint8Array): SkillJson {
+function parseSkillJson(bytes: Uint8Array): BundleJson {
   let decoded: string;
   try {
     decoded = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
@@ -417,7 +417,7 @@ function parseSkillJson(bytes: Uint8Array): SkillJson {
   } catch {
     return fail("SKILL_BUNDLE_INVALID", "skill.json is not valid JSON");
   }
-  const parsed = skillJsonSchema.safeParse(raw);
+  const parsed = bundleJsonSchema.safeParse(raw);
   if (!parsed.success) {
     return fail("SKILL_BUNDLE_INVALID", "skill.json does not match a supported format");
   }
@@ -430,16 +430,74 @@ function parseSkillJson(bytes: Uint8Array): SkillJson {
   return parsed.data;
 }
 
-function assertUtf8Markdown(bytes: Uint8Array): void {
+function assertUtf8Markdown(bytes: Uint8Array, path = "SKILL.md"): void {
   try {
     const value = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
     if (value.includes("\0") || value.trim().length === 0) {
-      fail("SKILL_BUNDLE_INVALID", "SKILL.md must contain non-empty UTF-8 text");
+      fail("SKILL_BUNDLE_INVALID", `${path} must contain non-empty UTF-8 text`);
     }
   } catch (error) {
     if (error instanceof BundleValidationError) throw error;
-    fail("SKILL_BUNDLE_INVALID", "SKILL.md is not valid UTF-8");
+    fail("SKILL_BUNDLE_INVALID", `${path} is not valid UTF-8`);
   }
+}
+
+// An instructions bundle is exactly one root AGENTS.md plus skill.json.
+function validateInstructionsBundle(
+  files: ReadonlyMap<string, Uint8Array>,
+): BundleJson {
+  const document = files.get("AGENTS.md");
+  const skillJsonBytes = files.get("skill.json");
+  if (!document || !skillJsonBytes) {
+    return fail(
+      "SKILL_BUNDLE_INVALID",
+      "Bundle must contain root SKILL.md and skill.json",
+    );
+  }
+  const skill = parseSkillJson(skillJsonBytes);
+  if (!("kind" in skill)) {
+    return fail(
+      "SKILL_BUNDLE_INVALID",
+      "Bundle must contain root SKILL.md and skill.json",
+    );
+  }
+  if (files.size !== 2) {
+    return fail(
+      "SKILL_BUNDLE_INVALID",
+      "Instructions bundles contain only AGENTS.md and skill.json",
+    );
+  }
+  if (document.byteLength > BUNDLE_LIMITS.skillMarkdownBytes) {
+    return fail("SKILL_BUNDLE_TOO_LARGE", "AGENTS.md exceeds 1 MiB");
+  }
+  assertUtf8Markdown(document, "AGENTS.md");
+  return skill;
+}
+
+function validateSkillEntrypoint(files: ReadonlyMap<string, Uint8Array>): BundleJson {
+  const skillMarkdown = files.get("SKILL.md");
+  const skillJsonBytes = files.get("skill.json");
+  if (!skillMarkdown || !skillJsonBytes) {
+    return fail(
+      "SKILL_BUNDLE_INVALID",
+      "Bundle must contain root SKILL.md and skill.json",
+    );
+  }
+  if (files.has("AGENTS.md")) {
+    return fail(
+      "SKILL_PATH_INVALID",
+      "Bundle path uses an unsupported top-level entry",
+    );
+  }
+  assertUtf8Markdown(skillMarkdown);
+  const skill = parseSkillJson(skillJsonBytes);
+  if ("kind" in skill) {
+    return fail(
+      "SKILL_BUNDLE_INVALID",
+      "Instructions bundles contain only AGENTS.md and skill.json",
+    );
+  }
+  return skill;
 }
 
 export async function validateBundleArchive(
@@ -455,16 +513,9 @@ export async function validateBundleArchive(
     throw error;
   }
   const files = extractFiles(bytes, entries);
-  const skillMarkdown = files.get("SKILL.md");
-  const skillJsonBytes = files.get("skill.json");
-  if (!skillMarkdown || !skillJsonBytes) {
-    return fail(
-      "SKILL_BUNDLE_INVALID",
-      "Bundle must contain root SKILL.md and skill.json",
-    );
-  }
-  assertUtf8Markdown(skillMarkdown);
-  const skill = parseSkillJson(skillJsonBytes);
+  const skill = files.has("SKILL.md")
+    ? validateSkillEntrypoint(files)
+    : validateInstructionsBundle(files);
   if (
     skill.formatVersion === 1 &&
     [...files.keys()].some(

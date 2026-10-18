@@ -14,7 +14,7 @@ import {
   type WorkspaceKind,
 } from "@skillplane/domain";
 import { principalForWorkspace } from "../auth.js";
-import { executeReadTool, type McpToolRuntime } from "./shared.js";
+import { executeReadTool, reportedKind, type McpToolRuntime } from "./shared.js";
 
 interface WorkspaceRow {
   readonly id: string;
@@ -242,6 +242,7 @@ export function skillsList(runtime: McpToolRuntime, input: SkillsListInput) {
         summary: skill.description,
         tags: [...skill.tags],
         visibility: skill.visibility,
+        ...reportedKind(skill.kind),
         currentVersion:
           skill.currentPublishedVersionId && skill.currentSemanticVersion
             ? {

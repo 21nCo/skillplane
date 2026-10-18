@@ -63,6 +63,35 @@ export const skillJsonV2Schema = skillJsonV1Schema
   });
 export const skillJsonSchema = z.union([skillJsonV1Schema, skillJsonV2Schema]);
 export type SkillJson = z.infer<typeof skillJsonSchema>;
+
+/**
+ * Instructions are a separate artifact kind: a single `AGENTS.md` document that
+ * shares the skill lifecycle but is never resolved, composed or projected as a
+ * skill. `skillJsonSchema` deliberately excludes it so skill-only paths (Git
+ * imports, composition) cannot accept one.
+ */
+export const instructionsJsonSchema = skillJsonV1Schema
+  .omit({ entrypoint: true })
+  .extend({
+    kind: z.literal("instructions"),
+    entrypoint: z.literal("AGENTS.md"),
+  })
+  .strict();
+export type InstructionsJson = z.infer<typeof instructionsJsonSchema>;
+export const bundleJsonSchema = z.union([skillJsonSchema, instructionsJsonSchema]);
+export type BundleJson = SkillJson | InstructionsJson;
+
+export const ARTIFACT_KINDS = ["skill", "instructions"] as const;
+export type ArtifactKind = (typeof ARTIFACT_KINDS)[number];
+
+export function bundleKind(value: BundleJson): ArtifactKind {
+  return "kind" in value ? value.kind : "skill";
+}
+
+/** The markdown document that carries a bundle's primary instructions. */
+export function bundleEntrypoint(value: BundleJson): "SKILL.md" | "AGENTS.md" {
+  return "kind" in value ? value.entrypoint : "SKILL.md";
+}
 export type SkillFileManifestEntry = z.infer<typeof fileManifestEntrySchema>;
 
 export interface BundleManifest {
@@ -78,28 +107,36 @@ export interface CanonicalBundle {
   readonly bytes: Uint8Array;
   readonly digest: `sha256:${string}`;
   readonly manifest: BundleManifest;
-  readonly skill: SkillJson;
+  readonly skill: BundleJson;
   readonly files: ReadonlyMap<string, Uint8Array>;
 }
 
+export type BundleJsonIdentity = BundleJson extends infer S
+  ? S extends BundleJson
+    ? Omit<S, "files">
+    : never
+  : never;
+
 export function canonicalSkillJson(
-  value: (SkillJson extends infer S
-    ? S extends SkillJson
-      ? Omit<S, "files">
-      : never
-    : never) & {
+  value: BundleJsonIdentity & {
     readonly files: readonly SkillFileManifestEntry[];
   },
-): SkillJson {
+): BundleJson {
   return {
-    ...(value.formatVersion === 1
-      ? { formatVersion: 1 as const, entrypoint: "SKILL.md" as const }
-      : {
-          formatVersion: 2 as const,
-          entrypoints: value.entrypoints,
-          dependencies: value.dependencies,
-          ...(value.verification ? { verification: value.verification } : {}),
-        }),
+    ...("kind" in value
+      ? {
+          formatVersion: 1 as const,
+          kind: "instructions" as const,
+          entrypoint: "AGENTS.md" as const,
+        }
+      : value.formatVersion === 1
+        ? { formatVersion: 1 as const, entrypoint: "SKILL.md" as const }
+        : {
+            formatVersion: 2 as const,
+            entrypoints: value.entrypoints,
+            dependencies: value.dependencies,
+            ...(value.verification ? { verification: value.verification } : {}),
+          }),
     name: value.name.trim(),
     slug: value.slug.trim(),
     description: value.description,

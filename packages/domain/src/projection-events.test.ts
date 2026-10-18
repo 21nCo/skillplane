@@ -14,6 +14,7 @@ const skill: SkillRecord = {
   description: "Public history",
   tags: [],
   visibility: "public",
+  kind: "skill",
   currentPublishedVersionId: "version:two",
   currentSemanticVersion: "2.0.0",
   archivedAt: null,

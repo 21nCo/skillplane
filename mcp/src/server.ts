@@ -216,7 +216,7 @@ export const skillplaneMcpDeclaration = defineMcpFnServer<McpToolRuntime>({
       name: "skills_list",
       title: "List workspace skills",
       description:
-        "Enumerate authorized skills in one workspace without a search query. Select the workspace returned by workspaces_list with workspace: { id } or workspace: { slug }. Includes active unpublished skill records, supports visibility and archive filters, and returns an opaque cursor until every matching skill has been listed.",
+        "Enumerate authorized skills in one workspace without a search query. Select the workspace returned by workspaces_list with workspace: { id } or workspace: { slug }. Includes active unpublished skill records and instructions documents (each item reports kind), supports visibility and archive filters, and returns an opaque cursor until every matching skill has been listed.",
       input: skillsListInputSchema,
       output: skillsListOutputSchema,
       annotations: READ_ONLY_ANNOTATIONS,
@@ -226,7 +226,7 @@ export const skillplaneMcpDeclaration = defineMcpFnServer<McpToolRuntime>({
       name: "skills_search",
       title: "Search skills",
       description:
-        "Search one workspace using authorization-filtered Postgres full-text ranking. Select the workspace returned by workspaces_list with workspace: { id } or workspace: { slug }. Returns only stable skill metadata, current published version IDs, semantic versions, digests, and an opaque cursor.",
+        "Search one workspace using authorization-filtered Postgres full-text ranking. Select the workspace returned by workspaces_list with workspace: { id } or workspace: { slug }. Returns only stable skill metadata including kind (skill or instructions), current published version IDs, semantic versions, digests, and an opaque cursor.",
       input: skillsSearchInputSchema,
       output: skillsSearchOutputSchema,
       annotations: READ_ONLY_ANNOTATIONS,
@@ -276,7 +276,7 @@ export const skillplaneMcpDeclaration = defineMcpFnServer<McpToolRuntime>({
       name: "skill_resolve",
       title: "Resolve a skill",
       description:
-        "Return the exact locked DAG, namespaced execution modules, invocation boundaries and inherited verification obligations. Version selectors never float published child pins.",
+        "Return the exact locked DAG, namespaced execution modules, invocation boundaries and inherited verification obligations. Version selectors never float published child pins. Instructions documents are rejected; only skills resolve.",
       input: skillResolveInputSchema,
       output: skillResolveOutputSchema,
       annotations: READ_ONLY_ANNOTATIONS,
@@ -356,7 +356,7 @@ export const skillplaneMcpDeclaration = defineMcpFnServer<McpToolRuntime>({
       name: "skill_retrieve",
       title: "Retrieve a skill",
       description:
-        "Retrieve one exact authorized immutable skill version with its canonical manifest, verified bundle digest, SKILL.md instructions, file descriptors, and optional authorized context knowledge and active notes.",
+        "Retrieve one exact authorized immutable skill version with its canonical manifest, verified bundle digest, kind, entrypoint instructions (SKILL.md, or AGENTS.md for instructions documents), file descriptors, and optional authorized context knowledge and active notes.",
       input: skillRetrieveInputSchema,
       output: skillRetrieveOutputSchema,
       annotations: READ_ONLY_ANNOTATIONS,
@@ -466,7 +466,7 @@ export const skillplaneMcpDeclaration = defineMcpFnServer<McpToolRuntime>({
       name: "skill_create",
       title: "Create a skill",
       description:
-        "Create one authorized skill and immutable published 1.0.0 version from a bounded canonical file set with caller attribution, durable audit, and replay-safe idempotency.",
+        "Create one authorized skill and immutable published 1.0.0 version from a bounded canonical file set with caller attribution, durable audit, and replay-safe idempotency. kind: instructions creates a private or workspace AGENTS.md instructions document without assets or composition.",
       input: skillCreateInputSchema,
       output: skillCreateOutputSchema,
       annotations: MUTATION_ANNOTATIONS,

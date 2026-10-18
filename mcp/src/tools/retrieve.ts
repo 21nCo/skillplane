@@ -1,6 +1,8 @@
 import type { SkillRetrieveInput, SkillRetrieveOutput } from "@skillplane/mcp-schema";
 import { compositionPlanSchema, McpToolError } from "@skillplane/mcp-schema";
 import {
+  bundleEntrypoint,
+  bundleKind,
   canonicalizeBundle,
   stableJson,
   type CanonicalBundle,
@@ -12,7 +14,7 @@ import {
   resolveVersion,
   type ResolvedVersion,
 } from "./resolve.js";
-import { executeReadTool, type McpToolRuntime } from "./shared.js";
+import { executeReadTool, reportedKind, type McpToolRuntime } from "./shared.js";
 
 function equalBytes(left: Uint8Array, right: Uint8Array): boolean {
   return (
@@ -90,6 +92,13 @@ export function skillRetrieve(runtime: McpToolRuntime, input: SkillRetrieveInput
       });
     }
     const bundle = await loadExactCanonicalBundle(runtime, version);
+    if (bundleKind(bundle.skill) !== skill.kind) {
+      throw new McpToolError(
+        "R2_OBJECT_MISMATCH",
+        "The stored bundle does not match the artifact kind",
+        { status: 503, retryable: true },
+      );
+    }
     const output: SkillRetrieveOutput = {
       ...(bundle.skill.formatVersion === 2
         ? {
@@ -113,6 +122,7 @@ export function skillRetrieve(runtime: McpToolRuntime, input: SkillRetrieveInput
         description: skill.description,
         tags: [...skill.tags],
         visibility: skill.visibility,
+        ...reportedKind(skill.kind),
       },
       version: {
         id: version.id,
@@ -128,7 +138,9 @@ export function skillRetrieve(runtime: McpToolRuntime, input: SkillRetrieveInput
         createdAt: version.createdAt,
         publishedAt: version.publishedAt,
       },
-      instructions: decodeInstructions(bundle.files.get("SKILL.md")),
+      instructions: decodeInstructions(
+        bundle.files.get(bundleEntrypoint(bundle.skill)),
+      ),
       files: bundle.manifest.files.map((file) => ({ ...file })),
       context: selectedContext,
     };
