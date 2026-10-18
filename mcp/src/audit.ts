@@ -328,3 +328,52 @@ export function emitMcpOperationalEvent(event: {
     }),
   );
 }
+
+export interface McpDiagnosticIssue {
+  readonly keyword: string;
+  readonly instancePath: string;
+  readonly schemaPath: string;
+  readonly rejectedProperty?: string;
+  readonly missingProperty?: string;
+}
+
+/**
+ * Records a tool call that McpFn stopped before the handler ran. The event is
+ * structural only: it never carries argument values, credentials or prompts.
+ * It shares the operational log channel and retention of emitMcpOperationalEvent.
+ */
+export function emitMcpDiagnosticEvent(event: {
+  readonly requestId: string;
+  readonly tool?: string;
+  readonly profileId?: string;
+  readonly stage: string;
+  readonly code: string;
+  readonly actorType: McpIdentity["actorType"];
+  readonly actorId: string;
+  readonly issues: readonly McpDiagnosticIssue[];
+}): void {
+  console.info(
+    JSON.stringify({
+      component: "mcp",
+      event: "mcp.tool.rejected_before_handler",
+      requestId: event.requestId,
+      ...(event.tool ? { tool: event.tool } : {}),
+      ...(event.profileId ? { profileId: event.profileId } : {}),
+      stage: event.stage,
+      code: event.code,
+      actorType: event.actorType,
+      actorId: event.actorId,
+      issues: event.issues.map((issue) => ({
+        keyword: issue.keyword,
+        instancePath: issue.instancePath,
+        schemaPath: issue.schemaPath,
+        ...(issue.rejectedProperty !== undefined
+          ? { rejectedProperty: issue.rejectedProperty }
+          : {}),
+        ...(issue.missingProperty !== undefined
+          ? { missingProperty: issue.missingProperty }
+          : {}),
+      })),
+    }),
+  );
+}

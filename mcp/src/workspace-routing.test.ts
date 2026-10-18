@@ -159,7 +159,11 @@ describe("MCP workspace routing", () => {
     const scope = await classifyMcpScope(
       call("skills_search", { workspace: { id: "workspace:public" } }),
     );
-    if (scope.kind === "global" || scope.kind === "batch") {
+    if (
+      scope.kind === "global" ||
+      scope.kind === "unrouted" ||
+      scope.kind === "batch"
+    ) {
       throw new Error("Expected one workspace scope");
     }
     const query = async () => ({ rows: [] });
@@ -175,7 +179,11 @@ describe("MCP workspace routing", () => {
     const privateScope = await classifyMcpScope(
       call("skills_list", { workspace: { id: "workspace:private" } }),
     );
-    if (privateScope.kind === "global" || privateScope.kind === "batch") {
+    if (
+      privateScope.kind === "global" ||
+      privateScope.kind === "unrouted" ||
+      privateScope.kind === "batch"
+    ) {
       throw new Error("Expected one workspace scope");
     }
     await expect(
@@ -207,7 +215,9 @@ describe("MCP workspace routing", () => {
         { name: "skill_retrieve", arguments: { skillId: "skill:two" } },
       ),
     );
-    if (scope.kind === "global") throw new Error("Expected a workspace batch");
+    if (scope.kind === "global" || scope.kind === "unrouted") {
+      throw new Error("Expected a workspace batch");
+    }
     await expect(
       resolveMcpWorkspaceBatch(
         scope,
@@ -228,7 +238,9 @@ describe("MCP workspace routing", () => {
         { name: "skill_versions_list", arguments: { skillId: "skill:two" } },
       ),
     );
-    if (scope.kind === "global") throw new Error("Expected a workspace batch");
+    if (scope.kind === "global" || scope.kind === "unrouted") {
+      throw new Error("Expected a workspace batch");
+    }
     await expect(
       resolveMcpWorkspaceBatch(
         scope,
@@ -238,6 +250,37 @@ describe("MCP workspace routing", () => {
         }),
       ),
     ).resolves.toMatchObject({ workspaceId: "workspace:one" });
+  });
+
+  it("leaves workspace calls that name no workspace to protocol validation", async () => {
+    for (const args of [
+      {},
+      { workspace_id: "workspace:one" },
+      { workspace: { id: "" } },
+    ]) {
+      await expect(classifyMcpScope(call("skills_list", args))).resolves.toEqual({
+        kind: "unrouted",
+      });
+    }
+    await expect(
+      classifyMcpScope(
+        batch(
+          { name: "skills_list", arguments: { workspace_id: "workspace:one" } },
+          { name: "skills_list", arguments: { workspace: { id: "workspace:one" } } },
+        ),
+      ),
+    ).rejects.toMatchObject({ code: "WORKSPACE_ROUTE_INVALID" });
+    const app = createRoutedMcpApplication({
+      local: { fetch: () => Response.json({ servedLocally: true }) },
+      services: async () => {
+        throw new Error("An unrouted call must not resolve a workspace");
+      },
+    });
+    const response = await app.fetch(
+      call("skills_search", { query: "q", workspace_id: "workspace:one" }),
+      localBindings(),
+    );
+    await expect(response.json()).resolves.toEqual({ servedLocally: true });
   });
 
   it("passes unknown tools to protocol validation even with workspace-looking arguments", async () => {

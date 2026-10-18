@@ -17,6 +17,7 @@ import {
   type McpIdentity,
 } from "./auth.js";
 import { verifyDownloadGrant } from "./downloads.js";
+import { WORKSPACE_ROUTED_MCP_TOOL_NAMES } from "./tool-catalog.js";
 
 interface McpApplication<Context = unknown> {
   fetch(
@@ -32,6 +33,11 @@ interface ServiceBinding {
 
 type McpScope =
   | { readonly kind: "global" }
+  /**
+   * A workspace tool call whose arguments name no workspace. Only protocol
+   * validation can describe what is wrong with it, so it is never routed.
+   */
+  | { readonly kind: "unrouted" }
   | {
       readonly kind: "workspace-id";
       readonly value: string;
@@ -55,7 +61,10 @@ type McpScope =
       readonly allowPublic: true;
     };
 
-type WorkspaceMcpScope = Exclude<McpScope, { readonly kind: "global" }>;
+type WorkspaceMcpScope = Exclude<
+  McpScope,
+  { readonly kind: "global" } | { readonly kind: "unrouted" }
+>;
 interface McpBatchScope {
   readonly kind: "batch";
   readonly scopes: readonly WorkspaceMcpScope[];
@@ -109,54 +118,13 @@ function downloadToken(value: string | undefined): string | null {
   }
 }
 
-const workspaceTools = new Set([
-  "skill_usage_report",
-  "skills_list",
-  "skills_search",
-  "skill_retrieve",
-  "skill_resolve",
-  "skill_verification_plan_get",
-  "skill_execution_report",
-  "skill_verification_run_start",
-  "skill_verification_run_get",
-  "skill_verification_evidence_add",
-  "skill_verification_run_complete",
-  "skill_dependency_upgrade",
-  "skill_composition_candidate_create",
-  "skill_dependency_upgrades_get",
-  "skill_version_lifecycle_update",
-  "skill_asset_retrieve",
-  "skill_versions_list",
-  "skill_versions_diff",
-  "skill_candidates_list",
-  "skill_amendment_policy_get",
-  "contexts_list",
-  "context_get",
-  "context_knowledge_history",
-  "context_notes_list",
-  "skill_amend",
-  "skill_create",
-  "skill_visibility_update",
-  "skill_archive",
-  "skill_restore",
-  "skill_candidate_approve",
-  "skill_candidate_reject",
-  "skill_amendment_policy_update",
-  "context_create",
-  "context_update",
-  "context_archive",
-  "context_restore",
-  "context_knowledge_update",
-  "context_note_upsert",
-]);
-
 function scopeForMessage(message: unknown): McpScope {
   const root = record(message);
   const params = record(root?.params);
   if (root?.method !== "tools/call" || typeof params?.name !== "string") {
     return { kind: "global" };
   }
-  if (!workspaceTools.has(params.name)) return { kind: "global" };
+  if (!WORKSPACE_ROUTED_MCP_TOOL_NAMES.has(params.name)) return { kind: "global" };
   const arguments_ = record(params.arguments);
   const allowPublic =
     params.name === "skill_resolve" ||
@@ -187,7 +155,11 @@ function scopeForMessage(message: unknown): McpScope {
       allowPublic,
     };
   }
-  throw new McpRoutingError(
+  return { kind: "unrouted" };
+}
+
+function unroutedToolCallError(): McpRoutingError {
+  return new McpRoutingError(
     400,
     "WORKSPACE_ROUTE_INVALID",
     "The MCP tool call does not identify one workspace",
@@ -219,10 +191,14 @@ export async function classifyMcpScope(request: Request): Promise<RoutedMcpScope
   }
   const scopes = (Array.isArray(body) ? body : [body]).map(scopeForMessage);
   const workspaceScopes = scopes.filter(
-    (scope): scope is Exclude<McpScope, { readonly kind: "global" }> =>
-      scope.kind !== "global",
+    (scope): scope is WorkspaceMcpScope =>
+      scope.kind !== "global" && scope.kind !== "unrouted",
   );
-  if (workspaceScopes.length === 0) return { kind: "global" };
+  const unrouted = scopes.some((scope) => scope.kind === "unrouted");
+  if (workspaceScopes.length === 0) {
+    return unrouted ? { kind: "unrouted" } : { kind: "global" };
+  }
+  if (unrouted) throw unroutedToolCallError();
   if (workspaceScopes.length !== scopes.length) {
     throw new McpRoutingError(
       400,
@@ -417,8 +393,12 @@ export function createRoutedMcpApplication<Context>(input: {
       }
       try {
         const scope = await classifyMcpScope(request);
+        // An unrouted call stays on this deployment so that McpFn authenticates
+        // it and reports its structured validation diagnostic. Workspace tool
+        // handlers never run here: server.ts refuses them against control data.
+        const servedLocally = scope.kind === "global" || scope.kind === "unrouted";
         if (runtime.deployment.role === "control") {
-          return scope.kind === "global"
+          return servedLocally
             ? await input.local.fetch(request, bindings, context)
             : new McpRoutingError(
                 404,
@@ -427,7 +407,7 @@ export function createRoutedMcpApplication<Context>(input: {
               ).response();
         }
         if (runtime.deployment.role === "gateway") {
-          if (scope.kind === "global") {
+          if (servedLocally) {
             return await input.local.fetch(request, bindings, context);
           }
           const services = await input.services(bindings);
@@ -471,6 +451,7 @@ export function createRoutedMcpApplication<Context>(input: {
             await input.services.release?.(services);
           }
         }
+        if (scope.kind === "unrouted") throw unroutedToolCallError();
         if (scope.kind === "global" || !runtime.deployment.regionId) {
           throw new McpRoutingError(
             404,

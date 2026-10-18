@@ -1,12 +1,9 @@
 import type { SkillsListOutput, SkillsSearchOutput } from "@skillplane/mcp-schema";
 import type { PostHog } from "@posthog/mcp";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import {
-  prepareMcpProtocolRequest,
-  projectMcpToolCatalogResponse,
-} from "../../src/index.js";
 import { isPostHogSessionId } from "../../src/analytics.js";
-import type { McpIdentity } from "../../src/auth.js";
+import incident from "../fixtures/oauth-list-skills-incident.json" with { type: "json" };
+import { OAUTH_CLIENT_PROFILES } from "../../src/client-profiles.js";
 import {
   SKILLPLANE_MCP_SERVER_INFO,
   skillplaneMcpDeclaration,
@@ -60,38 +57,30 @@ function protocolRequest(
   );
 }
 
-function oauthIdentity(clientId: string): McpIdentity {
-  return {
-    kind: "oauth",
-    actorType: "user",
-    actorId: "user:test",
-    userId: "user:test",
-    credentialId: "oauth-token:test",
-    credentialKind: "oauth_access_token",
-    clientId,
-    scopes: ["skills:read"],
-    expiresAt: new Date("2030-01-01T00:00:00.000Z"),
-  };
+function incidentArguments(workspaceId: string): Record<string, unknown> {
+  return JSON.parse(
+    JSON.stringify(incident.rejectedArguments).replaceAll(
+      incident.redactedWorkspaceId,
+      workspaceId,
+    ),
+  ) as Record<string, unknown>;
 }
 
-const SERVICE_IDENTITY: McpIdentity = {
-  kind: "service",
-  actorType: "service_principal",
-  actorId: "service:test",
-  servicePrincipalId: "service:test",
-  userId: null,
-  credentialId: "service-token:test",
-  credentialKind: "service_principal",
-  workspaceId: "workspace:test",
-  displayName: "Test service",
-  role: "viewer",
-  scopes: ["skills:read"],
-};
+async function auditedCaller(requestId: string): Promise<Record<string, unknown>> {
+  const result = await environment.services.database.pool.query<{
+    readonly metadata: { readonly caller: Record<string, unknown> };
+  }>("SELECT metadata FROM audit_events WHERE request_id = $1", [requestId]);
+  expect(result.rows).toHaveLength(1);
+  return result.rows[0]?.metadata.caller ?? {};
+}
 
-function toolCatalogResponse(result: unknown): Response {
-  return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result }), {
-    headers: { "content-type": "application/json" },
-  });
+async function ownerWorkspaceSlug(): Promise<string> {
+  const result = await environment.services.database.pool.query<{
+    readonly slug: string;
+  }>("SELECT slug FROM workspaces WHERE id = $1", [environment.owner.workspaceId]);
+  const slug = result.rows[0]?.slug;
+  if (!slug) throw new Error("The owner workspace slug is missing");
+  return slug;
 }
 
 describe("MCP Streamable HTTP conformance", () => {
@@ -131,75 +120,9 @@ describe("MCP Streamable HTTP conformance", () => {
     }
   });
 
-  it("keeps Linear's complete tool inventory below its catalog budget", async () => {
-    const listed = await connection.client.listTools();
-    const response = await projectMcpToolCatalogResponse(
-      toolCatalogResponse(listed),
-      oauthIdentity("https://linear.app/.well-known/oauth-client-metadata/mcp.json"),
-    );
-    const body = await response.text();
-    const compacted = JSON.parse(body) as {
-      readonly result: { readonly tools: readonly Record<string, unknown>[] };
-    };
-
-    expect(Buffer.byteLength(body)).toBeLessThan(32 * 1_024);
-    expect(compacted.result.tools).toHaveLength(SKILLPLANE_MCP_TOOL_COUNT);
-    for (const tool of compacted.result.tools) {
-      expect(tool).not.toHaveProperty("outputSchema");
-      expect(tool).not.toHaveProperty("execution");
-      expect(tool).not.toHaveProperty("annotations");
-      expect(tool).not.toHaveProperty("title");
-      expect(tool.inputSchema).not.toHaveProperty("$schema");
-      expect(tool.inputSchema).not.toHaveProperty("properties.caller");
-      expect(tool.inputSchema).not.toHaveProperty(
-        "required",
-        expect.arrayContaining(["caller"]),
-      );
-      expect(tool.inputSchema).not.toHaveProperty("required", []);
-    }
-  });
-
-  it("hides caller from Claude and generic OAuth catalogs without compacting metadata", async () => {
-    const listed = await connection.client.listTools();
-    for (const clientId of [
-      "https://claude.ai/oauth/mcp-oauth-client-metadata",
-      "https://agent.example.test/oauth/client",
-    ]) {
-      const response = await projectMcpToolCatalogResponse(
-        toolCatalogResponse(listed),
-        oauthIdentity(clientId),
-      );
-      const projected = (await response.json()) as {
-        readonly result: {
-          readonly tools: readonly Record<string, unknown>[];
-        };
-      };
-      for (const tool of projected.result.tools) {
-        expect(tool).toHaveProperty("outputSchema");
-        expect(tool).toHaveProperty("annotations");
-        expect(tool.inputSchema).not.toHaveProperty("properties.caller");
-        expect(tool.inputSchema).not.toHaveProperty(
-          "required",
-          expect.arrayContaining(["caller"]),
-        );
-        expect(tool.inputSchema).not.toHaveProperty("required", []);
-        expect(tool.inputSchema).toHaveProperty("additionalProperties", false);
-      }
-    }
-  });
-
   it("keeps caller model-visible and caller-required for service principals", async () => {
     const listed = await connection.client.listTools();
-    const response = await projectMcpToolCatalogResponse(
-      toolCatalogResponse(listed),
-      SERVICE_IDENTITY,
-    );
-    const canonical = (await response.json()) as {
-      readonly result: {
-        readonly tools: readonly Record<string, unknown>[];
-      };
-    };
-    for (const tool of canonical.result.tools) {
+    for (const tool of listed.tools) {
       expect(tool.inputSchema).toHaveProperty("properties.caller");
       expect(tool.inputSchema).toHaveProperty(
         "required",
@@ -209,140 +132,19 @@ describe("MCP Streamable HTTP conformance", () => {
     }
   });
 
-  it("injects bounded caller attribution for known and generic OAuth profiles", async () => {
-    const profiles = [
-      {
-        clientId: "https://claude.ai/oauth/mcp-oauth-client-metadata",
-        caller: {
-          agentId: "claude",
-          agentName: "Claude",
-          modelProvider: "Anthropic",
-          clientName: "Claude",
-        },
-        runPrefix: "claude-run:",
-      },
-      {
-        clientId: "https://linear.app/.well-known/oauth-client-metadata/mcp.json",
-        caller: {
-          agentId: "linear-agent",
-          agentName: "Linear Agent",
-          modelProvider: "Linear",
-          clientName: "Linear",
-        },
-        runPrefix: "linear-run:",
-      },
-      {
-        clientId: "https://agent.example.test/oauth/client",
-        caller: {
-          agentId: "authenticated-oauth-client",
-          agentName: "Authenticated OAuth client",
-          modelProvider: "unknown",
-          clientName: "OAuth MCP client",
-        },
-        runPrefix: "oauth-client-run:",
-      },
-    ] as const;
-
-    for (const profile of profiles) {
-      const request = await prepareMcpProtocolRequest(
-        new Request(TEST_MCP_RESOURCE, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            jsonrpc: "2.0",
-            id: 1,
-            method: "tools/call",
-            params: {
-              name: "skills_list",
-              arguments: {
-                workspaceId: "workspace:test",
-                caller: { agentId: "forged" },
-              },
-            },
-          }),
-        }),
-        oauthIdentity(profile.clientId),
-      );
-      const payload = (await request.json()) as {
-        readonly params: {
-          readonly arguments: {
-            readonly workspace: { readonly id: string };
-            readonly workspaceId?: string;
-            readonly caller: Record<string, unknown>;
-          };
-        };
-      };
-
-      expect(payload.params.arguments.workspace).toEqual({ id: "workspace:test" });
-      expect(payload.params.arguments).not.toHaveProperty("workspaceId");
-      expect(payload.params.arguments.caller).toMatchObject(profile.caller);
-      expect(payload.params.arguments.caller.runId).toMatch(
-        new RegExp(`^${profile.runPrefix}`, "u"),
-      );
-      expect(payload.params.arguments.caller).not.toHaveProperty("agentId", "forged");
-    }
-  });
-
-  it("does not adapt service-principal calls or ambiguous workspace selectors", async () => {
-    const serviceRequest = new Request(TEST_MCP_RESOURCE, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "tools/call",
-        params: {
-          name: "skills_list",
-          arguments: { workspaceId: "workspace:test" },
-        },
-      }),
-    });
-    await expect(
-      prepareMcpProtocolRequest(serviceRequest, SERVICE_IDENTITY),
-    ).resolves.toBe(serviceRequest);
-
-    const ambiguous = await prepareMcpProtocolRequest(
-      new Request(TEST_MCP_RESOURCE, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          id: 2,
-          method: "tools/call",
-          params: {
-            name: "skills_list",
-            arguments: {
-              workspace: { id: "workspace:canonical" },
-              workspaceId: "workspace:legacy",
-            },
-          },
-        }),
-      }),
-      oauthIdentity("https://agent.example.test/oauth/client"),
-    );
-    const payload = (await ambiguous.json()) as {
-      readonly params: { readonly arguments: Record<string, unknown> };
-    };
-    expect(payload.params.arguments).toMatchObject({
-      workspace: { id: "workspace:canonical" },
-      workspaceId: "workspace:legacy",
-    });
-  });
-
-  it("executes the original OAuth listing shape and rejects the malformed alias", async () => {
+  it("executes the original OAuth listing incident and names a malformed selector", async () => {
     const oauthToken = await environment.issueOAuthToken("skills:read");
     const oauthConnection = await environment.connect(oauthToken);
     const listed = await oauthConnection.client.listTools();
-    const listingTool = listed.tools.find((tool) => tool.name === "skills_list");
-    expect(listingTool?.inputSchema).not.toHaveProperty("properties.caller");
-    expect(listingTool?.inputSchema).not.toHaveProperty("properties.context");
-    expect(listingTool?.inputSchema).toHaveProperty("additionalProperties", false);
+    for (const tool of listed.tools) {
+      expect(tool.inputSchema).not.toHaveProperty("properties.caller");
+      expect(tool.inputSchema.required ?? []).not.toContain("caller");
+      expect(tool.inputSchema).toHaveProperty("additionalProperties", false);
+    }
 
     const result = await oauthConnection.client.callTool({
-      name: "skills_list",
-      arguments: {
-        workspaceId: environment.owner.workspaceId,
-      },
+      name: incident.tool,
+      arguments: incidentArguments(environment.owner.workspaceId),
     });
     expect(result.isError, JSON.stringify(result)).not.toBe(true);
     const structured = parseStructured<SkillsListOutput>(result);
@@ -353,11 +155,88 @@ describe("MCP Streamable HTTP conformance", () => {
 
     const malformed = await oauthConnection.client.callTool({
       name: "skills_list",
-      arguments: {
-        workspace_id: environment.owner.workspaceId,
-      },
+      arguments: { workspace_id: environment.owner.workspaceId },
     });
     expect(malformed.isError).toBe(true);
+    const text = malformed.content.find((item) => item.type === "text");
+    const body = text?.type === "text" ? text.text : "";
+    expect(body).not.toContain(environment.owner.workspaceId);
+    expect(JSON.parse(body)).toMatchObject({
+      error: {
+        code: "MCPFN_INVALID_ARGUMENTS",
+        details: {
+          lifecycleStage: "input-validation",
+          profile: { id: "skillplane/oauth-generic", version: "1" },
+          issues: expect.arrayContaining([
+            expect.objectContaining({
+              keyword: "additionalProperties",
+              instancePath: "/",
+              rejectedProperty: "workspace_id",
+            }),
+          ]),
+        },
+      },
+    });
+  });
+
+  it("records only profile-derived attribution for a forged OAuth caller", async () => {
+    const oauthToken = await environment.issueOAuthToken("skills:read");
+    const oauthConnection = await environment.connect(oauthToken);
+    const result = await oauthConnection.client.callTool({
+      name: "skills_list",
+      arguments: {
+        workspace: { id: environment.owner.workspaceId },
+        caller: { ...TEST_CALLER, agentId: "forged-agent", agentName: "Forged" },
+      },
+    });
+    expect(result.isError, JSON.stringify(result)).not.toBe(true);
+    const caller = await auditedCaller(
+      parseStructured<SkillsListOutput>(result).requestId,
+    );
+    // Every supplied field is discarded: the record is exactly the generic
+    // profile's attribution, one fresh per-invocation ID and the audit
+    // writer's existing trust label.
+    const invocation = String(caller.runId).replace(/^oauth-client-run:/u, "");
+    expect(invocation).toMatch(/^[0-9a-f-]{36}$/u);
+    expect(caller).toEqual({
+      ...OAUTH_CLIENT_PROFILES.generic.caller,
+      runId: `oauth-client-run:${invocation}`,
+      sessionId: `oauth-client-session:${invocation}`,
+      conversationId: `oauth-client-conversation:${invocation}`,
+      trust: "caller-declared",
+    });
+  });
+
+  it("searches with either nested workspace selector or the deprecated flat alias", async () => {
+    for (const selector of [
+      { workspace: { id: environment.owner.workspaceId } },
+      { workspace: { slug: await ownerWorkspaceSlug() } },
+      { workspaceId: environment.owner.workspaceId },
+    ]) {
+      const result = await connection.client.callTool({
+        name: "skills_search",
+        arguments: {
+          query: "authorization",
+          ...selector,
+          visibility: ["public"],
+          caller: TEST_CALLER,
+        },
+      });
+      expect(result.isError, JSON.stringify(result)).not.toBe(true);
+      expect(
+        parseStructured<SkillsSearchOutput>(result).skills.map((skill) => skill.id),
+      ).toContain(environment.skill.skill.id);
+    }
+    const ambiguous = await connection.client.callTool({
+      name: "skills_search",
+      arguments: {
+        query: "authorization",
+        workspace: { id: environment.owner.workspaceId },
+        workspaceId: environment.owner.workspaceId,
+        caller: TEST_CALLER,
+      },
+    });
+    expect(ambiguous.isError).toBe(true);
   });
 
   it("executes a declared tool through structured and text MCP content", async () => {
@@ -365,7 +244,7 @@ describe("MCP Streamable HTTP conformance", () => {
       name: "skills_search",
       arguments: {
         query: "authorization",
-        workspaceId: environment.owner.workspaceId,
+        workspace: { id: environment.owner.workspaceId },
         visibility: ["public"],
         tags: ["review"],
         limit: 20,
