@@ -178,19 +178,111 @@ describe("local instructions artifacts", () => {
     ]);
   });
 
-  it("keeps the skill table writable by published runtimes", async () => {
+  it("keeps instructions out of the tables published runtimes read and write", async () => {
+    const base = root();
+    const store = new LocalStore(join(base, "state"));
+    stores.push(store);
+    const runtime = new Runtime(store);
+    const project = join(base, "project");
+    mkdirSync(project);
+    const context = runtime.setup(project, "Personal", [
+      targetSchema.parse({ adapter: "codex" }),
+    ]);
+    const provider = new LocalWorkspaceProvider(store, context.primary.id);
+    const created = await provider.create(instructions);
+    await provider.create(skill);
+    await provider.amend({
+      skillId: created.skillId,
+      baseVersionId: created.versionId,
+      proposedBump: "patch",
+      idempotencyKey: "amend-instructions",
+      changes: [
+        {
+          operation: "replace",
+          path: "AGENTS.md",
+          expectedSha256: createHash("sha256")
+            .update(instructions.instructions)
+            .digest("hex"),
+          content: "# Agents\n\nRun pnpm lint too.\n",
+        },
+      ],
+      learning: {
+        summary: "Lint before handoff",
+        observation: "Lint failures reached review",
+        rationale: "Catch them earlier",
+        confidence: "high",
+        evidence: [],
+        evidenceUnavailableReason: "Editorial update",
+        validation: [],
+        validationNotRunReason: "No executable change",
+      },
+    });
+
+    // CLI/MCP 0.1.1 lists, catalogs and syncs every row of these base queries,
+    // and its bundle validator requires a root SKILL.md.
+    const legacy = store.db
+      .prepare("SELECT id,slug,name,description FROM skill WHERE workspace=?")
+      .all(provider.workspace.id);
+    expect(legacy.map((row) => row.slug)).toEqual(["review"]);
+    const versions = store.db.prepare("SELECT skill,digest FROM version").all();
+    expect(versions.map((row) => row.skill)).not.toContain(created.skillId);
+    for (const row of versions) {
+      const bundle = await store.bundle(String(row.digest));
+      expect(bundle.files.has("SKILL.md")).toBe(true);
+    }
+
+    // A published runtime creates skills positionally after checking only the
+    // skill table, so it can take a slug an instructions document holds.
+    const now = new Date().toISOString();
+    store.db
+      .prepare("INSERT INTO skill VALUES(?,?,?,?,?,?)")
+      .run(
+        "skill:published",
+        provider.workspace.id,
+        instructions.slug,
+        "Older",
+        "",
+        "skill-version:published",
+      );
+    store.db
+      .prepare(
+        "INSERT INTO version VALUES(?,?,?,'published','1.0.0',NULL,'patch',?,?,'{}',NULL)",
+      )
+      .run(
+        "skill-version:published",
+        "skill:published",
+        String(versions[0]?.digest),
+        now,
+        now,
+      );
+    expect((await provider.list()).map(({ id, kind }) => ({ id, kind }))).toEqual([
+      { id: created.skillId, kind: "instructions" },
+      { id: "skill:published", kind: "skill" },
+      { id: expect.any(String), kind: "skill" },
+    ]);
+    expect((await provider.retrieve(created.skillId)).skill.kind).toBe("instructions");
+    await expect(
+      provider.create({ ...skill, slug: instructions.slug, idempotencyKey: "taken" }),
+    ).rejects.toMatchObject({ code: "SKILL_SLUG_CONFLICT" });
+    expect(
+      (await runtime.sync(project)).map((record) => record.skill.id).sort(),
+    ).toEqual(["skill:published", String(legacy[0]?.id)].sort());
+  });
+
+  it("rejects a skill slug an instructions document already holds", async () => {
     const store = new LocalStore(join(root(), "state"));
     stores.push(store);
     const provider = LocalWorkspaceProvider.create(store, "Personal");
     await provider.create(instructions);
-    // CLI/MCP 0.1.1 inserts skill rows with six positional values.
-    store.db
-      .prepare("INSERT INTO skill VALUES(?,?,?,?,?,?)")
-      .run("skill:published", provider.workspace.id, "older", "Older", "", null);
-    expect((await provider.list()).map(({ slug, kind }) => ({ slug, kind }))).toEqual([
-      { slug: "older", kind: "skill" },
-      { slug: "repository-agents", kind: "instructions" },
-    ]);
+    await expect(
+      provider.create({ ...skill, slug: instructions.slug }),
+    ).rejects.toMatchObject({ code: "SKILL_SLUG_CONFLICT" });
+    await expect(
+      provider.create({ ...instructions, slug: skill.slug, idempotencyKey: "other" }),
+    ).resolves.toBeDefined();
+    await expect(
+      provider.create({ ...instructions, idempotencyKey: "again" }),
+    ).rejects.toMatchObject({ code: "SKILL_SLUG_CONFLICT" });
   });
 
   it("never projects instructions documents into agent skill directories", async () => {

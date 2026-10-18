@@ -1,5 +1,6 @@
--- Reverses 0054_regional_artifact_kind.sql. Instructions artifacts must be
--- archived or removed first: without the column they would read as skills.
+-- Reverses 0054_regional_artifact_kind.sql. Run it only after instructions
+-- artifacts are removed (without the column they would read as skills) and the
+-- code is rolled back, because code from 0054 onward reads skills.kind.
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM skills WHERE kind <> 'skill') THEN

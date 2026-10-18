@@ -12,7 +12,8 @@ import {
   type SkillsListOutput,
   type SkillsSearchOutput,
 } from "@skillplane/mcp-schema";
-import { createHash } from "node:crypto";
+import { stableJson } from "@skillplane/storage";
+import { createHash, createHmac } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
 import {
@@ -89,6 +90,33 @@ const preKindListOutputSchema = skillsListOutputSchema.extend({
 const preKindSearchOutputSchema = skillsSearchOutputSchema.extend({
   skills: z.array(skillSearchItemSchema.omit({ kind: true }).strict()).max(100),
 });
+
+function decodeJson(value: string): Record<string, unknown> {
+  return JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as Record<
+    string,
+    unknown
+  >;
+}
+
+function encodeJson(value: unknown): string {
+  return Buffer.from(stableJson(value)).toString("base64url");
+}
+
+// Re-signs a skills_list cursor whose page cursor carries no kind, as every
+// cursor issued before artifact kinds did.
+function withoutKind(cursor: string, secret: string): string {
+  const envelope = decodeJson(cursor.split(".")[0] ?? "");
+  const page = decodeJson(
+    String((envelope.boundary as { pageCursor: string }).pageCursor),
+  );
+  expect(page.kind).toBe("skill");
+  delete page.kind;
+  const body = encodeJson({ ...envelope, boundary: { pageCursor: encodeJson(page) } });
+  const signature = createHmac("sha256", secret)
+    .update(Buffer.from(body, "base64url"))
+    .digest("base64url");
+  return `${body}.${signature}`;
+}
 
 describe("MCP instructions artifacts", () => {
   it("creates, amends, reviews and publishes instructions that never resolve as skills", async () => {
@@ -546,6 +574,87 @@ describe("MCP instructions artifacts", () => {
       expect(parseToolError(malformed).error.code, name).toBe(
         "MCPFN_INVALID_ARGUMENTS",
       );
+    }
+  });
+
+  it("continues skill cursors issued before artifact kinds", async () => {
+    const suffix = crypto.randomUUID().slice(0, 8);
+    const term = `prekind${suffix}`;
+    const workspace = { id: environment.owner.workspaceId };
+    for (const [kind, index] of [
+      ["skill", 1],
+      ["skill", 2],
+      ["instructions", 1],
+    ] as const)
+      await oauth.client.callTool({
+        name: "skill_create",
+        arguments: {
+          workspace,
+          kind,
+          slug: `prekind-${kind}-${index}-${suffix}`,
+          name: `Pre-kind ${kind} ${index}`,
+          description: `Shared ${term} guidance`,
+          visibility: "workspace",
+          instructions: `# ${term}\n\nFollow the ${kind} guidance.\n`,
+          idempotencyKey: `prekind-${kind}-${index}-${suffix}`,
+          caller: TEST_CALLER,
+        },
+      });
+
+    const first = parseStructured<SkillsListOutput>(
+      await oauth.client.callTool({
+        name: "skills_list",
+        arguments: { workspace, limit: 1, caller: TEST_CALLER },
+      }),
+    );
+    const listCursor = withoutKind(
+      String(first.nextCursor),
+      environment.services.tenancySecret,
+    );
+    const owner = environment.owner;
+    const search = await environment.services.skillSearchService.search({
+      query: term,
+      workspaceId: owner.workspaceId,
+      tags: [],
+      visibility: ["private", "workspace", "public"],
+      archive: "active",
+      limit: 1,
+      principal: {
+        kind: "user",
+        actorId: owner.userId,
+        userId: owner.userId,
+        sessionId: "fixture:prekind",
+        workspaceId: owner.workspaceId,
+        role: "owner",
+      },
+    });
+    const searchCursor = String(search.nextCursor);
+
+    for (const [name, cursor, query, schema] of [
+      ["skills_list", listCursor, {}, preKindListOutputSchema],
+      ["skills_search", searchCursor, { query: term }, preKindSearchOutputSchema],
+    ] as const) {
+      const continued = schema.parse(
+        (
+          await oauth.client.callTool({
+            name,
+            arguments: { workspace, ...query, cursor, limit: 100, caller: TEST_CALLER },
+          })
+        ).structuredContent,
+      );
+      expect(continued.skills.length, name).toBeGreaterThan(0);
+      // A pre-kind cursor never continues an instructions listing.
+      const replayed = await oauth.client.callTool({
+        name,
+        arguments: {
+          workspace,
+          ...query,
+          kind: "instructions",
+          cursor,
+          caller: TEST_CALLER,
+        },
+      });
+      expect(parseToolError(replayed).error.code, name).toBe("CURSOR_FILTER_MISMATCH");
     }
   });
 });

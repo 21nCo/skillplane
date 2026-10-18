@@ -121,7 +121,7 @@ async function signCursor(
 async function parseCursor(
   cursor: string,
   secret: string,
-  expectedFilterHash: string,
+  expectedFilterHashes: readonly string[],
   now: Date,
 ): Promise<SearchCursorPayload> {
   const parts = cursor.split(".");
@@ -166,7 +166,7 @@ async function parseCursor(
   if (payload.expiresAt <= now.getTime()) {
     throw new DomainError("CURSOR_INVALID", "Search cursor has expired", 400);
   }
-  if (payload.filterHash !== expectedFilterHash) {
+  if (!expectedFilterHashes.includes(payload.filterHash)) {
     throw new DomainError(
       "CURSOR_FILTER_MISMATCH",
       "Search cursor does not match the current filters",
@@ -358,17 +358,24 @@ export class SkillSearchService {
     const normalized = normalizeSearchInput({ ...options, allowEmptyQuery });
     const kind = options.kind === undefined ? null : parseSkillKind(options.kind);
     const scope = searchScope(options);
-    const digest = await filterHash({
+    const filters = {
       query: normalized.query,
       tags: normalized.tags,
       visibility: normalized.visibility,
       archive: normalized.archive,
       scope,
-      ...(kind ? { kind } : {}),
-    });
+    };
+    const digest = await filterHash({ ...filters, ...(kind ? { kind } : {}) });
     const now = options.now ?? new Date();
+    // A cursor hashed without kind predates kinds (or covers every kind), so it
+    // can continue a skills-only search; it never continues an instructions one.
     const cursor = options.cursor
-      ? await parseCursor(options.cursor, this.cursorSecret, digest, now)
+      ? await parseCursor(
+          options.cursor,
+          this.cursorSecret,
+          kind === "skill" ? [digest, await filterHash(filters)] : [digest],
+          now,
+        )
       : null;
     const document = options.principal
       ? "workspace_search_document"

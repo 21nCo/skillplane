@@ -250,7 +250,10 @@ function parseListCursor(
   const cursor = parsed as SkillListCursor;
   if (
     (cursor.groupId ?? null) !== groupId ||
-    (cursor.kind ?? null) !== kind ||
+    // A cursor without kind predates kinds (or lists every kind), so it can
+    // continue a skills-only listing; it never continues an instructions one.
+    ((cursor.kind ?? null) !== kind &&
+      !(cursor.kind === undefined && kind === "skill")) ||
     cursor.archive !== archive ||
     stableJson(cursor.visibility) !== stableJson(visibility)
   ) {
