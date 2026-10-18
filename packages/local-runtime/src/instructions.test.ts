@@ -2,7 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { createHash } from "node:crypto";
 import {
   LocalStore,
@@ -17,7 +17,6 @@ import { assertProjectionSupported } from "./projections.js";
 
 const stores: LocalStore[] = [];
 afterEach(() => {
-  vi.restoreAllMocks();
   for (const store of stores.splice(0)) store.close();
 });
 
@@ -179,47 +178,19 @@ describe("local instructions artifacts", () => {
     ]);
   });
 
-  it("upgrades a pre-kind store when another opener adds kind after the first check", () => {
-    const state = join(root(), "state");
-    mkdirSync(state, { mode: 0o700 });
-    const file = join(state, "runtime.sqlite");
-    const legacy = new DatabaseSync(file);
-    legacy.exec(
-      "CREATE TABLE skill (id TEXT PRIMARY KEY, workspace TEXT NOT NULL, slug TEXT NOT NULL, name TEXT NOT NULL, description TEXT NOT NULL, current TEXT, UNIQUE(workspace,slug));",
-    );
-    // Between this opener's column check and its upgrade, a concurrent opener
-    // of the same store finishes the upgrade.
-    const prepare = DatabaseSync.prototype.prepare;
-    let raced = false;
-    vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (
-      this: DatabaseSync,
-      sql: string,
-    ) {
-      const statement = prepare.call(this, sql);
-      if (raced || !sql.includes("pragma_table_info('skill')")) return statement;
-      raced = true;
-      const get = statement.get.bind(statement);
-      return Object.assign(Object.create(statement) as typeof statement, {
-        get: (...args: Parameters<typeof get>) => {
-          const row = get(...args);
-          legacy.exec(
-            "ALTER TABLE skill ADD COLUMN kind TEXT NOT NULL DEFAULT 'skill' CHECK(kind IN ('skill','instructions'))",
-          );
-          return row;
-        },
-      });
-    });
-    const store = new LocalStore(state);
+  it("keeps the skill table writable by published runtimes", async () => {
+    const store = new LocalStore(join(root(), "state"));
     stores.push(store);
-    legacy.close();
-    expect(raced).toBe(true);
-    expect(
-      store.db
-        .prepare(
-          "SELECT count(*) AS count FROM pragma_table_info('skill') WHERE name='kind'",
-        )
-        .get(),
-    ).toEqual({ count: 1 });
+    const provider = LocalWorkspaceProvider.create(store, "Personal");
+    await provider.create(instructions);
+    // CLI/MCP 0.1.1 inserts skill rows with six positional values.
+    store.db
+      .prepare("INSERT INTO skill VALUES(?,?,?,?,?,?)")
+      .run("skill:published", provider.workspace.id, "older", "Older", "", null);
+    expect((await provider.list()).map(({ slug, kind }) => ({ slug, kind }))).toEqual([
+      { slug: "older", kind: "skill" },
+      { slug: "repository-agents", kind: "instructions" },
+    ]);
   });
 
   it("never projects instructions documents into agent skill directories", async () => {

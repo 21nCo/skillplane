@@ -62,13 +62,15 @@ export class LocalWorkspaceProvider implements WorkspaceProvider {
   async list(): Promise<SkillInfo[]> {
     return this.store.db
       .prepare(
-        "SELECT id,slug,name,description,kind FROM skill WHERE workspace=? ORDER BY slug",
+        "SELECT id,slug,name,description,COALESCE(k.kind,'skill') AS kind FROM skill LEFT JOIN skill_kind k ON k.skill=skill.id WHERE workspace=? ORDER BY slug",
       )
       .all(this.workspace.id) as unknown as SkillInfo[];
   }
   private skill(id: string): Row {
     const row = this.store.db
-      .prepare("SELECT * FROM skill WHERE id=? AND workspace=?")
+      .prepare(
+        "SELECT skill.*,COALESCE(k.kind,'skill') AS kind FROM skill LEFT JOIN skill_kind k ON k.skill=skill.id WHERE skill.id=? AND skill.workspace=?",
+      )
       .get(id, this.workspace.id);
     if (!row) throw new RuntimeError("SKILL_NOT_FOUND");
     return row;
@@ -144,9 +146,7 @@ export class LocalWorkspaceProvider implements WorkspaceProvider {
         versionId: `skill-version:${randomUUID()}`,
       };
       this.store.db
-        .prepare(
-          "INSERT INTO skill (id,workspace,slug,name,description,current,kind) VALUES(?,?,?,?,?,?,?)",
-        )
+        .prepare("INSERT INTO skill VALUES(?,?,?,?,?,?)")
         .run(
           result.skillId,
           this.workspace.id,
@@ -154,8 +154,10 @@ export class LocalWorkspaceProvider implements WorkspaceProvider {
           input.name,
           input.description,
           result.versionId,
-          input.kind,
         );
+      this.store.db
+        .prepare("INSERT INTO skill_kind VALUES(?,?)")
+        .run(result.skillId, input.kind);
       const now = new Date().toISOString();
       this.store.db
         .prepare(

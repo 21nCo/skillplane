@@ -23,34 +23,21 @@ export class LocalStore {
       throw new RuntimeError("UNSAFE_FILE");
     this.db = new DatabaseSync(path);
     chmodSync(path, 0o600);
+    // Published runtimes insert skill rows positionally, so kind lives in
+    // skill_kind rather than the skill table. A missing row means a skill.
     this.db
       .exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;
       CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS projection_owner (projection_id TEXT NOT NULL, project TEXT NOT NULL, PRIMARY KEY(projection_id, project));
       CREATE INDEX IF NOT EXISTS projection_owner_project ON projection_owner(project, projection_id);
       CREATE TABLE IF NOT EXISTS workspace (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE);
-      CREATE TABLE IF NOT EXISTS skill (id TEXT PRIMARY KEY, workspace TEXT NOT NULL REFERENCES workspace(id), slug TEXT NOT NULL, name TEXT NOT NULL, description TEXT NOT NULL, current TEXT, kind TEXT NOT NULL DEFAULT 'skill' CHECK(kind IN ('skill','instructions')), UNIQUE(workspace,slug));
+      CREATE TABLE IF NOT EXISTS skill (id TEXT PRIMARY KEY, workspace TEXT NOT NULL REFERENCES workspace(id), slug TEXT NOT NULL, name TEXT NOT NULL, description TEXT NOT NULL, current TEXT, UNIQUE(workspace,slug));
+      CREATE TABLE IF NOT EXISTS skill_kind (skill TEXT PRIMARY KEY REFERENCES skill(id), kind TEXT NOT NULL CHECK(kind IN ('skill','instructions')));
       CREATE TABLE IF NOT EXISTS version (id TEXT PRIMARY KEY, skill TEXT NOT NULL REFERENCES skill(id), digest TEXT NOT NULL, state TEXT NOT NULL, semantic TEXT, base TEXT, bump TEXT NOT NULL, created TEXT NOT NULL, updated TEXT NOT NULL, learning TEXT NOT NULL, reason TEXT);
       CREATE TABLE IF NOT EXISTS mutation (key TEXT PRIMARY KEY, hash TEXT NOT NULL, result TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS usage (id TEXT PRIMARY KEY, payload TEXT NOT NULL, uploaded INTEGER NOT NULL DEFAULT 0);
     `);
-    this.addKindColumn();
     if (!this.get("installation")) this.set("installation", randomUUID());
-  }
-  // Stores created before artifact kinds hold only skills. Another process may
-  // open the same store concurrently, so recheck under the write lock.
-  private addKindColumn(): void {
-    const hasKind = () =>
-      this.db
-        .prepare("SELECT 1 FROM pragma_table_info('skill') WHERE name='kind'")
-        .get() !== undefined;
-    if (hasKind()) return;
-    this.transaction(() => {
-      if (!hasKind())
-        this.db.exec(
-          "ALTER TABLE skill ADD COLUMN kind TEXT NOT NULL DEFAULT 'skill' CHECK(kind IN ('skill','instructions'))",
-        );
-    });
   }
   close(): void {
     this.db.close();
