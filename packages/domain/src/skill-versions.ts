@@ -14,6 +14,7 @@ import {
   retrieveBundleFile,
   sha256Hex,
   validateBundleArchive,
+  type ArtifactKind,
   type BundleManifest,
   type CanonicalBundle,
   type DownloadedSkillFile,
@@ -62,6 +63,7 @@ interface VersionRow {
   readonly created_at: Date;
   readonly visibility?: string;
   readonly skill_archived_at?: Date | null;
+  readonly skill_kind?: ArtifactKind;
 }
 
 export interface SkillFileDiff {
@@ -548,7 +550,8 @@ export class SkillVersionService {
               version.created_by_actor_id, version.created_by_agent,
               version.created_by_model, version.created_for_user_id,
               version.published_at, version.created_at,
-              skill.visibility, skill.archived_at AS skill_archived_at
+              skill.visibility, skill.archived_at AS skill_archived_at,
+              skill.kind AS skill_kind
          FROM skill_versions version
          JOIN skills skill ON skill.id = version.skill_id
         WHERE skill.id = $1 AND version.id = $2
@@ -645,6 +648,7 @@ export class SkillVersionService {
         bundleDigest: version.content_digest,
         path: options.path,
         ...(expected ? { expectedFileDigest: expected } : {}),
+        ...(version.skill_kind ? { kind: version.skill_kind } : {}),
       });
       return {
         file,

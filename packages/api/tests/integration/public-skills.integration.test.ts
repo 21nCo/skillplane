@@ -393,10 +393,11 @@ describe("public skill discovery API", () => {
     let snapshotTotalSkills: string;
     try {
       await statsClient.query("BEGIN ISOLATION LEVEL REPEATABLE READ");
+      // Public totals count skills only, never instructions artifacts.
       const expected = await statsClient.query<{ total: string }>(
         `SELECT count(*)::text AS total
            FROM skills
-          WHERE archived_at IS NULL`,
+          WHERE archived_at IS NULL AND kind = 'skill'`,
       );
       expectedTotalSkills = expected.rows[0]?.total ?? "0";
       const snapshotServices: ApiServices = {

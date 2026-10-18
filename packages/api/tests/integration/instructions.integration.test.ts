@@ -380,4 +380,101 @@ describe("instructions artifacts over the API", () => {
     expect(dependencyError.code).toBe("SKILL_DEPENDENCY_CONFLICT");
     expect(dependencyError.message).toContain("instructions document");
   });
+
+  it("decides a root AGENTS.md by artifact kind on REST reads and writes", async () => {
+    const tag = suffix.split("-").at(-1);
+    const document = "# Repository agents\n\nKeep commits focused.\n";
+    const bundle = await instructionsBundle(`paths-agents-${tag}`, document);
+    const instructions = await app.request(
+      `/api/v1/workspaces/${owner.workspaceId}/skills`,
+      {
+        method: "POST",
+        headers: headers(`paths-instructions-${suffix}`),
+        body: JSON.stringify({
+          bundleBase64: base64(bundle.bytes),
+          visibility: "workspace",
+        }),
+      },
+    );
+    expect(instructions.status, await instructions.clone().text()).toBe(201);
+    const created = await data<CreatedArtifact>(instructions);
+    const entrypoint = await app.request(
+      `/api/v1/skills/${created.skill.id}/versions/${created.version.id}/files/AGENTS.md`,
+      { headers: headers() },
+    );
+    expect(entrypoint.status, await entrypoint.clone().text()).toBe(200);
+    expect(await entrypoint.text()).toBe(document);
+    expect(entrypoint.headers.get("cache-control")).toBe("private, no-store");
+    const documentSha256 = createHash("sha256").update(document).digest("hex");
+    expect(entrypoint.headers.get("etag")).toBe(`"sha256-${documentSha256}"`);
+    expect(
+      bundle.manifest.files.find((file) => file.path === "AGENTS.md")?.sha256,
+    ).toBe(documentSha256);
+
+    const skillSlug = `paths-skill-${tag}`;
+    const skillBundle = await createSkillBundleFixture({
+      name: "Path skill",
+      slug: skillSlug,
+      skillMarkdown: "# Path skill\n",
+    });
+    const skill = await app.request(`/api/v1/workspaces/${owner.workspaceId}/skills`, {
+      method: "POST",
+      headers: headers(`paths-skill-${suffix}`),
+      body: JSON.stringify({
+        bundleBase64: base64(skillBundle),
+        visibility: "workspace",
+      }),
+    });
+    expect(skill.status, await skill.clone().text()).toBe(201);
+    const createdSkill = await data<CreatedArtifact>(skill);
+    const skillAgents = await app.request(
+      `/api/v1/skills/${createdSkill.skill.id}/versions/${createdSkill.version.id}/files/AGENTS.md`,
+      { headers: headers() },
+    );
+    expect(skillAgents.status).toBe(400);
+    expect(await errorCode(skillAgents)).toBe("SKILL_PATH_INVALID");
+
+    // A skill archive with a root AGENTS.md is rejected on create and upload.
+    const withAgents = await createSkillBundleFixture({
+      name: "Path skill",
+      slug: skillSlug,
+      skillMarkdown: "# Path skill\n",
+      files: { "AGENTS.md": "# Not a skill file\n" },
+    });
+    const rejectedCreate = await app.request(
+      `/api/v1/workspaces/${owner.workspaceId}/skills`,
+      {
+        method: "POST",
+        headers: headers(`paths-create-agents-${suffix}`),
+        body: JSON.stringify({
+          bundleBase64: base64(
+            await createSkillBundleFixture({
+              name: "Path skill",
+              slug: `paths-rejected-${tag}`,
+              skillMarkdown: "# Path skill\n",
+              files: { "AGENTS.md": "# Not a skill file\n" },
+            }),
+          ),
+          visibility: "workspace",
+        }),
+      },
+    );
+    expect(rejectedCreate.status).toBe(400);
+    expect(await errorCode(rejectedCreate)).toBe("SKILL_PATH_INVALID");
+    const rejectedCandidate = await app.request(
+      `/api/v1/skills/${createdSkill.skill.id}/versions`,
+      {
+        method: "POST",
+        headers: headers(`paths-candidate-agents-${suffix}`),
+        body: JSON.stringify({
+          bundleBase64: base64(withAgents),
+          baseVersionId: createdSkill.version.id,
+          proposedBump: "patch",
+          changeSummary: "Add a root AGENTS.md",
+        }),
+      },
+    );
+    expect(rejectedCandidate.status).toBe(400);
+    expect(await errorCode(rejectedCandidate)).toBe("SKILL_PATH_INVALID");
+  });
 });

@@ -2,6 +2,7 @@ import { strToU8, zipSync } from "fflate";
 import { describe, expect, it } from "vitest";
 import { createTestBundle } from "../tests/support/bundle-fixture.js";
 import { canonicalizeBundle, canonicalizeBundleFiles } from "./canonicalize.js";
+import { retrieveBundleFile } from "./downloads.js";
 import {
   bundleEntrypoint,
   bundleKind,
@@ -10,6 +11,7 @@ import {
   type SkillFileManifestEntry,
 } from "./manifest.js";
 import { BundlePathError, bytewisePathCompare, normalizeBundlePath } from "./paths.js";
+import type { R2BundleRepository } from "./r2.js";
 import { mediaTypeForPath, sha256Hex, validateBundleArchive } from "./validate.js";
 
 const identity = {
@@ -109,12 +111,46 @@ describe("instructions bundles", () => {
     ).rejects.toMatchObject({ code: "SKILL_BUNDLE_TOO_LARGE" });
   });
 
+  it("serves a root AGENTS.md only from an instructions artifact", async () => {
+    const bundle = await canonicalizeBundleFiles({
+      skill: { ...instructionsHeader, ...identity, tags: [...identity.tags] },
+      files: new Map([["AGENTS.md", strToU8("# Agents\n\nRun the tests.\n")]]),
+    });
+    let reads = 0;
+    const repository = {
+      getCanonicalBundle: async () => {
+        reads += 1;
+        return { bytes: bundle.bytes };
+      },
+    } as unknown as R2BundleRepository;
+    const target = {
+      repository,
+      objectKey: "bundle",
+      bundleDigest: bundle.digest,
+      path: "AGENTS.md",
+    };
+    await expect(retrieveBundleFile(target)).rejects.toBeInstanceOf(BundlePathError);
+    await expect(
+      retrieveBundleFile({ ...target, kind: "skill" }),
+    ).rejects.toBeInstanceOf(BundlePathError);
+    expect(reads).toBe(0);
+    const file = await retrieveBundleFile({ ...target, kind: "instructions" });
+    expect(file).toMatchObject({
+      path: "AGENTS.md",
+      mediaType: bundle.manifest.files[0]?.mediaType,
+      sha256: bundle.manifest.files[0]?.sha256,
+    });
+  });
+
   it("keeps AGENTS.md out of skill bundles and instructions out of skill metadata", async () => {
     await expect(
       validateBundleArchive(
         await createTestBundle({ "SKILL.md": "# Skill\n", "AGENTS.md": "# Agents\n" }),
       ),
-    ).rejects.toBeInstanceOf(BundlePathError);
+    ).rejects.toMatchObject({
+      name: "BundleValidationError",
+      code: "SKILL_PATH_INVALID",
+    });
     // Skill paths reject AGENTS.md up front; only instructions opt in.
     expect(() => normalizeBundlePath("AGENTS.md")).toThrow(BundlePathError);
     expect(

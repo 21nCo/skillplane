@@ -6,6 +6,7 @@ import {
 import { CompositionService } from "./composition-service.js";
 import {
   ARTIFACT_KINDS,
+  BundlePathError,
   BundleValidationError,
   StorageError,
   bundleEntrypoint,
@@ -335,7 +336,7 @@ function isUniqueViolation(error: unknown, constraint: string): boolean {
 
 export function mapSkillInfrastructureError(error: unknown): never {
   if (error instanceof DomainError) throw error;
-  if (error instanceof BundleValidationError) {
+  if (error instanceof BundleValidationError || error instanceof BundlePathError) {
     throw new DomainError(error.code, error.message, 400);
   }
   if (error instanceof StorageError) {

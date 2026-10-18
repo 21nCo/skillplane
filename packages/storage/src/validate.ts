@@ -490,7 +490,7 @@ function validateSkillEntrypoint(files: ReadonlyMap<string, Uint8Array>): Bundle
     );
   }
   if (files.has(INSTRUCTIONS_ENTRYPOINT)) {
-    throw new BundlePathError(
+    return fail(
       "SKILL_PATH_INVALID",
       "Bundle path uses an unsupported top-level entry",
     );
