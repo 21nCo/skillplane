@@ -422,6 +422,124 @@ describe("cloud provider transport contract", () => {
       }),
     ).rejects.toThrow("SKILL_NOT_FOUND");
   });
+  it("keeps membership errors for servers that predate artifact kinds", async () => {
+    const { local, workspace, transport } = fixture();
+    const created = await local.create({ ...request, assets: [] });
+    // McpTransport's error for a base server whose strict skills_list input
+    // schema rejects the kind argument (MCPFN_INVALID_ARGUMENTS in text content).
+    const rejection = (property: string) =>
+      new RuntimeError(
+        "CLOUD_REQUEST_REJECTED",
+        JSON.stringify([
+          {
+            type: "text",
+            text: JSON.stringify({
+              ok: false,
+              error: {
+                code: "MCPFN_INVALID_ARGUMENTS",
+                message: "Invalid arguments",
+                details: {
+                  lifecycleStage: "input-validation",
+                  issues: [
+                    {
+                      path: "/",
+                      instancePath: "/",
+                      schemaPath: "#/additionalProperties",
+                      keyword: "additionalProperties",
+                      message: `must not have unknown property "${property}"`,
+                      rejectedProperty: property,
+                    },
+                  ],
+                },
+              },
+            }),
+          },
+        ]),
+      );
+    let probes = 0;
+    const preKind = new CloudWorkspaceProvider(workspace, {
+      ...transport,
+      async call(name, args) {
+        if (name === "skills_list" && "kind" in args) {
+          probes += 1;
+          throw rejection("kind");
+        }
+        return transport.call(name, args);
+      },
+    });
+    const base = await local.retrieve(created.skillId);
+    const amended = await local.amend({
+      skillId: created.skillId,
+      baseVersionId: created.versionId,
+      proposedBump: "patch",
+      idempotencyKey: "amend-pre-kind",
+      changes: [
+        {
+          operation: "replace",
+          path: "SKILL.md",
+          expectedSha256: createHash("sha256")
+            .update(requireValue(base.bundle.files.get("SKILL.md")))
+            .digest("hex"),
+          content: "Read this document twice.",
+        },
+      ],
+      learning: {
+        summary: "Read twice",
+        observation: "One read missed details",
+        rationale: "A second read catches them",
+        confidence: "high",
+        evidence: [],
+        evidenceUnavailableReason: "Editorial update",
+        validation: [],
+        validationNotRunReason: "No executable change",
+      },
+    });
+    expect((await preKind.versions(created.skillId)).map((v) => v.id)).toContain(
+      created.versionId,
+    );
+    const [candidate] = (await preKind.candidates(created.skillId)) as {
+      review: { id: string; updatedAt: string };
+    }[];
+    expect(candidate?.review.id).toBe(amended.versionId);
+    const decision = (await preKind.decide(
+      created.skillId,
+      amended.versionId,
+      candidate?.review.updatedAt ?? "",
+      true,
+      "Clearer",
+      "approve-pre-kind",
+    )) as { result: { candidate: { state: string } } };
+    expect(decision.result.candidate.state).toBe("published");
+    // A skill is found on the skills page, so no kind probe is sent for it.
+    expect(probes).toBe(0);
+    await expect(preKind.versions("skill:missing")).rejects.toThrow("SKILL_NOT_FOUND");
+    await expect(preKind.candidates("skill:missing")).rejects.toThrow(
+      "SKILL_NOT_FOUND",
+    );
+    await expect(
+      preKind.decide(
+        "skill:missing",
+        "version:missing",
+        "",
+        true,
+        "No",
+        "decide-missing",
+      ),
+    ).rejects.toThrow("SKILL_NOT_FOUND");
+    // The server's lack of kinds is learned once.
+    expect(probes).toBe(1);
+    // Any other rejection still reaches the caller.
+    const rejecting = new CloudWorkspaceProvider(workspace, {
+      ...transport,
+      async call(name, args) {
+        if (name === "skills_list" && "kind" in args) throw rejection("limit");
+        return transport.call(name, args);
+      },
+    });
+    await expect(rejecting.versions("skill:missing")).rejects.toMatchObject({
+      code: "CLOUD_REQUEST_REJECTED",
+    });
+  });
   it("creates through the shared immutable bundle contract", async () => {
     const { cloud } = fixture();
     const created = await cloud.create(request);

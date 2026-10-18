@@ -38,9 +38,60 @@ import {
 } from "./contracts.js";
 import { type Profiles } from "./profiles.js";
 import { hash } from "./files.js";
+import { z } from "zod";
 export interface CloudTransport {
   call(name: string, args: Record<string, unknown>): Promise<unknown>;
   download(url: string, max: number): Promise<Uint8Array>;
+}
+// McpFn's invalid-arguments payload, as McpTransport reports it in text content
+// or structured content of a CLOUD_REQUEST_REJECTED error.
+const invalidArgumentsSchema = z.object({
+  error: z.object({
+    code: z.literal("MCPFN_INVALID_ARGUMENTS"),
+    details: z.object({
+      issues: z.array(
+        z.object({
+          keyword: z.string(),
+          instancePath: z.string(),
+          rejectedProperty: z.string().optional(),
+        }),
+      ),
+    }),
+  }),
+});
+const textContentSchema = z.array(
+  z.object({ type: z.string(), text: z.string().optional() }),
+);
+function parseJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+}
+// True when the server's input schema rejected an undeclared top-level argument.
+export function rejectsArgument(error: unknown, property: string): boolean {
+  if (!(error instanceof RuntimeError) || error.code !== "CLOUD_REQUEST_REJECTED")
+    return false;
+  const value = parseJson(error.message);
+  const content = textContentSchema.safeParse(value);
+  const payloads = content.success
+    ? content.data.flatMap((item) =>
+        item.type === "text" && item.text !== undefined ? [parseJson(item.text)] : [],
+      )
+    : [value];
+  return payloads.some((payload) => {
+    const parsed = invalidArgumentsSchema.safeParse(payload);
+    return (
+      parsed.success &&
+      parsed.data.error.details.issues.some(
+        (issue) =>
+          issue.keyword === "additionalProperties" &&
+          (issue.instancePath === "/" || issue.instancePath === "") &&
+          issue.rejectedProperty === property,
+      )
+    );
+  });
 }
 export class McpTransport implements CloudTransport {
   constructor(
@@ -150,6 +201,7 @@ export class CloudWorkspaceProvider implements WorkspaceProvider {
       caller,
     );
   }
+  private listsInstructions = true;
   private call(name: string, args: Record<string, unknown>): Promise<unknown> {
     return this.transport.call(name, { ...args, caller: this.caller });
   }
@@ -197,8 +249,15 @@ export class CloudWorkspaceProvider implements WorkspaceProvider {
   // Check membership in this exact workspace before ID-only lifecycle
   // operations, which apply to skills and instructions documents alike.
   private async requireMember(skillId: string): Promise<void> {
-    for (const kind of ["skill", "instructions"] as const)
-      if ((await this.listKind(kind)).some((s) => s.id === skillId)) return;
+    if ((await this.listKind("skill")).some((s) => s.id === skillId)) return;
+    if (this.listsInstructions)
+      try {
+        if ((await this.listKind("instructions")).some((s) => s.id === skillId)) return;
+      } catch (error) {
+        // A pre-kind server rejects the kind argument and has no instructions.
+        if (!rejectsArgument(error, "kind")) throw error;
+        this.listsInstructions = false;
+      }
     throw new RuntimeError("SKILL_NOT_FOUND");
   }
   async versions(skillId: string): Promise<VersionInfo[]> {
