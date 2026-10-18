@@ -477,4 +477,94 @@ describe("instructions artifacts over the API", () => {
     expect(rejectedCandidate.status).toBe(400);
     expect(await errorCode(rejectedCandidate)).toBe("SKILL_PATH_INVALID");
   });
+
+  it("filters REST skill search by kind across cursor pages", async () => {
+    const tag = suffix.split("-").at(-1) ?? "";
+    // A term no other fixture uses, so the search matches only these artifacts.
+    const term = `kindsearch${tag}`;
+    const createArtifact = async (slug: string, bytes: Uint8Array) => {
+      const response = await app.request(
+        `/api/v1/workspaces/${owner.workspaceId}/skills`,
+        {
+          method: "POST",
+          headers: headers(`search-${slug}`),
+          body: JSON.stringify({
+            bundleBase64: base64(bytes),
+            visibility: "workspace",
+          }),
+        },
+      );
+      expect(response.status, await response.clone().text()).toBe(201);
+      return (await data<CreatedArtifact>(response)).skill.id;
+    };
+    const instructionIds = new Set<string>();
+    for (const index of [1, 2]) {
+      const bundle = await createSkillBundle({
+        kind: "instructions",
+        name: `Agents ${term} ${index}`,
+        slug: `search-agents-${index}-${tag}`,
+        description: `Guidance ${term}`,
+        tags: [],
+        instructions: "# Agents\n",
+        assets: [],
+      });
+      instructionIds.add(
+        await createArtifact(`search-agents-${index}-${tag}`, bundle.bytes),
+      );
+    }
+    const skillId = await createArtifact(
+      `search-skill-${tag}`,
+      await createSkillBundleFixture({
+        name: `Skill ${term}`,
+        slug: `search-skill-${tag}`,
+        description: `Skill ${term}`,
+        skillMarkdown: "# Skill\n",
+      }),
+    );
+    const search = async (query: string) => {
+      const response = await app.request(
+        `/api/v1/skills/search?workspaceId=${owner.workspaceId}&q=${term}&${query}`,
+        { headers: headers() },
+      );
+      expect(response.status, await response.clone().text()).toBe(200);
+      return data<{
+        skills: { id: string; kind: string }[];
+        nextCursor: string | null;
+      }>(response);
+    };
+
+    const unfiltered = await search("limit=10");
+    expect(new Set(unfiltered.skills.map((skill) => skill.id))).toEqual(
+      new Set([skillId, ...instructionIds]),
+    );
+    const skillsOnly = await search("kind=skill&limit=10");
+    expect(skillsOnly.skills.map((skill) => skill.id)).toEqual([skillId]);
+
+    const firstPage = await search("kind=instructions&limit=1");
+    expect(firstPage.skills).toHaveLength(1);
+    expect(firstPage.nextCursor).not.toBeNull();
+    const secondPage = await search(
+      `kind=instructions&limit=1&cursor=${encodeURIComponent(firstPage.nextCursor ?? "")}`,
+    );
+    const paged = [...firstPage.skills, ...secondPage.skills];
+    expect(new Set(paged.map((skill) => skill.id))).toEqual(instructionIds);
+    expect(new Set(paged.map((skill) => skill.kind))).toEqual(
+      new Set(["instructions"]),
+    );
+    expect(secondPage.nextCursor).toBeNull();
+
+    // The cursor is bound to the kind filter it was issued for.
+    const crossFilter = await app.request(
+      `/api/v1/skills/search?workspaceId=${owner.workspaceId}&q=${term}&kind=skill&limit=1&cursor=${encodeURIComponent(firstPage.nextCursor ?? "")}`,
+      { headers: headers() },
+    );
+    expect(crossFilter.status).toBe(400);
+
+    const badKind = await app.request(
+      `/api/v1/skills/search?workspaceId=${owner.workspaceId}&q=${term}&kind=agents`,
+      { headers: headers() },
+    );
+    expect(badKind.status).toBe(400);
+    expect(await errorCode(badKind)).toBe("VALIDATION_FAILED");
+  });
 });

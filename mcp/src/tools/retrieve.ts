@@ -144,6 +144,7 @@ export function skillRetrieve(runtime: McpToolRuntime, input: SkillRetrieveInput
       files: bundle.manifest.files.map((file) => ({ ...file })),
       context: selectedContext,
     };
-    return { output };
+    // Public agent-use stats count skills only, like the skill totals.
+    return skill.kind === "instructions" ? { output, countMetric: false } : { output };
   });
 }

@@ -18,6 +18,7 @@ import { SkillVersionService } from "../../src/skill-versions.js";
 import { SkillGroupService } from "../../src/skill-groups.js";
 import { SkillSearchService } from "../../src/search.js";
 import { GitSourceService } from "../../src/git-sources.js";
+import { createSkillBundle } from "../../src/skill-input.js";
 import type { GitSnapshot } from "../../src/git-source-provider.js";
 import type { Principal } from "../../src/principal.js";
 // This acceptance suite must fail, never skip, when no test database resolves.
@@ -362,6 +363,53 @@ describe("Git source persistence and recovery", () => {
         })
       ).skills.map((s) => s.id),
     ).toEqual([manual.skill.id]);
+  });
+  it("never binds or imports over an instructions document", async () => {
+    const slug = `git-agents-${crypto.randomUUID().slice(0, 8)}`;
+    const instructions = await createSkillBundle({
+      kind: "instructions",
+      name: slug,
+      slug,
+      description: "",
+      tags: [],
+      instructions: "# Agents\n",
+      assets: [],
+    });
+    const created = await skills.create({
+      workspaceId: owner.workspaceId,
+      principal: owner,
+      archiveBytes: instructions.bytes,
+      visibility: "workspace",
+      idempotencyKey: crypto.randomUUID(),
+      requestId: crypto.randomUUID(),
+      fencingEpoch: 1,
+    });
+    expect(created.skill.kind).toBe("instructions");
+    const source = await sources.create({
+      ...m(),
+      config: { repositoryUrl: "https://github.com/a/agents" },
+      idempotencyKey: crypto.randomUUID(),
+    });
+    await expect(
+      sources.bind({
+        ...m(),
+        sourceId: source.id,
+        path: "agents",
+        skillId: created.skill.id,
+      }),
+    ).rejects.toMatchObject({ code: "SKILL_KIND_UNSUPPORTED", status: 400 });
+    snapshot = {
+      commitSha: "9".repeat(40),
+      skills: [
+        { path: "agents", bundle: await bundle(slug, "# Skill\n"), error: null },
+      ],
+    };
+    expect(
+      (await sources.preview({ ...m(), sourceId: source.id })).plan[0],
+    ).toMatchObject({
+      action: "conflict",
+      message: "An instructions document already uses this slug",
+    });
   });
   it("rejects stale previews, source mutation during sync and foreign bindings", async () => {
     const s = await sources.create({

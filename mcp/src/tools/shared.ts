@@ -59,6 +59,8 @@ export interface ToolSuccess<T extends object> {
   readonly output: T;
   readonly auditScopes?: readonly ToolAuditScope[];
   readonly allowEmptyAuditScopes?: boolean;
+  /** False keeps a successful read out of public agent-use metrics. */
+  readonly countMetric?: boolean;
 }
 
 export function mutationAuditContext(
@@ -271,6 +273,7 @@ export async function executeReadTool<T extends object>(
           ? { versionDigest: auditScope.versionDigest }
           : {}),
         ...(auditScope.contextId ? { contextId: auditScope.contextId } : {}),
+        ...(success.countMetric === false ? { countMetric: false } : {}),
         latencyMs,
       };
     });

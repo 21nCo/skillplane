@@ -23,6 +23,7 @@ import {
   type TenantFixture,
 } from "@skillplane/testing";
 import { createHash } from "node:crypto";
+import type { McpAuditWriter } from "../../src/audit.js";
 import { createMcpApp } from "../../src/index.js";
 
 export const TEST_OAUTH_ISSUER = "https://app.skillplane.dev";
@@ -320,7 +321,10 @@ export function parseToolError(result: CallToolResult): {
 
 export async function startMcpTestEnvironment(
   label: string,
-  options: { readonly posthog?: PostHog | null } = {},
+  options: {
+    readonly posthog?: PostHog | null;
+    readonly createAuditWriter?: (services: ApiServices) => McpAuditWriter;
+  } = {},
 ): Promise<McpTestEnvironment> {
   const databaseUrl = await resolveTestDatabaseUrl();
   await migrateDatabase(databaseUrl);
@@ -379,6 +383,9 @@ export async function startMcpTestEnvironment(
   const mcpApp = createMcpApp({
     getServices: async () => services,
     posthog: options.posthog,
+    ...(options.createAuditWriter
+      ? { createAuditWriter: options.createAuditWriter }
+      : {}),
   });
   const cookie = `${AUTH_SESSION_COOKIE}=${encodeURIComponent(
     owner.sessionToken,

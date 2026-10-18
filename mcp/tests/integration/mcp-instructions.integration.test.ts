@@ -18,12 +18,29 @@ import {
   type ConnectedMcpClient,
   type McpTestEnvironment,
 } from "../support/mcp-test-environment.js";
+import { PostgresMcpAuditWriter, type McpAuditRecord } from "../../src/audit.js";
 
 let environment: McpTestEnvironment;
 let oauth: ConnectedMcpClient;
+const auditRecords: McpAuditRecord[] = [];
 
 beforeAll(async () => {
-  environment = await startMcpTestEnvironment("instructions");
+  environment = await startMcpTestEnvironment("instructions", {
+    // Capture what reaches the regional writer, which counts agent skill use.
+    createAuditWriter: (services) => {
+      const writer = new PostgresMcpAuditWriter(services.database.pool);
+      return {
+        async record(event) {
+          auditRecords.push(event);
+          await writer.record(event);
+        },
+        async recordBatch(events) {
+          auditRecords.push(...events);
+          await writer.recordBatch(events);
+        },
+      };
+    },
+  });
   oauth = await environment.connect(
     await environment.issueOAuthToken(
       "skills:read skills:write skills:amend skills:publish contexts:read",
@@ -118,6 +135,25 @@ describe("MCP instructions artifacts", () => {
       "skill.json",
     ]);
     expect(retrieved.composition).toBeUndefined();
+    // Agent skill-use metrics count skills only, like the public skill totals.
+    const retrieveAudit = auditRecords.filter(
+      (event) => event.tool === "skill_retrieve" && event.skillId === created.skill.id,
+    );
+    expect(retrieveAudit).toEqual([
+      expect.objectContaining({ outcome: "success", countMetric: false }),
+    ]);
+    parseStructured<SkillRetrieveOutput>(
+      await oauth.client.callTool({
+        name: "skill_retrieve",
+        arguments: { skill: { id: environment.skill.skill.id }, caller: TEST_CALLER },
+      }),
+    );
+    const skillAudit = auditRecords.find(
+      (event) =>
+        event.tool === "skill_retrieve" && event.skillId === environment.skill.skill.id,
+    );
+    expect(skillAudit).toMatchObject({ outcome: "success" });
+    expect(skillAudit?.countMetric).toBeUndefined();
 
     const asset = parseStructured<SkillAssetRetrieveOutput>(
       await oauth.client.callTool({

@@ -27,6 +27,8 @@ describe("projected skill search filters", () => {
     ["visibilities=public%2Cworkspace", "visibility"],
     ["state=archived", "state"],
     ["state=all", "state"],
+    ["kind=instructions", "kind"],
+    ["kind=agents", "kind"],
   ])("rejects unsupported global filter %s", async (query, field) => {
     const discover = vi.fn();
     const response = await projectedSearchApp(discover).request(
@@ -44,6 +46,16 @@ describe("projected skill search filters", () => {
     const discover = vi.fn(async () => ({ skills: [], nextCursor: null }));
     const response = await projectedSearchApp(discover).request(
       "/api/v1/skills/search?visibility=public&state=active",
+    );
+
+    expect(response.status).toBe(200);
+    expect(discover).toHaveBeenCalledOnce();
+  });
+
+  it("accepts kind=skill as the public catalog's only kind", async () => {
+    const discover = vi.fn(async () => ({ skills: [], nextCursor: null }));
+    const response = await projectedSearchApp(discover).request(
+      "/api/v1/skills/search?kind=skill",
     );
 
     expect(response.status).toBe(200);

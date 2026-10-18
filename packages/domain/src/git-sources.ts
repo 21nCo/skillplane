@@ -323,12 +323,22 @@ export class GitSourceService {
           "Path does not match this single-skill source",
           400,
         );
-      const skill = await c.query<{ current_published_version_id: string }>(
-        "SELECT current_published_version_id FROM skills WHERE workspace_id=$1 AND id=$2 AND archived_at IS NULL FOR SHARE",
+      const skill = await c.query<{
+        current_published_version_id: string;
+        kind: string;
+      }>(
+        "SELECT current_published_version_id,kind FROM skills WHERE workspace_id=$1 AND id=$2 AND archived_at IS NULL FOR SHARE",
         [m.principal.workspaceId, m.skillId],
       );
       if (!skill.rows[0])
         throw new DomainError("NOT_FOUND", "Workspace skill was not found", 404);
+      if (skill.rows[0].kind !== "skill")
+        throw new DomainError(
+          "SKILL_KIND_UNSUPPORTED",
+          "Git sources import skills only and cannot bind an instructions document",
+          400,
+          { field: "skillId" },
+        );
       const old = await c.query<{ skill_id: string }>(
         "SELECT skill_id FROM skill_source_bindings WHERE workspace_id=$1 AND source_id=$2 AND skill_path=$3 AND disconnected_at IS NULL",
         [m.principal.workspaceId, m.sourceId, path],
@@ -402,8 +412,9 @@ export class GitSourceService {
       throw new DomainError("CONFLICT", "Restore the source before syncing", 409);
     const snapshot = await this.provider.snapshot(this.config(source)),
       bindings = await this.bindings(m.principal, source.id);
-    const catalog = await this.pool.query<{ slug: string; id: string }>(
-      "SELECT slug,id FROM skills WHERE workspace_id=$1",
+    // Slugs are unique across kinds, so instructions stay in the catalog as conflicts.
+    const catalog = await this.pool.query<{ slug: string; id: string; kind: string }>(
+      "SELECT slug,id,kind FROM skills WHERE workspace_id=$1",
       [m.principal.workspaceId],
     );
     const plan: GitPlanEntry[] = [];
@@ -441,6 +452,14 @@ export class GitSourceService {
           ...base,
           action: "conflict",
           message: "Several source paths declare this slug; import them separately",
+        });
+        continue;
+      }
+      if (!binding && catalog.rows.some((s) => s.slug === slug && s.kind !== "skill")) {
+        plan.push({
+          ...base,
+          action: "conflict",
+          message: "An instructions document already uses this slug",
         });
         continue;
       }
