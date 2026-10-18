@@ -153,7 +153,12 @@ export class CloudWorkspaceProvider implements WorkspaceProvider {
   private call(name: string, args: Record<string, unknown>): Promise<unknown> {
     return this.transport.call(name, { ...args, caller: this.caller });
   }
-  async list(): Promise<SkillInfo[]> {
+  // Projection, sync and usage membership list skills only (SKI-24 owns
+  // instructions projection), so skills_list keeps its default kind here.
+  list(): Promise<SkillInfo[]> {
+    return this.listKind("skill");
+  }
+  private async listKind(kind: SkillInfo["kind"]): Promise<SkillInfo[]> {
     const items: SkillInfo[] = [];
     let cursor: string | null = null;
     const seen = new Set<string>();
@@ -163,6 +168,8 @@ export class CloudWorkspaceProvider implements WorkspaceProvider {
           workspace: { id: this.workspace.id },
           limit: 100,
           cursor,
+          // Omit the default so a pre-kind server still accepts skill listing.
+          ...(kind === "skill" ? {} : { kind }),
         }),
       );
       if (
@@ -170,6 +177,8 @@ export class CloudWorkspaceProvider implements WorkspaceProvider {
         page.skills.some((s) => s.workspaceId !== this.workspace.id)
       )
         throw new RuntimeError("WORKSPACE_MISMATCH");
+      if (page.skills.some((s) => (s.kind ?? "skill") !== kind))
+        throw new RuntimeError("SKILL_KIND_MISMATCH");
       items.push(
         ...page.skills.map((s) => ({
           id: s.id,
@@ -185,10 +194,15 @@ export class CloudWorkspaceProvider implements WorkspaceProvider {
     } while (cursor);
     return items;
   }
+  // Check membership in this exact workspace before ID-only lifecycle
+  // operations, which apply to skills and instructions documents alike.
+  private async requireMember(skillId: string): Promise<void> {
+    for (const kind of ["skill", "instructions"] as const)
+      if ((await this.listKind(kind)).some((s) => s.id === skillId)) return;
+    throw new RuntimeError("SKILL_NOT_FOUND");
+  }
   async versions(skillId: string): Promise<VersionInfo[]> {
-    // Check membership in this exact workspace before ID-only MCP operations.
-    if (!(await this.list()).some((s) => s.id === skillId))
-      throw new RuntimeError("SKILL_NOT_FOUND");
+    await this.requireMember(skillId);
     const items: VersionInfo[] = [];
     let cursor: string | null = null;
     const seen = new Set<string>();
@@ -366,8 +380,7 @@ export class CloudWorkspaceProvider implements WorkspaceProvider {
     return { skillId: output.skillId, versionId: output.candidate.id };
   }
   async candidates(skillId: string): Promise<unknown> {
-    if (!(await this.list()).some((s) => s.id === skillId))
-      throw new RuntimeError("SKILL_NOT_FOUND");
+    await this.requireMember(skillId);
     let cursor: string | null = null;
     const items = [];
     const seen = new Set<string>();
@@ -395,8 +408,7 @@ export class CloudWorkspaceProvider implements WorkspaceProvider {
     reason: string,
     idempotencyKey: string,
   ): Promise<unknown> {
-    if (!(await this.list()).some((s) => s.id === skillId))
-      throw new RuntimeError("SKILL_NOT_FOUND");
+    await this.requireMember(skillId);
     const output = skillCandidateDecisionOutputSchema.parse(
       await this.call(approve ? "skill_candidate_approve" : "skill_candidate_reject", {
         skill: { id: skillId },
