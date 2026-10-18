@@ -237,6 +237,16 @@ export class CompositionService {
       return this.denied();
     }
   }
+  // The one guard REST and MCP share: instructions never resolve, compose or upgrade.
+  private requireSkillKind(source: Source): void {
+    if (source.kind === "instructions")
+      throw new DomainError(
+        "SKILL_KIND_UNSUPPORTED",
+        "Instructions documents cannot be resolved, composed or verified as skills",
+        400,
+        { kind: "instructions" },
+      );
+  }
   private async node(source: Source): Promise<DependencyNode> {
     if (source.kind !== "skill" || bundleKind(source.bundle.skill) !== "skill")
       this.denied();
@@ -367,6 +377,7 @@ export class CompositionService {
       source.status !== "published"
     )
       this.denied();
+    this.requireSkillKind(source);
     return source.bundle;
   }
   async upgradePreview(versionId: string, principal: Principal, skillId?: string) {
@@ -381,6 +392,7 @@ export class CompositionService {
       source.status !== "published"
     )
       this.denied();
+    this.requireSkillKind(source);
     const prepared = await this.prepare(
       source.bundle,
       principal,
@@ -602,13 +614,7 @@ export class CompositionService {
   ): Promise<CompositionPlan> {
     if (principal) authorize(principal, "skills:read");
     const source = await this.source(versionId, principal, db);
-    if (source.kind === "instructions")
-      throw new DomainError(
-        "SKILL_KIND_UNSUPPORTED",
-        "Instructions documents cannot be resolved, composed or verified as skills",
-        400,
-        { kind: "instructions" },
-      );
+    this.requireSkillKind(source);
     if (
       source.status !== "published" &&
       !(

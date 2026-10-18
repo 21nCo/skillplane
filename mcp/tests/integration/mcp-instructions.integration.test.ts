@@ -1,5 +1,6 @@
 import type {
   SkillAmendOutput,
+  SkillAssetRetrieveOutput,
   SkillCandidateDecisionOutput,
   SkillCandidatesListOutput,
   SkillCreateOutput,
@@ -117,6 +118,31 @@ describe("MCP instructions artifacts", () => {
       "skill.json",
     ]);
     expect(retrieved.composition).toBeUndefined();
+
+    const asset = parseStructured<SkillAssetRetrieveOutput>(
+      await oauth.client.callTool({
+        name: "skill_asset_retrieve",
+        arguments: {
+          skill: { id: created.skill.id },
+          version: { selector: "current" },
+          path: "AGENTS.md",
+          responseMode: "auto",
+          caller: TEST_CALLER,
+        },
+      }),
+    );
+    expect(asset).toMatchObject({ delivery: "text", text: document });
+    const skillAsset = await oauth.client.callTool({
+      name: "skill_asset_retrieve",
+      arguments: {
+        skill: { id: environment.skill.skill.id },
+        version: { selector: "current" },
+        path: "AGENTS.md",
+        responseMode: "auto",
+        caller: TEST_CALLER,
+      },
+    });
+    expect(parseToolError(skillAsset).error.code).toBe("SKILL_PATH_INVALID");
 
     const extraFile = await oauth.client.callTool({
       name: "skill_amend",
@@ -264,6 +290,69 @@ describe("MCP instructions artifacts", () => {
       },
     });
     expect(parseToolError(composed).error.code).toBe("VALIDATION_FAILED");
+    // Upgrades reach the shared CompositionService kind guard.
+    for (const [name, extra] of [
+      ["skill_dependency_upgrades_get", {}],
+      [
+        "skill_dependency_upgrade",
+        { idempotencyKey: `instructions-upgrade-${suffix}` },
+      ],
+    ] as const) {
+      const upgrade = await oauth.client.callTool({
+        name,
+        arguments: {
+          skill: { id: created.skill.id },
+          version: { selector: "current" },
+          caller: TEST_CALLER,
+          ...extra,
+        },
+      });
+      expect(parseToolError(upgrade).error, name).toMatchObject({
+        code: "VALIDATION_FAILED",
+        details: { kind: "instructions" },
+      });
+    }
+
+    // A root AGENTS.md stays an up-front, non-retryable path error for skills.
+    const skillWithAgents = await oauth.client.callTool({
+      name: "skill_create",
+      arguments: {
+        workspace: { id: environment.owner.workspaceId },
+        slug: `skill-with-agents-${suffix}`,
+        name: "Skill with agents",
+        instructions: "# Skill\n",
+        assets: [{ path: "AGENTS.md", content: "# Agents\n" }],
+        idempotencyKey: `instructions-skill-agents-${suffix}`,
+        caller: TEST_CALLER,
+      },
+    });
+    expect(parseToolError(skillWithAgents).error).toMatchObject({
+      code: "SKILL_PATH_INVALID",
+      retryable: false,
+    });
+    const skillAmendAgents = await oauth.client.callTool({
+      name: "skill_amend",
+      arguments: {
+        skillId: environment.skill.skill.id,
+        baseVersionId: environment.skill.version.id,
+        idempotencyKey: `instructions-skill-amend-agents-${suffix}`,
+        proposedBump: "patch",
+        changes: [
+          {
+            operation: "add",
+            path: "AGENTS.md",
+            expectedSha256: null,
+            content: "# Agents\n",
+          },
+        ],
+        learning,
+        caller: TEST_CALLER,
+      },
+    });
+    expect(parseToolError(skillAmendAgents).error).toMatchObject({
+      code: "SKILL_PATH_INVALID",
+      retryable: false,
+    });
 
     const workspace = await environment.services.database.pool.query<{ slug: string }>(
       "SELECT slug FROM workspaces WHERE id = $1",

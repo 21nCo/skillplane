@@ -9,6 +9,7 @@ import {
 } from "./manifest.js";
 import {
   BundlePathError,
+  INSTRUCTIONS_ENTRYPOINT,
   bundlePathCollisionKey,
   bytewisePathCompare,
   normalizeBundlePath,
@@ -191,7 +192,10 @@ function inspectCentralDirectory(bytes: Uint8Array): readonly CentralEntry[] {
     const rawName = bytes.slice(offset + 46, offset + 46 + nameLength);
     const name = decodeName(rawName, (flags & 0x800) !== 0);
     const directory = name.endsWith("/");
-    const path = normalizeBundlePath(name, directory);
+    // The entry set decides the kind; validateSkillEntrypoint rejects AGENTS.md.
+    const path = normalizeBundlePath(name, directory, {
+      allowInstructionsEntrypoint: true,
+    });
     const collisionKey = bundlePathCollisionKey(path);
     if (paths.has(collisionKey)) {
       return fail(
@@ -292,7 +296,9 @@ function extractFiles(
   const unzip = new Unzip((file) => {
     try {
       const directory = file.name.endsWith("/");
-      const path = normalizeBundlePath(file.name, directory);
+      const path = normalizeBundlePath(file.name, directory, {
+        allowInstructionsEntrypoint: true,
+      });
       const entry = entries.find(
         (candidate) => candidate.path === path && candidate.directory === directory,
       );
@@ -483,8 +489,8 @@ function validateSkillEntrypoint(files: ReadonlyMap<string, Uint8Array>): Bundle
       "Bundle must contain root SKILL.md and skill.json",
     );
   }
-  if (files.has("AGENTS.md")) {
-    return fail(
+  if (files.has(INSTRUCTIONS_ENTRYPOINT)) {
+    throw new BundlePathError(
       "SKILL_PATH_INVALID",
       "Bundle path uses an unsupported top-level entry",
     );

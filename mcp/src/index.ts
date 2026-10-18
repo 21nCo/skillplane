@@ -327,7 +327,9 @@ async function handleDownload(
         { status: 401 },
       );
     }
-    const path = normalizeBundlePath(grant.path);
+    const path = normalizeBundlePath(grant.path, false, {
+      allowInstructionsEntrypoint: skill.kind === "instructions",
+    });
     const bundle = await loadExactCanonicalBundle(runtime, version);
     const bytes = bundle.files.get(path);
     const descriptor = bundle.manifest.files.find((file) => file.path === path);

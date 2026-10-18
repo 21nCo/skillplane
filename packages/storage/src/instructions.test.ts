@@ -9,7 +9,7 @@ import {
   stableJson,
   type SkillFileManifestEntry,
 } from "./manifest.js";
-import { bytewisePathCompare } from "./paths.js";
+import { BundlePathError, bytewisePathCompare, normalizeBundlePath } from "./paths.js";
 import { mediaTypeForPath, sha256Hex, validateBundleArchive } from "./validate.js";
 
 const identity = {
@@ -114,7 +114,21 @@ describe("instructions bundles", () => {
       validateBundleArchive(
         await createTestBundle({ "SKILL.md": "# Skill\n", "AGENTS.md": "# Agents\n" }),
       ),
-    ).rejects.toMatchObject({ code: "SKILL_PATH_INVALID" });
+    ).rejects.toBeInstanceOf(BundlePathError);
+    // Skill paths reject AGENTS.md up front; only instructions opt in.
+    expect(() => normalizeBundlePath("AGENTS.md")).toThrow(BundlePathError);
+    expect(
+      normalizeBundlePath("AGENTS.md", false, { allowInstructionsEntrypoint: true }),
+    ).toBe("AGENTS.md");
+    await expect(
+      canonicalizeBundleFiles({
+        skill: { formatVersion: 1, entrypoint: "SKILL.md", ...identity, tags: [] },
+        files: new Map([
+          ["SKILL.md", strToU8("# Skill\n")],
+          ["AGENTS.md", strToU8("# Agents\n")],
+        ]),
+      }),
+    ).rejects.toBeInstanceOf(BundlePathError);
     // Git imports parse repository metadata with the skill-only schema.
     expect(
       skillJsonSchema.safeParse({ ...instructionsHeader, ...identity, files: [] })

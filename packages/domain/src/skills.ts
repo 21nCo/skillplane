@@ -671,11 +671,13 @@ export class SkillService {
             ],
             fencingEpoch: options.fencingEpoch,
           });
-          await enqueueSkillCountProjection(client, {
-            workspaceId: options.workspaceId,
-            delta: 1,
-            fencingEpoch: options.fencingEpoch,
-          });
+          // Public stats count skills; instructions are a separate artifact kind.
+          if (responseBody.skill.kind === "skill")
+            await enqueueSkillCountProjection(client, {
+              workspaceId: options.workspaceId,
+              delta: 1,
+              fencingEpoch: options.fencingEpoch,
+            });
           await this.idempotency.complete(client, claim.identity, 201, responseBody);
           return responseBody;
         },
@@ -1105,7 +1107,10 @@ export class SkillService {
             fencingEpoch: options.fencingEpoch,
             includePublishedHistory: !options.archived && Boolean(previous.archived_at),
           });
-          if (Boolean(previous.archived_at) !== options.archived) {
+          if (
+            skill.kind === "skill" &&
+            Boolean(previous.archived_at) !== options.archived
+          ) {
             await enqueueSkillCountProjection(client, {
               workspaceId: options.principal.workspaceId,
               delta: options.archived ? -1 : 1,

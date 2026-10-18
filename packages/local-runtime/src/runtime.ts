@@ -2,7 +2,7 @@ import { requireValue } from "./contracts.js";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
-import { canonicalizeBundle } from "@skillplane/storage";
+import { bundleEntrypoint, bundleKind, canonicalizeBundle } from "@skillplane/storage";
 import { type LocalStore } from "./store.js";
 import { Profiles } from "./profiles.js";
 import { LocalWorkspaceProvider } from "./local-provider.js";
@@ -459,7 +459,10 @@ export class Runtime {
     key: string,
   ): Promise<unknown> {
     const bundle = await canonicalizeBundle(bytes);
+    const kind = bundleKind(bundle.skill);
+    const entrypoint = bundleEntrypoint(bundle.skill);
     return this.create(context, {
+      ...(kind === "instructions" ? { kind } : {}),
       ...(bundle.skill.formatVersion === 2
         ? {
             composition: {
@@ -474,12 +477,12 @@ export class Runtime {
       description: bundle.skill.description,
       tags: bundle.skill.tags,
       visibility: "private",
-      instructions: new TextDecoder().decode(bundle.files.get("SKILL.md")),
+      instructions: new TextDecoder().decode(bundle.files.get(entrypoint)),
       assets: [...bundle.files]
         .filter(
           ([p]) =>
             ![
-              "SKILL.md",
+              entrypoint,
               "skill.json",
               ...(bundle.skill.formatVersion === 2 ? ["skill.lock.json"] : []),
             ].includes(p),

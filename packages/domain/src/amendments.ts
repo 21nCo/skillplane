@@ -2,7 +2,9 @@ import { CompositionService } from "./composition-service.js";
 import {
   BundlePathError,
   BundleValidationError,
+  INSTRUCTIONS_ENTRYPOINT,
   bundleEntrypoint,
+  bundleKind,
   canonicalizeBundleFiles,
   normalizeBundlePath,
   sha256Hex,
@@ -224,7 +226,12 @@ export function parseAmendmentOperations(
     }
     let path: string;
     try {
-      path = normalizeBundlePath(requiredDeclaredText(row.path, `${field}.path`));
+      // The base bundle's kind decides whether AGENTS.md is amendable.
+      path = normalizeBundlePath(
+        requiredDeclaredText(row.path, `${field}.path`),
+        false,
+        { allowInstructionsEntrypoint: true },
+      );
     } catch (error) {
       if (error instanceof BundlePathError) {
         throw new DomainError(error.code, error.message, 400, {
@@ -446,6 +453,18 @@ export class AmendmentService {
         baseRow.content_digest,
       );
       const validatedBase = await validateBundleArchive(storedBase.bytes);
+      if (bundleKind(validatedBase.skill) === "skill") {
+        const index = changes.findIndex(
+          (change) => change.path === INSTRUCTIONS_ENTRYPOINT,
+        );
+        if (index >= 0)
+          throw new DomainError(
+            "SKILL_PATH_INVALID",
+            "Bundle path uses an unsupported top-level entry",
+            400,
+            { field: `changes[${String(index)}].path` },
+          );
+      }
       const amendedFiles = await applyAmendmentOperations(validatedBase.files, changes);
       let canonical = await canonicalizeBundleFiles({
         skill: validatedBase.skill,
@@ -867,7 +886,7 @@ export class AmendmentService {
           })
           .catch(() => undefined);
       }
-      if (error instanceof BundleValidationError) {
+      if (error instanceof BundleValidationError || error instanceof BundlePathError) {
         throw new DomainError(error.code, error.message, 400);
       }
       return mapSkillInfrastructureError(error);

@@ -1,13 +1,14 @@
 import { DatabaseSync } from "node:sqlite";
-import { mkdirSync, mkdtempSync, realpathSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
 import {
   LocalStore,
   LocalWorkspaceProvider,
   Runtime,
+  projectSchema,
   targetSchema,
   type CreateRequest,
 } from "./index.js";
@@ -15,6 +16,7 @@ import { assertProjectionSupported } from "./projections.js";
 
 const stores: LocalStore[] = [];
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const store of stores.splice(0)) store.close();
 });
 
@@ -111,6 +113,28 @@ describe("local instructions artifacts", () => {
     expect((await again.retrieve(created.skillId)).skill.kind).toBe("instructions");
   });
 
+  it("keeps kind and digest across an export and import round trip", async () => {
+    const base = root();
+    const store = new LocalStore(join(base, "state"));
+    stores.push(store);
+    const runtime = new Runtime(store);
+    const source = LocalWorkspaceProvider.create(store, "Source");
+    const created = await source.create(instructions);
+    const snapshot = await source.retrieve(created.skillId);
+    const file = join(base, "instructions.zip");
+    runtime.exportBundle(snapshot, file);
+
+    const destination = LocalWorkspaceProvider.create(store, "Destination");
+    const imported = (await runtime.importBundle(
+      projectSchema.parse({ formatVersion: 1, primary: destination.workspace }),
+      readFileSync(file),
+      "import-instructions",
+    )) as { skillId: string };
+    const copy = await destination.retrieve(imported.skillId);
+    expect(copy.skill.kind).toBe("instructions");
+    expect(copy.bundle.digest).toBe(snapshot.bundle.digest);
+  });
+
   it("upgrades stores created before artifact kinds", async () => {
     const state = join(root(), "state");
     mkdirSync(state, { mode: 0o700 });
@@ -135,6 +159,49 @@ describe("local instructions artifacts", () => {
         kind: "skill",
       },
     ]);
+  });
+
+  it("upgrades a pre-kind store when another opener adds kind after the first check", () => {
+    const state = join(root(), "state");
+    mkdirSync(state, { mode: 0o700 });
+    const file = join(state, "runtime.sqlite");
+    const legacy = new DatabaseSync(file);
+    legacy.exec(
+      "CREATE TABLE skill (id TEXT PRIMARY KEY, workspace TEXT NOT NULL, slug TEXT NOT NULL, name TEXT NOT NULL, description TEXT NOT NULL, current TEXT, UNIQUE(workspace,slug));",
+    );
+    // Between this opener's column check and its upgrade, a concurrent opener
+    // of the same store finishes the upgrade.
+    const prepare = DatabaseSync.prototype.prepare;
+    let raced = false;
+    vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (
+      this: DatabaseSync,
+      sql: string,
+    ) {
+      const statement = prepare.call(this, sql);
+      if (raced || !sql.includes("pragma_table_info('skill')")) return statement;
+      raced = true;
+      const get = statement.get.bind(statement);
+      return Object.assign(Object.create(statement) as typeof statement, {
+        get: (...args: Parameters<typeof get>) => {
+          const row = get(...args);
+          legacy.exec(
+            "ALTER TABLE skill ADD COLUMN kind TEXT NOT NULL DEFAULT 'skill' CHECK(kind IN ('skill','instructions'))",
+          );
+          return row;
+        },
+      });
+    });
+    const store = new LocalStore(state);
+    stores.push(store);
+    legacy.close();
+    expect(raced).toBe(true);
+    expect(
+      store.db
+        .prepare(
+          "SELECT count(*) AS count FROM pragma_table_info('skill') WHERE name='kind'",
+        )
+        .get(),
+    ).toEqual({ count: 1 });
   });
 
   it("never projects instructions documents into agent skill directories", async () => {

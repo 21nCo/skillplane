@@ -1,6 +1,12 @@
 import { expect, it, vi } from "vitest";
 import { McpToolError } from "@skillplane/mcp-schema";
-import { executeMutationTool, executeReadTool, type McpToolRuntime } from "./shared.js";
+import { createSkillBundle } from "@skillplane/domain";
+import {
+  executeMutationTool,
+  executeReadTool,
+  mapMcpToolError,
+  type McpToolRuntime,
+} from "./shared.js";
 import type { McpAuditRecord } from "../audit.js";
 
 const caller = {
@@ -57,3 +63,21 @@ for (const [kind, execute] of [
     });
   }
 }
+
+it("rejects a root AGENTS.md skill asset as a non-retryable 400 path error", async () => {
+  const error = await createSkillBundle({
+    kind: "skill",
+    name: "Skill",
+    slug: "skill",
+    description: "",
+    tags: [],
+    instructions: "# Skill\n",
+    assets: [{ path: "AGENTS.md", content: "# Agents\n" }],
+  }).catch((caught: unknown) => caught);
+  const mapped = mapMcpToolError(error);
+  expect(mapped).toMatchObject({
+    code: "SKILL_PATH_INVALID",
+    status: 400,
+    retryable: false,
+  });
+});

@@ -105,6 +105,15 @@ describe("instructions artifacts over the API", () => {
     expect(publicCreate.status).toBe(400);
     expect(await errorCode(publicCreate)).toBe("SKILL_VISIBILITY_INVALID");
 
+    const skillCountEvents = async () =>
+      (
+        await services.database.pool.query<{ count: string }>(
+          `SELECT count(*)::text AS count FROM regional_projection_outbox
+            WHERE workspace_id = $1 AND event_type = 'public_stats.skill_count_changed'`,
+          [owner.workspaceId],
+        )
+      ).rows[0]?.count;
+    const skillCountBefore = await skillCountEvents();
     const create = await app.request(`/api/v1/workspaces/${owner.workspaceId}/skills`, {
       method: "POST",
       headers: headers(`create-${suffix}`),
@@ -117,6 +126,8 @@ describe("instructions artifacts over the API", () => {
     const created = await data<CreatedArtifact>(create);
     expect(created.skill.kind).toBe("instructions");
     expect(created.version).toMatchObject({ revision: 1, digest: bundle.digest });
+    // Public stats count skills only.
+    expect(await skillCountEvents()).toBe(skillCountBefore);
 
     const makePublic = await app.request(`/api/v1/skills/${created.skill.id}`, {
       method: "PATCH",
@@ -303,6 +314,26 @@ describe("instructions artifacts over the API", () => {
     );
     expect(resolve.status).toBe(400);
     expect(await errorCode(resolve)).toBe("SKILL_KIND_UNSUPPORTED");
+
+    // Repair and dependency upgrades share the CompositionService kind guard.
+    const versionPath = `/api/v1/skills/${created.skill.id}/versions/${direct.version.id}`;
+    for (const [method, path] of [
+      ["GET", `${versionPath}/repair-bundle`],
+      ["GET", `${versionPath}/dependency-upgrade`],
+      ["POST", `${versionPath}/dependency-upgrade`],
+    ] as const) {
+      const response = await app.request(path, {
+        method,
+        headers: headers(method === "POST" ? `upgrade-${suffix}` : undefined),
+        ...(method === "POST" ? { body: "{}" } : {}),
+      });
+      expect(response.status, `${method} ${path}`).toBe(400);
+      expect(await errorCode(response)).toBe("SKILL_KIND_UNSUPPORTED");
+    }
+    const unchanged = await app.request(`/api/v1/skills/${created.skill.id}/versions`, {
+      headers: headers(),
+    });
+    expect((await data<{ versions: unknown[] }>(unchanged)).versions).toHaveLength(3);
 
     const workspace = await services.database.pool.query<{ slug: string }>(
       "SELECT slug FROM workspaces WHERE id = $1",

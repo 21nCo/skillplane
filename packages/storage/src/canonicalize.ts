@@ -107,8 +107,9 @@ export async function canonicalizeBundleFiles(options: {
 }): Promise<CanonicalBundle> {
   const contentFiles = new Map<string, Uint8Array>();
   const collisionKeys = new Set<string>();
+  const allowInstructionsEntrypoint = "kind" in options.skill;
   for (const [rawPath, rawContent] of options.files) {
-    const path = normalizeBundlePath(rawPath);
+    const path = normalizeBundlePath(rawPath, false, { allowInstructionsEntrypoint });
     if (path === "skill.json") continue;
     const collisionKey = bundlePathCollisionKey(path);
     if (collisionKeys.has(collisionKey)) {

@@ -34,16 +34,23 @@ export class LocalStore {
       CREATE TABLE IF NOT EXISTS mutation (key TEXT PRIMARY KEY, hash TEXT NOT NULL, result TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS usage (id TEXT PRIMARY KEY, payload TEXT NOT NULL, uploaded INTEGER NOT NULL DEFAULT 0);
     `);
-    // Stores created before artifact kinds hold only skills.
-    if (
-      !this.db
-        .prepare("SELECT 1 FROM pragma_table_info('skill') WHERE name='kind'")
-        .get()
-    )
-      this.db.exec(
-        "ALTER TABLE skill ADD COLUMN kind TEXT NOT NULL DEFAULT 'skill' CHECK(kind IN ('skill','instructions'))",
-      );
+    this.addKindColumn();
     if (!this.get("installation")) this.set("installation", randomUUID());
+  }
+  // Stores created before artifact kinds hold only skills. Another process may
+  // open the same store concurrently, so recheck under the write lock.
+  private addKindColumn(): void {
+    const hasKind = () =>
+      this.db
+        .prepare("SELECT 1 FROM pragma_table_info('skill') WHERE name='kind'")
+        .get() !== undefined;
+    if (hasKind()) return;
+    this.transaction(() => {
+      if (!hasKind())
+        this.db.exec(
+          "ALTER TABLE skill ADD COLUMN kind TEXT NOT NULL DEFAULT 'skill' CHECK(kind IN ('skill','instructions'))",
+        );
+    });
   }
   close(): void {
     this.db.close();

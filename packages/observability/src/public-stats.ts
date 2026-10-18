@@ -29,7 +29,7 @@ export async function readPublicStats(
       : `WITH active_skills AS (
        SELECT count(*)::bigint AS total
          FROM skills
-        WHERE archived_at IS NULL
+        WHERE archived_at IS NULL AND kind = 'skill'
      )
      SELECT active_skills.total::text AS total_skills,
             COALESCE(sum(counters.agent_skill_uses), 0)::text AS agent_skill_uses

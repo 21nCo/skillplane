@@ -1,9 +1,7 @@
 const encoder = new TextEncoder();
 
-// AGENTS.md is accepted here and restricted to instructions bundles by validation.
 const ROOT_FILES = new Set([
   "SKILL.md",
-  "AGENTS.md",
   "skill.json",
   "skill.lock.json",
   "LICENSE",
@@ -32,7 +30,18 @@ export class BundlePathError extends Error {
   }
 }
 
-export function normalizeBundlePath(input: string, directory = false): string {
+/** The single document of an instructions artifact; never a skill bundle path. */
+export const INSTRUCTIONS_ENTRYPOINT = "AGENTS.md";
+
+/**
+ * Skill paths reject a root AGENTS.md up front. Only callers that build or
+ * validate an instructions bundle opt in with `allowInstructionsEntrypoint`.
+ */
+export function normalizeBundlePath(
+  input: string,
+  directory = false,
+  options: { readonly allowInstructionsEntrypoint?: boolean } = {},
+): string {
   if (!input || input.includes("\0") || input.includes("\\")) {
     throw new BundlePathError("SKILL_PATH_INVALID", "Bundle path is invalid");
   }
@@ -66,7 +75,13 @@ export function normalizeBundlePath(input: string, directory = false): string {
 
   const [root] = segments;
   if (
-    (!directory && segments.length === 1 && !ROOT_FILES.has(withoutDirectorySuffix)) ||
+    (!directory &&
+      segments.length === 1 &&
+      !ROOT_FILES.has(withoutDirectorySuffix) &&
+      !(
+        options.allowInstructionsEntrypoint &&
+        withoutDirectorySuffix === INSTRUCTIONS_ENTRYPOINT
+      )) ||
     (segments.length > 1 && !OPTIONAL_ROOTS.has(root ?? "")) ||
     (directory && !OPTIONAL_ROOTS.has(root ?? ""))
   ) {
