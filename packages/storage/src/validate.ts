@@ -448,16 +448,41 @@ function assertUtf8Markdown(bytes: Uint8Array, path = "SKILL.md"): void {
   }
 }
 
+function declaresInstructionsKind(bytes: Uint8Array): boolean {
+  try {
+    const raw: unknown = JSON.parse(
+      new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+    );
+    return (
+      typeof raw === "object" &&
+      raw !== null &&
+      (raw as Record<string, unknown>).kind === "instructions"
+    );
+  } catch {
+    return false;
+  }
+}
+
 // An instructions bundle is exactly one root AGENTS.md plus skill.json.
 function validateInstructionsBundle(
   files: ReadonlyMap<string, Uint8Array>,
 ): BundleJson {
   const document = files.get("AGENTS.md");
   const skillJsonBytes = files.get("skill.json");
-  if (!document || !skillJsonBytes) {
+  if (!skillJsonBytes) {
     return fail(
       "SKILL_BUNDLE_INVALID",
       "Bundle must contain root SKILL.md and skill.json",
+    );
+  }
+  if (!document) {
+    // Only a skill.json that declares the instructions kind names AGENTS.md;
+    // any other archive without SKILL.md keeps the skill entrypoint error.
+    return fail(
+      "SKILL_BUNDLE_INVALID",
+      declaresInstructionsKind(skillJsonBytes)
+        ? "Instructions bundle must contain root AGENTS.md and skill.json"
+        : "Bundle must contain root SKILL.md and skill.json",
     );
   }
   const skill = parseSkillJson(skillJsonBytes);

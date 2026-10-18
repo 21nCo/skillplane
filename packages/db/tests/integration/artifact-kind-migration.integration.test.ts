@@ -116,6 +116,8 @@ describe.each(["combined", "regional"] as const)(
         expect(
           (await pool.query("SELECT kind FROM skills WHERE id = 'kind-skill'")).rows,
         ).toEqual([{ kind: "skill" }]);
+        // Regional verification requires finalized physical ownership, which
+        // this per-migration test deliberately skips (see physical-ownership tests).
         if (role === "combined")
           await expect(verifyDatabase(urls[role])).resolves.toBeDefined();
       } finally {

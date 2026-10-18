@@ -108,6 +108,12 @@ export class LocalWorkspaceProvider implements WorkspaceProvider {
       workspace: { id: this.workspace.id },
       caller: declaredCaller(),
     });
+    // Same contract as MCP skill_create, before bundle construction can fail opaquely.
+    if (input.kind === "instructions" && (input.assets.length > 0 || input.composition))
+      throw new RuntimeError(
+        "VALIDATION_FAILED",
+        "Instructions are a single AGENTS.md document without assets or composition",
+      );
     if (input.composition)
       throw new RuntimeError(
         "COMPOSITION_RESOLUTION_REQUIRED",

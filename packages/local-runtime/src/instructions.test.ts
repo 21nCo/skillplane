@@ -8,6 +8,7 @@ import {
   LocalStore,
   LocalWorkspaceProvider,
   Runtime,
+  RuntimeError,
   projectSchema,
   targetSchema,
   type CreateRequest,
@@ -111,6 +112,23 @@ describe("local instructions artifacts", () => {
     );
     expect(published).toMatchObject({ state: "published", semanticVersion: "1.1.0" });
     expect((await again.retrieve(created.skillId)).skill.kind).toBe("instructions");
+  });
+
+  it("rejects instructions with assets as a stable validation error", async () => {
+    const store = new LocalStore(join(root(), "state"));
+    stores.push(store);
+    const provider = LocalWorkspaceProvider.create(store, "Personal");
+    const rejected = provider.create({
+      ...instructions,
+      assets: [{ path: "references/extra.md", content: "extra" }],
+    });
+    await expect(rejected).rejects.toBeInstanceOf(RuntimeError);
+    await expect(rejected).rejects.toMatchObject({
+      code: "VALIDATION_FAILED",
+      message:
+        "Instructions are a single AGENTS.md document without assets or composition",
+    });
+    expect(await provider.list()).toEqual([]);
   });
 
   it("keeps kind and digest across an export and import round trip", async () => {

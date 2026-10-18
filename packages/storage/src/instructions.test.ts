@@ -111,6 +111,25 @@ describe("instructions bundles", () => {
     ).rejects.toMatchObject({ code: "SKILL_BUNDLE_TOO_LARGE" });
   });
 
+  it("names the missing entrypoint by the declared kind", async () => {
+    // An amendment that deletes AGENTS.md re-canonicalizes only skill.json.
+    await expect(
+      canonicalizeBundleFiles({
+        skill: { ...instructionsHeader, ...identity, tags: [...identity.tags] },
+        files: new Map(),
+      }),
+    ).rejects.toMatchObject({
+      code: "SKILL_BUNDLE_INVALID",
+      message: "Instructions bundle must contain root AGENTS.md and skill.json",
+    });
+    await expect(
+      validateBundleArchive(await archive({}, { formatVersion: 1 })),
+    ).rejects.toMatchObject({
+      code: "SKILL_BUNDLE_INVALID",
+      message: "Bundle must contain root SKILL.md and skill.json",
+    });
+  });
+
   it("serves a root AGENTS.md only from an instructions artifact", async () => {
     const bundle = await canonicalizeBundleFiles({
       skill: { ...instructionsHeader, ...identity, tags: [...identity.tags] },
