@@ -44,6 +44,7 @@ export function skillsSearch(runtime: McpToolRuntime, input: SkillsSearchInput) 
       tags: input.tags,
       visibility,
       archive: "active",
+      kind: input.kind,
       limit: input.limit,
       cursor: input.cursor,
       principal,

@@ -5,6 +5,7 @@ import {
   limitSchema,
   nullableCursorSchema,
   reportedSkillKindSchema,
+  skillKindSchema,
   skillVisibilitySchema,
   slugSchema,
   stableIdSchema,
@@ -31,6 +32,8 @@ export const skillsSearchInputSchema = z
       )
       .max(30)
       .default([]),
+    /** Defaults to skills so callers that predate artifact kinds see no instructions. */
+    kind: skillKindSchema.default("skill"),
     cursor: nullableCursorSchema,
     limit: limitSchema,
     caller: callerDeclarationSchema,

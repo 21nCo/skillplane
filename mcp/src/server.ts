@@ -216,7 +216,7 @@ export const skillplaneMcpDeclaration = defineMcpFnServer<McpToolRuntime>({
       name: "skills_list",
       title: "List workspace skills",
       description:
-        "Enumerate authorized skills in one workspace without a search query. Select the workspace returned by workspaces_list with workspace: { id } or workspace: { slug }. Includes active unpublished skill records and instructions documents (kind is reported only for instructions documents; an absent kind means a skill), supports visibility and archive filters, and returns an opaque cursor until every matching skill has been listed.",
+        "Enumerate authorized skills in one workspace without a search query. Select the workspace returned by workspaces_list with workspace: { id } or workspace: { slug }. Includes active unpublished skill records, lists only skills unless kind: instructions selects instructions documents (kind is reported only for instructions documents; an absent kind means a skill), supports visibility and archive filters, and returns an opaque cursor until every matching skill has been listed.",
       input: skillsListInputSchema,
       output: skillsListOutputSchema,
       annotations: READ_ONLY_ANNOTATIONS,
@@ -226,7 +226,7 @@ export const skillplaneMcpDeclaration = defineMcpFnServer<McpToolRuntime>({
       name: "skills_search",
       title: "Search skills",
       description:
-        "Search one workspace using authorization-filtered Postgres full-text ranking. Select the workspace returned by workspaces_list with workspace: { id } or workspace: { slug }. Returns only stable skill metadata (kind is reported only for instructions documents; an absent kind means a skill), current published version IDs, semantic versions, digests, and an opaque cursor.",
+        "Search one workspace using authorization-filtered Postgres full-text ranking. Select the workspace returned by workspaces_list with workspace: { id } or workspace: { slug }. Searches only skills unless kind: instructions selects instructions documents. Returns only stable skill metadata (kind is reported only for instructions documents; an absent kind means a skill), current published version IDs, semantic versions, digests, and an opaque cursor.",
       input: skillsSearchInputSchema,
       output: skillsSearchOutputSchema,
       annotations: READ_ONLY_ANNOTATIONS,

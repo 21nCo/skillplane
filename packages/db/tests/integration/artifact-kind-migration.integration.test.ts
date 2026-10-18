@@ -27,6 +27,29 @@ async function kindColumn(pool: Pool) {
   ).rows[0];
 }
 
+let auditSequence = 0;
+
+/** Records one successful retrieval and returns the workspace agent-use counter. */
+async function countRetrieval(pool: Pool, countMetric?: false): Promise<string> {
+  auditSequence += 1;
+  await pool.query(
+    `INSERT INTO audit_events
+       (id, workspace_id, event_type, action, outcome, actor_type, actor_id,
+        request_id, metadata)
+     VALUES ($1, 'kind-workspace', 'mcp.skill_retrieve.success', 'skill_retrieve',
+             'success', 'user', 'kind-user', $1, $2::jsonb)`,
+    [
+      `kind-audit-${auditSequence}`,
+      JSON.stringify(countMetric === false ? { countMetric } : {}),
+    ],
+  );
+  const counter = await pool.query<{ agent_skill_uses: string }>(
+    `SELECT agent_skill_uses::text FROM public_stats_counters
+      WHERE id = 'kind-workspace'`,
+  );
+  return counter.rows[0]?.agent_skill_uses ?? "0";
+}
+
 beforeAll(async () => {
   const testUrl = new URL(await resolveTestDatabaseUrl());
   testUrl.pathname = "/postgres";
@@ -80,6 +103,10 @@ describe.each(["combined", "regional"] as const)(
           ),
         ).rejects.toMatchObject({ constraint: "skills_kind" });
 
+        // Instructions retrievals never count as public agent skill uses.
+        expect(await countRetrieval(pool)).toBe("1");
+        expect(await countRetrieval(pool, false)).toBe("1");
+
         const rollback = await readFile(
           resolve(packageRoot, "migrations/rollback", MIGRATION),
           "utf8",
@@ -96,6 +123,8 @@ describe.each(["combined", "regional"] as const)(
 
         await pool.query(rollback);
         expect(await kindColumn(pool)).toBeUndefined();
+        // Rollback restores the 0019 trigger, which counts every retrieval.
+        expect(await countRetrieval(pool, false)).toBe("2");
         expect(
           (
             await pool.query(
@@ -116,6 +145,8 @@ describe.each(["combined", "regional"] as const)(
         expect(
           (await pool.query("SELECT kind FROM skills WHERE id = 'kind-skill'")).rows,
         ).toEqual([{ kind: "skill" }]);
+        expect(await countRetrieval(pool, false)).toBe("2");
+        expect(await countRetrieval(pool)).toBe("3");
         // Regional verification requires finalized physical ownership, which
         // this per-migration test deliberately skips (see physical-ownership tests).
         if (role === "combined")

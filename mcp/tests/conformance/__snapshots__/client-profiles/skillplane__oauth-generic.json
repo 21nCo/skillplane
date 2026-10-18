@@ -5,7 +5,7 @@
     "id": "skillplane/oauth-generic",
     "version": "1"
   },
-  "catalogHash": "473862318bfffa68c1315888ff8eb5ca22d8799e6fd82ba20ddcd8d238150aa2",
+  "catalogHash": "b72417abf5433ddc7b66fe3b365255eb1e968824328bbee2a215edcd2fa614ef",
   "tools": [
     {
       "name": "context_archive",
@@ -627,11 +627,12 @@
     },
     {
       "name": "skills_list",
-      "hash": "fe2b2624fc845c225e45c30687fb8531a6d759220b72dbee35796810d31367f6",
+      "hash": "49961dd103f5ffa8029e3e421b69449b4817a1510770fc85ce2570eb313adb36",
       "inputProperties": [
         "workspace",
         "visibility",
         "state",
+        "kind",
         "cursor",
         "limit"
       ],
@@ -642,12 +643,13 @@
     },
     {
       "name": "skills_search",
-      "hash": "aaa2e0480a6a280b949268afe9344dae7a601ebd5ed825a0a426d9b4cf377586",
+      "hash": "e45f3d12eb640b7b1a976fc78bcb665bf7f505bc4b6b09c9d9959233990f2b37",
       "inputProperties": [
         "query",
         "workspace",
         "visibility",
         "tags",
+        "kind",
         "cursor",
         "limit"
       ],
@@ -668,5 +670,5 @@
       "outputSchema": true
     }
   ],
-  "catalogBytes": 169293
+  "catalogBytes": 169571
 }

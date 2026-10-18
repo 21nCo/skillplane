@@ -748,9 +748,13 @@ export function describeDiagnosticContract(engine: SchemaEngine): void {
         });
         const client = await McpFnTestClient.connect(server);
         const listed = await client.listTools();
-        expect(listed.find((tool) => tool.name === incident.tool)?.inputSchema).toEqual(
-          incident.effectiveInputSchema,
-        );
+        const published = listed.find(
+          (tool) => tool.name === incident.tool,
+        )?.inputSchema;
+        // kind (SKI-23) is an optional input added after the incident, with a default.
+        const properties = { ...published?.properties };
+        delete properties.kind;
+        expect({ ...published, properties }).toEqual(incident.effectiveInputSchema);
         const rejected = toolError(
           await client.callTool(incident.tool, incidentArguments()),
         );

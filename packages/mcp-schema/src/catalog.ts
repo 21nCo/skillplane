@@ -4,6 +4,7 @@ import {
   limitSchema,
   nullableCursorSchema,
   reportedSkillKindSchema,
+  skillKindSchema,
   skillVisibilitySchema,
   slugSchema,
   stableIdSchema,
@@ -75,6 +76,8 @@ export const skillsListInputSchema = z
       .max(3)
       .default(["private", "workspace", "public"]),
     state: skillArchiveFilterSchema.default("active"),
+    /** Defaults to skills so callers that predate artifact kinds see no instructions. */
+    kind: skillKindSchema.default("skill"),
     cursor: nullableCursorSchema,
     limit: limitSchema,
     caller: callerDeclarationSchema,

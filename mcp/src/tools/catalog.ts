@@ -207,6 +207,7 @@ export function skillsList(runtime: McpToolRuntime, input: SkillsListInput) {
       workspaceId: workspace.id,
       state: input.state,
       visibility: [...input.visibility].sort(),
+      kind: input.kind,
       actorId: runtime.identity.actorId,
       credentialId: runtime.identity.credentialId,
     };
@@ -218,6 +219,7 @@ export function skillsList(runtime: McpToolRuntime, input: SkillsListInput) {
       principal,
       archive: input.state,
       visibility: input.visibility,
+      kind: input.kind,
       cursor,
       limit: input.limit,
     });

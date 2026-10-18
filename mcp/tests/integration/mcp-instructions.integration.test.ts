@@ -1,15 +1,20 @@
-import type {
-  SkillAmendOutput,
-  SkillAssetRetrieveOutput,
-  SkillCandidateDecisionOutput,
-  SkillCandidatesListOutput,
-  SkillCreateOutput,
-  SkillRetrieveOutput,
-  SkillsListOutput,
-  SkillsSearchOutput,
+import {
+  listedSkillSchema,
+  skillSearchItemSchema,
+  skillsListOutputSchema,
+  skillsSearchOutputSchema,
+  type SkillAmendOutput,
+  type SkillAssetRetrieveOutput,
+  type SkillCandidateDecisionOutput,
+  type SkillCandidatesListOutput,
+  type SkillCreateOutput,
+  type SkillRetrieveOutput,
+  type SkillsListOutput,
+  type SkillsSearchOutput,
 } from "@skillplane/mcp-schema";
 import { createHash } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { z } from "zod";
 import {
   parseStructured,
   parseToolError,
@@ -77,6 +82,14 @@ const learning = {
   ],
 } as const;
 
+// The strict list and search shapes bundled by clients released before kinds.
+const preKindListOutputSchema = skillsListOutputSchema.extend({
+  skills: z.array(listedSkillSchema.omit({ kind: true }).strict()).max(100),
+});
+const preKindSearchOutputSchema = skillsSearchOutputSchema.extend({
+  skills: z.array(skillSearchItemSchema.omit({ kind: true }).strict()).max(100),
+});
+
 describe("MCP instructions artifacts", () => {
   it("creates, amends, reviews and publishes instructions that never resolve as skills", async () => {
     const suffix = crypto.randomUUID().slice(0, 8);
@@ -118,6 +131,15 @@ describe("MCP instructions artifacts", () => {
     });
     expect(parseToolError(publicCreate).error.code).toBe("VALIDATION_FAILED");
 
+    const agentUses = async () =>
+      (
+        await environment.services.database.pool.query<{ uses: string }>(
+          `SELECT COALESCE(sum(agent_skill_uses), 0)::text AS uses
+             FROM public_stats_counters WHERE id = $1`,
+          [environment.owner.workspaceId],
+        )
+      ).rows[0]?.uses;
+    const usesBefore = await agentUses();
     const retrieved = parseStructured<SkillRetrieveOutput>(
       await oauth.client.callTool({
         name: "skill_retrieve",
@@ -142,6 +164,8 @@ describe("MCP instructions artifacts", () => {
     expect(retrieveAudit).toEqual([
       expect.objectContaining({ outcome: "success", countMetric: false }),
     ]);
+    // The combined-database counter trigger reads the persisted flag.
+    expect(await agentUses()).toBe(usesBefore);
     parseStructured<SkillRetrieveOutput>(
       await oauth.client.callTool({
         name: "skill_retrieve",
@@ -154,6 +178,7 @@ describe("MCP instructions artifacts", () => {
     );
     expect(skillAudit).toMatchObject({ outcome: "success" });
     expect(skillAudit?.countMetric).toBeUndefined();
+    expect(await agentUses()).toBe(String(Number(usesBefore) + 1));
 
     const asset = parseStructured<SkillAssetRetrieveOutput>(
       await oauth.client.callTool({
@@ -274,6 +299,7 @@ describe("MCP instructions artifacts", () => {
         name: "skills_list",
         arguments: {
           workspace: { id: environment.owner.workspaceId },
+          kind: "instructions",
           limit: 100,
           caller: TEST_CALLER,
         },
@@ -282,10 +308,6 @@ describe("MCP instructions artifacts", () => {
     expect(listed.skills.find((item) => item.id === created.skill.id)?.kind).toBe(
       "instructions",
     );
-    // Skills omit kind so strict clients from before artifact kinds still parse.
-    expect(
-      listed.skills.find((item) => item.id === environment.skill.skill.id),
-    ).not.toHaveProperty("kind");
 
     const searched = parseStructured<SkillsSearchOutput>(
       await oauth.client.callTool({
@@ -293,6 +315,7 @@ describe("MCP instructions artifacts", () => {
         arguments: {
           workspace: { id: environment.owner.workspaceId },
           query: "repository agents",
+          kind: "instructions",
           caller: TEST_CALLER,
         },
       }),
@@ -421,5 +444,108 @@ describe("MCP instructions artifacts", () => {
     const dependencyError = parseToolError(dependent).error;
     expect(dependencyError.code).toBe("SKILL_DEPENDENCY_CONFLICT");
     expect(dependencyError.message).toContain("instructions document");
+  });
+  it("lists and searches only skills unless a caller selects instructions", async () => {
+    const suffix = crypto.randomUUID().slice(0, 8);
+    const term = `kindfilter${suffix}`;
+    const createArtifact = async (kind: "skill" | "instructions", index: number) =>
+      parseStructured<SkillCreateOutput>(
+        await oauth.client.callTool({
+          name: "skill_create",
+          arguments: {
+            workspace: { id: environment.owner.workspaceId },
+            kind,
+            slug: `${kind}-${index}-${suffix}`,
+            name: `Kind filter ${kind} ${index}`,
+            description: `Shared ${term} guidance`,
+            visibility: "workspace",
+            instructions: `# ${term}\n\nFollow the ${kind} guidance.\n`,
+            idempotencyKey: `kind-filter-${kind}-${index}-${suffix}`,
+            caller: TEST_CALLER,
+          },
+        }),
+      ).skill.id;
+    const instructionIds = [
+      await createArtifact("instructions", 1),
+      await createArtifact("instructions", 2),
+    ];
+    const skillId = await createArtifact("skill", 1);
+    const workspace = { id: environment.owner.workspaceId };
+
+    // A caller that sends no kind gets the pre-kind shape a strict client parses.
+    const defaultList = preKindListOutputSchema.parse(
+      (
+        await oauth.client.callTool({
+          name: "skills_list",
+          arguments: { workspace, limit: 100, caller: TEST_CALLER },
+        })
+      ).structuredContent,
+    );
+    const defaultListIds = defaultList.skills.map((item) => item.id);
+    expect(defaultListIds).toContain(skillId);
+    expect(defaultListIds).not.toContain(instructionIds[0]);
+    const defaultSearch = preKindSearchOutputSchema.parse(
+      (
+        await oauth.client.callTool({
+          name: "skills_search",
+          arguments: { workspace, query: term, caller: TEST_CALLER },
+        })
+      ).structuredContent,
+    );
+    expect(defaultSearch.skills.map((item) => item.id)).toEqual([skillId]);
+
+    for (const name of ["skills_list", "skills_search"] as const) {
+      const query = name === "skills_search" ? { query: term } : {};
+      const seen: string[] = [];
+      let cursor: string | null = null;
+      let firstCursor: string | null = null;
+      do {
+        const page: SkillsListOutput | SkillsSearchOutput = parseStructured(
+          await oauth.client.callTool({
+            name,
+            arguments: {
+              workspace,
+              ...query,
+              kind: "instructions",
+              cursor,
+              limit: 1,
+              caller: TEST_CALLER,
+            },
+          }),
+        );
+        for (const item of page.skills) {
+          expect(item.kind, name).toBe("instructions");
+          seen.push(item.id);
+        }
+        cursor = page.nextCursor;
+        firstCursor ??= cursor;
+      } while (cursor);
+      expect(seen, name).toEqual(expect.arrayContaining(instructionIds));
+      expect(seen, name).not.toContain(skillId);
+
+      // A cursor stays bound to the kind it was issued for.
+      expect(firstCursor, name).not.toBeNull();
+      const replayed = await oauth.client.callTool({
+        name,
+        arguments: {
+          workspace,
+          ...query,
+          kind: "skill",
+          cursor: firstCursor,
+          limit: 1,
+          caller: TEST_CALLER,
+        },
+      });
+      expect(parseToolError(replayed).error.code, name).toBe("CURSOR_FILTER_MISMATCH");
+
+      const malformed = await oauth.client.callTool({
+        name,
+        arguments: { workspace, ...query, kind: "agents", caller: TEST_CALLER },
+      });
+      // Schema validation rejects an unknown kind before the handler runs.
+      expect(parseToolError(malformed).error.code, name).toBe(
+        "MCPFN_INVALID_ARGUMENTS",
+      );
+    }
   });
 });

@@ -46,6 +46,7 @@ function fixture() {
     id: local.workspace.id,
   };
   const calls: string[] = [];
+  const listArgs: Record<string, unknown>[] = [];
   const transport: CloudTransport = {
     async call(name, args) {
       calls.push(name);
@@ -95,31 +96,36 @@ function fixture() {
           },
         };
       }
-      if (name === "skills_list")
+      if (name === "skills_list") {
+        listArgs.push(args);
         return {
           requestId: "request",
           workspace: { id: workspace.id, slug: "work", name: "Work", kind: "personal" },
           skills: await Promise.all(
-            (await local.list()).map(async (s) => {
-              const v = (await local.retrieve(s.id)).version;
-              return {
-                id: s.id,
-                workspaceId: workspace.id,
-                workspaceSlug: "work",
-                slug: s.slug,
-                name: s.name,
-                summary: s.description,
-                tags: [],
-                visibility: "private",
-                ...(s.kind === "instructions" ? { kind: s.kind } : {}),
-                currentVersion: { id: v.id, semanticVersion: v.semanticVersion },
-                archivedAt: null,
-                updatedAt: v.createdAt,
-              };
-            }),
+            // The server lists only skills unless the caller selects a kind.
+            (await local.list())
+              .filter((s) => s.kind === (args.kind ?? "skill"))
+              .map(async (s) => {
+                const v = (await local.retrieve(s.id)).version;
+                return {
+                  id: s.id,
+                  workspaceId: workspace.id,
+                  workspaceSlug: "work",
+                  slug: s.slug,
+                  name: s.name,
+                  summary: s.description,
+                  tags: [],
+                  visibility: "private",
+                  ...(s.kind === "instructions" ? { kind: s.kind } : {}),
+                  currentVersion: { id: v.id, semanticVersion: v.semanticVersion },
+                  archivedAt: null,
+                  updatedAt: v.createdAt,
+                };
+              }),
           ),
           nextCursor: null,
         };
+      }
       const selected = args.version as
         | {
             versionId?: string;
@@ -208,12 +214,13 @@ function fixture() {
     workspace,
     transport,
     calls,
+    listArgs,
     cloud: new CloudWorkspaceProvider(workspace, transport),
   };
 }
 describe("cloud provider transport contract", () => {
   it("rebuilds an instructions document from its AGENTS.md entrypoint", async () => {
-    const { local, cloud, calls } = fixture();
+    const { local, cloud, calls, listArgs } = fixture();
     const created = await local.create({
       ...request,
       kind: "instructions",
@@ -226,7 +233,9 @@ describe("cloud provider transport contract", () => {
       (await local.retrieve(created.skillId)).bundle.digest,
     );
     expect(calls.filter((name) => name === "skill_asset_retrieve")).toHaveLength(1);
-    expect((await cloud.list()).map((skill) => skill.kind)).toEqual(["instructions"]);
+    // Local projection lists skills only; SKI-24 owns instructions projection.
+    expect(await cloud.list()).toEqual([]);
+    expect(listArgs.every((args) => args.kind === undefined)).toBe(true);
   });
   it("creates through the shared immutable bundle contract", async () => {
     const { cloud } = fixture();
