@@ -44,7 +44,11 @@
     searching = true;
     searchError = null;
     try {
-      const params = new SvelteURLSearchParams({ q: query, limit: "10" });
+      const params = new SvelteURLSearchParams({
+        q: query,
+        kind: "skill",
+        limit: "10",
+      });
       if (searchScope === "workspace") params.set("workspaceId", workspaceId);
       const result = await apiRequest<{ skills: typeof matches }>(
         `/api/v1/skills/search?${params}`,

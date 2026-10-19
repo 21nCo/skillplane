@@ -1,4 +1,6 @@
 export type SkillVisibility = "private" | "workspace" | "public";
+/** Instructions share the skill version lifecycle but are a separate artifact kind. */
+export type SkillKind = "skill" | "instructions";
 export type SkillArchiveFilter = "active" | "archived" | "all";
 export type SkillVersionStatus = "draft" | "pending_review" | "published" | "rejected";
 export type SemanticBump = "patch" | "minor" | "major";
@@ -87,6 +89,7 @@ export interface Skill {
   readonly description: string;
   readonly tags: readonly string[];
   readonly visibility: SkillVisibility;
+  readonly kind: SkillKind;
   readonly currentPublishedVersionId: string | null;
   readonly currentSemanticVersion: string | null;
   readonly archivedAt: string | null;

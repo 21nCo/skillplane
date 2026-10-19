@@ -15,6 +15,7 @@ const skill = {
   description: "Trace a regional request",
   tags: ["performance"],
   visibility: "workspace",
+  kind: "skill",
   amendmentPolicy: { mode: "review_required" },
   currentPublishedVersionId: "version:one",
   archivedAt: null,
@@ -160,6 +161,7 @@ describe("first-party DataFn skill reads", () => {
     );
     expect(url.pathname).toBe("/api/v1/workspaces/workspace%3Aindia/skills");
     expect(url.searchParams.get("q")).toBe("published-only-term");
+    expect(url.searchParams.get("kind")).toBe("skill");
     expect(url.searchParams.get("cursor")).toBe("signed-domain-cursor");
     expect(url.searchParams.getAll("visibility")).toEqual(["workspace"]);
     expect(
@@ -178,6 +180,7 @@ describe("first-party DataFn skill reads", () => {
     { query: "new search" },
     { archive: "archived" as const },
     { visibility: ["private"] as const },
+    { kind: "instructions" as const },
   ])("rejects cursor reuse with changed scope %j before transport", async (changed) => {
     const fetchMock = vi.fn<typeof fetch>().mockImplementation(async () =>
       datafnResponse([skill], {
@@ -194,6 +197,53 @@ describe("first-party DataFn skill reads", () => {
       listSkills({ ...options, ...changed, cursor: first.nextCursor }),
     ).rejects.toMatchObject({ code: "CURSOR_FILTER_MISMATCH", status: 400 });
     expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("keeps instructions out of every skill listing path", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockImplementation(async (input) =>
+        String(input).includes("/datafn/")
+          ? datafnResponse([skill])
+          : new Response(
+              JSON.stringify({ ok: true, data: { skills: [], nextCursor: null } }),
+              { headers: { "content-type": "application/json" } },
+            ),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    await listSkills({ workspaceId: "workspace:india" });
+    await listSkills({ workspaceId: "workspace:india", query: "review" });
+    await listSkills({ workspaceId: "workspace:india", groupId: "group:one" });
+    await listSkills({ workspaceId: "workspace:india", sourceId: "source:one" });
+
+    const datafn = await requestDetails(fetchMock.mock.calls[0] ?? []);
+    expect(datafn.body.filters).toMatchObject({ kind: "skill" });
+    for (const call of fetchMock.mock.calls.slice(1)) {
+      const url = new URL(String(call[0]), "https://app.skillplane.dev");
+      expect(url.searchParams.get("kind")).toBe("skill");
+    }
+  });
+
+  it("lists instructions separately and rejects rows without a known kind", async () => {
+    const instructions = { ...skill, id: "skill:two", kind: "instructions" };
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(datafnResponse([instructions]))
+      .mockResolvedValueOnce(datafnResponse([{ ...skill, kind: undefined }]));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const page = await listSkills({
+      workspaceId: "workspace:india",
+      kind: "instructions",
+    });
+    expect(page.skills.map((entry) => entry.kind)).toEqual(["instructions"]);
+    expect((await requestDetails(fetchMock.mock.calls[0] ?? [])).body.filters).toEqual({
+      archivedAt: { is_null: true },
+      kind: "instructions",
+    });
+    await expect(listSkills({ workspaceId: "workspace:india" })).rejects.toThrow(
+      "DataFn returned an invalid kind field",
+    );
   });
 
   it("normalizes visibility order and allows page-size changes", async () => {
@@ -260,18 +310,16 @@ describe("first-party DataFn skill reads", () => {
   );
 
   it("reuses search cursors across equivalent whitespace", async () => {
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockImplementation(
-        async () =>
-          new Response(
-            JSON.stringify({
-              ok: true,
-              data: { skills: [], nextCursor: "domain-cursor" },
-            }),
-            { headers: { "content-type": "application/json" } },
-          ),
-      );
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(
+      async () =>
+        new Response(
+          JSON.stringify({
+            ok: true,
+            data: { skills: [], nextCursor: "domain-cursor" },
+          }),
+          { headers: { "content-type": "application/json" } },
+        ),
+    );
     vi.stubGlobal("fetch", fetchMock);
     const first = await listSkills({
       workspaceId: "workspace:india",

@@ -20,6 +20,7 @@ function skill(slug: string): Skill {
     description: "",
     tags: [],
     visibility: "workspace",
+    kind: "skill",
     currentPublishedVersionId: `version-${slug}`,
     currentSemanticVersion: "1.0.0",
     archivedAt: null,

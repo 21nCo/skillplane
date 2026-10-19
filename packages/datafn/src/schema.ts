@@ -68,6 +68,7 @@ export const skillplaneDatafnSchema = defineSchema({
         { name: "description", type: "string", required: true, readonly: true },
         { name: "tags", type: "array", required: true, readonly: true },
         { name: "visibility", type: "string", required: true, readonly: true },
+        { name: "kind", type: "string", required: true, readonly: true },
         { name: "amendmentPolicy", type: "json", required: true, readonly: true },
         {
           name: "currentPublishedVersionId",
@@ -94,6 +95,7 @@ export const skillplaneDatafnSchema = defineSchema({
         "description",
         "tags",
         "visibility",
+        "kind",
         "amendmentPolicy",
         "currentPublishedVersionId",
         "createdAt",

@@ -1,5 +1,6 @@
 import {
   bytewisePathCompare,
+  canonicalizeBundleFiles,
   canonicalSkillJson,
   mediaTypeForPath,
   sha256Hex,
@@ -60,4 +61,26 @@ export async function createSkillBundleFixture(options: {
     ];
   }
   return zipSync(archive, { level: 6 });
+}
+
+/** A canonical instructions bundle: exactly AGENTS.md plus skill.json. */
+export async function createInstructionsBundleFixture(options: {
+  readonly name: string;
+  readonly slug: string;
+  readonly description?: string;
+  readonly document: string;
+}): Promise<Uint8Array> {
+  const bundle = await canonicalizeBundleFiles({
+    skill: {
+      formatVersion: 1,
+      kind: "instructions",
+      entrypoint: "AGENTS.md",
+      name: options.name,
+      slug: options.slug,
+      description: options.description ?? "",
+      tags: [],
+    },
+    files: new Map([["AGENTS.md", strToU8(options.document)]]),
+  });
+  return bundle.bytes;
 }

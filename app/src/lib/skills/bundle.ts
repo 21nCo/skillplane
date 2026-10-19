@@ -170,6 +170,42 @@ export async function buildSkillBundle(options: {
     files: manifest,
   };
   files.set("skill.json", strToU8(`${stableJson(skillJson)}\n`));
+  return zipBundle(files);
+}
+
+/** An instructions bundle is exactly one root AGENTS.md plus its skill.json. */
+export async function buildInstructionsBundle(options: {
+  readonly metadata: EditableSkillMetadata;
+  readonly document: string;
+}): Promise<Uint8Array> {
+  if (!options.document.trim()) {
+    throw new Error("AGENTS.md is required and cannot be empty.");
+  }
+  const metadata = normalizeMetadata(options.metadata);
+  const document = strToU8(options.document);
+  const skillJson = {
+    formatVersion: 1,
+    kind: "instructions",
+    entrypoint: "AGENTS.md",
+    ...metadata,
+    files: [
+      {
+        path: "AGENTS.md",
+        sha256: await sha256Hex(document),
+        byteSize: document.byteLength,
+        mediaType: mediaTypeForPath("AGENTS.md"),
+      },
+    ],
+  };
+  return zipBundle(
+    new Map([
+      ["AGENTS.md", document],
+      ["skill.json", strToU8(`${stableJson(skillJson)}\n`)],
+    ]),
+  );
+}
+
+function zipBundle(files: ReadonlyMap<string, Uint8Array>): Uint8Array {
   const archive: Zippable = {};
   for (const [path, bytes] of [...files].sort(([left], [right]) =>
     comparePaths(left, right),

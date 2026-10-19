@@ -1,7 +1,9 @@
 <script lang="ts">
+  import { goto } from "$app/navigation";
   import { page } from "$app/state";
   import { resolve } from "$app/paths";
   import { Badge, Button } from "@skillplane/ui";
+  import KindBadge from "$lib/skills/KindBadge.svelte";
   import SkillState from "$lib/skills/SkillState.svelte";
   import { provideSkillDetailStore } from "$lib/skills/store.svelte.js";
   import { useWorkspaceStore } from "$lib/workspaces/store.svelte.js";
@@ -17,6 +19,8 @@
     ) ?? null,
   );
   const skillSlug = $derived(page.params.skillSlug ?? "");
+  // Instructions have no SKILL.md; they open on their own route, never as a skill.
+  const isInstructions = $derived(detail.skill?.kind === "instructions");
   const navigation = $derived(
     workspace
       ? [
@@ -88,6 +92,23 @@
     if (workspace && skillSlug) void detail.load(workspace.id, skillSlug);
   });
 
+  $effect(() => {
+    if (
+      workspace &&
+      detail.skill &&
+      isInstructions &&
+      detail.skill.slug === skillSlug
+    ) {
+      void goto(
+        resolve("/(app)/[workspaceSlug]/instructions/[instructionsSlug]", {
+          workspaceSlug: workspace.slug,
+          instructionsSlug: detail.skill.slug,
+        }),
+        { replaceState: true },
+      );
+    }
+  });
+
   function isActive(href: string): boolean {
     if (href.endsWith(`/${skillSlug}`)) {
       return page.url.pathname === href;
@@ -96,7 +117,7 @@
   }
 </script>
 
-{#if detail.loading}
+{#if detail.loading || isInstructions}
   <main class="detail-page">
     <SkillState
       kind="loading"
@@ -136,6 +157,7 @@
       <div>
         <div class="title-row">
           <h1>{detail.skill.name}</h1>
+          <KindBadge kind={detail.skill.kind} />
           <Badge tone={detail.skill.archivedAt ? "warning" : "success"}>
             {detail.skill.archivedAt ? "Archived" : "Active"}
           </Badge>

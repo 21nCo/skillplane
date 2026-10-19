@@ -39,6 +39,17 @@ describe("Skillplane DataFn schema", () => {
     expect(workspaces?.permissions?.read?.fields).toContain("kind");
   });
 
+  it("exposes the artifact kind so first-party skill lists can exclude instructions", () => {
+    const skills = skillplaneDatafnSchema.resources.find(
+      (resource) => resource.name === "skills",
+    );
+    expect(skills?.fields).toContainEqual(
+      expect.objectContaining({ name: "kind", required: true, readonly: true }),
+    );
+    expect(skills?.permissions?.read?.fields).toContain("kind");
+    expect(skills?.permissions?.write?.fields).toEqual([]);
+  });
+
   it("exposes the complete first-party skill version read contract", () => {
     const versions = skillplaneDatafnSchema.resources.find(
       (resource) => resource.name === "skillVersions",

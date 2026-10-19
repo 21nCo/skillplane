@@ -1,6 +1,9 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type BrowserContext, type Page } from "@playwright/test";
-import { createSkillBundleFixture } from "@skillplane/testing";
+import {
+  createInstructionsBundleFixture,
+  createSkillBundleFixture,
+} from "@skillplane/testing";
 import {
   startWorkspaceBrowserHarness,
   type WorkspaceBrowserHarness,
@@ -152,6 +155,51 @@ test("@skill-pages-a11y passes the required viewport and theme matrix", async ({
   expect(candidateResponse.status()).toBe(201);
   const candidate = await data<{ version: { id: string } }>(candidateResponse);
 
+  const instructionsSlug = "accessible-conventions";
+  const instructionsResponse = await page.request.post(
+    `${harness.origin}/api/v1/workspaces/${harness.workspaceId}/skills`,
+    {
+      headers: mutationHeaders("a11y-instructions-create"),
+      data: {
+        bundleBase64: Buffer.from(
+          await createInstructionsBundleFixture({
+            name: "Accessible conventions",
+            slug: instructionsSlug,
+            document: "# Conventions\n\nLabel every control.\n",
+          }),
+        ).toString("base64"),
+        visibility: "workspace",
+      },
+    },
+  );
+  expect(instructionsResponse.status()).toBe(201);
+  const instructions = await data<{
+    skill: { id: string };
+    version: { id: string };
+  }>(instructionsResponse);
+  const instructionsCandidateResponse = await page.request.post(
+    `${harness.origin}/api/v1/skills/${instructions.skill.id}/versions`,
+    {
+      headers: mutationHeaders("a11y-instructions-candidate"),
+      data: {
+        bundleBase64: Buffer.from(
+          await createInstructionsBundleFixture({
+            name: "Accessible conventions",
+            slug: instructionsSlug,
+            document: "# Conventions\n\nLabel every control and announce errors.\n",
+          }),
+        ).toString("base64"),
+        baseVersionId: instructions.version.id,
+        proposedBump: "minor",
+        changeSummary: "Announce errors",
+      },
+    },
+  );
+  expect(instructionsCandidateResponse.status()).toBe(201);
+  const instructionsCandidate = await data<{ version: { id: string } }>(
+    instructionsCandidateResponse,
+  );
+
   const protectedRoutes = [
     {
       path: `/${harness.workspaceSlug}/skills`,
@@ -187,6 +235,36 @@ test("@skill-pages-a11y passes the required viewport and theme matrix", async ({
       path: `/${harness.workspaceSlug}/skills/${slug}/settings`,
       ready: () => page.getByRole("heading", { name: "Visibility" }),
       name: "settings",
+    },
+    {
+      path: `/${harness.workspaceSlug}/instructions`,
+      ready: () => page.getByRole("heading", { name: "Instructions", exact: true }),
+      name: "instructions-list",
+    },
+    {
+      path: `/${harness.workspaceSlug}/instructions/new`,
+      ready: () => page.getByRole("heading", { name: "Write an AGENTS.md document" }),
+      name: "instructions-create",
+    },
+    {
+      path: `/${harness.workspaceSlug}/instructions/${instructionsSlug}`,
+      ready: () => page.getByText("Label every control."),
+      name: "instructions-document",
+    },
+    {
+      path: `/${harness.workspaceSlug}/instructions/${instructionsSlug}/edit`,
+      ready: () => page.getByRole("heading", { name: "Edit AGENTS.md" }),
+      name: "instructions-edit",
+    },
+    {
+      path: `/${harness.workspaceSlug}/instructions/${instructionsSlug}/versions`,
+      ready: () => page.getByRole("heading", { name: "Version diff" }),
+      name: "instructions-versions",
+    },
+    {
+      path: `/${harness.workspaceSlug}/instructions/${instructionsSlug}/versions/${instructionsCandidate.version.id}`,
+      ready: () => page.getByLabel("Unified diff for AGENTS.md"),
+      name: "instructions-version-detail",
     },
   ] as const;
   const viewports = [

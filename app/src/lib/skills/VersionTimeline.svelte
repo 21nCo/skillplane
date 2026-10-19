@@ -8,10 +8,13 @@
     versions,
     workspaceSlug,
     skillSlug,
+    versionHref,
   }: {
     versions: readonly SkillVersion[];
     workspaceSlug: string;
     skillSlug: string;
+    /** Overrides the skill version route, for example for instructions. */
+    versionHref?: (versionId: string) => string;
   } = $props();
 
   function tone(status: SkillVersion["status"]) {
@@ -28,16 +31,17 @@
       <span class="rail" aria-hidden="true">
         <span></span>
       </span>
+      <!-- versionHref returns a resolve()d route. -->
+      <!-- eslint-disable svelte/no-navigation-without-resolve -->
       <a
-        href={resolve(
-          "/(app)/[workspaceSlug]/skills/[skillSlug]/versions/[versionId]",
-          {
+        href={versionHref?.(version.id) ??
+          resolve("/(app)/[workspaceSlug]/skills/[skillSlug]/versions/[versionId]", {
             workspaceSlug,
             skillSlug,
             versionId: version.id,
-          },
-        )}
+          })}
       >
+        <!-- eslint-enable svelte/no-navigation-without-resolve -->
         <div class="version-title">
           <span>
             {#if version.source === "agent_amendment"}
