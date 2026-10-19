@@ -1,5 +1,8 @@
 import { expect, test, type BrowserContext } from "@playwright/test";
-import { createSkillBundleFixture } from "@skillplane/testing";
+import {
+  createInstructionsBundleFixture,
+  createSkillBundleFixture,
+} from "@skillplane/testing";
 import {
   startWorkspaceBrowserHarness,
   type WorkspaceBrowserHarness,
@@ -48,10 +51,13 @@ test("@instructions creates, edits, reviews and publishes instructions in the UI
   const skillMarkdownRequests: string[] = [];
   const datafnSkillFilters: unknown[] = [];
   const serverErrors: string[] = [];
-  page.on("response", (response) => {
-    if (response.status() >= 500) serverErrors.push(response.url());
-  });
-  page.on("request", (request) => {
+  // Every page of every scenario context is observed, not only the first page.
+  const observeServerErrors = (observed: BrowserContext) =>
+    observed.on("response", (response) => {
+      if (response.status() >= 500) serverErrors.push(response.url());
+    });
+  observeServerErrors(context);
+  context.on("request", (request) => {
     if (/\/files\/SKILL\.md$/u.test(new URL(request.url()).pathname)) {
       skillMarkdownRequests.push(request.url());
     }
@@ -179,6 +185,7 @@ test("@instructions creates, edits, reviews and publishes instructions in the UI
 
   // A viewer can read instructions but cannot create, edit or publish them.
   const viewerContext = await browser.newContext();
+  observeServerErrors(viewerContext);
   try {
     await authenticate(viewerContext, true);
     const viewerPage = await viewerContext.newPage();
@@ -273,4 +280,97 @@ test("@instructions gives a document with the slug new its own route", async ({
   await expect(
     page.getByRole("heading", { name: "Write an AGENTS.md document" }),
   ).toHaveCount(0);
+});
+
+test("@instructions keeps paging, submission and archived edits consistent", async ({
+  context,
+  page,
+}) => {
+  test.setTimeout(120_000);
+  await authenticate(context);
+  const workspacePath = `${harness.origin}/${harness.workspaceSlug}`;
+  const headers = (key: string) => ({
+    "x-authfn-csrf": harness.csrfToken,
+    "x-skillplane-workspace-id": harness.workspaceId,
+    "idempotency-key": key,
+  });
+  let archivedId = "";
+  for (let index = 0; index < 21; index += 1) {
+    const slug = `paged-${String(index).padStart(2, "0")}`;
+    const response = await page.request.post(
+      `${harness.origin}/api/v1/workspaces/${harness.workspaceId}/skills`,
+      {
+        headers: headers(`instructions-e2e-${slug}`),
+        data: {
+          bundleBase64: Buffer.from(
+            await createInstructionsBundleFixture({
+              name: `Paged ${slug}`,
+              slug,
+              document: `# ${slug}\n`,
+            }),
+          ).toString("base64"),
+          visibility: "workspace",
+        },
+      },
+    );
+    expect(response.status()).toBe(201);
+    if (index === 0) {
+      archivedId = ((await response.json()) as { data: { skill: { id: string } } }).data
+        .skill.id;
+    }
+  }
+
+  // Loading more keeps the loaded search even after the field was edited.
+  await page.goto(`${workspacePath}/instructions`);
+  const inventory = page.getByRole("region", { name: "Instructions inventory" });
+  await expect(inventory.getByRole("article")).toHaveCount(20);
+  await page.getByLabel("Search instructions").fill("unsubmitted");
+  await page.getByRole("button", { name: "Load more instructions" }).click();
+  await expect
+    .poll(async () => inventory.getByRole("article").count())
+    .toBeGreaterThan(20);
+  await expect(page.getByText("Instructions could not be loaded")).toHaveCount(0);
+
+  // The form is locked while a creation request is in flight, and the request
+  // carries the values that were submitted.
+  await page.goto(`${workspacePath}/instructions/-/new`);
+  await page.getByLabel("Name").fill("Locked submission");
+  await page.getByLabel("AGENTS.md", { exact: true }).fill("# Locked\n");
+  let release!: () => void;
+  const held = new Promise<void>((done) => {
+    release = done;
+  });
+  let submitted: { visibility?: string } | null = null;
+  await page.route(
+    (url) => /^\/api\/v1\/workspaces\/[^/]+\/skills$/u.test(url.pathname),
+    async (route) => {
+      if (route.request().method() !== "POST") return route.fallback();
+      submitted = route.request().postDataJSON() as { visibility?: string };
+      await held;
+      return route.fallback();
+    },
+  );
+  await page.getByRole("button", { name: "Publish version 1.0.0" }).click();
+  await expect.poll(() => submitted).not.toBeNull();
+  await expect(page.getByLabel("Name")).toBeDisabled();
+  await expect(page.getByLabel("Visibility")).toBeDisabled();
+  await expect(
+    page.getByRole("button", { name: "Publish version 1.0.0" }),
+  ).toBeDisabled();
+  release();
+  await expect(page).toHaveURL(/\/instructions\/locked-submission\?created=true$/u);
+  expect(submitted).toMatchObject({ visibility: "private" });
+  await page.unrouteAll();
+
+  // An archived document cannot be edited, even by direct navigation.
+  const archived = await page.request.post(
+    `${harness.origin}/api/v1/skills/${archivedId}/archive`,
+    { headers: headers("instructions-e2e-archive") },
+  );
+  expect(archived.status()).toBe(200);
+  await page.goto(`${workspacePath}/instructions/paged-00/edit`);
+  await expect(
+    page.getByRole("heading", { name: "Archived instructions cannot be edited" }),
+  ).toBeVisible();
+  await expect(page.getByLabel("AGENTS.md", { exact: true })).toHaveCount(0);
 });

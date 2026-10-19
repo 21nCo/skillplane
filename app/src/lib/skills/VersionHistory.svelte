@@ -4,9 +4,11 @@
   import SkillState from "$lib/skills/SkillState.svelte";
   import VersionDiff from "$lib/skills/VersionDiff.svelte";
   import VersionTimeline from "$lib/skills/VersionTimeline.svelte";
-  import { getSkillDiff } from "$lib/skills/api.js";
+  import {
+    VersionComparison,
+    defaultComparison,
+  } from "$lib/skills/version-comparison.svelte.js";
   import { useSkillDetailStore } from "$lib/skills/store.svelte.js";
-  import type { SkillVersionDiff } from "$lib/skills/types.js";
   import { useWorkspaceStore } from "$lib/workspaces/store.svelte.js";
   import { ArrowsLeftRightIcon } from "phosphor-svelte";
 
@@ -27,41 +29,29 @@
 
   let fromVersionId = $state("");
   let toVersionId = $state("");
-  let diff = $state<SkillVersionDiff | null>(null);
-  let loadingDiff = $state(false);
-  let diffError = $state<string | null>(null);
-  let initialized = $state(false);
+  let initializedFor = $state<string | null>(null);
+  const comparison = new VersionComparison();
 
+  // Another artifact gets its own default selection and drops the previous result.
   $effect(() => {
-    if (!initialized && detail.versions.length > 0) {
-      const current = detail.currentVersion ?? detail.versions[0];
-      const previous =
-        detail.versions.find((version) => version.id === current.baseVersionId) ??
-        detail.versions.find((version) => version.id !== current.id);
-      toVersionId = current.id;
-      fromVersionId = previous?.id ?? "";
-      initialized = true;
-    }
+    const skillId = detail.skill?.id ?? null;
+    if (!skillId || initializedFor === skillId || detail.versions.length === 0) return;
+    const selection = defaultComparison(detail.versions, detail.currentVersion);
+    fromVersionId = selection?.fromVersionId ?? "";
+    toVersionId = selection?.toVersionId ?? "";
+    comparison.reset();
+    initializedFor = skillId;
   });
 
-  async function compare(event: SubmitEvent) {
+  function compare(event: SubmitEvent) {
     event.preventDefault();
     if (!workspace || !detail.skill || !fromVersionId || !toVersionId) return;
-    loadingDiff = true;
-    diffError = null;
-    try {
-      diff = await getSkillDiff({
-        workspaceId: workspace.id,
-        skillId: detail.skill.id,
-        fromVersionId,
-        toVersionId,
-      });
-    } catch (cause) {
-      diffError =
-        cause instanceof Error ? cause.message : "Versions could not be compared.";
-    } finally {
-      loadingDiff = false;
-    }
+    void comparison.compare({
+      workspaceId: workspace.id,
+      skillId: detail.skill.id,
+      fromVersionId,
+      toVersionId,
+    });
   }
 
   function versionLabel(versionId: string): string {
@@ -94,11 +84,7 @@
           {versionHref}
         />
       {:else}
-        <SkillState
-          kind="empty"
-          title="No versions"
-          message="This skill has no visible versions."
-        />
+        <SkillState kind="empty" title="No versions" message="No visible versions." />
       {/if}
     </section>
 
@@ -112,7 +98,9 @@
       {#if detail.versions.length < 2}
         <SkillState
           kind="empty"
-          title="One version published"
+          title={detail.versions.length === 0
+            ? "No versions to compare"
+            : "One version published"}
           message="Create a candidate revision before comparing immutable versions."
         />
       {:else}
@@ -142,28 +130,28 @@
           />
           <Button
             type="submit"
-            loading={loadingDiff}
+            loading={comparison.loading}
             disabled={!fromVersionId || !toVersionId || fromVersionId === toVersionId}
           >
             Compare versions
           </Button>
         </form>
 
-        {#if diffError}
+        {#if comparison.error}
           <SkillState
             kind="error"
             title="Diff could not be loaded"
-            message={diffError}
+            message={comparison.error}
             retry={() => {
-              const synthetic = new SubmitEvent("submit");
-              void compare(synthetic);
+              compare(new SubmitEvent("submit"));
             }}
           />
-        {:else if diff}
+        {:else if comparison.diff}
           <div class="diff-heading">
-            {versionLabel(diff.fromVersionId)} → {versionLabel(diff.toVersionId)}
+            {versionLabel(comparison.diff.fromVersionId)} →
+            {versionLabel(comparison.diff.toVersionId)}
           </div>
-          <VersionDiff files={diff.files} />
+          <VersionDiff files={comparison.diff.files} />
         {/if}
       {/if}
     </section>

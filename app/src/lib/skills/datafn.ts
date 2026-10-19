@@ -193,6 +193,10 @@ function datafnBoundary(value: unknown): {
 } {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw cursorError();
   const record = value as Record<string, unknown>;
+  // DataFn returns the next page's boundary as the last row's sort keys.
+  if (record.after === undefined && record.before === undefined) {
+    return { after: record };
+  }
   const key = record.after !== undefined ? "after" : "before";
   const boundary = record[key];
   if (

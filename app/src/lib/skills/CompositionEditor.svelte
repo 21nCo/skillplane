@@ -111,12 +111,14 @@
     >
   </div>
   {#if searchError}<p role="alert">{searchError}</p>{/if}
-  {#each matches as match (match.id)}<Button
-      type="button"
-      disabled={dependencies.length >= 32}
-      onclick={() => addMatch(match)}
-      >Add {match.workspaceSlug}/{match.slug} {match.semanticVersion}</Button
-    ><KindBadge kind={match.kind ?? "skill"} />{/each}
+  {#each matches as match (match.id)}<div class="match">
+      <Button
+        type="button"
+        disabled={dependencies.length >= 32}
+        onclick={() => addMatch(match)}
+        >Add {match.workspaceSlug}/{match.slug} {match.semanticVersion}</Button
+      ><KindBadge kind={match.kind ?? "skill"} />
+    </div>{/each}
   {#each dependencies as dependency, index (index)}
     <fieldset>
       <legend>Dependency {index + 1}</legend>
@@ -223,6 +225,13 @@
   section {
     display: grid;
     gap: var(--sp-space-4);
+  }
+  /* The result keeps its full-width button, with its kind beside it. */
+  .match {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: var(--sp-space-2);
   }
   fieldset {
     border: 1px solid var(--sp-color-border);

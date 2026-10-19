@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { untrack } from "svelte";
+  import { onDestroy, untrack } from "svelte";
   import { resolve } from "$app/paths";
   import { page } from "$app/state";
   import { Badge, Button, Textarea } from "@skillplane/ui";
@@ -21,10 +21,12 @@
   const canPublish = $derived(
     Boolean(workspace && (workspace.role === "admin" || workspace.role === "owner")),
   );
+  // The store ignores a decision for an artifact it no longer holds.
   const candidate = new CandidateReviewController(async (decided) => {
     detail.replaceVersion(decided);
-    await detail.refresh();
+    await detail.refreshIfOwner(decided.skillId);
   });
+  onDestroy(() => candidate.dispose());
   const version = $derived(candidate.version);
   const control = $derived(candidate.control);
   const decideAmendment = (decision: "approve" | "reject", rationale: string) =>
@@ -147,7 +149,11 @@
             >
               Reject
             </Button>
-            <Button loading={candidate.busy} onclick={() => void candidate.publish()}>
+            <Button
+              loading={candidate.busy}
+              disabled={candidate.busy}
+              onclick={() => void candidate.publish()}
+            >
               Publish {version.proposedBump ?? "patch"}
             </Button>
           </div>

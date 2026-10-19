@@ -74,11 +74,19 @@ export class SkillDetailStore {
     this.error = null;
   }
 
+  // A late decision may arrive after this store moved to another artifact; only the
+  // artifact it belongs to is refreshed.
+  async refreshIfOwner(skillId: string): Promise<void> {
+    if (this.skill?.id === skillId) await this.refresh();
+  }
+
   replaceSkill(skill: Skill): void {
     this.skill = skill;
   }
 
+  // A version of another artifact is ignored, so it never enters this history.
   replaceVersion(version: SkillVersion): void {
+    if (this.skill?.id !== version.skillId) return;
     const index = this.versions.findIndex((entry) => entry.id === version.id);
     if (index === -1) {
       this.versions = [version, ...this.versions];

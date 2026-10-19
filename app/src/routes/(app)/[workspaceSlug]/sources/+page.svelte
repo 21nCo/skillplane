@@ -428,7 +428,8 @@
         ><tbody
           >{#each preview.plan as item (item.path)}<tr
               ><td><code>{item.path || "/"}</code></td><td
-                >{item.slug ?? "Invalid skill"}</td
+                >{#if item.slug}{item.slug} <KindBadge kind="skill" />{:else}Invalid
+                  skill{/if}</td
               ><td>{item.action}</td><td>{item.message ?? ""}</td></tr
             >{/each}</tbody
         >

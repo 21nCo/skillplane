@@ -128,14 +128,26 @@ export class CandidateReviewController {
     if (this.target) void this.load(this.target);
   }
 
-  // Retries only the refresh after a saved decision; the decision is not repeated.
+  // Called when the page is destroyed: pending loads and decisions stop changing
+  // this view, while saved decisions still reach ondecided.
+  dispose(): void {
+    this.request += 1;
+    this.target = null;
+    this.decisionKey = null;
+  }
+
+  // Retries only the refresh (and a missing agent review) after a saved decision;
+  // the decision is not repeated.
   async refresh(): Promise<void> {
     const request = this.request;
+    const target = this.target;
     const version = this.version;
-    if (!version || this.busy || this.refreshError === null) return;
+    if (!target || !version || this.busy || this.refreshError === null) return;
     this.busy = true;
     this.refreshError = null;
     try {
+      const review = this.review ?? (await findAgentReview(target, version));
+      if (request === this.request) this.review = review;
       await this.ondecided(version);
     } catch (cause) {
       if (request === this.request) {
@@ -196,30 +208,43 @@ export class CandidateReviewController {
     return this.decisionKey.key;
   }
 
-  // A failed request may still have committed; a candidate that left review is shown
-  // as decided rather than as unchanged.
-  private async reconcile(
-    request: number,
-    target: CandidateTarget,
-  ): Promise<SkillVersion | null> {
+  // A failed request may still have committed. A candidate that left review is
+  // returned as decided even when its review cannot be read; the review failure is
+  // reported separately instead of hiding the saved decision.
+  private async reconcile(target: CandidateTarget): Promise<{
+    readonly version: SkillVersion;
+    readonly review: AmendmentReview | null;
+    readonly reviewError: string | null;
+  } | null> {
+    let current: SkillVersion;
     try {
-      const current = await getSkillVersion(
+      current = await getSkillVersion(
         target.workspaceId,
         target.skillId,
         target.versionId,
       );
-      if (current.status === "pending_review") return null;
-      const review = await findAgentReview(target, current);
-      if (request !== this.request) return null;
-      this.version = current;
-      this.review = review;
-      return current;
     } catch {
       return null;
     }
+    if (current.status === "pending_review") return null;
+    try {
+      return {
+        version: current,
+        review: await findAgentReview(target, current),
+        reviewError: null,
+      };
+    } catch (cause) {
+      return {
+        version: current,
+        review: null,
+        reviewError: message(cause, "The amendment review could not be loaded."),
+      };
+    }
   }
 
-  // A decision belongs to the candidate it was made on; after navigation it is dropped.
+  // A saved decision is always passed to ondecided, which owns the artifact's shared
+  // history. Only the request that made it may change this controller's view state;
+  // a later load or dispose() keeps the newer view.
   private async settle(
     kind: "human" | "agent",
     scope: readonly string[],
@@ -236,37 +261,46 @@ export class CandidateReviewController {
     if (!target || this.busy || this.loading || this.control.kind !== kind) {
       return false;
     }
+    const owns = () => request === this.request;
     this.busy = true;
     this.actionError = null;
     this.refreshError = null;
     let version: SkillVersion;
+    let reviewError: string | null = null;
     try {
       const decided = await operation(target, this.keyFor(target, scope));
-      if (request !== this.request) return false;
       version = decided.version;
-      this.version = version;
-      if (decided.review) this.review = decided.review;
+      if (owns()) {
+        this.version = version;
+        if (decided.review) this.review = decided.review;
+      }
     } catch (cause) {
-      if (request !== this.request) return false;
-      const reconciled = await this.reconcile(request, target);
-      if (request !== this.request) return false;
+      const reconciled = await this.reconcile(target);
       if (!reconciled) {
-        this.actionError = message(cause, "The candidate state was not changed.");
-        this.busy = false;
+        if (owns()) {
+          this.actionError = message(cause, "The candidate state was not changed.");
+          this.busy = false;
+        }
         return false;
       }
-      version = reconciled;
+      version = reconciled.version;
+      reviewError = reconciled.reviewError;
+      if (owns()) {
+        this.version = version;
+        this.review = reconciled.review;
+      }
     }
-    this.decisionKey = null;
+    if (owns()) this.decisionKey = null;
     // The decision is saved; a failed refresh must not report it as unchanged.
     try {
       await this.ondecided(version);
     } catch (cause) {
-      if (request === this.request) {
-        this.refreshError = message(cause, "The instructions could not refresh.");
-      }
+      reviewError ??= message(cause, "The instructions could not refresh.");
     }
-    if (request === this.request) this.busy = false;
+    if (owns()) {
+      this.refreshError = reviewError;
+      this.busy = false;
+    }
     return true;
   }
 }

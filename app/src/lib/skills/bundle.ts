@@ -80,6 +80,24 @@ function mediaTypeForPath(path: string): string {
   return extension ? (types[extension] ?? "application/octet-stream") : "text/plain";
 }
 
+const SLUG_MAX_LENGTH = 120;
+
+/**
+ * Derives a valid slug from a display name: lowercase ASCII words joined by single
+ * hyphens, cut at a hyphen boundary when longer than the 120-character limit.
+ */
+export function slugFromName(name: string): string {
+  const slug = name
+    .trim()
+    .toLocaleLowerCase()
+    .replace(/[^a-z0-9]+/gu, "-")
+    .replace(/^-|-$/gu, "");
+  if (slug.length <= SLUG_MAX_LENGTH) return slug;
+  const cut = slug.slice(0, SLUG_MAX_LENGTH + 1);
+  const boundary = cut.lastIndexOf("-");
+  return boundary > 0 ? cut.slice(0, boundary) : slug.slice(0, SLUG_MAX_LENGTH);
+}
+
 function normalizeMetadata(metadata: EditableSkillMetadata): EditableSkillMetadata {
   const name = metadata.name.trim().replace(/\s+/gu, " ");
   const slug = metadata.slug.trim().toLocaleLowerCase();
@@ -89,13 +107,17 @@ function normalizeMetadata(metadata: EditableSkillMetadata): EditableSkillMetada
   if (!name || name.length > 160) {
     throw new Error("Skill name must contain 1 to 160 characters.");
   }
-  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(slug) || slug.length > 120) {
+  if (slug.length > SLUG_MAX_LENGTH) {
+    throw new Error("Skill slug must be 120 characters or fewer.");
+  }
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(slug)) {
     throw new Error(
       "Skill slug must use lowercase letters, numbers, and single hyphens.",
     );
   }
-  if (metadata.description.length > 20_000) {
-    throw new Error("Description must be 20,000 characters or fewer.");
+  // Storage limits the description in UTF-8 bytes, not characters.
+  if (new TextEncoder().encode(metadata.description).byteLength > 20_000) {
+    throw new Error("Description must be 20,000 bytes (UTF-8) or fewer.");
   }
   if (tags.some((tag) => tag.length > 80)) {
     throw new Error("Tags must be 80 characters or fewer.");

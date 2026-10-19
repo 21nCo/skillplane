@@ -115,7 +115,11 @@
       <p>{detail.skill.description || "No description provided."}</p>
       <div class="meta">
         <code>{detail.skill.slug}</code>
-        <span>v{detail.skill.currentSemanticVersion ?? "unpublished"}</span>
+        <span
+          >{detail.skill.currentSemanticVersion
+            ? `v${detail.skill.currentSemanticVersion}`
+            : "unpublished"}</span
+        >
         <span>{detail.versions.length} immutable versions</span>
       </div>
     </header>

@@ -86,4 +86,23 @@ describe("SkillDetailStore", () => {
     expect(store.skill).toEqual(newSkill);
     expect(store.versions).toEqual([newVersion]);
   });
+
+  it("ignores a version or refresh for a skill it no longer holds", async () => {
+    api.getSkillBySlug.mockResolvedValueOnce(skill("current"));
+    api.listSkillVersions.mockResolvedValueOnce([version("current")]);
+    const store = new SkillDetailStore();
+    await store.load("workspace-1", "current");
+    api.getSkill.mockClear();
+    api.listSkillVersions.mockClear();
+
+    store.replaceVersion(version("other"));
+    await store.refreshIfOwner("skill-other");
+
+    expect(store.versions).toEqual([version("current")]);
+    expect(api.getSkill).not.toHaveBeenCalled();
+    expect(api.listSkillVersions).not.toHaveBeenCalled();
+
+    store.replaceVersion({ ...version("current"), status: "rejected" });
+    expect(store.versions[0]?.status).toBe("rejected");
+  });
 });

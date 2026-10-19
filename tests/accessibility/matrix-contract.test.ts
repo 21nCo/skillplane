@@ -44,7 +44,19 @@ describe("WCAG 2.2 AA release matrix contract", () => {
     ]) {
       expect(matrix.toLowerCase()).toContain(requiredEvidence.toLowerCase());
     }
-    expect(errorPage).toMatch(/role=["']alert["']/u);
+    // The error page announces its failure itself or through the shared ErrorState,
+    // which must keep its alert role.
+    if (!/role=["']alert["']/u.test(errorPage)) {
+      expect(errorPage).toMatch(
+        /import \{[^}]*\bErrorState\b[^}]*\} from "@skillplane\/ui"/u,
+      );
+      expect(errorPage).toMatch(/<ErrorState\b/u);
+      const errorState = await readFile(
+        resolve(root, "packages/ui/src/components/ErrorState.svelte"),
+        "utf8",
+      );
+      expect(errorState).toMatch(/role=["']alert["']/u);
+    }
   });
 
   it("retains landmark and reduced-motion CSS contracts", async () => {

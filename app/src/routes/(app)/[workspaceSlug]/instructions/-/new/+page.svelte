@@ -6,7 +6,11 @@
   import MarkdownEditor from "$lib/markdown/MarkdownEditor.svelte";
   import SkillState from "$lib/skills/SkillState.svelte";
   import { createSkill } from "$lib/skills/api.js";
-  import { buildInstructionsBundle, bytesToBase64 } from "$lib/skills/bundle.js";
+  import {
+    buildInstructionsBundle,
+    bytesToBase64,
+    slugFromName,
+  } from "$lib/skills/bundle.js";
   import type { SkillVisibility } from "$lib/skills/types.js";
   import { useWorkspaceStore } from "$lib/workspaces/store.svelte.js";
   import { ArrowLeftIcon, WarningCircleIcon } from "phosphor-svelte";
@@ -39,35 +43,40 @@
   }
 
   function deriveSlug() {
-    slug = name
-      .trim()
-      .toLocaleLowerCase()
-      .replace(/[^a-z0-9]+/gu, "-")
-      .replace(/^-|-$/gu, "");
+    slug = slugFromName(name);
     changed();
   }
 
+  // The request is built from one snapshot taken before any await; the form is
+  // disabled until it settles, so a later edit cannot mix into it.
   async function submit(event: SubmitEvent) {
     event.preventDefault();
-    if (!workspace) return;
+    if (!workspace || saving) return;
+    const submission = {
+      workspace: { id: workspace.id, slug: workspace.slug },
+      metadata: { name, slug, description, tags: [] },
+      document,
+      visibility,
+      idempotencyKey,
+    };
     saving = true;
     error = null;
     try {
       const bundle = await buildInstructionsBundle({
-        metadata: { name, slug, description, tags: [] },
-        document,
+        metadata: submission.metadata,
+        document: submission.document,
       });
       const created = await createSkill({
-        workspaceId: workspace.id,
+        workspaceId: submission.workspace.id,
         bundleBase64: bytesToBase64(bundle),
-        visibility,
-        idempotencyKey,
+        visibility: submission.visibility,
+        idempotencyKey: submission.idempotencyKey,
       });
       // The pathname is route-safe via resolve(); the static success flag is appended.
       /* eslint-disable svelte/no-navigation-without-resolve */
       await goto(
         `${resolve("/(app)/[workspaceSlug]/instructions/[instructionsSlug]", {
-          workspaceSlug: workspace.slug,
+          workspaceSlug: submission.workspace.slug,
           instructionsSlug: created.skill.slug,
         })}?created=true`,
       );
@@ -110,63 +119,72 @@
     />
   {:else}
     <form class="panel" onsubmit={submit}>
-      <div class="two-column">
-        <Input
-          label="Name"
-          placeholder="Repository conventions"
-          required
-          maxlength={160}
-          bind:value={name}
-          oninput={deriveSlug}
-        />
-        <Input
-          label="Slug"
-          description="Unique across skills and instructions in this workspace."
-          placeholder="repository-conventions"
-          required
-          maxlength={120}
-          pattern="[a-z0-9]+(?:-[a-z0-9]+)*"
-          bind:value={slug}
+      <fieldset disabled={saving}>
+        <div class="two-column">
+          <div>
+            <Input
+              label="Name"
+              placeholder="Repository conventions"
+              required
+              maxlength={160}
+              bind:value={name}
+              oninput={deriveSlug}
+            />
+          </div>
+          <div>
+            <Input
+              label="Slug"
+              description="Unique across skills and instructions in this workspace."
+              placeholder="repository-conventions"
+              required
+              maxlength={120}
+              pattern="[a-z0-9]+(?:-[a-z0-9]+)*"
+              bind:value={slug}
+              oninput={changed}
+            />
+          </div>
+        </div>
+        <Textarea
+          label="Description"
+          rows={2}
+          maxlength={20000}
+          bind:value={description}
           oninput={changed}
         />
-      </div>
-      <Textarea
-        label="Description"
-        rows={2}
-        maxlength={20000}
-        bind:value={description}
-        oninput={changed}
-      />
-      <MarkdownEditor
-        surface="instructions-create"
-        label="AGENTS.md"
-        description="The instructions document delivered to agents."
-        rows={18}
-        required
-        maxBytes={1_048_576}
-        maxCharacters={1_048_576}
-        bind:value={document}
-        oninput={changed}
-      />
-      <Select
-        label="Visibility"
-        description="Instructions are never public."
-        options={[
-          { value: "private", label: "Private — only you and authorized principals" },
-          { value: "workspace", label: "Workspace — all workspace members" },
-        ]}
-        bind:value={visibility}
-        onchange={changed}
-      />
-      {#if error}
-        <p class="error" role="alert">
-          <WarningCircleIcon weight="fill" aria-hidden="true" />
-          {error}
-        </p>
-      {/if}
-      <div class="actions">
-        <Button type="submit" loading={saving}>Publish version 1.0.0</Button>
-      </div>
+        <MarkdownEditor
+          surface="instructions-create"
+          label="AGENTS.md"
+          description="The instructions document delivered to agents."
+          rows={18}
+          required
+          maxBytes={1_048_576}
+          maxCharacters={1_048_576}
+          disabled={saving}
+          bind:value={document}
+          oninput={changed}
+        />
+        <Select
+          label="Visibility"
+          description="Instructions are never public."
+          options={[
+            { value: "private", label: "Private — only you and authorized principals" },
+            { value: "workspace", label: "Workspace — all workspace members" },
+          ]}
+          bind:value={visibility}
+          onchange={changed}
+        />
+        {#if error}
+          <p class="error" role="alert">
+            <WarningCircleIcon weight="fill" aria-hidden="true" />
+            {error}
+          </p>
+        {/if}
+        <div class="actions">
+          <Button type="submit" loading={saving} disabled={saving}>
+            Publish version 1.0.0
+          </Button>
+        </div>
+      </fieldset>
     </form>
   {/if}
 </main>
@@ -215,6 +233,15 @@
     border-radius: var(--sp-radius-lg);
     padding: var(--sp-space-5);
     background: var(--sp-color-surface);
+  }
+
+  fieldset {
+    display: grid;
+    gap: var(--sp-space-4);
+    min-width: 0;
+    margin: 0;
+    border: 0;
+    padding: 0;
   }
 
   .two-column {

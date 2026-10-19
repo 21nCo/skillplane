@@ -131,6 +131,29 @@ describe("first-party DataFn skill reads", () => {
     });
   });
 
+  it("pages with the boundary DataFn returns as the last row's sort keys", async () => {
+    // DataFn's own nextCursor is the bare sort-key record, not { after }.
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        datafnResponse([{ ...skill, currentVersion: version }], {
+          updatedAt: skill.updatedAt,
+          id: skill.id,
+        }),
+      )
+      .mockResolvedValueOnce(datafnResponse([]));
+    vi.stubGlobal("fetch", fetchMock);
+    const options = { workspaceId: "workspace:india", archive: "active" } as const;
+
+    const page = await listSkills(options);
+    await listSkills({ ...options, cursor: page.nextCursor });
+
+    const nextQuery = await requestDetails(fetchMock.mock.calls[1] ?? []);
+    expect(nextQuery.body.cursor).toEqual({
+      after: { updatedAt: skill.updatedAt, id: skill.id },
+    });
+  });
+
   it("retains domain search ranking and forwards its cursor unchanged", async () => {
     const page = {
       skills: [{ ...skill, workspaceId: "workspace:india" }],

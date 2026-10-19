@@ -2,14 +2,18 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   AmendmentReview,
   AmendmentReviewDetail,
+  Skill,
   SkillVersion,
 } from "../../src/lib/skills/types.js";
 
 const api = vi.hoisted(() => ({
   decideAmendmentReview: vi.fn(),
+  getSkill: vi.fn(),
+  getSkillBySlug: vi.fn(),
   getSkillDiff: vi.fn(),
   getSkillVersion: vi.fn(),
   listAmendmentReviews: vi.fn(),
+  listSkillVersions: vi.fn(),
   publishCandidate: vi.fn(),
   rejectCandidate: vi.fn(),
 }));
@@ -20,6 +24,7 @@ import {
   CandidateReviewController,
   candidateControl,
 } from "../../src/lib/instructions/candidate-review.svelte.js";
+import { SkillDetailStore } from "../../src/lib/skills/store.svelte.js";
 
 const target = (versionId: string) => ({
   workspaceId: "workspace-1",
@@ -158,7 +163,7 @@ describe("CandidateReviewController", () => {
     expect(controller.loading).toBe(false);
   });
 
-  it("acts on the selected candidate and drops a decision that resolves after navigation", async () => {
+  it("keeps the newer view but records a decision that resolves after navigation", async () => {
     api.getSkillVersion.mockImplementation(async (_w: string, _s: string, id: string) =>
       version(id),
     );
@@ -175,10 +180,11 @@ describe("CandidateReviewController", () => {
     await controller.load(target("second"));
     published.resolve(version("first", { status: "published" }));
 
-    expect(await decision).toBe(false);
+    // The saved decision still reaches the artifact's history.
+    expect(await decision).toBe(true);
+    expect(ondecided).toHaveBeenCalledWith(version("first", { status: "published" }));
     expect(controller.version).toEqual(version("second"));
     expect(controller.busy).toBe(false);
-    expect(ondecided).not.toHaveBeenCalled();
 
     api.publishCandidate.mockResolvedValueOnce(
       version("second", { status: "published" }),
@@ -267,6 +273,141 @@ describe("CandidateReviewController", () => {
     );
     expect(api.publishCandidate).toHaveBeenCalledTimes(1);
     expect(controller.refreshError).toBeNull();
+    expect(controller.busy).toBe(false);
+  });
+
+  it("records a lost-response decision whose review cannot be read", async () => {
+    const candidate = version("agent", { source: "agent_amendment" });
+    api.getSkillVersion
+      .mockResolvedValueOnce(candidate)
+      .mockResolvedValueOnce({ ...candidate, status: "published" });
+    api.listAmendmentReviews
+      .mockResolvedValueOnce([{ review: review("agent") }])
+      .mockRejectedValueOnce(new Error("Reviews unavailable"));
+    api.decideAmendmentReview.mockRejectedValueOnce(new Error("Network error"));
+    const ondecided = vi.fn(() => Promise.resolve());
+    const controller = new CandidateReviewController(ondecided);
+    await controller.load(target("agent"));
+
+    expect(await controller.decideAmendment("approve", "validated")).toBe(true);
+
+    expect(controller.version?.status).toBe("published");
+    expect(controller.actionError).toBeNull();
+    expect(controller.refreshError).toBe("Reviews unavailable");
+    expect(controller.busy).toBe(false);
+    expect(ondecided).toHaveBeenCalledWith({ ...candidate, status: "published" });
+
+    // Retrying reads the review again without deciding again.
+    api.listAmendmentReviews.mockResolvedValueOnce([
+      { review: { ...review("agent"), status: "approved" } },
+    ]);
+    await controller.refresh();
+    expect(controller.review?.status).toBe("approved");
+    expect(controller.refreshError).toBeNull();
+    expect(api.decideAmendmentReview).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("candidate decisions and the shared detail store", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+
+  function artifact(id: string, slug: string) {
+    return {
+      id,
+      workspaceId: "workspace-1",
+      slug,
+      name: slug,
+      kind: "instructions",
+      currentPublishedVersionId: null,
+    } as unknown as Skill;
+  }
+
+  // Wires the controller to the store exactly as the version page does.
+  async function storeHolding(id: string, slug: string, versions: SkillVersion[]) {
+    api.getSkillBySlug.mockResolvedValueOnce(artifact(id, slug));
+    api.listSkillVersions.mockResolvedValueOnce(versions);
+    const store = new SkillDetailStore();
+    await store.load("workspace-1", slug);
+    const controller = new CandidateReviewController(async (decided) => {
+      store.replaceVersion(decided);
+      await store.refreshIfOwner(decided.skillId);
+    });
+    return { store, controller };
+  }
+
+  it.each(["human", "agent"] as const)(
+    "keeps a %s decision for document A out of document B after the page is destroyed",
+    async (source) => {
+      const pending = version("a-2", {
+        source: source === "agent" ? "agent_amendment" : "human",
+      });
+      api.getSkillVersion.mockResolvedValueOnce(pending);
+      api.listAmendmentReviews.mockResolvedValueOnce([{ review: review("a-2") }]);
+      const { store, controller } = await storeHolding("instructions-1", "a", [
+        pending,
+      ]);
+      await controller.load(target("a-2"));
+      const decided = deferred<SkillVersion>();
+      if (source === "agent") {
+        api.decideAmendmentReview.mockReturnValueOnce(
+          decided.promise.then((candidate) => ({
+            candidate,
+            review: { ...review("a-2"), status: "approved" },
+          })),
+        );
+      } else {
+        api.publishCandidate.mockReturnValueOnce(decided.promise);
+      }
+      const decision =
+        source === "agent"
+          ? controller.decideAmendment("approve", "validated")
+          : controller.publish();
+
+      // The user leaves A's version page for document B.
+      controller.dispose();
+      const other = version("b-1", { skillId: "instructions-2", status: "published" });
+      api.getSkillBySlug.mockResolvedValueOnce(artifact("instructions-2", "b"));
+      api.listSkillVersions.mockResolvedValueOnce([other]);
+      await store.load("workspace-1", "b");
+      decided.resolve({ ...pending, status: "published" });
+
+      expect(await decision).toBe(true);
+      expect(store.skill?.id).toBe("instructions-2");
+      expect(store.versions).toEqual([other]);
+      expect(api.getSkill).not.toHaveBeenCalled();
+      expect(controller.refreshError).toBeNull();
+    },
+  );
+
+  it("updates the same document's history when the decision resolves after another version loads", async () => {
+    const first = version("first");
+    const second = version("second", { revision: 3 });
+    const { store, controller } = await storeHolding("instructions-1", "a", [
+      second,
+      first,
+    ]);
+    api.getSkillVersion.mockImplementation(
+      async (_w: string, _s: string, id: string) => (id === "first" ? first : second),
+    );
+    await controller.load(target("first"));
+    const published = deferred<SkillVersion>();
+    api.publishCandidate.mockReturnValueOnce(published.promise);
+    const decision = controller.publish();
+
+    await controller.load(target("second"));
+    const refreshed = { ...first, status: "published" as const };
+    api.getSkill.mockResolvedValueOnce(artifact("instructions-1", "a"));
+    api.listSkillVersions.mockResolvedValueOnce([second, refreshed]);
+    published.resolve(refreshed);
+
+    expect(await decision).toBe(true);
+    expect(store.versions.find((entry) => entry.id === "first")?.status).toBe(
+      "published",
+    );
+    expect(api.getSkill).toHaveBeenCalledWith("workspace-1", "instructions-1");
+    expect(controller.version).toEqual(second);
     expect(controller.busy).toBe(false);
   });
 });

@@ -31,12 +31,19 @@
   let loadingMore = $state(false);
   let error = $state<string | null>(null);
   let loadedWorkspaceId = $state<string | null>(null);
+  // The filters the listed page was loaded with; a cursor is valid only for them.
+  let loadedFilters = $state<{ query: string; archive: SkillArchiveFilter }>({
+    query: "",
+    archive: "active",
+  });
   let generation = 0;
 
   // Only the latest request may update the list; a slower superseded one is dropped.
+  // Loading more keeps the loaded filters even when the search field was edited.
   async function load(reset = true) {
     if (!workspace) return;
     const current = ++generation;
+    const filters = reset ? { query, archive } : loadedFilters;
     if (reset) loading = true;
     else loadingMore = true;
     error = null;
@@ -44,12 +51,13 @@
       const result = await listSkills({
         workspaceId: workspace.id,
         kind: "instructions",
-        query,
-        archive,
+        query: filters.query,
+        archive: filters.archive,
         cursor: reset ? null : nextCursor,
         limit: 20,
       });
       if (current !== generation) return;
+      loadedFilters = filters;
       documents = reset ? [...result.skills] : [...documents, ...result.skills];
       nextCursor = result.nextCursor;
     } catch (cause) {
@@ -71,7 +79,9 @@
     }
   });
 
-  const filtered = $derived(Boolean(query || archive !== "active"));
+  const filtered = $derived(
+    Boolean(loadedFilters.query || loadedFilters.archive !== "active"),
+  );
 </script>
 
 <svelte:head>
@@ -198,6 +208,7 @@
         <Button
           variant="secondary"
           loading={loadingMore}
+          disabled={loadingMore}
           onclick={() => void load(false)}
         >
           Load more instructions

@@ -97,7 +97,8 @@ test("@skill-pages-a11y passes the required viewport and theme matrix", async ({
   context,
   page,
 }) => {
-  test.setTimeout(180_000);
+  // The matrix renders every skill and instructions view in each viewport and theme.
+  test.setTimeout(300_000);
   await authenticate(context);
   await page.goto(`${harness.origin}/${harness.workspaceSlug}/skills`);
 

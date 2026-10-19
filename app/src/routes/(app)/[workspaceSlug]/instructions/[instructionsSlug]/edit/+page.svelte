@@ -20,6 +20,8 @@
     ) ?? null,
   );
   const canWrite = $derived(Boolean(workspace && workspace.role !== "viewer"));
+  // The amendment service rejects candidates for an archived document.
+  const archived = $derived(Boolean(detail.skill?.archivedAt));
 
   let base = $state<SkillVersion | null>(null);
   let document = $state<string | null>(null);
@@ -58,29 +60,46 @@
     if (!base && detail.currentVersion) void load();
   });
 
+  // The request is built from one snapshot taken before any await; the form is
+  // disabled until it settles, so a later edit cannot mix into it.
   async function submit(event: SubmitEvent) {
     event.preventDefault();
-    if (!workspace || !detail.skill || !base || document === null) return;
+    const skill = detail.skill;
+    if (!workspace || !skill || !base || document === null || saving) return;
+    if (skill.archivedAt) {
+      error = "Archived instructions cannot be edited.";
+      return;
+    }
+    const submission = {
+      workspace: { id: workspace.id, slug: workspace.slug },
+      skill: { id: skill.id, slug: skill.slug },
+      metadata: {
+        name: skill.name,
+        slug: skill.slug,
+        description: skill.description,
+        tags: skill.tags,
+      },
+      document,
+      baseVersionId: base.id,
+      proposedBump,
+      changeSummary,
+      idempotencyKey,
+    };
     saving = true;
     error = null;
     try {
       const bundle = await buildInstructionsBundle({
-        metadata: {
-          name: detail.skill.name,
-          slug: detail.skill.slug,
-          description: detail.skill.description,
-          tags: detail.skill.tags,
-        },
-        document,
+        metadata: submission.metadata,
+        document: submission.document,
       });
       const version = await createSkillCandidate({
-        workspaceId: workspace.id,
-        skillId: detail.skill.id,
-        baseVersionId: base.id,
-        proposedBump,
-        changeSummary,
+        workspaceId: submission.workspace.id,
+        skillId: submission.skill.id,
+        baseVersionId: submission.baseVersionId,
+        proposedBump: submission.proposedBump,
+        changeSummary: submission.changeSummary,
         bundleBase64: bytesToBase64(bundle),
-        idempotencyKey,
+        idempotencyKey: submission.idempotencyKey,
       });
       detail.replaceVersion(version);
       // The pathname is route-safe via resolve(); the static flag is appended.
@@ -89,8 +108,8 @@
         `${resolve(
           "/(app)/[workspaceSlug]/instructions/[instructionsSlug]/versions/[versionId]",
           {
-            workspaceSlug: workspace.slug,
-            instructionsSlug: detail.skill.slug,
+            workspaceSlug: submission.workspace.slug,
+            instructionsSlug: submission.skill.slug,
             versionId: version.id,
           },
         )}?candidate=true`,
@@ -115,6 +134,12 @@
     title="Editor access required"
     message="Your viewer role can inspect instructions but cannot propose changes."
   />
+{:else if archived}
+  <SkillState
+    kind="authorization"
+    title="Archived instructions cannot be edited"
+    message="Restore the document before proposing a new version."
+  />
 {:else if loadError}
   <SkillState
     kind="error"
@@ -130,52 +155,61 @@
   />
 {:else}
   <form class="panel" onsubmit={submit}>
-    <header>
-      <h2>Edit AGENTS.md</h2>
-      <p>
-        Submitting creates a candidate based on v{base.semanticVersion}. Published
-        content is unchanged until the candidate is approved.
-      </p>
-    </header>
-    <MarkdownEditor
-      surface="instructions-revise"
-      label="AGENTS.md"
-      rows={20}
-      required
-      maxBytes={1_048_576}
-      maxCharacters={1_048_576}
-      bind:value={document}
-      oninput={changed}
-    />
-    <div class="two-column">
-      <Textarea
-        label="Change summary"
+    <fieldset disabled={saving}>
+      <header>
+        <h2>Edit AGENTS.md</h2>
+        <p>
+          Submitting creates a candidate based on v{base.semanticVersion}. Published
+          content is unchanged until the candidate is approved.
+        </p>
+      </header>
+      <MarkdownEditor
+        surface="instructions-revise"
+        label="AGENTS.md"
+        rows={20}
         required
-        rows={2}
-        maxlength={2000}
-        bind:value={changeSummary}
+        maxBytes={1_048_576}
+        maxCharacters={1_048_576}
+        disabled={saving}
+        bind:value={document}
         oninput={changed}
       />
-      <Select
-        label="Proposed semantic bump"
-        options={[
-          { value: "patch", label: "Patch" },
-          { value: "minor", label: "Minor" },
-          { value: "major", label: "Major" },
-        ]}
-        bind:value={proposedBump}
-        onchange={changed}
-      />
-    </div>
-    {#if error}
-      <p class="error" role="alert">
-        <WarningCircleIcon weight="fill" aria-hidden="true" />
-        {error}
-      </p>
-    {/if}
-    <div class="actions">
-      <Button type="submit" loading={saving}>Submit version for review</Button>
-    </div>
+      <div class="two-column">
+        <div>
+          <Textarea
+            label="Change summary"
+            required
+            rows={2}
+            maxlength={2000}
+            bind:value={changeSummary}
+            oninput={changed}
+          />
+        </div>
+        <div>
+          <Select
+            label="Proposed semantic bump"
+            options={[
+              { value: "patch", label: "Patch" },
+              { value: "minor", label: "Minor" },
+              { value: "major", label: "Major" },
+            ]}
+            bind:value={proposedBump}
+            onchange={changed}
+          />
+        </div>
+      </div>
+      {#if error}
+        <p class="error" role="alert">
+          <WarningCircleIcon weight="fill" aria-hidden="true" />
+          {error}
+        </p>
+      {/if}
+      <div class="actions">
+        <Button type="submit" loading={saving} disabled={saving}>
+          Submit version for review
+        </Button>
+      </div>
+    </fieldset>
   </form>
 {/if}
 
@@ -187,6 +221,15 @@
     border-radius: var(--sp-radius-lg);
     padding: var(--sp-space-5);
     background: var(--sp-color-surface);
+  }
+
+  fieldset {
+    display: grid;
+    gap: var(--sp-space-4);
+    min-width: 0;
+    margin: 0;
+    border: 0;
+    padding: 0;
   }
 
   h2,
