@@ -330,8 +330,12 @@ export async function listAmendmentReviews(options: {
   readonly workspaceId: string;
   readonly skillId: string;
   readonly status?: AmendmentReviewStatus | "all";
+  readonly proposedVersionId?: string;
 }): Promise<readonly AmendmentReviewDetail[]> {
   const query = new URLSearchParams({ status: options.status ?? "all" });
+  if (options.proposedVersionId !== undefined) {
+    query.set("proposedVersionId", options.proposedVersionId);
+  }
   const data = await apiRequest<{ reviews: readonly AmendmentReviewDetail[] }>(
     `/api/v1/skills/${encodeURIComponent(options.skillId)}/candidates?${query.toString()}`,
     { headers: workspaceHeaders(options.workspaceId) },

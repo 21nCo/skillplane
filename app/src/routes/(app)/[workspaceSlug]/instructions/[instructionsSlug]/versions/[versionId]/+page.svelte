@@ -169,6 +169,7 @@
         kind="error"
         title="The decision was saved, but the instructions could not refresh"
         message={candidate.refreshError}
+        retry={() => void candidate.refresh()}
       />
     {/if}
 

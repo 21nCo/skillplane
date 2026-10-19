@@ -630,4 +630,122 @@ describe("amendments, learning provenance, policy, and review", () => {
       ),
     ).toHaveLength(1);
   });
+
+  it("finds a pending review by its proposed version beyond the newest 50", async () => {
+    const markdown = "# Exact review lookup\n\nInspect each candidate.\n";
+    const bundle = await createSkillBundleFixture({
+      name: "Exact review lookup",
+      slug: `exact-review-lookup-${suffix.split("-").at(-1)}`,
+      description: "Many pending agent amendments",
+      tags: ["review"],
+      skillMarkdown: markdown,
+    });
+    const create = await app.request(`/api/v1/workspaces/${owner.workspaceId}/skills`, {
+      method: "POST",
+      headers: headers(owner, `lookup-create-${suffix}`),
+      body: JSON.stringify({
+        bundleBase64: Buffer.from(bundle).toString("base64"),
+        visibility: "workspace",
+      }),
+    });
+    expect(create.status, await create.clone().text()).toBe(201);
+    const created = await data<{
+      skill: { id: string };
+      version: {
+        id: string;
+        manifest: { files: readonly { path: string; sha256: string }[] };
+      };
+    }>(create);
+    const skillId = created.skill.id;
+    const sha = created.version.manifest.files.find(
+      (file) => file.path === "SKILL.md",
+    )?.sha256;
+    if (!sha) throw new Error("Initial SKILL.md digest was not returned");
+
+    const candidates: { candidateId: string; reviewId: string }[] = [];
+    for (let index = 0; index < 51; index += 1) {
+      const response = await app.request(`/api/v1/skills/${skillId}/amendments`, {
+        method: "POST",
+        headers: headers(editor, `lookup-amend-${index}-${suffix}`),
+        body: JSON.stringify(
+          amendmentBody({
+            baseVersionId: created.version.id,
+            expectedSha256: sha,
+            content: `${markdown}\nCandidate ${index}.\n`,
+          }),
+        ),
+      });
+      expect(response.status, await response.clone().text()).toBe(201);
+      const amended = await data<{
+        candidate: { id: string };
+        review: { id: string; status: string };
+      }>(response);
+      expect(amended.review.status).toBe("pending");
+      candidates.push({
+        candidateId: amended.candidate.id,
+        reviewId: amended.review.id,
+      });
+    }
+    const oldest = candidates[0];
+    if (!oldest) throw new Error("No candidate was created");
+
+    const newest = await app.request(
+      `/api/v1/skills/${skillId}/candidates?status=pending`,
+      { headers: headers(viewer) },
+    );
+    expect(newest.status).toBe(200);
+    const newestReviews = (
+      await data<{ reviews: readonly { review: { id: string } }[] }>(newest)
+    ).reviews;
+    expect(newestReviews).toHaveLength(50);
+    expect(newestReviews.map((entry) => entry.review.id)).not.toContain(
+      oldest.reviewId,
+    );
+
+    const exact = await app.request(
+      `/api/v1/skills/${skillId}/candidates?status=all&proposedVersionId=${encodeURIComponent(
+        oldest.candidateId,
+      )}`,
+      { headers: headers(viewer) },
+    );
+    expect(exact.status).toBe(200);
+    expect(
+      (
+        await data<{
+          reviews: readonly {
+            review: { id: string; proposedVersionId: string };
+            candidate: { id: string };
+          }[];
+        }>(exact)
+      ).reviews,
+    ).toEqual([
+      expect.objectContaining({
+        review: expect.objectContaining({
+          id: oldest.reviewId,
+          proposedVersionId: oldest.candidateId,
+        }),
+        candidate: expect.objectContaining({ id: oldest.candidateId }),
+      }),
+    ]);
+
+    const otherVersion = await app.request(
+      `/api/v1/skills/${skillId}/candidates?proposedVersionId=${encodeURIComponent(
+        created.version.id,
+      )}`,
+      { headers: headers(viewer) },
+    );
+    expect(otherVersion.status).toBe(200);
+    expect((await data<{ reviews: readonly unknown[] }>(otherVersion)).reviews).toEqual(
+      [],
+    );
+
+    for (const malformed of ["", "%20", "x".repeat(201)]) {
+      const response = await app.request(
+        `/api/v1/skills/${skillId}/candidates?proposedVersionId=${malformed}`,
+        { headers: headers(viewer) },
+      );
+      expect(response.status).toBe(400);
+      expect(await response.text()).toContain("proposedVersionId");
+    }
+  });
 });

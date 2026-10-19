@@ -17,21 +17,28 @@
   let error = $state<string | null>(null);
   let loading = $state(true);
   let loadedVersionId = $state<string | null>(null);
+  let request = 0;
 
+  // Only the latest load owns the document; a superseded version's response is dropped.
   async function load() {
     if (!workspace || !detail.skill || !detail.currentVersion) return;
+    const current = ++request;
     loading = true;
     error = null;
     try {
-      markdown = await getInstructionsDocument({
+      const document = await getInstructionsDocument({
         workspaceId: workspace.id,
         skillId: detail.skill.id,
         versionId: detail.currentVersion.id,
       });
+      if (current === request) markdown = document;
     } catch (cause) {
-      error = cause instanceof Error ? cause.message : "AGENTS.md could not be loaded.";
+      if (current === request) {
+        error =
+          cause instanceof Error ? cause.message : "AGENTS.md could not be loaded.";
+      }
     } finally {
-      loading = false;
+      if (current === request) loading = false;
     }
   }
 

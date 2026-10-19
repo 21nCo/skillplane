@@ -74,14 +74,21 @@ describe("CandidateReviewController", () => {
     vi.resetAllMocks();
   });
 
-  it("looks up a pending agent candidate in the pending queue and withholds publication when absent", async () => {
+  it("finds an agent candidate's review by its proposed version beyond the newest 50", async () => {
     api.getSkillVersion.mockResolvedValue(
       version("agent", { source: "agent_amendment" }),
     );
-    // The newest reviews belong to other candidates; the selected one is not listed.
-    api.listAmendmentReviews.mockResolvedValue([
-      { review: review("other") } as AmendmentReviewDetail,
-    ]);
+    // Like the API, an unfiltered list holds only the newest 50 other reviews.
+    api.listAmendmentReviews.mockImplementation(
+      (options: { proposedVersionId?: string }) =>
+        Promise.resolve(
+          options.proposedVersionId === "agent"
+            ? [{ review: review("agent") }]
+            : Array.from({ length: 50 }, (_, index) => ({
+                review: review(`newer-${index}`),
+              })),
+        ),
+    );
     const controller = new CandidateReviewController(() => Promise.resolve());
 
     await controller.load(target("agent"));
@@ -89,8 +96,21 @@ describe("CandidateReviewController", () => {
     expect(api.listAmendmentReviews).toHaveBeenCalledWith({
       workspaceId: "workspace-1",
       skillId: "instructions-1",
-      status: "pending",
+      status: "all",
+      proposedVersionId: "agent",
     });
+    expect(controller.control).toEqual({ kind: "agent", review: review("agent") });
+  });
+
+  it("withholds publication when an agent candidate has no review", async () => {
+    api.getSkillVersion.mockResolvedValue(
+      version("agent", { source: "agent_amendment" }),
+    );
+    api.listAmendmentReviews.mockResolvedValue([] as AmendmentReviewDetail[]);
+    const controller = new CandidateReviewController(() => Promise.resolve());
+
+    await controller.load(target("agent"));
+
     expect(controller.control).toEqual({ kind: "agent_review_missing" });
     expect(await controller.publish()).toBe(false);
     expect(await controller.reject("no")).toBe(false);
@@ -224,9 +244,11 @@ describe("CandidateReviewController", () => {
     api.publishCandidate.mockResolvedValueOnce(
       version("first", { status: "published" }),
     );
-    const controller = new CandidateReviewController(() =>
-      Promise.reject(new Error("Refresh failed")),
-    );
+    const ondecided = vi
+      .fn<(decided: SkillVersion) => Promise<void>>()
+      .mockRejectedValueOnce(new Error("Refresh failed"))
+      .mockResolvedValueOnce(undefined);
+    const controller = new CandidateReviewController(ondecided);
     await controller.load(target("first"));
 
     expect(await controller.publish()).toBe(true);
@@ -234,6 +256,17 @@ describe("CandidateReviewController", () => {
     expect(controller.version?.status).toBe("published");
     expect(controller.refreshError).toBe("Refresh failed");
     expect(controller.actionError).toBeNull();
+    expect(controller.busy).toBe(false);
+
+    // Retrying refreshes the saved decision without deciding again.
+    await controller.refresh();
+
+    expect(ondecided).toHaveBeenCalledTimes(2);
+    expect(ondecided).toHaveBeenLastCalledWith(
+      version("first", { status: "published" }),
+    );
+    expect(api.publishCandidate).toHaveBeenCalledTimes(1);
+    expect(controller.refreshError).toBeNull();
     expect(controller.busy).toBe(false);
   });
 });

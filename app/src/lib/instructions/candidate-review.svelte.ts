@@ -38,8 +38,8 @@ export function candidateControl(
   return version.status === "pending_review" ? { kind: "human" } : { kind: "none" };
 }
 
-// A pending candidate's review is pending, so the pending queue is searched rather
-// than the newest-first history, which the API truncates.
+// The review is looked up by its proposed version rather than searched in the
+// newest-first history, which the API truncates.
 async function findAgentReview(
   target: CandidateTarget,
   version: SkillVersion,
@@ -48,7 +48,8 @@ async function findAgentReview(
   const reviews = await listAmendmentReviews({
     workspaceId: target.workspaceId,
     skillId: target.skillId,
-    status: version.status === "pending_review" ? "pending" : "all",
+    status: "all",
+    proposedVersionId: version.id,
   });
   return (
     reviews.find((entry) => entry.review.proposedVersionId === version.id)?.review ??
@@ -125,6 +126,23 @@ export class CandidateReviewController {
 
   retry(): void {
     if (this.target) void this.load(this.target);
+  }
+
+  // Retries only the refresh after a saved decision; the decision is not repeated.
+  async refresh(): Promise<void> {
+    const request = this.request;
+    const version = this.version;
+    if (!version || this.busy || this.refreshError === null) return;
+    this.busy = true;
+    this.refreshError = null;
+    try {
+      await this.ondecided(version);
+    } catch (cause) {
+      if (request === this.request) {
+        this.refreshError = message(cause, "The instructions could not refresh.");
+      }
+    }
+    if (request === this.request) this.busy = false;
   }
 
   publish(): Promise<boolean> {

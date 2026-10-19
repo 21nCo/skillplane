@@ -203,6 +203,7 @@ export class AmendmentReviewService {
     readonly skillId: string;
     readonly principal: Principal;
     readonly status?: AmendmentReviewStatus | "all";
+    readonly proposedVersionId?: string;
     readonly limit?: number;
   }): Promise<readonly AmendmentReviewDetail[]> {
     authorize(options.principal, "skills:read");
@@ -214,13 +215,35 @@ export class AmendmentReviewService {
     ) {
       throw new DomainError("VALIDATION_FAILED", "Review status is invalid", 400);
     }
+    const proposedVersionId = options.proposedVersionId;
+    if (
+      proposedVersionId !== undefined &&
+      (typeof proposedVersionId !== "string" ||
+        !proposedVersionId.trim() ||
+        proposedVersionId.length > 200)
+    ) {
+      throw new DomainError(
+        "VALIDATION_FAILED",
+        "proposedVersionId must be a non-empty identifier",
+        400,
+        { field: "proposedVersionId" },
+      );
+    }
+    // A proposed version has at most one review, so the exact lookup is never truncated.
     const result = await this.pool.query<ReviewRow>(
       `${REVIEW_SELECT}
         WHERE review.workspace_id = $1 AND review.skill_id = $2
           AND ($3::text = 'all' OR review.status = $3)
+          AND ($5::text IS NULL OR review.proposed_version_id = $5)
         ORDER BY review.created_at DESC, review.id DESC
         LIMIT $4`,
-      [options.principal.workspaceId, options.skillId, status, limit],
+      [
+        options.principal.workspaceId,
+        options.skillId,
+        status,
+        limit,
+        proposedVersionId ?? null,
+      ],
     );
     if (result.rows.length === 0) {
       const skill = await this.pool.query(
