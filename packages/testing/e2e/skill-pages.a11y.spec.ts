@@ -242,7 +242,7 @@ test("@skill-pages-a11y passes the required viewport and theme matrix", async ({
       name: "instructions-list",
     },
     {
-      path: `/${harness.workspaceSlug}/instructions/new`,
+      path: `/${harness.workspaceSlug}/instructions/-/new`,
       ready: () => page.getByRole("heading", { name: "Write an AGENTS.md document" }),
       name: "instructions-create",
     },

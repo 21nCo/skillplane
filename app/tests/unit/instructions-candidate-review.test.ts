@@ -71,7 +71,7 @@ describe("candidateControl", () => {
 
 describe("CandidateReviewController", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
   });
 
   it("looks up a pending agent candidate in the pending queue and withholds publication when absent", async () => {
@@ -167,5 +167,73 @@ describe("CandidateReviewController", () => {
     expect(api.publishCandidate).toHaveBeenLastCalledWith(
       expect.objectContaining({ versionId: "second" }),
     );
+  });
+
+  it("reuses one idempotency key across retries of the same decision", async () => {
+    api.getSkillVersion.mockResolvedValue(version("first"));
+    api.publishCandidate.mockRejectedValueOnce(new Error("Network error"));
+    api.rejectCandidate.mockRejectedValue(new Error("Network error"));
+    const controller = new CandidateReviewController(() => Promise.resolve());
+    await controller.load(target("first"));
+
+    expect(await controller.publish()).toBe(false);
+    expect(controller.actionError).toBe("Network error");
+    expect(controller.version?.status).toBe("pending_review");
+    api.publishCandidate.mockResolvedValueOnce(
+      version("first", { status: "published" }),
+    );
+    expect(await controller.publish()).toBe(true);
+    const [first, retry] = api.publishCandidate.mock.calls.map(
+      ([options]) => (options as { idempotencyKey: string }).idempotencyKey,
+    );
+    expect(retry).toBe(first);
+
+    // A different decision or reason is a new request.
+    await controller.load(target("first"));
+    await controller.reject("outdated");
+    await controller.reject("outdated");
+    await controller.reject("duplicate");
+    const keys = api.rejectCandidate.mock.calls.map(
+      ([options]) => (options as { idempotencyKey: string }).idempotencyKey,
+    );
+    expect(keys[1]).toBe(keys[0]);
+    expect(keys[2]).not.toBe(keys[0]);
+    expect(keys[0]).not.toBe(first);
+  });
+
+  it("shows a decision that committed although its response was lost", async () => {
+    api.getSkillVersion
+      .mockResolvedValueOnce(version("first"))
+      .mockResolvedValueOnce(version("first", { status: "published" }));
+    api.publishCandidate.mockRejectedValueOnce(new Error("Network error"));
+    const ondecided = vi.fn(() => Promise.resolve());
+    const controller = new CandidateReviewController(ondecided);
+    await controller.load(target("first"));
+
+    expect(await controller.publish()).toBe(true);
+
+    expect(controller.version?.status).toBe("published");
+    expect(controller.actionError).toBeNull();
+    expect(controller.busy).toBe(false);
+    expect(controller.control).toEqual({ kind: "none" });
+    expect(ondecided).toHaveBeenCalledWith(version("first", { status: "published" }));
+  });
+
+  it("keeps a saved decision when the refresh after it fails", async () => {
+    api.getSkillVersion.mockResolvedValue(version("first"));
+    api.publishCandidate.mockResolvedValueOnce(
+      version("first", { status: "published" }),
+    );
+    const controller = new CandidateReviewController(() =>
+      Promise.reject(new Error("Refresh failed")),
+    );
+    await controller.load(target("first"));
+
+    expect(await controller.publish()).toBe(true);
+
+    expect(controller.version?.status).toBe("published");
+    expect(controller.refreshError).toBe("Refresh failed");
+    expect(controller.actionError).toBeNull();
+    expect(controller.busy).toBe(false);
   });
 });

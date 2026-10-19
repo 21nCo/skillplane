@@ -90,7 +90,7 @@
     </div>
     {#if workspace && canWrite}
       <Button
-        href={resolve("/(app)/[workspaceSlug]/instructions/new", {
+        href={resolve("/(app)/[workspaceSlug]/instructions/-/new", {
           workspaceSlug: workspace.slug,
         })}
       >

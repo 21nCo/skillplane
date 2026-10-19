@@ -239,3 +239,38 @@ test("@instructions creates, edits, reviews and publishes instructions in the UI
   expect(skillMarkdownRequests).toEqual([]);
   expect(serverErrors).toEqual([]);
 });
+
+test("@instructions gives a document with the slug new its own route", async ({
+  context,
+  page,
+}) => {
+  await authenticate(context);
+  const workspacePath = `${harness.origin}/${harness.workspaceSlug}`;
+
+  await page.goto(`${workspacePath}/instructions`);
+  await page.getByRole("link", { name: "New instructions" }).click();
+  await page.getByLabel("Name").fill("New");
+  await expect(page.getByLabel("Slug")).toHaveValue("new");
+  await page
+    .getByLabel("AGENTS.md", { exact: true })
+    .fill("# New\n\nReachable at its own route.\n");
+  await page.getByRole("button", { name: "Publish version 1.0.0" }).click();
+
+  await expect(page).toHaveURL(/\/instructions\/new\?created=true$/u);
+  await expect(page.locator("header h1")).toHaveText("New");
+  await expect(page.getByText("Reachable at its own route.")).toBeVisible();
+
+  // Reopening it from the inventory shows the document, not the creation form.
+  await page.goto(`${workspacePath}/instructions`);
+  await page
+    .getByRole("region", { name: "Instructions inventory" })
+    .getByRole("article")
+    .filter({ has: page.locator("code", { hasText: /^new$/u }) })
+    .getByRole("link")
+    .click();
+  await expect(page).toHaveURL(/\/instructions\/new$/u);
+  await expect(page.getByText("Reachable at its own route.")).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Write an AGENTS.md document" }),
+  ).toHaveCount(0);
+});

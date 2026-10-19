@@ -11,6 +11,8 @@
   import { useWorkspaceStore } from "$lib/workspaces/store.svelte.js";
   import { ArrowLeftIcon, WarningCircleIcon } from "phosphor-svelte";
 
+  // Creation lives under "-", which is never a valid slug, so every document slug,
+  // including "new", keeps its own route.
   const workspaces = useWorkspaceStore();
   const workspace = $derived(
     workspaces.workspaces.find(

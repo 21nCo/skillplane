@@ -71,6 +71,7 @@ export class CandidateReviewController {
   refreshError = $state<string | null>(null);
   private request = 0;
   private target: CandidateTarget | null = null;
+  private decisionKey: { readonly scope: string; readonly key: string } | null = null;
 
   constructor(private readonly ondecided: (version: SkillVersion) => Promise<void>) {}
 
@@ -84,6 +85,7 @@ export class CandidateReviewController {
   async load(target: CandidateTarget): Promise<void> {
     const request = ++this.request;
     this.target = target;
+    this.decisionKey = null;
     this.version = null;
     this.diff = null;
     this.review = null;
@@ -126,24 +128,24 @@ export class CandidateReviewController {
   }
 
   publish(): Promise<boolean> {
-    return this.settle("human", (target) =>
+    return this.settle("human", ["publish"], (target, idempotencyKey) =>
       publishCandidate({
         workspaceId: target.workspaceId,
         skillId: target.skillId,
         versionId: target.versionId,
-        idempotencyKey: crypto.randomUUID(),
+        idempotencyKey,
       }).then((version) => ({ version })),
     );
   }
 
   reject(reason: string): Promise<boolean> {
-    return this.settle("human", (target) =>
+    return this.settle("human", ["reject", reason], (target, idempotencyKey) =>
       rejectCandidate({
         workspaceId: target.workspaceId,
         skillId: target.skillId,
         versionId: target.versionId,
         reason,
-        idempotencyKey: crypto.randomUUID(),
+        idempotencyKey,
       }).then((version) => ({ version })),
     );
   }
@@ -152,23 +154,61 @@ export class CandidateReviewController {
     const control = this.control;
     if (control.kind !== "agent") return Promise.resolve(false);
     const reviewId = control.review.id;
-    return this.settle("agent", async (target) => {
+    const scope = [reviewId, decision, reason];
+    return this.settle("agent", scope, async (target, idempotencyKey) => {
       const decided = await decideAmendmentReview({
         workspaceId: target.workspaceId,
         skillId: target.skillId,
         reviewId,
         decision,
         reason,
-        idempotencyKey: crypto.randomUUID(),
+        idempotencyKey,
       });
       return { version: decided.candidate, review: decided.review };
     });
   }
 
+  // One key per candidate decision, so a retry after a lost response replays the
+  // saved decision instead of failing; a changed decision or reason starts anew.
+  private keyFor(target: CandidateTarget, scope: readonly string[]): string {
+    const serialized = JSON.stringify([target.versionId, ...scope]);
+    if (this.decisionKey?.scope !== serialized) {
+      this.decisionKey = { scope: serialized, key: crypto.randomUUID() };
+    }
+    return this.decisionKey.key;
+  }
+
+  // A failed request may still have committed; a candidate that left review is shown
+  // as decided rather than as unchanged.
+  private async reconcile(
+    request: number,
+    target: CandidateTarget,
+  ): Promise<SkillVersion | null> {
+    try {
+      const current = await getSkillVersion(
+        target.workspaceId,
+        target.skillId,
+        target.versionId,
+      );
+      if (current.status === "pending_review") return null;
+      const review = await findAgentReview(target, current);
+      if (request !== this.request) return null;
+      this.version = current;
+      this.review = review;
+      return current;
+    } catch {
+      return null;
+    }
+  }
+
   // A decision belongs to the candidate it was made on; after navigation it is dropped.
   private async settle(
     kind: "human" | "agent",
-    operation: (target: CandidateTarget) => Promise<{
+    scope: readonly string[],
+    operation: (
+      target: CandidateTarget,
+      idempotencyKey: string,
+    ) => Promise<{
       readonly version: SkillVersion;
       readonly review?: AmendmentReview;
     }>,
@@ -181,21 +221,28 @@ export class CandidateReviewController {
     this.busy = true;
     this.actionError = null;
     this.refreshError = null;
-    let decided: Awaited<ReturnType<typeof operation>>;
+    let version: SkillVersion;
     try {
-      decided = await operation(target);
+      const decided = await operation(target, this.keyFor(target, scope));
+      if (request !== this.request) return false;
+      version = decided.version;
+      this.version = version;
+      if (decided.review) this.review = decided.review;
     } catch (cause) {
       if (request !== this.request) return false;
-      this.actionError = message(cause, "The candidate state was not changed.");
-      this.busy = false;
-      return false;
+      const reconciled = await this.reconcile(request, target);
+      if (request !== this.request) return false;
+      if (!reconciled) {
+        this.actionError = message(cause, "The candidate state was not changed.");
+        this.busy = false;
+        return false;
+      }
+      version = reconciled;
     }
-    if (request !== this.request) return false;
-    this.version = decided.version;
-    if (decided.review) this.review = decided.review;
+    this.decisionKey = null;
     // The decision is saved; a failed refresh must not report it as unchanged.
     try {
-      await this.ondecided(decided.version);
+      await this.ondecided(version);
     } catch (cause) {
       if (request === this.request) {
         this.refreshError = message(cause, "The instructions could not refresh.");
