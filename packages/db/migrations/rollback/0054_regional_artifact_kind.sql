@@ -1,6 +1,12 @@
 -- Reverses 0054_regional_artifact_kind.sql. Run it only after instructions
 -- artifacts are removed (without the column they would read as skills) and the
 -- code is rolled back, because code from 0054 onward reads skills.kind.
+-- One transaction keeps the guard atomic with the schema change under any
+-- runner, including psql -f without ON_ERROR_STOP: once the guard raises, every
+-- later statement fails and COMMIT rolls back. The lock stops a concurrent
+-- instructions insert from landing between the check and the drop.
+BEGIN;
+LOCK TABLE skills IN ACCESS EXCLUSIVE MODE;
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM skills WHERE kind <> 'skill') THEN
@@ -39,3 +45,4 @@ BEGIN
 END
 $migration$;
 DELETE FROM skillplane_schema_migrations WHERE id = '0054_regional_artifact_kind.sql';
+COMMIT;

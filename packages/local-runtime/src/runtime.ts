@@ -358,8 +358,14 @@ export class Runtime {
           : "Exact version checked with the authoritative workspace. Observed invocation; success is not inferred.",
     };
   }
+  /**
+   * Caches a retrieved snapshot and records skill usage for it. Instructions
+   * documents are cached too, but they are not skills, so they never count as
+   * skill usage locally or in a cloud upload.
+   */
   observeRead(snapshot: Snapshot, agent: string, invoked = false): void {
     this.cache(snapshot);
+    if (bundleKind(snapshot.bundle.skill) !== "skill") return;
     const types = invoked
       ? (["skill_resolved", "skill_invoked_observed"] as const)
       : (["skill_resolved"] as const);

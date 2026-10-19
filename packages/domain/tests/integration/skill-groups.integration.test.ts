@@ -222,6 +222,41 @@ describe.skipIf(!url)("workspace skill groups", () => {
       audit.rows.filter((r) => r.event_type === "skill_group.skill.added"),
     ).toHaveLength(1);
   });
+  it("never assigns an instructions document to a skill group", async () => {
+    const g = await groups.create({
+      ...mutation(),
+      name: `Docs ${crypto.randomUUID()}`,
+      idempotencyKey: crypto.randomUUID(),
+    });
+    const instructionsId = `skill:${crypto.randomUUID()}`;
+    await pool.query(
+      "INSERT INTO skills(id,workspace_id,slug,name,visibility,kind) VALUES($1,$2,$3,'Agents','workspace','instructions')",
+      [instructionsId, owner.workspaceId, `agents-${crypto.randomUUID()}`],
+    );
+    const assign = (add: boolean) =>
+      groups.association({
+        ...mutation(),
+        groupId: g.id,
+        kind: "skill",
+        targetId: instructionsId,
+        add,
+      });
+    await expect(assign(true)).rejects.toMatchObject({
+      code: "VALIDATION_FAILED",
+      status: 400,
+    });
+    expect(await assign(false)).toEqual({ changed: false });
+    await groups.association({
+      ...mutation(),
+      groupId: g.id,
+      kind: "skill",
+      targetId: skillId,
+      add: true,
+    });
+    expect((await groups.skills(owner, g.id)).skills.map((s) => s.id)).toEqual([
+      skillId,
+    ]);
+  });
   it("writes exactly one attributed audit record per effective mutation", async () => {
     const key = crypto.randomUUID();
     const created = await groups.create({

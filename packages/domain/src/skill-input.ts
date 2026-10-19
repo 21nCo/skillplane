@@ -4,6 +4,7 @@ import {
   type SkillDependency,
   type CanonicalBundle,
 } from "@skillplane/storage";
+import { DomainError } from "./errors.js";
 
 /** Shared initial immutable bundle construction for local, API and MCP adapters. */
 export function createSkillBundle(input: {
@@ -24,8 +25,11 @@ export function createSkillBundle(input: {
 }): Promise<CanonicalBundle> {
   if (input.kind === "instructions") {
     if (input.composition || input.assets.length > 0)
-      throw new Error(
-        "Instructions are a single AGENTS.md without assets or composition",
+      throw new DomainError(
+        "VALIDATION_FAILED",
+        "Instructions are a single AGENTS.md document without assets or composition",
+        400,
+        { field: "kind" },
       );
     return canonicalizeBundleFiles({
       skill: {

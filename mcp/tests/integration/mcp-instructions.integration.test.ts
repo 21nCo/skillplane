@@ -118,6 +118,24 @@ function withoutKind(cursor: string, secret: string): string {
   return `${body}.${signature}`;
 }
 
+// Re-signs a search cursor with the filter hash a pre-kind deployment issued,
+// after checking that the current hash binds the all-kinds marker.
+function preKindSearchCursor(
+  cursor: string,
+  secret: string,
+  filters: Record<string, unknown>,
+): string {
+  const hash = (value: unknown) =>
+    createHash("sha256").update(stableJson(value)).digest("base64url");
+  const payload = decodeJson(cursor.split(".")[0] ?? "");
+  expect(payload.filterHash).toBe(hash({ ...filters, kind: "*" }));
+  const body = encodeJson({ ...payload, filterHash: hash(filters) });
+  const signature = createHmac("sha256", secret)
+    .update(Buffer.from(body, "base64url"))
+    .digest("base64url");
+  return `${body}.${signature}`;
+}
+
 describe("MCP instructions artifacts", () => {
   it("creates, amends, reviews and publishes instructions that never resolve as skills", async () => {
     const suffix = crypto.randomUUID().slice(0, 8);
@@ -628,7 +646,29 @@ describe("MCP instructions artifacts", () => {
         role: "owner",
       },
     });
-    const searchCursor = String(search.nextCursor);
+    // The service mints an all-kinds cursor, which never continues the
+    // default skills-only search.
+    const allKinds = await oauth.client.callTool({
+      name: "skills_search",
+      arguments: {
+        workspace,
+        query: term,
+        cursor: String(search.nextCursor),
+        caller: TEST_CALLER,
+      },
+    });
+    expect(parseToolError(allKinds).error.code).toBe("CURSOR_FILTER_MISMATCH");
+    const searchCursor = preKindSearchCursor(
+      String(search.nextCursor),
+      environment.services.tenancySecret,
+      {
+        query: term,
+        tags: [],
+        visibility: ["private", "public", "workspace"],
+        archive: "active",
+        scope: `workspace:${owner.workspaceId}`,
+      },
+    );
 
     for (const [name, cursor, query, schema] of [
       ["skills_list", listCursor, {}, preKindListOutputSchema],
@@ -656,5 +696,34 @@ describe("MCP instructions artifacts", () => {
       });
       expect(parseToolError(replayed).error.code, name).toBe("CURSOR_FILTER_MISMATCH");
     }
+  });
+  it("rejects blank or oversized documents on create as caller validation errors", async () => {
+    const suffix = crypto.randomUUID().slice(0, 8);
+    for (const kind of ["skill", "instructions"] as const)
+      for (const [label, instructions, assets] of [
+        ["blank", " \n\t\n", []],
+        ["oversized", "x".repeat(2 * 1024 * 1024), []],
+        ...(kind === "instructions"
+          ? ([["assets", "# Agents\n", [{ path: "notes.md", content: "x" }]]] as const)
+          : []),
+      ] as const) {
+        const rejected = await oauth.client.callTool({
+          name: "skill_create",
+          arguments: {
+            workspace: { id: environment.owner.workspaceId },
+            kind,
+            slug: `invalid-${kind}-${label}-${suffix}`,
+            name: "Invalid document",
+            instructions,
+            assets,
+            idempotencyKey: `invalid-${kind}-${label}-${suffix}`,
+            caller: TEST_CALLER,
+          },
+        });
+        expect(parseToolError(rejected).error, `${kind} ${label}`).toMatchObject({
+          code: "VALIDATION_FAILED",
+          retryable: false,
+        });
+      }
   });
 });

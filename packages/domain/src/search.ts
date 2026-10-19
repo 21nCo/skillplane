@@ -365,15 +365,16 @@ export class SkillSearchService {
       archive: normalized.archive,
       scope,
     };
-    const digest = await filterHash({ ...filters, ...(kind ? { kind } : {}) });
+    // An all-kinds search binds "*", so only a cursor issued before kinds
+    // existed hashes without kind. Every artifact was then a skill, so that
+    // cursor continues a skill or all-kinds search, never an instructions one.
+    const digest = await filterHash({ ...filters, kind: kind ?? "*" });
     const now = options.now ?? new Date();
-    // A cursor hashed without kind predates kinds (or covers every kind), so it
-    // can continue a skills-only search; it never continues an instructions one.
     const cursor = options.cursor
       ? await parseCursor(
           options.cursor,
           this.cursorSecret,
-          kind === "skill" ? [digest, await filterHash(filters)] : [digest],
+          kind === "instructions" ? [digest] : [digest, await filterHash(filters)],
           now,
         )
       : null;

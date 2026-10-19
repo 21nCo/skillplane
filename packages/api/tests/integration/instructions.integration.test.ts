@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { migrateDatabase, resolveTestDatabaseUrl } from "@skillplane/db";
 import { createSkillBundle } from "@skillplane/domain";
+import { stableJson } from "@skillplane/storage";
 import {
   createSkillBundleFixture,
   purgeTenantFixture,
@@ -559,6 +560,41 @@ describe("instructions artifacts over the API", () => {
       { headers: headers() },
     );
     expect(crossFilter.status).toBe(400);
+
+    // An all-kinds cursor continues only all-kinds paging, for search and list.
+    const allKinds = await search("limit=1");
+    const listed = await data<{ nextCursor: string }>(
+      await app.request(`/api/v1/workspaces/${owner.workspaceId}/skills?limit=1`, {
+        headers: headers(),
+      }),
+    );
+    const replay = (path: string, query: string, cursor: string) =>
+      app.request(`${path}${query}&cursor=${encodeURIComponent(cursor)}`, {
+        headers: headers(),
+      });
+    const searchPath = `/api/v1/skills/search?workspaceId=${owner.workspaceId}&q=${term}&limit=10`;
+    const listPath = `/api/v1/workspaces/${owner.workspaceId}/skills?limit=1`;
+    // Pre-kind list cursors carried no kind; every artifact was then a skill.
+    const page = JSON.parse(Buffer.from(listed.nextCursor, "base64url").toString());
+    expect(page.kind).toBe("*");
+    delete page.kind;
+    const preKind = Buffer.from(stableJson(page)).toString("base64url");
+    for (const [path, cursor, kind, status] of [
+      [searchPath, allKinds.nextCursor ?? "", "", 200],
+      [searchPath, allKinds.nextCursor ?? "", "&kind=skill", 400],
+      [searchPath, allKinds.nextCursor ?? "", "&kind=instructions", 400],
+      [listPath, listed.nextCursor, "", 200],
+      [listPath, listed.nextCursor, "&kind=skill", 400],
+      [listPath, listed.nextCursor, "&kind=instructions", 400],
+      [listPath, preKind, "", 200],
+      [listPath, preKind, "&kind=skill", 200],
+      [listPath, preKind, "&kind=instructions", 400],
+    ] as const) {
+      const response = await replay(path, kind, cursor);
+      expect(response.status, `${path}${kind}`).toBe(status);
+      if (status === 400)
+        expect(await errorCode(response)).toBe("CURSOR_FILTER_MISMATCH");
+    }
 
     const badKind = await app.request(
       `/api/v1/skills/search?workspaceId=${owner.workspaceId}&q=${term}&kind=agents`,

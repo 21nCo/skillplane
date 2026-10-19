@@ -25,6 +25,7 @@ import type {
   SkillVersionRecord,
 } from "@skillplane/domain";
 import { createSkillBundle } from "@skillplane/domain";
+import { BundleValidationError } from "@skillplane/storage";
 import { registerResourceRoutes } from "@skillplane/api";
 import { principalForWorkspace } from "../auth.js";
 import { resolveSkill, type ResolvedSkill } from "./resolve.js";
@@ -235,16 +236,18 @@ export function skillCreate(runtime: McpToolRuntime, input: SkillCreateInput) {
         execution,
         input.workspace,
       );
-      if (
-        input.kind === "instructions" &&
-        (input.assets.length > 0 || input.composition)
-      )
+      // The bundle is built from caller input here, so a validation failure is
+      // the caller's to fix, not a retryable stored-content failure.
+      const canonical = await createSkillBundle(input).catch((error: unknown) => {
+        if (!(error instanceof BundleValidationError)) throw error;
         throw new McpToolError(
-          "VALIDATION_FAILED",
-          "Instructions are a single AGENTS.md document without assets or composition",
-          { details: { field: "kind" } },
+          error.code === "SKILL_PATH_INVALID"
+            ? "SKILL_PATH_INVALID"
+            : "VALIDATION_FAILED",
+          error.message,
+          { details: { reason: error.code } },
         );
-      const canonical = await createSkillBundle(input);
+      });
       const created = await runtime.services.skillService.create({
         workspaceId: resolved.workspace.id,
         principal: resolved.principal,

@@ -104,7 +104,8 @@ interface SkillListCursor {
   readonly id: string;
   readonly archive: SkillArchiveFilter;
   readonly visibility: readonly SkillVisibility[];
-  readonly kind?: SkillKind | null;
+  /** "*" lists every kind; a cursor without kind was issued before kinds. */
+  readonly kind?: SkillKind | "*";
 }
 
 interface SkillRow {
@@ -250,10 +251,11 @@ function parseListCursor(
   const cursor = parsed as SkillListCursor;
   if (
     (cursor.groupId ?? null) !== groupId ||
-    // A cursor without kind predates kinds (or lists every kind), so it can
-    // continue a skills-only listing; it never continues an instructions one.
-    ((cursor.kind ?? null) !== kind &&
-      !(cursor.kind === undefined && kind === "skill")) ||
+    // Every artifact was a skill before kinds existed, so a kindless cursor
+    // continues a skill or all-kinds listing, never an instructions one.
+    (cursor.kind === undefined
+      ? kind === "instructions"
+      : cursor.kind !== (kind ?? "*")) ||
     cursor.archive !== archive ||
     stableJson(cursor.visibility) !== stableJson(visibility)
   ) {
@@ -800,7 +802,7 @@ export class SkillService {
             archive,
             visibility,
             sourceId: options.sourceId ?? null,
-            ...(kind ? { kind } : {}),
+            kind: kind ?? "*",
           })
         : null,
     };

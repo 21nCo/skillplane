@@ -34,8 +34,10 @@ export class BundlePathError extends Error {
 export const INSTRUCTIONS_ENTRYPOINT = "AGENTS.md";
 
 /**
- * Skill paths reject a root AGENTS.md up front. Only callers that build or
- * validate an instructions bundle opt in with `allowInstructionsEntrypoint`.
+ * Rejects a root AGENTS.md unless the caller opts in with
+ * `allowInstructionsEntrypoint`. Callers that do not know the kind yet (archive
+ * parsing, amendments) opt in, so they must reject a root AGENTS.md in a skill
+ * once the kind is known.
  */
 export function normalizeBundlePath(
   input: string,

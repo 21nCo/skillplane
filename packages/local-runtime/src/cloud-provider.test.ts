@@ -9,6 +9,7 @@ import {
   CloudWorkspaceProvider,
   LocalWorkspaceProvider,
   LocalStore,
+  Runtime,
   RuntimeError,
   type WorkspaceRef,
   type AmendRequest,
@@ -583,6 +584,34 @@ describe("cloud provider transport contract", () => {
       },
     });
     await expect(corrupt.retrieve(initial.skillId)).rejects.toThrow("DIGEST_MISMATCH");
+  });
+  it("caches cloud instructions reads without queueing skill usage", async () => {
+    const { cloud, local, workspace } = fixture();
+    const document = await local.create({
+      ...request,
+      kind: "instructions",
+      assets: [],
+    });
+    const created = await local.create({
+      ...request,
+      slug: "skill",
+      idempotencyKey: "create-skill",
+    });
+    const runtime = new Runtime(local.store);
+    local.store.set("analytics:consent", true);
+    runtime.observeRead(await cloud.retrieve(document.skillId), "codex");
+    expect(runtime.usage.report()).toMatchObject({ counts: {}, pending: 0 });
+    runtime.observeRead(await cloud.retrieve(created.skillId), "codex");
+    const membership = new Set((await cloud.list()).map((item) => item.id));
+    const { workspaceKey } = await import("./contracts.js");
+    expect(
+      await runtime.usage.upload(
+        async (events) =>
+          Promise.all(events.map((event) => cloud.reportUsage(event, membership))),
+        workspaceKey(workspace),
+      ),
+    ).toBe(1);
+    expect(runtime.usage.report()).toMatchObject({ pending: 0, quarantined: 0 });
   });
   it("sends idempotent usage receipts only for the exact qualified cloud workspace", async () => {
     const { cloud, local, workspace } = fixture();

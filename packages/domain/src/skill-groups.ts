@@ -272,12 +272,20 @@ export class SkillGroupService {
           409,
         );
       if (options.kind === "skill") {
-        const r = await client.query(
-          "SELECT 1 FROM skills WHERE workspace_id=$1 AND id=$2 FOR SHARE",
+        const r = await client.query<{ kind: string }>(
+          "SELECT kind FROM skills WHERE workspace_id=$1 AND id=$2 FOR SHARE",
           [options.principal.workspaceId, options.targetId],
         );
         if (!r.rowCount)
           throw new DomainError("NOT_FOUND", "Workspace skill was not found", 404);
+        // Groups hold skills; instructions documents are a separate kind.
+        if (options.add && r.rows[0]?.kind !== "skill")
+          throw new DomainError(
+            "VALIDATION_FAILED",
+            "Only skills can be assigned to a skill group",
+            400,
+            { field: "targetId" },
+          );
       }
       const table =
           options.kind === "skill" ? "skill_group_skills" : "skill_group_members",

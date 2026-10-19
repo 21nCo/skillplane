@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { Pool } from "pg";
+import { Pool, type PoolClient } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   migrateDatabase,
@@ -25,6 +25,53 @@ async function kindColumn(pool: Pool) {
         WHERE table_schema = 'public' AND table_name = 'skills' AND column_name = 'kind'`,
     )
   ).rows[0];
+}
+
+/**
+ * Splits a script into top-level statements the way psql does, keeping
+ * comments, quoted strings and dollar-quoted bodies intact.
+ */
+function statements(script: string): string[] {
+  const result: string[] = [];
+  let start = 0;
+  let index = 0;
+  while (index < script.length) {
+    const rest = script.slice(index);
+    const dollar = /^\$[A-Za-z_]*\$/.exec(rest);
+    if (rest.startsWith("--")) {
+      const end = script.indexOf("\n", index);
+      index = end < 0 ? script.length : end + 1;
+    } else if (rest.startsWith("'")) {
+      index = script.indexOf("'", index + 1) + 1;
+    } else if (dollar) {
+      const end = script.indexOf(dollar[0], index + dollar[0].length);
+      index = end + dollar[0].length;
+    } else if (rest.startsWith(";")) {
+      result.push(script.slice(start, index + 1).trim());
+      start = index += 1;
+    } else index += 1;
+  }
+  if (script.slice(start).replace(/--.*$/gm, "").trim()) {
+    result.push(script.slice(start).trim());
+  }
+  return result;
+}
+
+/**
+ * Runs each statement separately and keeps going after an error, as psql -f
+ * does without ON_ERROR_STOP. Returns the error messages in order.
+ */
+async function runLikePsql(
+  client: PoolClient,
+  script: string,
+  afterStatement?: (statement: string) => Promise<void>,
+): Promise<string[]> {
+  const errors: string[] = [];
+  for (const statement of statements(script)) {
+    await client.query(statement).catch((error: Error) => errors.push(error.message));
+    await afterStatement?.(statement);
+  }
+  return errors;
 }
 
 let auditSequence = 0;
@@ -115,13 +162,79 @@ describe.each(["combined", "regional"] as const)(
           `INSERT INTO skills (id, workspace_id, slug, name, kind)
          VALUES ('kind-agents', 'kind-workspace', 'agents', 'Agents', 'instructions')`,
         );
-        await expect(pool.query(rollback)).rejects.toThrow(
-          "instructions artifacts exist",
-        );
-        expect(await kindColumn(pool)).toBeDefined();
+        const ledgerRows = async () =>
+          (
+            await pool.query(
+              "SELECT 1 FROM skillplane_schema_migrations WHERE id = $1",
+              [MIGRATION],
+            )
+          ).rowCount;
+        const refusedIntact = async () => {
+          expect(await kindColumn(pool)).toBeDefined();
+          expect(
+            (await pool.query("SELECT kind FROM skills WHERE id = 'kind-agents'")).rows,
+          ).toEqual([{ kind: "instructions" }]);
+          expect(await ledgerRows()).toBe(1);
+        };
+
+        // A single-query runner refuses atomically.
+        const runner = await pool.connect();
+        try {
+          await expect(runner.query(rollback)).rejects.toThrow(
+            "instructions artifacts exist",
+          );
+          await runner.query("ROLLBACK");
+        } finally {
+          runner.release();
+        }
+        await refusedIntact();
+
+        // psql -f without ON_ERROR_STOP runs on after the guard raises; the
+        // transaction turns every later statement and COMMIT into a no-op.
+        // The lock is held before the guard, so a concurrent instructions
+        // insert cannot slip in between the check and the drop.
+        const other = new Pool({ connectionString: urls[role], max: 1 });
+        const psql = await other.connect();
+        let concurrentInsert: unknown;
+        try {
+          const errors = await runLikePsql(psql, rollback, async (statement) => {
+            if (!statement.startsWith("LOCK TABLE skills")) return;
+            concurrentInsert = await pool
+              .query(
+                `SET lock_timeout = '200ms';
+                 INSERT INTO skills (id, workspace_id, slug, name, kind)
+                 VALUES ('kind-race', 'kind-workspace', 'race', 'Race', 'instructions')`,
+              )
+              .catch((error: { code?: string }) => error.code);
+            await pool.query("RESET lock_timeout");
+          });
+          expect(errors[0]).toContain("instructions artifacts exist");
+          expect(errors.length).toBeGreaterThan(1);
+          expect(
+            errors
+              .slice(1)
+              .every((message) => message.includes("current transaction is aborted")),
+          ).toBe(true);
+          expect(
+            (await psql.query<{ state: string }>("SELECT 'idle' AS state")).rows,
+          ).toEqual([{ state: "idle" }]);
+        } finally {
+          psql.release();
+          await other.end();
+        }
+        expect(concurrentInsert).toBe("55P03");
+        expect(
+          (await pool.query("SELECT 1 FROM skills WHERE id = 'kind-race'")).rowCount,
+        ).toBe(0);
+        await refusedIntact();
         await pool.query("DELETE FROM skills WHERE id = 'kind-agents'");
 
-        await pool.query(rollback);
+        const success = await pool.connect();
+        try {
+          expect(await runLikePsql(success, rollback)).toEqual([]);
+        } finally {
+          success.release();
+        }
         expect(await kindColumn(pool)).toBeUndefined();
         // Rollback restores the 0019 trigger, which counts every retrieval.
         expect(await countRetrieval(pool, false)).toBe("2");

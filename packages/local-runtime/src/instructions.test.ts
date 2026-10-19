@@ -2,7 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
 import {
   LocalStore,
@@ -14,6 +14,7 @@ import {
   type CreateRequest,
 } from "./index.js";
 import { assertProjectionSupported } from "./projections.js";
+import { main } from "./cli.js";
 
 const stores: LocalStore[] = [];
 afterEach(() => {
@@ -304,5 +305,52 @@ describe("local instructions artifacts", () => {
     expect((await runtime.sync(project)).map((record) => record.skill.slug)).toEqual([
       "review",
     ]);
+  });
+
+  it("retrieves instructions without recording skill usage", async () => {
+    const base = root();
+    const state = join(base, "state");
+    const project = join(base, "project");
+    mkdirSync(project);
+    const store = new LocalStore(state);
+    const context = new Runtime(store).setup(project, "Personal", []);
+    const provider = new LocalWorkspaceProvider(store, context.primary.id);
+    const document = await provider.create(instructions);
+    const created = await provider.create(skill);
+    store.close();
+    const retrieve = async (id: string) => {
+      const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      try {
+        await main(["retrieve", id, "--home", state, "--project", project]);
+        return JSON.parse(String(log.mock.calls[0]?.[0])) as {
+          skill: { kind: string };
+          instructions: string;
+        };
+      } finally {
+        log.mockRestore();
+      }
+    };
+
+    expect(await retrieve(document.skillId)).toMatchObject({
+      skill: { kind: "instructions" },
+      instructions: instructions.instructions,
+    });
+    const reopened = new LocalStore(state);
+    stores.push(reopened);
+    const runtime = new Runtime(reopened);
+    expect(runtime.usage.report()).toMatchObject({ counts: {}, pending: 0 });
+    expect(
+      reopened.entries(`cache:local:${context.primary.id}:${document.skillId}:`),
+    ).toHaveLength(1);
+    reopened.close();
+    stores.pop();
+
+    await retrieve(created.skillId);
+    const after = new LocalStore(state);
+    stores.push(after);
+    expect(new Runtime(after).usage.report()).toMatchObject({
+      counts: { "skill_resolved/live-cli/observed": 1 },
+      pending: 1,
+    });
   });
 });
