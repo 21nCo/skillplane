@@ -7,11 +7,11 @@ import {
 
 let harness: WorkspaceBrowserHarness;
 
-async function authenticate(context: BrowserContext): Promise<void> {
+async function authenticate(context: BrowserContext, viewer = false): Promise<void> {
   await context.addCookies([
     {
       name: "__Secure-skillplane.session",
-      value: harness.sessionToken,
+      value: viewer ? harness.invitedSessionToken : harness.sessionToken,
       domain: "localhost",
       path: "/",
       httpOnly: true,
@@ -20,7 +20,7 @@ async function authenticate(context: BrowserContext): Promise<void> {
     },
     {
       name: "skillplane.csrf",
-      value: harness.csrfToken,
+      value: viewer ? harness.invitedCsrfToken : harness.csrfToken,
       domain: "localhost",
       path: "/",
       secure: true,
@@ -38,6 +38,7 @@ test.afterAll(async () => {
 });
 
 test("@instructions creates, edits, reviews and publishes instructions in the UI", async ({
+  browser,
   context,
   page,
 }) => {
@@ -167,8 +168,62 @@ test("@instructions creates, edits, reviews and publishes instructions in the UI
   await expect(page.getByLabel("Unified diff for AGENTS.md")).toContainText(
     "formatter and linter",
   );
+  const candidateUrl = page.url();
+
+  // A second editor starts from v1.0.0 while the candidate is pending.
+  const stalePage = await context.newPage();
+  await stalePage.goto(`${workspacePath}/instructions/repository-conventions/edit`);
+  await expect(stalePage.getByLabel("AGENTS.md", { exact: true })).toHaveValue(
+    "# Conventions\n\nRun the formatter before committing.\n",
+  );
+
+  // A viewer can read instructions but cannot create, edit or publish them.
+  const viewerContext = await browser.newContext();
+  try {
+    await authenticate(viewerContext, true);
+    const viewerPage = await viewerContext.newPage();
+    await viewerPage.goto(`${workspacePath}/instructions`);
+    await expect(
+      viewerPage
+        .getByRole("region", { name: "Instructions inventory" })
+        .getByRole("article"),
+    ).toHaveCount(1);
+    await expect(
+      viewerPage.getByRole("link", { name: "New instructions" }),
+    ).toHaveCount(0);
+    await viewerPage.goto(candidateUrl);
+    await expect(
+      viewerPage.getByRole("heading", { name: "Candidate revision 2" }),
+    ).toBeVisible();
+    await expect(
+      viewerPage.getByText("Admin or owner approval required"),
+    ).toBeVisible();
+    await expect(viewerPage.getByRole("button", { name: "Publish minor" })).toHaveCount(
+      0,
+    );
+    await viewerPage.goto(`${workspacePath}/instructions/repository-conventions/edit`);
+    await expect(viewerPage.getByText("Editor access required")).toBeVisible();
+    await expect(viewerPage.getByLabel("AGENTS.md", { exact: true })).toHaveCount(0);
+  } finally {
+    await viewerContext.close();
+  }
+
   await page.getByRole("button", { name: "Publish minor" }).click();
   await expect(page.getByRole("heading", { name: "Version 1.1.0" })).toBeVisible();
+
+  // Submitting against the superseded v1.0.0 base is refused and creates nothing.
+  await stalePage
+    .getByLabel("AGENTS.md", { exact: true })
+    .fill("# Conventions\n\nA stale edit.\n");
+  await stalePage.getByLabel("Change summary").fill("Stale edit");
+  await stalePage.getByRole("button", { name: "Submit version for review" }).click();
+  await expect(
+    stalePage
+      .getByRole("alert")
+      .filter({ hasText: "The base version is no longer current" }),
+  ).toBeVisible();
+  await expect(stalePage).toHaveURL(/\/instructions\/repository-conventions\/edit$/u);
+  await stalePage.close();
 
   await navigation.getByRole("link", { name: "Versions" }).click();
   await expect(page.getByRole("heading", { name: "2 versions" })).toBeVisible();

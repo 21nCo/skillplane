@@ -1,24 +1,13 @@
 <script lang="ts">
+  import { untrack } from "svelte";
   import { resolve } from "$app/paths";
   import { page } from "$app/state";
   import { Badge, Button, Textarea } from "@skillplane/ui";
+  import { CandidateReviewController } from "$lib/instructions/candidate-review.svelte.js";
   import ReviewDecision from "$lib/skills/ReviewDecision.svelte";
   import SkillState from "$lib/skills/SkillState.svelte";
   import VersionDiff from "$lib/skills/VersionDiff.svelte";
-  import {
-    decideAmendmentReview,
-    getSkillDiff,
-    getSkillVersion,
-    listAmendmentReviews,
-    publishCandidate,
-    rejectCandidate,
-  } from "$lib/skills/api.js";
   import { useSkillDetailStore } from "$lib/skills/store.svelte.js";
-  import type {
-    AmendmentReview,
-    SkillVersion,
-    SkillVersionDiff,
-  } from "$lib/skills/types.js";
   import { useWorkspaceStore } from "$lib/workspaces/store.svelte.js";
   import { ArrowLeftIcon, CheckCircleIcon, GitDiffIcon } from "phosphor-svelte";
 
@@ -32,123 +21,27 @@
   const canPublish = $derived(
     Boolean(workspace && (workspace.role === "admin" || workspace.role === "owner")),
   );
-  let version = $state<SkillVersion | null>(null);
-  // Agent amendments are decided through their review; human candidates directly.
-  let review = $state<AmendmentReview | null>(null);
-  let diff = $state<SkillVersionDiff | null>(null);
-  let loading = $state(true);
-  let error = $state<string | null>(null);
-  let busy = $state(false);
-  let actionError = $state<string | null>(null);
-  let refreshError = $state<string | null>(null);
+  const candidate = new CandidateReviewController(async (decided) => {
+    detail.replaceVersion(decided);
+    await detail.refresh();
+  });
+  const version = $derived(candidate.version);
+  const control = $derived(candidate.control);
+  const decideAmendment = (decision: "approve" | "reject", rationale: string) =>
+    candidate.decideAmendment(decision, rationale);
   let reason = $state("");
-  let loadedKey = $state("");
-
-  async function load() {
-    const versionId = page.params.versionId;
-    if (!workspace || !detail.skill || !versionId) return;
-    loading = true;
-    error = null;
-    try {
-      const selected = await getSkillVersion(workspace.id, detail.skill.id, versionId);
-      const [comparison, reviews] = await Promise.all([
-        selected.baseVersionId
-          ? getSkillDiff({
-              workspaceId: workspace.id,
-              skillId: detail.skill.id,
-              fromVersionId: selected.baseVersionId,
-              toVersionId: selected.id,
-            })
-          : null,
-        selected.source === "agent_amendment"
-          ? listAmendmentReviews({
-              workspaceId: workspace.id,
-              skillId: detail.skill.id,
-            })
-          : [],
-      ]);
-      version = selected;
-      diff = comparison;
-      review =
-        reviews.find((entry) => entry.review.proposedVersionId === selected.id)
-          ?.review ?? null;
-    } catch (cause) {
-      error =
-        cause instanceof Error ? cause.message : "The version could not be loaded.";
-    } finally {
-      loading = false;
-    }
-  }
-
-  async function settle(operation: () => Promise<SkillVersion>): Promise<boolean> {
-    busy = true;
-    actionError = null;
-    refreshError = null;
-    try {
-      version = await operation();
-    } catch (cause) {
-      actionError =
-        cause instanceof Error ? cause.message : "The candidate state was not changed.";
-      busy = false;
-      return false;
-    }
-    // The decision is saved; a failed refresh must not report it as unchanged.
-    try {
-      detail.replaceVersion(version);
-      await detail.refresh();
-    } catch (cause) {
-      refreshError =
-        cause instanceof Error ? cause.message : "The instructions could not refresh.";
-    }
-    busy = false;
-    return true;
-  }
-
-  function decideHuman(decision: "approve" | "reject") {
-    if (!workspace || !detail.skill || !version) return;
-    const options = {
-      workspaceId: workspace.id,
-      skillId: detail.skill.id,
-      versionId: version.id,
-      idempotencyKey: crypto.randomUUID(),
-    };
-    void settle(() =>
-      decision === "approve"
-        ? publishCandidate(options)
-        : rejectCandidate({ ...options, reason: reason.trim() }),
-    );
-  }
-
-  async function decideAmendment(
-    decision: "approve" | "reject",
-    rationale: string,
-  ): Promise<boolean> {
-    if (!workspace || !detail.skill || !review) return false;
-    const reviewId = review.id;
-    const skillId = detail.skill.id;
-    return settle(async () => {
-      const decided = await decideAmendmentReview({
-        workspaceId: workspace.id,
-        skillId,
-        reviewId,
-        decision,
-        reason: rationale,
-        idempotencyKey: crypto.randomUUID(),
-      });
-      review = decided.review;
-      return decided.candidate;
-    });
-  }
+  let loadedKey = "";
 
   $effect(() => {
-    const key =
-      workspace && detail.skill && page.params.versionId
-        ? `${workspace.id}:${detail.skill.id}:${page.params.versionId}`
-        : "";
-    if (key && key !== loadedKey) {
-      loadedKey = key;
-      void load();
-    }
+    const workspaceId = workspace?.id;
+    const skillId = detail.skill?.id;
+    const versionId = page.params.versionId;
+    if (!workspaceId || !skillId || !versionId) return;
+    const key = `${workspaceId}:${skillId}:${versionId}`;
+    if (key === loadedKey) return;
+    loadedKey = key;
+    reason = "";
+    untrack(() => void candidate.load({ workspaceId, skillId, versionId }));
   });
 </script>
 
@@ -172,18 +65,18 @@
     <ArrowLeftIcon weight="bold" aria-hidden="true" /> Version history
   </a>
 
-  {#if loading}
+  {#if candidate.loading}
     <SkillState
       kind="loading"
       title="Loading version"
       message="Reading immutable metadata and calculating the diff."
     />
-  {:else if error !== null || !version}
+  {:else if candidate.error !== null || !version}
     <SkillState
       kind="error"
       title="Version could not be loaded"
-      message={error ?? "The requested version is not available."}
-      retry={() => void load()}
+      message={candidate.error ?? "The requested version is not available."}
+      retry={() => candidate.retry()}
     />
   {:else}
     <header class="version-heading">
@@ -219,16 +112,23 @@
       </div>
     {/if}
 
-    {#if review}
+    {#if control.kind === "agent"}
       <section class="panel">
         <ReviewDecision
-          {review}
+          review={control.review}
           canDecide={canPublish}
-          {busy}
+          busy={candidate.busy}
           ondecide={decideAmendment}
         />
       </section>
-    {:else if version.status === "pending_review"}
+    {:else if control.kind === "agent_review_missing"}
+      <SkillState
+        kind="error"
+        title="Agent review could not be found"
+        message="This agent amendment is decided through its review. Publication controls stay hidden until the review loads."
+        retry={() => candidate.retry()}
+      />
+    {:else if control.kind === "human"}
       <section class="panel review">
         <h3>Publication control</h3>
         {#if canPublish}
@@ -242,12 +142,12 @@
           <div class="actions">
             <Button
               variant="danger"
-              disabled={busy || !reason.trim()}
-              onclick={() => decideHuman("reject")}
+              disabled={candidate.busy || !reason.trim()}
+              onclick={() => void candidate.reject(reason.trim())}
             >
               Reject
             </Button>
-            <Button loading={busy} onclick={() => decideHuman("approve")}>
+            <Button loading={candidate.busy} onclick={() => void candidate.publish()}>
               Publish {version.proposedBump ?? "patch"}
             </Button>
           </div>
@@ -257,32 +157,32 @@
       </section>
     {/if}
 
-    {#if actionError}
+    {#if candidate.actionError}
       <SkillState
         kind="error"
         title="Candidate state was not changed"
-        message={actionError}
+        message={candidate.actionError}
       />
     {/if}
-    {#if refreshError}
+    {#if candidate.refreshError}
       <SkillState
         kind="error"
         title="The decision was saved, but the instructions could not refresh"
-        message={refreshError}
+        message={candidate.refreshError}
       />
     {/if}
 
     <section class="panel">
       <h3>
-        {#if diff}
+        {#if candidate.diff}
           <GitDiffIcon weight="duotone" aria-hidden="true" />
           Diff from base revision
         {:else}
           Initial version
         {/if}
       </h3>
-      {#if diff}
-        <VersionDiff files={diff.files} />
+      {#if candidate.diff}
+        <VersionDiff files={candidate.diff.files} />
       {:else}
         <SkillState
           kind="empty"

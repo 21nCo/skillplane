@@ -2,6 +2,8 @@
   import { SvelteURLSearchParams } from "svelte/reactivity";
   import { apiRequest } from "$lib/api/client.js";
   import { Button, Input, Select, Textarea } from "@skillplane/ui";
+  import KindBadge from "./KindBadge.svelte";
+  import type { SkillKind } from "./types.js";
   export interface Dependency {
     alias: string;
     workspace: string;
@@ -38,6 +40,7 @@
       slug: string;
       name: string;
       semanticVersion: string;
+      kind?: SkillKind;
     }[]
   >([]);
   async function search() {
@@ -113,7 +116,7 @@
       disabled={dependencies.length >= 32}
       onclick={() => addMatch(match)}
       >Add {match.workspaceSlug}/{match.slug} {match.semanticVersion}</Button
-    >{/each}
+    ><KindBadge kind={match.kind ?? "skill"} />{/each}
   {#each dependencies as dependency, index (index)}
     <fieldset>
       <legend>Dependency {index + 1}</legend>
