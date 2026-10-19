@@ -129,3 +129,12 @@ jobs:
 
       - name: Skill and instructions page accessibility
         run: pnpm test:a11y --filter skill-pages
+
+      - name: Upload Playwright traces
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: playwright-traces
+          path: packages/testing/test-results/
+          if-no-files-found: ignore
+          retention-days: 7

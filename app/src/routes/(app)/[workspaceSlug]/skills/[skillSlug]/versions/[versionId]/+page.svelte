@@ -79,7 +79,7 @@
       });
       version = published;
       detail.replaceVersion(published);
-      await detail.refresh();
+      await detail.refreshIfOwner(published);
     } catch (cause) {
       actionError =
         cause instanceof Error

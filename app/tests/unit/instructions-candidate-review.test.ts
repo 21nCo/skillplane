@@ -35,6 +35,7 @@ const target = (versionId: string) => ({
 function version(id: string, overrides: Partial<SkillVersion> = {}): SkillVersion {
   return {
     id,
+    workspaceId: "workspace-1",
     skillId: "instructions-1",
     revision: 2,
     status: "pending_review",
@@ -332,7 +333,7 @@ describe("candidate decisions and the shared detail store", () => {
     await store.load("workspace-1", slug);
     const controller = new CandidateReviewController(async (decided) => {
       store.replaceVersion(decided);
-      await store.refreshIfOwner(decided.skillId);
+      await store.refreshIfOwner(decided);
     });
     return { store, controller };
   }
@@ -380,6 +381,41 @@ describe("candidate decisions and the shared detail store", () => {
       expect(controller.refreshError).toBeNull();
     },
   );
+
+  it("keeps a decision saved during navigation to another workspace's same slug out of the destination", async () => {
+    const pending = version("a-2");
+    api.getSkillVersion.mockResolvedValueOnce(pending);
+    const { store, controller } = await storeHolding("instructions-1", "docs", [
+      pending,
+    ]);
+    await controller.load(target("a-2"));
+    const decided = deferred<SkillVersion>();
+    api.publishCandidate.mockReturnValueOnce(decided.promise);
+    const decision = controller.publish();
+
+    controller.dispose();
+    const destination = deferred<Skill>();
+    const other = version("b-1", {
+      workspaceId: "workspace-2",
+      skillId: "instructions-2",
+      status: "published",
+    });
+    api.getSkillBySlug.mockReturnValueOnce(destination.promise);
+    api.listSkillVersions.mockResolvedValueOnce([other]);
+    const navigation = store.load("workspace-2", "docs");
+    decided.resolve({ ...pending, status: "published" });
+    expect(await decision).toBe(true);
+    destination.resolve({
+      ...artifact("instructions-2", "docs"),
+      workspaceId: "workspace-2",
+    });
+    await navigation;
+
+    expect(api.getSkill).not.toHaveBeenCalled();
+    expect(store.skill?.id).toBe("instructions-2");
+    expect(store.versions).toEqual([other]);
+    expect(store.loading).toBe(false);
+  });
 
   it("updates the same document's history when the decision resolves after another version loads", async () => {
     const first = version("first");

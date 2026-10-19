@@ -24,7 +24,7 @@
   // The store ignores a decision for an artifact it no longer holds.
   const candidate = new CandidateReviewController(async (decided) => {
     detail.replaceVersion(decided);
-    await detail.refreshIfOwner(decided.skillId);
+    await detail.refreshIfOwner(decided);
   });
   onDestroy(() => candidate.dispose());
   const version = $derived(candidate.version);

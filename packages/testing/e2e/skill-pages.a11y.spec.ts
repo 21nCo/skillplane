@@ -85,24 +85,17 @@ async function assertAccessible(page: Page, label: string): Promise<void> {
   expect(overflow, `${label} horizontal overflow`).toBeLessThanOrEqual(1);
 }
 
-test.beforeAll(async () => {
+const slug = "accessible-review";
+const instructionsSlug = "accessible-conventions";
+let candidateVersionId: string;
+let instructionsCandidateVersionId: string;
+
+test.beforeAll(async ({ browser }) => {
+  test.setTimeout(120_000);
   harness = await startWorkspaceBrowserHarness();
-});
-
-test.afterAll(async () => {
-  await harness.close();
-});
-
-test("@skill-pages-a11y passes the required viewport and theme matrix", async ({
-  context,
-  page,
-}) => {
-  // The matrix renders every skill and instructions view in each viewport and theme.
-  test.setTimeout(300_000);
+  // Every matrix test reviews the same skill and instructions fixtures.
+  const context = await browser.newContext();
   await authenticate(context);
-  await page.goto(`${harness.origin}/${harness.workspaceSlug}/skills`);
-
-  const slug = "accessible-review";
   const initialBundle = await createSkillBundleFixture({
     name: "Accessible review",
     slug,
@@ -114,7 +107,7 @@ test("@skill-pages-a11y passes the required viewport and theme matrix", async ({
       "references/checklist.md": "# Checklist\n\n- Labels\n- Focus\n- Contrast\n",
     },
   });
-  const createdResponse = await page.request.post(
+  const createdResponse = await context.request.post(
     `${harness.origin}/api/v1/workspaces/${harness.workspaceId}/skills`,
     {
       headers: mutationHeaders("a11y-create"),
@@ -141,7 +134,7 @@ test("@skill-pages-a11y passes the required viewport and theme matrix", async ({
       "references/checklist.md": "# Checklist\n\n- Labels\n- Focus\n- Contrast\n",
     },
   });
-  const candidateResponse = await page.request.post(
+  const candidateResponse = await context.request.post(
     `${harness.origin}/api/v1/skills/${created.skill.id}/versions`,
     {
       headers: mutationHeaders("a11y-candidate"),
@@ -154,10 +147,10 @@ test("@skill-pages-a11y passes the required viewport and theme matrix", async ({
     },
   );
   expect(candidateResponse.status()).toBe(201);
-  const candidate = await data<{ version: { id: string } }>(candidateResponse);
+  candidateVersionId = (await data<{ version: { id: string } }>(candidateResponse))
+    .version.id;
 
-  const instructionsSlug = "accessible-conventions";
-  const instructionsResponse = await page.request.post(
+  const instructionsResponse = await context.request.post(
     `${harness.origin}/api/v1/workspaces/${harness.workspaceId}/skills`,
     {
       headers: mutationHeaders("a11y-instructions-create"),
@@ -178,7 +171,7 @@ test("@skill-pages-a11y passes the required viewport and theme matrix", async ({
     skill: { id: string };
     version: { id: string };
   }>(instructionsResponse);
-  const instructionsCandidateResponse = await page.request.post(
+  const instructionsCandidateResponse = await context.request.post(
     `${harness.origin}/api/v1/skills/${instructions.skill.id}/versions`,
     {
       headers: mutationHeaders("a11y-instructions-candidate"),
@@ -197,11 +190,18 @@ test("@skill-pages-a11y passes the required viewport and theme matrix", async ({
     },
   );
   expect(instructionsCandidateResponse.status()).toBe(201);
-  const instructionsCandidate = await data<{ version: { id: string } }>(
-    instructionsCandidateResponse,
-  );
+  instructionsCandidateVersionId = (
+    await data<{ version: { id: string } }>(instructionsCandidateResponse)
+  ).version.id;
+  await context.close();
+});
 
-  const protectedRoutes = [
+test.afterAll(async () => {
+  await harness.close();
+});
+
+function protectedRoutes(page: Page) {
+  return [
     {
       path: `/${harness.workspaceSlug}/skills`,
       ready: () => page.getByRole("heading", { name: "Skills" }),
@@ -228,7 +228,7 @@ test("@skill-pages-a11y passes the required viewport and theme matrix", async ({
       name: "versions",
     },
     {
-      path: `/${harness.workspaceSlug}/skills/${slug}/versions/${candidate.version.id}`,
+      path: `/${harness.workspaceSlug}/skills/${slug}/versions/${candidateVersionId}`,
       ready: () => page.getByRole("heading", { name: "Candidate revision 2" }),
       name: "version-detail",
     },
@@ -263,29 +263,35 @@ test("@skill-pages-a11y passes the required viewport and theme matrix", async ({
       name: "instructions-versions",
     },
     {
-      path: `/${harness.workspaceSlug}/instructions/${instructionsSlug}/versions/${instructionsCandidate.version.id}`,
+      path: `/${harness.workspaceSlug}/instructions/${instructionsSlug}/versions/${instructionsCandidateVersionId}`,
       ready: () => page.getByLabel("Unified diff for AGENTS.md"),
       name: "instructions-version-detail",
     },
   ] as const;
-  const viewports = [
-    { width: 390, height: 844 },
-    { width: 768, height: 1024 },
-    { width: 1440, height: 900 },
-  ] as const;
+}
 
-  for (const theme of ["dark", "light"] as const) {
-    for (const viewport of viewports) {
-      await page.setViewportSize(viewport);
-      await page.emulateMedia({
-        colorScheme: theme,
-        reducedMotion: "reduce",
-      });
-      await page.evaluate(
+const viewports = [
+  { width: 390, height: 844 },
+  { width: 768, height: 1024 },
+  { width: 1440, height: 900 },
+] as const;
+
+for (const theme of ["dark", "light"] as const) {
+  for (const viewport of viewports) {
+    test(`@skill-pages-a11y passes the ${theme} theme at ${String(viewport.width)}px`, async ({
+      context,
+      page,
+    }) => {
+      // Each theme and viewport renders every skill and instructions view.
+      test.setTimeout(120_000);
+      await authenticate(context);
+      await context.addInitScript(
         (nextTheme) => localStorage.setItem("skillplane.theme", nextTheme),
         theme,
       );
-      for (const route of protectedRoutes) {
+      await page.setViewportSize(viewport);
+      await page.emulateMedia({ colorScheme: theme, reducedMotion: "reduce" });
+      for (const route of protectedRoutes(page)) {
         await page.goto(`${harness.origin}${route.path}`);
         await expect(route.ready()).toBeVisible();
         await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
@@ -298,9 +304,15 @@ test("@skill-pages-a11y passes the required viewport and theme matrix", async ({
         (element as HTMLElement).dataset.theme = nextTheme;
       }, theme);
       await assertAccessible(page, `public-${theme}-${viewport.width}`);
-    }
+    });
   }
+}
 
+test("@skill-pages-a11y keeps dialogs and tabs keyboard operable", async ({
+  context,
+  page,
+}) => {
+  await authenticate(context);
   await page.setViewportSize({ width: 768, height: 1024 });
   await page.goto(`${harness.origin}/${harness.workspaceSlug}/skills/${slug}/settings`);
   const archiveButton = page.getByRole("button", { name: "Archive skill" });
