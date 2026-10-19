@@ -86,7 +86,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-  await harness.close();
+  await harness?.close();
 });
 
 test("@context-pages-a11y passes context routes, themes, viewports, and keyboard dialogs", async ({

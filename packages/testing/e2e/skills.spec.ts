@@ -67,7 +67,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-  await harness.close();
+  await harness?.close();
 });
 
 test("@skills exposes an actionable server-error and retry state", async ({

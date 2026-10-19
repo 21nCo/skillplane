@@ -175,7 +175,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-  await harness.close();
+  await harness?.close();
 });
 
 test("@groups catalog ignores a superseded group-filter response", async ({

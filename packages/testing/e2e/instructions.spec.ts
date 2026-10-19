@@ -37,7 +37,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-  await harness.close();
+  await harness?.close();
 });
 
 test("@instructions creates, edits, reviews and publishes instructions in the UI", async ({

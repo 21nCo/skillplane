@@ -119,7 +119,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-  await harness.close();
+  await harness?.close();
 });
 
 test("@skill-pages-visual matches the production skill-page goldens", async ({

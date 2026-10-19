@@ -11,6 +11,7 @@ import { migrateDatabase, resolveTestDatabaseUrl } from "@skillplane/db";
 import { rollupUtcDay, writeAuditEvent } from "@skillplane/observability";
 import { createServer as createViteServer, type ViteDevServer } from "vite";
 import { buildApiServices, createApiApp } from "../../../api/src/index.js";
+import { HarnessDiagnostics } from "./harness-diagnostics.js";
 
 const projectRoot = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -101,11 +102,14 @@ function closeHttpServer(server: Server): Promise<void> {
 
 export async function startWorkspaceBrowserHarness(): Promise<WorkspaceBrowserHarness> {
   const databaseUrl = await resolveTestDatabaseUrl();
-  await migrateDatabase(databaseUrl);
   const suffix = `workspace-browser-${crypto.randomUUID().replaceAll("-", "").slice(0, 12)}`;
   const invitedSuffix = `${suffix}-invited`;
-  const fixture = await seedTenantFixture(databaseUrl, suffix);
-  const invitedFixture = await seedTenantFixture(databaseUrl, invitedSuffix);
+  const diagnostics = new HarnessDiagnostics(suffix);
+  await diagnostics.phase("migrate", () => migrateDatabase(databaseUrl));
+  const [fixture, invitedFixture] = await diagnostics.phase("seed", async () => [
+    await seedTenantFixture(databaseUrl, suffix),
+    await seedTenantFixture(databaseUrl, invitedSuffix),
+  ]);
   const email = `${suffix}@example.test`;
   const invitedEmail = `${invitedSuffix}@example.test`;
   const messages: unknown[] = [];
@@ -114,12 +118,27 @@ export async function startWorkspaceBrowserHarness(): Promise<WorkspaceBrowserHa
   process.chdir(appRoot);
   let vite: ViteDevServer;
   try {
-    vite = await createViteServer({
-      root: appRoot,
-      configFile: resolve(appRoot, "vite.config.ts"),
-      server: { middlewareMode: true, hmr: false },
-      appType: "custom",
-      logLevel: "error",
+    vite = await diagnostics.phase("vite", () =>
+      createViteServer({
+        root: appRoot,
+        configFile: resolve(appRoot, "vite.config.ts"),
+        server: { middlewareMode: true, hmr: false },
+        appType: "custom",
+        logLevel: "error",
+      }),
+    );
+    // On a cold cache Vite pre-bundles dependencies in the background once it
+    // starts, compiling Svelte on this event loop for seconds at a time. A
+    // database connection opened meanwhile can miss its connect timeout, so
+    // let that first optimization finish before the API opens connections.
+    const optimizer = vite.environments.client.depsOptimizer;
+    await diagnostics.phase("vite-dependencies", async () => {
+      await optimizer?.scanProcessing;
+      await Promise.all(
+        Object.values(optimizer?.metadata.discovered ?? {}).map(
+          (dependency) => dependency.processing,
+        ),
+      );
     });
   } finally {
     process.chdir(originalWorkingDirectory);
@@ -186,17 +205,22 @@ export async function startWorkspaceBrowserHarness(): Promise<WorkspaceBrowserHa
         requestId: () => `req_workspace_${crypto.randomUUID()}`,
         getServices: async () => built,
       });
-      await built.database.pool.query(
-        `INSERT INTO workspace_memberships (id, workspace_id, user_id, role)
+      await diagnostics.phase("first-query", () =>
+        built.database.pool.query(
+          `INSERT INTO workspace_memberships (id, workspace_id, user_id, role)
          VALUES ($1, $2, $3, 'viewer')`,
-        [
-          `membership:${suffix}:browser-viewer`,
-          fixture.workspaceId,
-          invitedFixture.userId,
-        ],
+          [
+            `membership:${suffix}:browser-viewer`,
+            fixture.workspaceId,
+            invitedFixture.userId,
+          ],
+        ),
       );
+      await diagnostics.finish();
+      console.info(diagnostics.summary());
       return built;
     } catch (error) {
+      await diagnostics.finish(error).catch(() => undefined);
       await closeHttpServer(server).catch(() => undefined);
       await vite.close().catch(() => undefined);
       await initialized?.datafn.close().catch(() => undefined);
@@ -204,7 +228,10 @@ export async function startWorkspaceBrowserHarness(): Promise<WorkspaceBrowserHa
       await initialized?.database.close().catch(() => undefined);
       await purgeTenantFixture(databaseUrl, suffix).catch(() => undefined);
       await purgeTenantFixture(databaseUrl, invitedSuffix).catch(() => undefined);
-      throw error;
+      throw new Error(
+        `Workspace browser harness did not start. ${diagnostics.summary()}`,
+        { cause: error },
+      );
     }
   })();
   let observabilitySeeded = false;

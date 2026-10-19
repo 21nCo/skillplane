@@ -21,7 +21,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-  await harness.close();
+  await harness?.close();
 });
 
 async function authenticate(context: BrowserContext): Promise<void> {

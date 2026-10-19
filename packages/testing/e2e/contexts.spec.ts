@@ -66,7 +66,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-  await harness.close();
+  await harness?.close();
 });
 
 test("@contexts exposes an actionable context-inventory error and retry state", async ({

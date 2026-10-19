@@ -61,7 +61,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-  await harness.close();
+  await harness?.close();
 });
 
 test("@analytics renders database-backed workspace and skill metrics with role-safe navigation", async ({

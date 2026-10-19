@@ -207,7 +207,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-  await harness.close();
+  await harness?.close();
 });
 
 test("@amendments @amendment-review reviews, persists, role-gates, and configures trusted policy", async ({
