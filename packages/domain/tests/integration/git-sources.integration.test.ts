@@ -404,11 +404,25 @@ describe("Git source persistence and recovery", () => {
         { path: "agents", bundle: await bundle(slug, "# Skill\n"), error: null },
       ],
     };
-    expect(
-      (await sources.preview({ ...m(), sourceId: source.id })).plan[0],
-    ).toMatchObject({
+    const preview = await sources.preview({ ...m(), sourceId: source.id });
+    expect(preview.plan[0]).toMatchObject({
       action: "conflict",
       message: "An instructions document already uses this slug",
+    });
+    const before = await skills.get({ skillId: created.skill.id, principal: owner });
+    const applied = await sources.apply({
+      ...m(),
+      sourceId: source.id,
+      runId: preview.id,
+    });
+    expect(applied.results[0]).toMatchObject({ status: "conflict", versionId: null });
+    expect((await sources.get(owner, source.id)).bindings).toHaveLength(0);
+    expect(await skills.get({ skillId: created.skill.id, principal: owner })).toEqual(
+      before,
+    );
+    expect(before).toMatchObject({
+      kind: "instructions",
+      currentPublishedVersionId: created.version.id,
     });
   });
   it("rejects stale previews, source mutation during sync and foreign bindings", async () => {

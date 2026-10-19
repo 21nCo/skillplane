@@ -229,6 +229,44 @@ describe.each(["combined", "regional"] as const)(
         await refusedIntact();
         await pool.query("DELETE FROM skills WHERE id = 'kind-agents'");
 
+        // Behind a long transaction the rollback gives up at LOCK instead of
+        // queueing every later skills reader. The test-side statement_timeout
+        // only bounds a regression; the rollback's own lock_timeout is shorter.
+        const blockers = new Pool({ connectionString: urls[role], max: 2 });
+        const blocker = await blockers.connect();
+        const waiting = await blockers.connect();
+        let readerAfterRefusal: unknown;
+        try {
+          await blocker.query("BEGIN");
+          await blocker.query("SELECT 1 FROM skills LIMIT 1");
+          await waiting.query("SET statement_timeout = '15s'");
+          const started = Date.now();
+          const errors = await runLikePsql(waiting, rollback, async (statement) => {
+            if (!statement.startsWith("LOCK TABLE skills")) return;
+            await pool.query("SET statement_timeout = '1s'");
+            readerAfterRefusal = await pool
+              .query("SELECT kind FROM skills WHERE id = 'kind-skill'")
+              .then((result) => result.rows)
+              .catch((error: { code?: string }) => error.code);
+            await pool.query("RESET statement_timeout");
+          });
+          expect(errors[0]).toContain("lock timeout");
+          expect(Date.now() - started).toBeLessThan(15_000);
+          expect(
+            errors
+              .slice(1)
+              .every((message) => message.includes("current transaction is aborted")),
+          ).toBe(true);
+        } finally {
+          await blocker.query("COMMIT").catch(() => undefined);
+          blocker.release();
+          waiting.release();
+          await blockers.end();
+        }
+        expect(readerAfterRefusal).toEqual([{ kind: "skill" }]);
+        expect(await kindColumn(pool)).toBeDefined();
+        expect(await ledgerRows()).toBe(1);
+
         const success = await pool.connect();
         try {
           expect(await runLikePsql(success, rollback)).toEqual([]);
@@ -267,6 +305,6 @@ describe.each(["combined", "regional"] as const)(
       } finally {
         await pool.end();
       }
-    });
+    }, 60_000);
   },
 );

@@ -281,7 +281,7 @@ export class SkillGroupService {
         // Groups hold skills; instructions documents are a separate kind.
         if (options.add && r.rows[0]?.kind !== "skill")
           throw new DomainError(
-            "VALIDATION_FAILED",
+            "SKILL_KIND_UNSUPPORTED",
             "Only skills can be assigned to a skill group",
             400,
             { field: "targetId" },

@@ -242,7 +242,7 @@ describe.skipIf(!url)("workspace skill groups", () => {
         add,
       });
     await expect(assign(true)).rejects.toMatchObject({
-      code: "VALIDATION_FAILED",
+      code: "SKILL_KIND_UNSUPPORTED",
       status: 400,
     });
     expect(await assign(false)).toEqual({ changed: false });

@@ -575,7 +575,9 @@ describe("instructions artifacts over the API", () => {
     const searchPath = `/api/v1/skills/search?workspaceId=${owner.workspaceId}&q=${term}&limit=10`;
     const listPath = `/api/v1/workspaces/${owner.workspaceId}/skills?limit=1`;
     // Pre-kind list cursors carried no kind; every artifact was then a skill.
-    const page = JSON.parse(Buffer.from(listed.nextCursor, "base64url").toString());
+    const page = JSON.parse(
+      Buffer.from(listed.nextCursor, "base64url").toString(),
+    ) as Record<string, unknown>;
     expect(page.kind).toBe("*");
     delete page.kind;
     const preKind = Buffer.from(stableJson(page)).toString("base64url");

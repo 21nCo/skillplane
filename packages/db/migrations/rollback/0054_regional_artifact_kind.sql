@@ -4,8 +4,12 @@
 -- One transaction keeps the guard atomic with the schema change under any
 -- runner, including psql -f without ON_ERROR_STOP: once the guard raises, every
 -- later statement fails and COMMIT rolls back. The lock stops a concurrent
--- instructions insert from landing between the check and the drop.
+-- instructions insert from landing between the check and the drop. The local
+-- lock_timeout makes a busy table refuse the rollback: a queued ACCESS
+-- EXCLUSIVE request would otherwise block every later skills reader until the
+-- longest open transaction ends.
 BEGIN;
+SET LOCAL lock_timeout = '5s';
 LOCK TABLE skills IN ACCESS EXCLUSIVE MODE;
 DO $$
 BEGIN

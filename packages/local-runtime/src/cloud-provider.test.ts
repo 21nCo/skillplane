@@ -599,11 +599,29 @@ describe("cloud provider transport contract", () => {
     });
     const runtime = new Runtime(local.store);
     local.store.set("analytics:consent", true);
-    runtime.observeRead(await cloud.retrieve(document.skillId), "codex");
+    const read = await cloud.retrieve(document.skillId);
+    runtime.observeRead(read, "codex");
     expect(runtime.usage.report()).toMatchObject({ counts: {}, pending: 0 });
+    const { workspaceKey } = await import("./contracts.js");
+    expect(
+      local.store.entries(`cache:${workspaceKey(workspace)}:${document.skillId}:`),
+    ).toEqual([
+      [
+        `cache:${workspaceKey(workspace)}:${document.skillId}:${read.version.id}`,
+        expect.objectContaining({
+          skill: expect.objectContaining({
+            id: document.skillId,
+            kind: "instructions",
+          }),
+          digest: read.bundle.digest,
+        }),
+      ],
+    ]);
+    await expect(local.store.bundle(read.bundle.digest)).resolves.toMatchObject({
+      digest: read.bundle.digest,
+    });
     runtime.observeRead(await cloud.retrieve(created.skillId), "codex");
     const membership = new Set((await cloud.list()).map((item) => item.id));
-    const { workspaceKey } = await import("./contracts.js");
     expect(
       await runtime.usage.upload(
         async (events) =>
