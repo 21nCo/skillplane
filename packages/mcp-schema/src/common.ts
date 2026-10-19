@@ -99,6 +99,13 @@ export const knowledgeSelectorSchema = z.discriminatedUnion("selector", [
 ]);
 
 export const skillVisibilitySchema = z.enum(["private", "workspace", "public"]);
+/** Instructions (AGENTS.md) share the skill lifecycle but are never resolved as skills. */
+export const skillKindSchema = z.enum(["skill", "instructions"]);
+/**
+ * Outputs report kind only for non-skill artifacts, so strict clients released
+ * before artifact kinds keep parsing skill records. An absent kind is a skill.
+ */
+export const reportedSkillKindSchema = skillKindSchema.optional();
 export const versionStateSchema = z.enum([
   "draft",
   "pending_review",

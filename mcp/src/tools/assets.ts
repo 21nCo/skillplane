@@ -49,7 +49,9 @@ export function skillAssetRetrieve(
         allowPublic: true,
       });
       const version = await resolveVersion(runtime, execution, skill, input.version);
-      const path = normalizeBundlePath(input.path);
+      const path = normalizeBundlePath(input.path, false, {
+        allowInstructionsEntrypoint: skill.kind === "instructions",
+      });
       const bundle = await loadExactCanonicalBundle(runtime, version);
       const bytes = bundle.files.get(path);
       const descriptor = bundle.manifest.files.find((file) => file.path === path);

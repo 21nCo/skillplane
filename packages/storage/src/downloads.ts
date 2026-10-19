@@ -1,3 +1,4 @@
+import type { ArtifactKind } from "./manifest.js";
 import { normalizeBundlePath } from "./paths.js";
 import type { R2BundleRepository } from "./r2.js";
 import { sha256Hex, validateBundleArchive } from "./validate.js";
@@ -16,8 +17,12 @@ export async function retrieveBundleFile(options: {
   readonly bundleDigest: `sha256:${string}`;
   readonly path: string;
   readonly expectedFileDigest?: string;
+  /** The stored artifact kind; only instructions expose a root AGENTS.md. */
+  readonly kind?: ArtifactKind;
 }): Promise<DownloadedSkillFile> {
-  const path = normalizeBundlePath(options.path);
+  const path = normalizeBundlePath(options.path, false, {
+    allowInstructionsEntrypoint: options.kind === "instructions",
+  });
   const { bytes } = await options.repository.getCanonicalBundle(
     options.objectKey,
     options.bundleDigest,

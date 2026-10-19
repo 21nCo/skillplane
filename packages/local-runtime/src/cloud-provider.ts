@@ -3,7 +3,12 @@ import { requireValue } from "./contracts.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { canonicalizeBundleFiles, skillJsonSchema } from "@skillplane/storage";
+import {
+  bundleEntrypoint,
+  bundleJsonSchema,
+  bundleKind,
+  canonicalizeBundleFiles,
+} from "@skillplane/storage";
 import {
   mcpErrorSchema,
   skillRetrieveOutputSchema,
@@ -33,9 +38,60 @@ import {
 } from "./contracts.js";
 import { type Profiles } from "./profiles.js";
 import { hash } from "./files.js";
+import { z } from "zod";
 export interface CloudTransport {
   call(name: string, args: Record<string, unknown>): Promise<unknown>;
   download(url: string, max: number): Promise<Uint8Array>;
+}
+// McpFn's invalid-arguments payload, as McpTransport reports it in text content
+// or structured content of a CLOUD_REQUEST_REJECTED error.
+const invalidArgumentsSchema = z.object({
+  error: z.object({
+    code: z.literal("MCPFN_INVALID_ARGUMENTS"),
+    details: z.object({
+      issues: z.array(
+        z.object({
+          keyword: z.string(),
+          instancePath: z.string(),
+          rejectedProperty: z.string().optional(),
+        }),
+      ),
+    }),
+  }),
+});
+const textContentSchema = z.array(
+  z.object({ type: z.string(), text: z.string().optional() }),
+);
+function parseJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+}
+// True when the server's input schema rejected an undeclared top-level argument.
+export function rejectsArgument(error: unknown, property: string): boolean {
+  if (!(error instanceof RuntimeError) || error.code !== "CLOUD_REQUEST_REJECTED")
+    return false;
+  const value = parseJson(error.message);
+  const content = textContentSchema.safeParse(value);
+  const payloads = content.success
+    ? content.data.flatMap((item) =>
+        item.type === "text" && item.text !== undefined ? [parseJson(item.text)] : [],
+      )
+    : [value];
+  return payloads.some((payload) => {
+    const parsed = invalidArgumentsSchema.safeParse(payload);
+    return (
+      parsed.success &&
+      parsed.data.error.details.issues.some(
+        (issue) =>
+          issue.keyword === "additionalProperties" &&
+          (issue.instancePath === "/" || issue.instancePath === "") &&
+          issue.rejectedProperty === property,
+      )
+    );
+  });
 }
 export class McpTransport implements CloudTransport {
   constructor(
@@ -145,10 +201,16 @@ export class CloudWorkspaceProvider implements WorkspaceProvider {
       caller,
     );
   }
+  private listsInstructions = true;
   private call(name: string, args: Record<string, unknown>): Promise<unknown> {
     return this.transport.call(name, { ...args, caller: this.caller });
   }
-  async list(): Promise<SkillInfo[]> {
+  // Projection, sync and usage membership list skills only (SKI-24 owns
+  // instructions projection), so skills_list keeps its default kind here.
+  list(): Promise<SkillInfo[]> {
+    return this.listKind("skill");
+  }
+  private async listKind(kind: SkillInfo["kind"]): Promise<SkillInfo[]> {
     const items: SkillInfo[] = [];
     let cursor: string | null = null;
     const seen = new Set<string>();
@@ -158,6 +220,8 @@ export class CloudWorkspaceProvider implements WorkspaceProvider {
           workspace: { id: this.workspace.id },
           limit: 100,
           cursor,
+          // Omit the default so a pre-kind server still accepts skill listing.
+          ...(kind === "skill" ? {} : { kind }),
         }),
       );
       if (
@@ -165,12 +229,15 @@ export class CloudWorkspaceProvider implements WorkspaceProvider {
         page.skills.some((s) => s.workspaceId !== this.workspace.id)
       )
         throw new RuntimeError("WORKSPACE_MISMATCH");
+      if (page.skills.some((s) => (s.kind ?? "skill") !== kind))
+        throw new RuntimeError("SKILL_KIND_MISMATCH");
       items.push(
         ...page.skills.map((s) => ({
           id: s.id,
           slug: s.slug,
           name: s.name,
           description: s.summary,
+          kind: s.kind ?? ("skill" as const),
         })),
       );
       cursor = page.nextCursor;
@@ -179,10 +246,22 @@ export class CloudWorkspaceProvider implements WorkspaceProvider {
     } while (cursor);
     return items;
   }
+  // Check membership in this exact workspace before ID-only lifecycle
+  // operations, which apply to skills and instructions documents alike.
+  private async requireMember(skillId: string): Promise<void> {
+    if ((await this.listKind("skill")).some((s) => s.id === skillId)) return;
+    if (this.listsInstructions)
+      try {
+        if ((await this.listKind("instructions")).some((s) => s.id === skillId)) return;
+      } catch (error) {
+        // A pre-kind server rejects the kind argument and has no instructions.
+        if (!rejectsArgument(error, "kind")) throw error;
+        this.listsInstructions = false;
+      }
+    throw new RuntimeError("SKILL_NOT_FOUND");
+  }
   async versions(skillId: string): Promise<VersionInfo[]> {
-    // Check membership in this exact workspace before ID-only MCP operations.
-    if (!(await this.list()).some((s) => s.id === skillId))
-      throw new RuntimeError("SKILL_NOT_FOUND");
+    await this.requireMember(skillId);
     const items: VersionInfo[] = [];
     let cursor: string | null = null;
     const seen = new Set<string>();
@@ -217,11 +296,13 @@ export class CloudWorkspaceProvider implements WorkspaceProvider {
       (versionId && output.version.id !== versionId)
     )
       throw new RuntimeError("WORKSPACE_MISMATCH");
+    const kind = output.skill.kind ?? ("skill" as const);
+    const entrypoint = kind === "instructions" ? "AGENTS.md" : "SKILL.md";
     const files = new Map<string, Uint8Array>([
-      ["SKILL.md", Buffer.from(output.instructions)],
+      [entrypoint, Buffer.from(output.instructions)],
     ]);
     for (const descriptor of output.files) {
-      if (descriptor.path === "SKILL.md") continue;
+      if (descriptor.path === entrypoint) continue;
       const asset = skillAssetRetrieveOutputSchema.parse(
         await this.call("skill_asset_retrieve", {
           skill: { id: skillId },
@@ -258,9 +339,14 @@ export class CloudWorkspaceProvider implements WorkspaceProvider {
         throw new RuntimeError("DIGEST_MISMATCH");
       files.set(descriptor.path, bytes);
     }
-    const immutableSkill = skillJsonSchema.parse(
+    const immutableSkill = bundleJsonSchema.parse(
       JSON.parse(new TextDecoder().decode(files.get("skill.json"))),
     );
+    if (
+      bundleKind(immutableSkill) !== kind ||
+      bundleEntrypoint(immutableSkill) !== entrypoint
+    )
+      throw new RuntimeError("DIGEST_MISMATCH");
     const bundle = await canonicalizeBundleFiles({ skill: immutableSkill, files });
     if (bundle.digest !== output.version.digest)
       throw new RuntimeError("DIGEST_MISMATCH");
@@ -271,6 +357,7 @@ export class CloudWorkspaceProvider implements WorkspaceProvider {
         slug: immutableSkill.slug,
         name: immutableSkill.name,
         description: immutableSkill.description,
+        kind,
       },
       version: output.version,
       bundle,
@@ -352,8 +439,7 @@ export class CloudWorkspaceProvider implements WorkspaceProvider {
     return { skillId: output.skillId, versionId: output.candidate.id };
   }
   async candidates(skillId: string): Promise<unknown> {
-    if (!(await this.list()).some((s) => s.id === skillId))
-      throw new RuntimeError("SKILL_NOT_FOUND");
+    await this.requireMember(skillId);
     let cursor: string | null = null;
     const items = [];
     const seen = new Set<string>();
@@ -381,8 +467,7 @@ export class CloudWorkspaceProvider implements WorkspaceProvider {
     reason: string,
     idempotencyKey: string,
   ): Promise<unknown> {
-    if (!(await this.list()).some((s) => s.id === skillId))
-      throw new RuntimeError("SKILL_NOT_FOUND");
+    await this.requireMember(skillId);
     const output = skillCandidateDecisionOutputSchema.parse(
       await this.call(approve ? "skill_candidate_approve" : "skill_candidate_reject", {
         skill: { id: skillId },

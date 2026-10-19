@@ -1,5 +1,5 @@
 import { CompositionService } from "./composition-service.js";
-import { validateBundleArchive } from "@skillplane/storage";
+import { bundleEntrypoint, validateBundleArchive } from "@skillplane/storage";
 import type { R2BundleRepository } from "@skillplane/storage";
 import type { Pool } from "pg";
 import { authorize } from "./authorization.js";
@@ -142,11 +142,12 @@ export class PublicationService {
         candidate.content_digest,
       );
       const bundle = await validateBundleArchive(stored.bytes);
-      const skillMarkdown = bundle.files.get("SKILL.md");
+      const entrypoint = bundleEntrypoint(bundle.skill);
+      const skillMarkdown = bundle.files.get(entrypoint);
       if (!skillMarkdown) {
         throw new DomainError(
           "SKILL_BUNDLE_INVALID",
-          "Candidate bundle is missing SKILL.md",
+          `Candidate bundle is missing ${entrypoint}`,
           400,
         );
       }
@@ -331,6 +332,7 @@ export class PublicationService {
                       description: row.skill_description,
                       tags: row.skill_tags ?? [],
                       visibility: "public",
+                      kind: "skill",
                       currentPublishedVersionId: record.id,
                       currentSemanticVersion: semanticVersion,
                       archivedAt: null,

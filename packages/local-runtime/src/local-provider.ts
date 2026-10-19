@@ -23,6 +23,22 @@ import {
 } from "./contracts.js";
 import { type LocalStore } from "./store.js";
 type Row = Record<string, unknown>;
+type Kind = SkillInfo["kind"];
+// Published pre-kind runtimes read every skill and version row as a skill, so
+// instructions documents use their own tables with the same columns. Slugs are
+// unique per workspace across both kinds when this runtime creates an artifact.
+// A pre-kind runtime checks only the skill table, so it can still create a skill
+// whose slug an instructions document holds; both then coexist with distinct
+// ids, and list orders them by slug, then kind.
+const tables = {
+  skill: { artifact: "skill", version: "version" },
+  instructions: { artifact: "instructions", version: "instructions_version" },
+} as const;
+interface Artifact {
+  readonly row: Row;
+  readonly kind: Kind;
+  readonly version: (typeof tables)[Kind]["version"];
+}
 function version(row: Row): VersionInfo {
   return {
     id: String(row.id),
@@ -62,37 +78,40 @@ export class LocalWorkspaceProvider implements WorkspaceProvider {
   async list(): Promise<SkillInfo[]> {
     return this.store.db
       .prepare(
-        "SELECT id,slug,name,description FROM skill WHERE workspace=? ORDER BY slug",
+        "SELECT id,slug,name,description,'skill' AS kind FROM skill WHERE workspace=? UNION ALL SELECT id,slug,name,description,'instructions' AS kind FROM instructions WHERE workspace=? ORDER BY slug,kind",
       )
-      .all(this.workspace.id) as unknown as SkillInfo[];
+      .all(this.workspace.id, this.workspace.id) as unknown as SkillInfo[];
   }
-  private skill(id: string): Row {
-    const row = this.store.db
-      .prepare("SELECT * FROM skill WHERE id=? AND workspace=?")
-      .get(id, this.workspace.id);
-    if (!row) throw new RuntimeError("SKILL_NOT_FOUND");
-    return row;
+  private skill(id: string): Artifact {
+    for (const kind of ["skill", "instructions"] as const) {
+      const row = this.store.db
+        .prepare(`SELECT * FROM ${tables[kind].artifact} WHERE id=? AND workspace=?`)
+        .get(id, this.workspace.id);
+      if (row) return { row, kind, version: tables[kind].version };
+    }
+    throw new RuntimeError("SKILL_NOT_FOUND");
   }
   async versions(skillId: string): Promise<VersionInfo[]> {
-    this.skill(skillId);
+    const skill = this.skill(skillId);
     return this.store.db
-      .prepare("SELECT * FROM version WHERE skill=? ORDER BY created DESC,id")
+      .prepare(`SELECT * FROM ${skill.version} WHERE skill=? ORDER BY created DESC,id`)
       .all(skillId)
       .map(version);
   }
   async retrieve(skillId: string, versionId?: string): Promise<Snapshot> {
     const skill = this.skill(skillId);
     const row = this.store.db
-      .prepare("SELECT * FROM version WHERE skill=? AND id=?")
-      .get(skillId, versionId ?? String(skill.current));
+      .prepare(`SELECT * FROM ${skill.version} WHERE skill=? AND id=?`)
+      .get(skillId, versionId ?? String(skill.row.current));
     if (!row) throw new RuntimeError("VERSION_UNAVAILABLE");
     return {
       workspace: this.workspace,
       skill: {
         id: skillId,
-        slug: String(skill.slug),
-        name: String(skill.name),
-        description: String(skill.description),
+        slug: String(skill.row.slug),
+        name: String(skill.row.name),
+        description: String(skill.row.description),
+        kind: skill.kind,
       },
       version: version(row),
       bundle: await this.store.bundle(String(row.digest)),
@@ -107,6 +126,12 @@ export class LocalWorkspaceProvider implements WorkspaceProvider {
       workspace: { id: this.workspace.id },
       caller: declaredCaller(),
     });
+    // Same contract as MCP skill_create, before bundle construction can fail opaquely.
+    if (input.kind === "instructions" && (input.assets.length > 0 || input.composition))
+      throw new RuntimeError(
+        "VALIDATION_FAILED",
+        "Instructions are a single AGENTS.md document without assets or composition",
+      );
     if (input.composition)
       throw new RuntimeError(
         "COMPOSITION_RESOLUTION_REQUIRED",
@@ -128,16 +153,19 @@ export class LocalWorkspaceProvider implements WorkspaceProvider {
       if (replay) return replay;
       if (
         this.store.db
-          .prepare("SELECT id FROM skill WHERE workspace=? AND slug=?")
-          .get(this.workspace.id, input.slug)
+          .prepare(
+            "SELECT id FROM skill WHERE workspace=? AND slug=? UNION ALL SELECT id FROM instructions WHERE workspace=? AND slug=?",
+          )
+          .get(this.workspace.id, input.slug, this.workspace.id, input.slug)
       )
         throw new RuntimeError("SKILL_SLUG_CONFLICT");
+      const target = tables[input.kind];
       const result = {
         skillId: `skill:${randomUUID()}`,
         versionId: `skill-version:${randomUUID()}`,
       };
       this.store.db
-        .prepare("INSERT INTO skill VALUES(?,?,?,?,?,?)")
+        .prepare(`INSERT INTO ${target.artifact} VALUES(?,?,?,?,?,?)`)
         .run(
           result.skillId,
           this.workspace.id,
@@ -149,7 +177,7 @@ export class LocalWorkspaceProvider implements WorkspaceProvider {
       const now = new Date().toISOString();
       this.store.db
         .prepare(
-          "INSERT INTO version VALUES(?,?,?,'published','1.0.0',NULL,'patch',?,?,'{}',NULL)",
+          `INSERT INTO ${target.version} VALUES(?,?,?,'published','1.0.0',NULL,'patch',?,?,'{}',NULL)`,
         )
         .run(result.versionId, result.skillId, bundle.digest, now, now);
       this.store.remember(key, request, result);
@@ -174,7 +202,7 @@ export class LocalWorkspaceProvider implements WorkspaceProvider {
     }>(key, request);
     if (replay) return replay;
     const base = await this.retrieve(input.skillId, input.baseVersionId);
-    if (this.skill(input.skillId).current !== input.baseVersionId)
+    if (this.skill(input.skillId).row.current !== input.baseVersionId)
       throw new RuntimeError("SKILL_VERSION_CONFLICT");
     const files = await applyAmendmentOperations(
       base.bundle.files,
@@ -190,7 +218,8 @@ export class LocalWorkspaceProvider implements WorkspaceProvider {
         versionId: string;
       }>(key, request);
       if (replay) return replay;
-      if (this.skill(input.skillId).current !== input.baseVersionId)
+      const skill = this.skill(input.skillId);
+      if (skill.row.current !== input.baseVersionId)
         throw new RuntimeError("SKILL_VERSION_CONFLICT");
       const result = {
         skillId: input.skillId,
@@ -199,7 +228,7 @@ export class LocalWorkspaceProvider implements WorkspaceProvider {
       const now = new Date().toISOString();
       this.store.db
         .prepare(
-          "INSERT INTO version VALUES(?,?,?,'pending_review',NULL,?,?,?,?,?,NULL)",
+          `INSERT INTO ${skill.version} VALUES(?,?,?,'pending_review',NULL,?,?,?,?,?,NULL)`,
         )
         .run(
           result.versionId,
@@ -216,10 +245,10 @@ export class LocalWorkspaceProvider implements WorkspaceProvider {
     });
   }
   async candidates(skillId: string): Promise<Row[]> {
-    this.skill(skillId);
+    const skill = this.skill(skillId);
     return this.store.db
       .prepare(
-        "SELECT id AS reviewId, state, base, digest, updated AS expectedUpdatedAt, learning, reason FROM version WHERE skill=? AND state<>'published' ORDER BY created",
+        `SELECT id AS reviewId, state, base, digest, updated AS expectedUpdatedAt, learning, reason FROM ${skill.version} WHERE skill=? AND state<>'published' ORDER BY created`,
       )
       .all(skillId);
   }
@@ -246,18 +275,18 @@ export class LocalWorkspaceProvider implements WorkspaceProvider {
       if (replay) return replay;
       const skill = this.skill(skillId);
       const row = this.store.db
-        .prepare("SELECT * FROM version WHERE skill=? AND id=?")
+        .prepare(`SELECT * FROM ${skill.version} WHERE skill=? AND id=?`)
         .get(skillId, reviewId);
       if (
         row?.updated !== expectedUpdatedAt ||
         !["draft", "pending_review"].includes(String(row.state))
       )
         throw new RuntimeError("REVIEW_CONFLICT");
-      if (approve && row.base !== skill.current)
+      if (approve && row.base !== skill.row.current)
         throw new RuntimeError("SKILL_VERSION_CONFLICT");
       const base = row.base
         ? this.store.db
-            .prepare("SELECT semantic FROM version WHERE id=?")
+            .prepare(`SELECT semantic FROM ${skill.version} WHERE id=?`)
             .get(String(row.base))
         : null;
       const semantic = approve
@@ -269,7 +298,9 @@ export class LocalWorkspaceProvider implements WorkspaceProvider {
           : "1.0.0"
         : null;
       this.store.db
-        .prepare("UPDATE version SET state=?,semantic=?,updated=?,reason=? WHERE id=?")
+        .prepare(
+          `UPDATE ${skill.version} SET state=?,semantic=?,updated=?,reason=? WHERE id=?`,
+        )
         .run(
           approve ? "published" : "rejected",
           semantic,
@@ -279,11 +310,13 @@ export class LocalWorkspaceProvider implements WorkspaceProvider {
         );
       if (approve)
         this.store.db
-          .prepare("UPDATE skill SET current=? WHERE id=?")
+          .prepare(`UPDATE ${tables[skill.kind].artifact} SET current=? WHERE id=?`)
           .run(reviewId, skillId);
       const result = version(
         requireValue(
-          this.store.db.prepare("SELECT * FROM version WHERE id=?").get(reviewId),
+          this.store.db
+            .prepare(`SELECT * FROM ${skill.version} WHERE id=?`)
+            .get(reviewId),
         ),
       );
       this.store.remember(key, request, result);

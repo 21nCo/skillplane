@@ -9,7 +9,7 @@ import {
 } from "node:fs";
 import { join, relative, resolve, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
-import { stableJson, type CanonicalBundle } from "@skillplane/storage";
+import { bundleKind, stableJson, type CanonicalBundle } from "@skillplane/storage";
 import { type LocalStore } from "./store.js";
 import { hash, inventory, safeDirectory, syncDirectory, writeAtomic } from "./files.js";
 import { RuntimeError, workspaceKey, type Snapshot, type Target } from "./contracts.js";
@@ -36,6 +36,11 @@ export interface ProjectionRecord {
   files: Record<string, string>;
 }
 export function assertProjectionSupported(bundle: CanonicalBundle): void {
+  if (bundleKind(bundle.skill) !== "skill")
+    throw new RuntimeError(
+      "PROJECTION_KIND_UNSUPPORTED",
+      "Instructions documents are not projected as skills",
+    );
   if (bundle.skill.formatVersion === 2)
     throw new RuntimeError(
       "COMPOSITION_RESOLUTION_REQUIRED",

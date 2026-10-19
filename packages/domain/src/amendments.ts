@@ -2,6 +2,9 @@ import { CompositionService } from "./composition-service.js";
 import {
   BundlePathError,
   BundleValidationError,
+  INSTRUCTIONS_ENTRYPOINT,
+  bundleEntrypoint,
+  bundleKind,
   canonicalizeBundleFiles,
   normalizeBundlePath,
   sha256Hex,
@@ -25,7 +28,11 @@ import { nextSemanticVersion } from "./publication.js";
 import { enqueueCurrentSkillProjection } from "./projection-events.js";
 import type { AmendmentReviewDetail, AmendmentReviewRecord } from "./reviews.js";
 import { parseSemanticBump } from "./skill-versions.js";
-import { mapSkillInfrastructureError, type SkillVersionRecord } from "./skills.js";
+import {
+  mapSkillInfrastructureError,
+  type SkillKind,
+  type SkillVersionRecord,
+} from "./skills.js";
 import { withDomainTransaction } from "./transactions.js";
 
 export type AmendmentFileOperationName = "add" | "replace" | "delete";
@@ -219,7 +226,12 @@ export function parseAmendmentOperations(
     }
     let path: string;
     try {
-      path = normalizeBundlePath(requiredDeclaredText(row.path, `${field}.path`));
+      // The base bundle's kind decides whether AGENTS.md is amendable.
+      path = normalizeBundlePath(
+        requiredDeclaredText(row.path, `${field}.path`),
+        false,
+        { allowInstructionsEntrypoint: true },
+      );
     } catch (error) {
       if (error instanceof BundlePathError) {
         throw new DomainError(error.code, error.message, 400, {
@@ -441,6 +453,18 @@ export class AmendmentService {
         baseRow.content_digest,
       );
       const validatedBase = await validateBundleArchive(storedBase.bytes);
+      if (bundleKind(validatedBase.skill) === "skill") {
+        const index = changes.findIndex(
+          (change) => change.path === INSTRUCTIONS_ENTRYPOINT,
+        );
+        if (index >= 0)
+          throw new DomainError(
+            "SKILL_PATH_INVALID",
+            "Bundle path uses an unsupported top-level entry",
+            400,
+            { field: `changes[${String(index)}].path` },
+          );
+      }
       const amendedFiles = await applyAmendmentOperations(validatedBase.files, changes);
       let canonical = await canonicalizeBundleFiles({
         skill: validatedBase.skill,
@@ -493,11 +517,12 @@ export class AmendmentService {
         canonical.bytes,
       );
       stored = storedBundle;
-      const markdown = canonical.files.get("SKILL.md");
+      const entrypoint = bundleEntrypoint(canonical.skill);
+      const markdown = canonical.files.get(entrypoint);
       if (!markdown) {
         throw new DomainError(
           "SKILL_BUNDLE_INVALID",
-          "Amendment removed the required SKILL.md file",
+          `Amendment removed the required ${entrypoint} file`,
           400,
         );
       }
@@ -796,6 +821,7 @@ export class AmendmentService {
               description: string;
               tags: string[];
               visibility: "private" | "workspace" | "public";
+              kind: SkillKind;
               current_published_version_id: string | null;
               semantic_version: string | null;
               archived_at: Date | null;
@@ -804,7 +830,7 @@ export class AmendmentService {
             }>(
               `SELECT skill.id, skill.workspace_id, skill.slug, skill.name,
                       skill.description, skill.tags, skill.visibility,
-                      skill.current_published_version_id,
+                      skill.kind, skill.current_published_version_id,
                       current.semantic_version, skill.archived_at,
                       skill.created_at, skill.updated_at
                  FROM skills skill
@@ -827,6 +853,7 @@ export class AmendmentService {
                 description: projected.description,
                 tags: projected.tags,
                 visibility: projected.visibility,
+                kind: projected.kind,
                 currentPublishedVersionId: projected.current_published_version_id,
                 currentSemanticVersion: projected.semantic_version,
                 archivedAt: projected.archived_at?.toISOString() ?? null,
@@ -859,7 +886,7 @@ export class AmendmentService {
           })
           .catch(() => undefined);
       }
-      if (error instanceof BundleValidationError) {
+      if (error instanceof BundleValidationError || error instanceof BundlePathError) {
         throw new DomainError(error.code, error.message, 400);
       }
       return mapSkillInfrastructureError(error);

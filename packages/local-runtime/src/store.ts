@@ -23,6 +23,10 @@ export class LocalStore {
       throw new RuntimeError("UNSAFE_FILE");
     this.db = new DatabaseSync(path);
     chmodSync(path, 0o600);
+    // Published pre-kind runtimes share this store and treat every skill and
+    // version row as a skill, so instructions documents live in their own
+    // instructions and instructions_version tables with the same columns.
+    // skill_kind came only from unreleased builds of this change and is dropped.
     this.db
       .exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;
       CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -31,6 +35,9 @@ export class LocalStore {
       CREATE TABLE IF NOT EXISTS workspace (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE);
       CREATE TABLE IF NOT EXISTS skill (id TEXT PRIMARY KEY, workspace TEXT NOT NULL REFERENCES workspace(id), slug TEXT NOT NULL, name TEXT NOT NULL, description TEXT NOT NULL, current TEXT, UNIQUE(workspace,slug));
       CREATE TABLE IF NOT EXISTS version (id TEXT PRIMARY KEY, skill TEXT NOT NULL REFERENCES skill(id), digest TEXT NOT NULL, state TEXT NOT NULL, semantic TEXT, base TEXT, bump TEXT NOT NULL, created TEXT NOT NULL, updated TEXT NOT NULL, learning TEXT NOT NULL, reason TEXT);
+      DROP TABLE IF EXISTS skill_kind;
+      CREATE TABLE IF NOT EXISTS instructions (id TEXT PRIMARY KEY, workspace TEXT NOT NULL REFERENCES workspace(id), slug TEXT NOT NULL, name TEXT NOT NULL, description TEXT NOT NULL, current TEXT, UNIQUE(workspace,slug));
+      CREATE TABLE IF NOT EXISTS instructions_version (id TEXT PRIMARY KEY, skill TEXT NOT NULL REFERENCES instructions(id), digest TEXT NOT NULL, state TEXT NOT NULL, semantic TEXT, base TEXT, bump TEXT NOT NULL, created TEXT NOT NULL, updated TEXT NOT NULL, learning TEXT NOT NULL, reason TEXT);
       CREATE TABLE IF NOT EXISTS mutation (key TEXT PRIMARY KEY, hash TEXT NOT NULL, result TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS usage (id TEXT PRIMARY KEY, payload TEXT NOT NULL, uploaded INTEGER NOT NULL DEFAULT 0);
     `);

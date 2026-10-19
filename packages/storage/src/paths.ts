@@ -30,7 +30,20 @@ export class BundlePathError extends Error {
   }
 }
 
-export function normalizeBundlePath(input: string, directory = false): string {
+/** The single document of an instructions artifact; never a skill bundle path. */
+export const INSTRUCTIONS_ENTRYPOINT = "AGENTS.md";
+
+/**
+ * Rejects a root AGENTS.md unless the caller opts in with
+ * `allowInstructionsEntrypoint`. Callers that do not know the kind yet (archive
+ * parsing, amendments) opt in, so they must reject a root AGENTS.md in a skill
+ * once the kind is known.
+ */
+export function normalizeBundlePath(
+  input: string,
+  directory = false,
+  options: { readonly allowInstructionsEntrypoint?: boolean } = {},
+): string {
   if (!input || input.includes("\0") || input.includes("\\")) {
     throw new BundlePathError("SKILL_PATH_INVALID", "Bundle path is invalid");
   }
@@ -64,7 +77,13 @@ export function normalizeBundlePath(input: string, directory = false): string {
 
   const [root] = segments;
   if (
-    (!directory && segments.length === 1 && !ROOT_FILES.has(withoutDirectorySuffix)) ||
+    (!directory &&
+      segments.length === 1 &&
+      !ROOT_FILES.has(withoutDirectorySuffix) &&
+      !(
+        options.allowInstructionsEntrypoint &&
+        withoutDirectorySuffix === INSTRUCTIONS_ENTRYPOINT
+      )) ||
     (segments.length > 1 && !OPTIONAL_ROOTS.has(root ?? "")) ||
     (directory && !OPTIONAL_ROOTS.has(root ?? ""))
   ) {

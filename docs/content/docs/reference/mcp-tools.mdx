@@ -21,6 +21,8 @@ Format-v2 composition writes (`skill_composition_candidate_create`, `skill_depen
 
 Discovery starts with `workspaces_list`. Pass one returned workspace to `skills_list` or `skills_search` as `workspace: { id }` or `workspace: { slug }`. A flat `workspaceId` string is still accepted on both tools as a deprecated alias for `workspace: { id }`; sending both forms is rejected. If a client cached an older catalog and a call is rejected for an unknown property, refresh the client's tool list.
 
+`skills_list` and `skills_search` return only skills by default. Pass `kind: "instructions"` to list or search instructions documents (`AGENTS.md`), which carry `kind: "instructions"`; skill records omit `kind`. `skill_retrieve` returns an instructions document's `AGENTS.md` as `instructions`. Composition and resolution tools reject instructions. See [Skills](/concepts/skills#instructions-documents).
+
 OAuth clients never send `caller`; Skillplane derives attribution from the authenticated OAuth client. Agent credentials declare `caller` on every call.
 
 ## Observed usage
@@ -49,12 +51,12 @@ Format-v2 composition is MCP-native. Call `skill_resolve` for the locked depende
 
 ## Skill lifecycle
 
-| Tool                      | Purpose                                      |
-| ------------------------- | -------------------------------------------- |
-| `skill_create`            | Create a skill and published version `1.0.0` |
-| `skill_visibility_update` | Change private or public visibility          |
-| `skill_archive`           | Archive an active skill                      |
-| `skill_restore`           | Restore an archived skill                    |
+| Tool                      | Purpose                                                                                              |
+| ------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `skill_create`            | Create a skill and published version `1.0.0`. `kind: "instructions"` creates an `AGENTS.md` document |
+| `skill_visibility_update` | Change private or public visibility                                                                  |
+| `skill_archive`           | Archive an active skill                                                                              |
+| `skill_restore`           | Restore an archived skill                                                                            |
 
 ## Improve and review
 

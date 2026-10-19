@@ -20,6 +20,12 @@ Each skill has a stable slug, description, tags, visibility, archive state, and 
 
 Changing visibility does not rewrite the published version. Archiving removes a skill from the active workflow without deleting its immutable history; it can be restored later.
 
+## Instructions documents
+
+An instructions artifact is a single `AGENTS.md` document with the same versioned lifecycle as a skill: drafts and amendments become reviewable candidates, and approval publishes a new semantic version with its own digest. Create one with `skill_create` and `kind: "instructions"`, or upload a bundle whose `skill.json` declares `"kind": "instructions"` and `"entrypoint": "AGENTS.md"`.
+
+Instructions are never skills. They have no supporting files, no composition, and private or workspace visibility only. `skill_resolve` and composition reject them, local skill projection leaves them out, and a skill cannot declare one as a dependency. Listing and retrieval report `kind: "instructions"`; MCP omits `kind` for skills, so a missing `kind` means a skill. MCP `skills_list` and `skills_search` return only skills unless the call passes `kind: "instructions"`, so clients released before instructions never receive them. The REST skill list and REST skill search accept `?kind=skill` or `?kind=instructions`; public discover search accepts only `?kind=skill`, because instructions are never public.
+
 ## Bundles and files
 
 Skillplane validates a bounded canonical file set. The manifest records each file path, media type, byte size, and digest. `skill_asset_retrieve` can fetch a specific supporting file safely without downloading the entire bundle.

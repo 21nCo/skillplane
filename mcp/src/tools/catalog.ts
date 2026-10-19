@@ -14,7 +14,7 @@ import {
   type WorkspaceKind,
 } from "@skillplane/domain";
 import { principalForWorkspace } from "../auth.js";
-import { executeReadTool, type McpToolRuntime } from "./shared.js";
+import { executeReadTool, reportedKind, type McpToolRuntime } from "./shared.js";
 
 interface WorkspaceRow {
   readonly id: string;
@@ -207,6 +207,9 @@ export function skillsList(runtime: McpToolRuntime, input: SkillsListInput) {
       workspaceId: workspace.id,
       state: input.state,
       visibility: [...input.visibility].sort(),
+      // Skill cursors keep the pre-kind filter shape so cursors issued before
+      // kinds existed keep paging; any other kind is bound into the cursor.
+      ...(input.kind === "skill" ? {} : { kind: input.kind }),
       actorId: runtime.identity.actorId,
       credentialId: runtime.identity.credentialId,
     };
@@ -218,6 +221,7 @@ export function skillsList(runtime: McpToolRuntime, input: SkillsListInput) {
       principal,
       archive: input.state,
       visibility: input.visibility,
+      kind: input.kind,
       cursor,
       limit: input.limit,
     });
@@ -242,6 +246,7 @@ export function skillsList(runtime: McpToolRuntime, input: SkillsListInput) {
         summary: skill.description,
         tags: [...skill.tags],
         visibility: skill.visibility,
+        ...reportedKind(skill.kind),
         currentVersion:
           skill.currentPublishedVersionId && skill.currentSemanticVersion
             ? {

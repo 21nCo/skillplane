@@ -3,6 +3,8 @@ import { callerDeclarationSchema } from "./caller.js";
 import {
   limitSchema,
   nullableCursorSchema,
+  reportedSkillKindSchema,
+  skillKindSchema,
   skillVisibilitySchema,
   slugSchema,
   stableIdSchema,
@@ -58,6 +60,7 @@ export const listedSkillSchema = z
     summary: z.string().max(20_000),
     tags: z.array(z.string().max(80)).max(30),
     visibility: skillVisibilitySchema,
+    kind: reportedSkillKindSchema,
     currentVersion: listedCurrentVersionSchema.nullable(),
     archivedAt: timestampSchema.nullable(),
     updatedAt: timestampSchema,
@@ -73,6 +76,8 @@ export const skillsListInputSchema = z
       .max(3)
       .default(["private", "workspace", "public"]),
     state: skillArchiveFilterSchema.default("active"),
+    /** Defaults to skills so callers that predate artifact kinds see no instructions. */
+    kind: skillKindSchema.default("skill"),
     cursor: nullableCursorSchema,
     limit: limitSchema,
     caller: callerDeclarationSchema,

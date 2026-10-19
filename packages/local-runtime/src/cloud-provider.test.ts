@@ -3,13 +3,16 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdtempSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { bundleEntrypoint } from "@skillplane/storage";
 import {
   CloudWorkspaceProvider,
   LocalWorkspaceProvider,
   LocalStore,
+  Runtime,
   RuntimeError,
   type WorkspaceRef,
+  type AmendRequest,
   type CreateRequest,
   type CloudTransport,
 } from "./index.js";
@@ -27,6 +30,47 @@ const request: CreateRequest = {
   visibility: "private",
   idempotencyKey: "create-1",
 };
+interface CandidateRow {
+  reviewId: string;
+  state: string;
+  base: string | null;
+  digest: string;
+  expectedUpdatedAt: string;
+  reason: string | null;
+}
+const policyDecision = {
+  outcome: "review_required",
+  reason: "policy_requires_review",
+  matchedRule: null,
+};
+function candidateResult(row: CandidateRow, semanticVersion: string | null) {
+  const published = row.state === "published";
+  return {
+    review: {
+      id: row.reviewId,
+      status: published ? "approved" : "pending",
+      decisionReason: published ? row.reason : null,
+      requestedBy: { actorType: "user", agent: null, model: null },
+      policyDecision,
+      reviewedAt: published ? row.expectedUpdatedAt : null,
+      createdAt: row.expectedUpdatedAt,
+      updatedAt: row.expectedUpdatedAt,
+    },
+    candidate: {
+      id: row.reviewId,
+      revision: 2,
+      semanticVersion,
+      state: row.state,
+      source: "agent_amendment",
+      digest: row.digest,
+      baseVersionId: row.base,
+      proposedBump: "patch",
+      changeSummary: "Amended",
+      createdAt: row.expectedUpdatedAt,
+      publishedAt: published ? row.expectedUpdatedAt : null,
+    },
+  };
+}
 function fixture() {
   const store = new LocalStore(
     realpathSync(mkdtempSync(join(tmpdir(), "cloud-contract-"))),
@@ -45,6 +89,7 @@ function fixture() {
     id: local.workspace.id,
   };
   const calls: string[] = [];
+  const listArgs: Record<string, unknown>[] = [];
   const transport: CloudTransport = {
     async call(name, args) {
       calls.push(name);
@@ -94,30 +139,98 @@ function fixture() {
           },
         };
       }
-      if (name === "skills_list")
+      if (name === "skills_list") {
+        listArgs.push(args);
         return {
           requestId: "request",
           workspace: { id: workspace.id, slug: "work", name: "Work", kind: "personal" },
           skills: await Promise.all(
-            (await local.list()).map(async (s) => {
-              const v = (await local.retrieve(s.id)).version;
-              return {
-                id: s.id,
-                workspaceId: workspace.id,
-                workspaceSlug: "work",
-                slug: s.slug,
-                name: s.name,
-                summary: s.description,
-                tags: [],
-                visibility: "private",
-                currentVersion: { id: v.id, semanticVersion: v.semanticVersion },
-                archivedAt: null,
-                updatedAt: v.createdAt,
-              };
-            }),
+            // The server lists only skills unless the caller selects a kind.
+            (await local.list())
+              .filter((s) => s.kind === (args.kind ?? "skill"))
+              .map(async (s) => {
+                const v = (await local.retrieve(s.id)).version;
+                return {
+                  id: s.id,
+                  workspaceId: workspace.id,
+                  workspaceSlug: "work",
+                  slug: s.slug,
+                  name: s.name,
+                  summary: s.description,
+                  tags: [],
+                  visibility: "private",
+                  ...(s.kind === "instructions" ? { kind: s.kind } : {}),
+                  currentVersion: { id: v.id, semanticVersion: v.semanticVersion },
+                  archivedAt: null,
+                  updatedAt: v.createdAt,
+                };
+              }),
           ),
           nextCursor: null,
         };
+      }
+      if (name === "skill_amend") {
+        const input = { ...args };
+        delete input.caller;
+        const result = await local.amend(input as AmendRequest);
+        const row = requireValue(
+          ((await local.candidates(skillId)) as CandidateRow[]).find(
+            (c) => c.reviewId === result.versionId,
+          ),
+        );
+        return {
+          requestId: "request",
+          skillId,
+          baseVersionId: input.baseVersionId,
+          candidate: {
+            id: result.versionId,
+            revision: 2,
+            state: "candidate",
+            semanticVersion: null,
+            digest: row.digest,
+            proposedBump: input.proposedBump,
+            createdAt: row.expectedUpdatedAt,
+            publishedAt: null,
+          },
+          review: { id: result.versionId, status: "pending" },
+          policyDecision,
+          autoPublished: false,
+        };
+      }
+      if (name === "skill_candidates_list")
+        return {
+          requestId: "request",
+          skillId,
+          candidates: ((await local.candidates(skillId)) as CandidateRow[]).map((c) =>
+            candidateResult(c, null),
+          ),
+          nextCursor: null,
+        };
+      if (name === "skill_candidate_approve") {
+        const published = await local.decide(
+          skillId,
+          String(args.reviewId),
+          String(args.expectedUpdatedAt),
+          true,
+          String(args.reason),
+          String(args.idempotencyKey),
+        );
+        return {
+          requestId: "request",
+          skillId,
+          result: candidateResult(
+            {
+              reviewId: published.id,
+              state: published.state,
+              base: null,
+              digest: published.digest,
+              expectedUpdatedAt: published.createdAt,
+              reason: String(args.reason),
+            },
+            published.semanticVersion,
+          ),
+        };
+      }
       const selected = args.version as
         | {
             versionId?: string;
@@ -161,7 +274,9 @@ function fixture() {
             manifest: bundle.manifest,
             publishedAt: version.createdAt,
           },
-          instructions: new TextDecoder().decode(bundle.files.get("SKILL.md")),
+          instructions: new TextDecoder().decode(
+            bundle.files.get(bundleEntrypoint(bundle.skill)),
+          ),
           files: bundle.manifest.files,
           context: null,
         };
@@ -204,10 +319,228 @@ function fixture() {
     workspace,
     transport,
     calls,
+    listArgs,
     cloud: new CloudWorkspaceProvider(workspace, transport),
   };
 }
 describe("cloud provider transport contract", () => {
+  it("rebuilds an instructions document from its AGENTS.md entrypoint", async () => {
+    const { local, cloud, calls, listArgs } = fixture();
+    const created = await local.create({
+      ...request,
+      kind: "instructions",
+      assets: [],
+      instructions: "# Agents\n\nRun the tests.\n",
+    });
+    const snapshot = await cloud.retrieve(created.skillId);
+    expect(snapshot.skill.kind).toBe("instructions");
+    expect(snapshot.bundle.digest).toBe(
+      (await local.retrieve(created.skillId)).bundle.digest,
+    );
+    expect(calls.filter((name) => name === "skill_asset_retrieve")).toHaveLength(1);
+    // Local projection lists skills only; SKI-24 owns instructions projection.
+    expect(await cloud.list()).toEqual([]);
+    expect(listArgs.every((args) => args.kind === undefined)).toBe(true);
+  });
+  it("reviews instructions documents through ID-only lifecycle operations", async () => {
+    const { cloud, listArgs, workspace } = fixture();
+    const document = "# Agents\n\nRun the tests.\n";
+    const created = await cloud.create({
+      ...request,
+      kind: "instructions",
+      assets: [],
+      instructions: document,
+    });
+    const amended = await cloud.amend({
+      skillId: created.skillId,
+      baseVersionId: created.versionId,
+      proposedBump: "minor",
+      idempotencyKey: "amend-instructions",
+      changes: [
+        {
+          operation: "replace",
+          path: "AGENTS.md",
+          expectedSha256: createHash("sha256").update(document).digest("hex"),
+          content: `${document}\nKeep PRs small.\n`,
+        },
+      ],
+      learning: {
+        summary: "Ask for small PRs",
+        observation: "Large PRs stalled review",
+        rationale: "Smaller changes review faster",
+        confidence: "high",
+        evidence: [],
+        evidenceUnavailableReason: "Editorial update",
+        validation: [],
+        validationNotRunReason: "No executable change",
+      },
+    });
+    expect((await cloud.versions(created.skillId)).map((v) => v.id)).toContain(
+      created.versionId,
+    );
+    const [candidate] = (await cloud.candidates(created.skillId)) as {
+      review: { id: string; updatedAt: string };
+    }[];
+    expect(candidate?.review.id).toBe(amended.versionId);
+    const decision = (await cloud.decide(
+      created.skillId,
+      amended.versionId,
+      candidate?.review.updatedAt ?? "",
+      true,
+      "Clearer guidance",
+      "approve-instructions",
+    )) as { result: { candidate: { state: string; semanticVersion: string } } };
+    expect(decision.result.candidate).toMatchObject({
+      state: "published",
+      semanticVersion: "1.1.0",
+    });
+    const snapshot = await cloud.retrieve(created.skillId);
+    expect(snapshot.skill.kind).toBe("instructions");
+    expect(snapshot.version.id).toBe(amended.versionId);
+    // Membership checks the exact workspace across both kinds.
+    expect(listArgs.map((args) => args.kind)).toContain("instructions");
+    await expect(cloud.candidates("skill:missing")).rejects.toThrow("SKILL_NOT_FOUND");
+    // Projection, sync and usage membership stay skills-only.
+    expect(await cloud.list()).toEqual([]);
+    await expect(
+      cloud.reportUsage({
+        id: randomUUID(),
+        timestamp: new Date().toISOString(),
+        type: "skill_invoked_observed",
+        workspace: (await import("./contracts.js")).workspaceKey(workspace),
+        skillId: created.skillId,
+        versionId: amended.versionId,
+        projectionId: null,
+        installationId: randomUUID(),
+        agent: "codex",
+        model: "unknown",
+        modelTrust: "caller-declared",
+        sessionId: null,
+        delivery: "live-cli",
+        freshness: "verified",
+        confidence: "observed",
+        evidence: null,
+      }),
+    ).rejects.toThrow("SKILL_NOT_FOUND");
+  });
+  it("keeps membership errors for servers that predate artifact kinds", async () => {
+    const { local, workspace, transport } = fixture();
+    const created = await local.create({ ...request, assets: [] });
+    // McpTransport's error for a base server whose strict skills_list input
+    // schema rejects the kind argument (MCPFN_INVALID_ARGUMENTS in text content).
+    const rejection = (property: string) =>
+      new RuntimeError(
+        "CLOUD_REQUEST_REJECTED",
+        JSON.stringify([
+          {
+            type: "text",
+            text: JSON.stringify({
+              ok: false,
+              error: {
+                code: "MCPFN_INVALID_ARGUMENTS",
+                message: "Invalid arguments",
+                details: {
+                  lifecycleStage: "input-validation",
+                  issues: [
+                    {
+                      path: "/",
+                      instancePath: "/",
+                      schemaPath: "#/additionalProperties",
+                      keyword: "additionalProperties",
+                      message: `must not have unknown property "${property}"`,
+                      rejectedProperty: property,
+                    },
+                  ],
+                },
+              },
+            }),
+          },
+        ]),
+      );
+    let probes = 0;
+    const preKind = new CloudWorkspaceProvider(workspace, {
+      ...transport,
+      async call(name, args) {
+        if (name === "skills_list" && "kind" in args) {
+          probes += 1;
+          throw rejection("kind");
+        }
+        return transport.call(name, args);
+      },
+    });
+    const base = await local.retrieve(created.skillId);
+    const amended = await local.amend({
+      skillId: created.skillId,
+      baseVersionId: created.versionId,
+      proposedBump: "patch",
+      idempotencyKey: "amend-pre-kind",
+      changes: [
+        {
+          operation: "replace",
+          path: "SKILL.md",
+          expectedSha256: createHash("sha256")
+            .update(requireValue(base.bundle.files.get("SKILL.md")))
+            .digest("hex"),
+          content: "Read this document twice.",
+        },
+      ],
+      learning: {
+        summary: "Read twice",
+        observation: "One read missed details",
+        rationale: "A second read catches them",
+        confidence: "high",
+        evidence: [],
+        evidenceUnavailableReason: "Editorial update",
+        validation: [],
+        validationNotRunReason: "No executable change",
+      },
+    });
+    expect((await preKind.versions(created.skillId)).map((v) => v.id)).toContain(
+      created.versionId,
+    );
+    const [candidate] = (await preKind.candidates(created.skillId)) as {
+      review: { id: string; updatedAt: string };
+    }[];
+    expect(candidate?.review.id).toBe(amended.versionId);
+    const decision = (await preKind.decide(
+      created.skillId,
+      amended.versionId,
+      candidate?.review.updatedAt ?? "",
+      true,
+      "Clearer",
+      "approve-pre-kind",
+    )) as { result: { candidate: { state: string } } };
+    expect(decision.result.candidate.state).toBe("published");
+    // A skill is found on the skills page, so no kind probe is sent for it.
+    expect(probes).toBe(0);
+    await expect(preKind.versions("skill:missing")).rejects.toThrow("SKILL_NOT_FOUND");
+    await expect(preKind.candidates("skill:missing")).rejects.toThrow(
+      "SKILL_NOT_FOUND",
+    );
+    await expect(
+      preKind.decide(
+        "skill:missing",
+        "version:missing",
+        "",
+        true,
+        "No",
+        "decide-missing",
+      ),
+    ).rejects.toThrow("SKILL_NOT_FOUND");
+    // The server's lack of kinds is learned once.
+    expect(probes).toBe(1);
+    // Any other rejection still reaches the caller.
+    const rejecting = new CloudWorkspaceProvider(workspace, {
+      ...transport,
+      async call(name, args) {
+        if (name === "skills_list" && "kind" in args) throw rejection("limit");
+        return transport.call(name, args);
+      },
+    });
+    await expect(rejecting.versions("skill:missing")).rejects.toMatchObject({
+      code: "CLOUD_REQUEST_REJECTED",
+    });
+  });
   it("creates through the shared immutable bundle contract", async () => {
     const { cloud } = fixture();
     const created = await cloud.create(request);
@@ -251,6 +584,52 @@ describe("cloud provider transport contract", () => {
       },
     });
     await expect(corrupt.retrieve(initial.skillId)).rejects.toThrow("DIGEST_MISMATCH");
+  });
+  it("caches cloud instructions reads without queueing skill usage", async () => {
+    const { cloud, local, workspace } = fixture();
+    const document = await local.create({
+      ...request,
+      kind: "instructions",
+      assets: [],
+    });
+    const created = await local.create({
+      ...request,
+      slug: "skill",
+      idempotencyKey: "create-skill",
+    });
+    const runtime = new Runtime(local.store);
+    local.store.set("analytics:consent", true);
+    const read = await cloud.retrieve(document.skillId);
+    runtime.observeRead(read, "codex");
+    expect(runtime.usage.report()).toMatchObject({ counts: {}, pending: 0 });
+    const { workspaceKey } = await import("./contracts.js");
+    expect(
+      local.store.entries(`cache:${workspaceKey(workspace)}:${document.skillId}:`),
+    ).toEqual([
+      [
+        `cache:${workspaceKey(workspace)}:${document.skillId}:${read.version.id}`,
+        expect.objectContaining({
+          skill: expect.objectContaining({
+            id: document.skillId,
+            kind: "instructions",
+          }),
+          digest: read.bundle.digest,
+        }),
+      ],
+    ]);
+    await expect(local.store.bundle(read.bundle.digest)).resolves.toMatchObject({
+      digest: read.bundle.digest,
+    });
+    runtime.observeRead(await cloud.retrieve(created.skillId), "codex");
+    const membership = new Set((await cloud.list()).map((item) => item.id));
+    expect(
+      await runtime.usage.upload(
+        async (events) =>
+          Promise.all(events.map((event) => cloud.reportUsage(event, membership))),
+        workspaceKey(workspace),
+      ),
+    ).toBe(1);
+    expect(runtime.usage.report()).toMatchObject({ pending: 0, quarantined: 0 });
   });
   it("sends idempotent usage receipts only for the exact qualified cloud workspace", async () => {
     const { cloud, local, workspace } = fixture();

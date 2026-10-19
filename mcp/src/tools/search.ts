@@ -1,6 +1,6 @@
 import type { SkillsSearchInput, SkillsSearchOutput } from "@skillplane/mcp-schema";
 import { principalForWorkspace } from "../auth.js";
-import { executeReadTool, type McpToolRuntime } from "./shared.js";
+import { executeReadTool, reportedKind, type McpToolRuntime } from "./shared.js";
 
 export function skillsSearch(runtime: McpToolRuntime, input: SkillsSearchInput) {
   return executeReadTool(runtime, "skills_search", input.caller, async (execution) => {
@@ -44,6 +44,7 @@ export function skillsSearch(runtime: McpToolRuntime, input: SkillsSearchInput) 
       tags: input.tags,
       visibility,
       archive: "active",
+      kind: input.kind,
       limit: input.limit,
       cursor: input.cursor,
       principal,
@@ -60,6 +61,7 @@ export function skillsSearch(runtime: McpToolRuntime, input: SkillsSearchInput) 
         summary: skill.description,
         tags: [...skill.tags],
         visibility: skill.visibility,
+        ...reportedKind(skill.kind),
         currentVersion: {
           id: skill.currentVersionId,
           semanticVersion: skill.semanticVersion,

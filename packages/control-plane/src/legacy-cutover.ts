@@ -289,6 +289,7 @@ export async function reconcileLegacyPublicSkillTotals(input: {
       `SELECT workspace_id, count(*)::text AS total_skills
          FROM skills
         WHERE workspace_id = ANY($1::text[]) AND archived_at IS NULL
+          AND kind = 'skill'
         GROUP BY workspace_id`,
       [workspaceIds],
     );

@@ -25,6 +25,7 @@ import type {
   SkillVersionRecord,
 } from "@skillplane/domain";
 import { createSkillBundle } from "@skillplane/domain";
+import { BundleValidationError } from "@skillplane/storage";
 import { registerResourceRoutes } from "@skillplane/api";
 import { principalForWorkspace } from "../auth.js";
 import { resolveSkill, type ResolvedSkill } from "./resolve.js";
@@ -32,6 +33,7 @@ import {
   executeMutationTool,
   executeReadTool,
   mutationAuditContext,
+  reportedKind,
   roleCanReadCandidates,
   type McpToolRuntime,
   type ToolExecution,
@@ -93,6 +95,7 @@ function lifecycleSkill(
     description: skill.description,
     tags: [...skill.tags],
     visibility: skill.visibility,
+    ...reportedKind(skill.kind),
     currentVersion:
       currentPublishedVersionId && currentSemanticVersion
         ? { id: currentPublishedVersionId, semanticVersion: currentSemanticVersion }
@@ -233,7 +236,18 @@ export function skillCreate(runtime: McpToolRuntime, input: SkillCreateInput) {
         execution,
         input.workspace,
       );
-      const canonical = await createSkillBundle(input);
+      // The bundle is built from caller input here, so a validation failure is
+      // the caller's to fix, not a retryable stored-content failure.
+      const canonical = await createSkillBundle(input).catch((error: unknown) => {
+        if (!(error instanceof BundleValidationError)) throw error;
+        throw new McpToolError(
+          error.code === "SKILL_PATH_INVALID"
+            ? "SKILL_PATH_INVALID"
+            : "VALIDATION_FAILED",
+          error.message,
+          { details: { reason: error.code } },
+        );
+      });
       const created = await runtime.services.skillService.create({
         workspaceId: resolved.workspace.id,
         principal: resolved.principal,

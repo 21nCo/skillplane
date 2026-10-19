@@ -159,6 +159,7 @@ export const skills = pgTable(
     description: text("description").notNull().default(""),
     tags: text("tags").array().notNull().default([]),
     visibility: text("visibility").notNull().default("private"),
+    kind: text("kind").$type<"skill" | "instructions">().notNull().default("skill"),
     nextRevision: integer("next_revision").notNull().default(1),
     amendmentPolicy: metadata("amendment_policy"),
     publishedSearchText: text("published_search_text").notNull().default(""),
@@ -183,6 +184,11 @@ export const skills = pgTable(
     uniqueIndex("skills_workspace_slug_unique").on(table.workspaceId, table.slug),
     uniqueIndex("skills_workspace_id_id_unique").on(table.workspaceId, table.id),
     index("skills_workspace_updated_idx").on(table.workspaceId, table.updatedAt),
+    check("skills_kind", sql`${table.kind} IN ('skill', 'instructions')`),
+    check(
+      "skills_instructions_visibility",
+      sql`${table.kind} <> 'instructions' OR ${table.visibility} <> 'public'`,
+    ),
   ],
 );
 

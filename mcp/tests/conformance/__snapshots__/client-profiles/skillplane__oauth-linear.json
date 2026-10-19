@@ -5,7 +5,7 @@
     "id": "skillplane/oauth-linear",
     "version": "1"
   },
-  "catalogHash": "a9fd65be211a426f23e2fb6f9ca73b03dcd08553762c2c07b7a39ddc8365fba6",
+  "catalogHash": "8977cd05eda8ba490ca875834d9df9547dca30552d9da314af8e3d3d29afd872",
   "tools": [
     {
       "name": "context_archive",
@@ -343,9 +343,10 @@
     },
     {
       "name": "skill_create",
-      "hash": "eacb175ed39480b0bfe78ac49c97c6b9577fed66e4f3a2a0949f0adac9f6dae9",
+      "hash": "0887279f55e1a89c15a2b9e0c84899be023df0c0333b0487468d31af8fa70575",
       "inputProperties": [
         "workspace",
+        "kind",
         "slug",
         "name",
         "description",
@@ -626,11 +627,12 @@
     },
     {
       "name": "skills_list",
-      "hash": "1f4b72cad7aa00459f19bb5652a9af4cda33b883dc09bdb60827d86c7cb34844",
+      "hash": "a1e8de8388c92bc81bbd12158ea5b5ef2ba7114e9831bcc5c13a018541e393f8",
       "inputProperties": [
         "workspace",
         "visibility",
         "state",
+        "kind",
         "cursor",
         "limit"
       ],
@@ -641,12 +643,13 @@
     },
     {
       "name": "skills_search",
-      "hash": "829ebf48ded2491da32ee8650a33fb9cfb47f8b72cb65d3056e546d7f6823c4a",
+      "hash": "6b687a597b9d800c6fb12738799860229efe482015bd5567a396ba8e26374ade",
       "inputProperties": [
         "query",
         "workspace",
         "visibility",
         "tags",
+        "kind",
         "cursor",
         "limit"
       ],
@@ -667,5 +670,5 @@
       "outputSchema": false
     }
   ],
-  "catalogBytes": 32195
+  "catalogBytes": 32318
 }

@@ -127,7 +127,7 @@ function auditInput(event: McpAuditRecord): AuditWriteInput {
     fencingEpoch: event.fencingEpoch,
   } satisfies AuditWriteInput;
   if (event.tool !== "skill_retrieve") return input;
-  return retrievalAuditEvent({
+  const retrieval = retrievalAuditEvent({
     workspaceId: event.workspaceId,
     requestId: event.requestId,
     tool: event.tool,
@@ -147,6 +147,10 @@ function auditInput(event: McpAuditRecord): AuditWriteInput {
     latencyMs: event.latencyMs,
     ...(event.fencingEpoch !== undefined ? { fencingEpoch: event.fencingEpoch } : {}),
   });
+  // Persisted so the combined-database counter trigger skips the row as well.
+  return event.countMetric === false
+    ? { ...retrieval, metadata: { countMetric: false } }
+    : retrieval;
 }
 
 function controlPlaneAuditInput(event: McpAuditRecord): ControlPlaneAuditWriteInput {

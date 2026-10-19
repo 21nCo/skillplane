@@ -59,6 +59,8 @@ export interface ToolSuccess<T extends object> {
   readonly output: T;
   readonly auditScopes?: readonly ToolAuditScope[];
   readonly allowEmptyAuditScopes?: boolean;
+  /** False keeps a successful read out of public agent-use metrics. */
+  readonly countMetric?: boolean;
 }
 
 export function mutationAuditContext(
@@ -271,6 +273,7 @@ export async function executeReadTool<T extends object>(
           ? { versionDigest: auditScope.versionDigest }
           : {}),
         ...(auditScope.contextId ? { contextId: auditScope.contextId } : {}),
+        ...(success.countMetric === false ? { countMetric: false } : {}),
         latencyMs,
       };
     });
@@ -440,4 +443,11 @@ export function roleCanReadCandidates(
 ): boolean {
   if (role === "viewer") return false;
   return principal.kind === "user" || principal.scopes.includes("skills:amend");
+}
+
+/** Outputs report kind only for non-skill artifacts; see reportedSkillKindSchema. */
+export function reportedKind(kind: "skill" | "instructions"): {
+  readonly kind?: "instructions";
+} {
+  return kind === "instructions" ? { kind } : {};
 }

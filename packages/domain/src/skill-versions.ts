@@ -9,10 +9,12 @@ import {
 } from "./git-provenance.js";
 import { CompositionService } from "./composition-service.js";
 import {
+  bundleKind,
   canonicalizeBundle,
   retrieveBundleFile,
   sha256Hex,
   validateBundleArchive,
+  type ArtifactKind,
   type BundleManifest,
   type CanonicalBundle,
   type DownloadedSkillFile,
@@ -61,6 +63,7 @@ interface VersionRow {
   readonly created_at: Date;
   readonly visibility?: string;
   readonly skill_archived_at?: Date | null;
+  readonly skill_kind?: ArtifactKind;
 }
 
 export interface SkillFileDiff {
@@ -253,9 +256,11 @@ export class SkillVersionService {
             archived_at: Date | null;
             next_revision: number;
             base_digest: string | null;
+            kind: string;
           }>(
             `SELECT skill.current_published_version_id, skill.archived_at,
-                    skill.next_revision, base.content_digest AS base_digest
+                    skill.next_revision, skill.kind,
+                    base.content_digest AS base_digest
                FROM skills skill
                LEFT JOIN skill_versions base
                  ON base.id = $3 AND base.skill_id = skill.id
@@ -272,6 +277,16 @@ export class SkillVersionService {
               "SKILL_ARCHIVED",
               "Archived skills cannot receive new revisions",
               409,
+            );
+          }
+          // An artifact's kind is immutable: a skill never gains an instructions
+          // revision and instructions never gain a skill revision.
+          if (row.kind !== bundleKind(canonical.skill)) {
+            throw new DomainError(
+              "SKILL_BUNDLE_INVALID",
+              `The proposed bundle must remain ${row.kind === "instructions" ? "an instructions document" : "a skill"}`,
+              400,
+              { field: "kind" },
             );
           }
           if (
@@ -535,7 +550,8 @@ export class SkillVersionService {
               version.created_by_actor_id, version.created_by_agent,
               version.created_by_model, version.created_for_user_id,
               version.published_at, version.created_at,
-              skill.visibility, skill.archived_at AS skill_archived_at
+              skill.visibility, skill.archived_at AS skill_archived_at,
+              skill.kind AS skill_kind
          FROM skill_versions version
          JOIN skills skill ON skill.id = version.skill_id
         WHERE skill.id = $1 AND version.id = $2
@@ -632,6 +648,7 @@ export class SkillVersionService {
         bundleDigest: version.content_digest,
         path: options.path,
         ...(expected ? { expectedFileDigest: expected } : {}),
+        ...(version.skill_kind ? { kind: version.skill_kind } : {}),
       });
       return {
         file,

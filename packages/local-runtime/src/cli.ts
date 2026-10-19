@@ -18,6 +18,7 @@ import {
   type AmendRequest,
 } from "./index.js";
 import { readSafe } from "./files.js";
+import { bundleEntrypoint } from "@skillplane/storage";
 const help = `Skillplane local and cloud workspaces (Node >=22.13)
 Global flags: --home DIR (private runtime state), --project DIR
   init [NAME] [--target claude|codex]    Create an offline local workspace/project
@@ -171,7 +172,9 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
           workspace: snapshot.workspace,
           skill: snapshot.skill,
           version: snapshot.version,
-          instructions: new TextDecoder().decode(snapshot.bundle.files.get("SKILL.md")),
+          instructions: new TextDecoder().decode(
+            snapshot.bundle.files.get(bundleEntrypoint(snapshot.bundle.skill)),
+          ),
           manifest: snapshot.bundle.manifest,
         };
         break;

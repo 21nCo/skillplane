@@ -231,6 +231,15 @@ describe("public GitHub source provider", () => {
     expect(r.skills.find((s) => s.path === "small")?.bundle?.skill.slug).toBe("small");
     expect(f.calls).toHaveLength(4);
   });
+  it("rejects a root AGENTS.md in a skill directory before fetching any blob", async () => {
+    const f = fixture({ "SKILL.md": markdown("Review"), "AGENTS.md": "# Agents\n" });
+    const r = await f.provider.snapshot(
+      gitSourceConfig({ repositoryUrl: "https://github.com/a/b" }),
+    );
+    expect(r.skills[0]?.bundle).toBeNull();
+    expect(r.skills[0]?.error).toContain('"AGENTS.md"');
+    expect(f.calls.filter((url) => url.includes("/git/blobs/"))).toEqual([]);
+  });
   it("bounds repository-wide skill discovery", async () => {
     const files = Object.fromEntries(
       Array.from({ length: 33 }, (_, i) => [

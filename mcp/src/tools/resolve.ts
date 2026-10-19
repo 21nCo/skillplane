@@ -23,6 +23,7 @@ export interface ResolvedSkill {
   readonly description: string;
   readonly tags: readonly string[];
   readonly visibility: "private" | "workspace" | "public";
+  readonly kind: "skill" | "instructions";
   readonly currentPublishedVersionId: string | null;
   readonly currentSemanticVersion: string | null;
   readonly archivedAt: string | null;
@@ -39,6 +40,7 @@ interface SkillRow {
   readonly description: string;
   readonly tags: string[];
   readonly visibility: ResolvedSkill["visibility"];
+  readonly kind: ResolvedSkill["kind"];
   readonly current_published_version_id: string | null;
   readonly semantic_version: string | null;
   readonly archived_at: Date | null;
@@ -156,7 +158,7 @@ export async function resolveSkill(
   const result = await runtime.services.database.pool.query<SkillRow>(
     `SELECT skill.id, skill.workspace_id,
             skill.slug, skill.name, skill.description, skill.tags,
-            skill.visibility, skill.current_published_version_id,
+            skill.visibility, skill.kind, skill.current_published_version_id,
             version.semantic_version, skill.archived_at, skill.created_at,
             skill.updated_at
        FROM skills skill
@@ -216,6 +218,7 @@ export async function resolveSkill(
     description: row.description,
     tags: row.tags,
     visibility: row.visibility,
+    kind: row.kind,
     currentPublishedVersionId: row.current_published_version_id,
     currentSemanticVersion: row.semantic_version,
     archivedAt: row.archived_at?.toISOString() ?? null,

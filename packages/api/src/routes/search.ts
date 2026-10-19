@@ -1,6 +1,7 @@
 import {
   DomainError,
   parseSkillArchiveFilter,
+  parseSkillKind,
   parseSkillVisibility,
 } from "@skillplane/domain";
 import type { Hono } from "hono";
@@ -50,6 +51,9 @@ export function registerSkillSearchRoutes(app: Hono<ApiEnvironment>): void {
     ].map(parseSkillVisibility);
     const archive = parseSkillArchiveFilter(context.req.query("state") ?? "active");
     const groupFilter = optionalIdFilter(context, "groupId");
+    const kindQuery = context.req.query("kind");
+    const kindFilter =
+      kindQuery === undefined ? {} : { kind: parseSkillKind(kindQuery) };
     if (services.publicProjectionService && !context.req.query("workspaceId")) {
       if (groupFilter.groupId !== undefined) {
         throw new DomainError(
@@ -65,6 +69,16 @@ export function registerSkillSearchRoutes(app: Hono<ApiEnvironment>): void {
           "Global skill search supports only public visibility",
           400,
           { field: "visibility" },
+        );
+      }
+      // Instructions are never public, so the public catalog holds only skills:
+      // kind=skill is a no-op and kind=instructions has nothing to match.
+      if (kindFilter.kind === "instructions") {
+        throw new DomainError(
+          "VALIDATION_FAILED",
+          "Global skill search supports only the skill kind",
+          400,
+          { field: "kind" },
         );
       }
       if (archive !== "active") {
@@ -87,6 +101,7 @@ export function registerSkillSearchRoutes(app: Hono<ApiEnvironment>): void {
     const page = await services.skillSearchService.search({
       query: context.req.query("q") ?? "",
       ...groupFilter,
+      ...kindFilter,
       tags: [...repeatedTags, ...commaTags],
       visibility,
       archive,

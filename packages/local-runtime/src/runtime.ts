@@ -2,7 +2,7 @@ import { requireValue } from "./contracts.js";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
-import { canonicalizeBundle } from "@skillplane/storage";
+import { bundleEntrypoint, bundleKind, canonicalizeBundle } from "@skillplane/storage";
 import { type LocalStore } from "./store.js";
 import { Profiles } from "./profiles.js";
 import { LocalWorkspaceProvider } from "./local-provider.js";
@@ -113,6 +113,8 @@ export class Runtime {
     for (const source of sources) {
       const provider = this.provider(source.workspace);
       for (const skill of await provider.list()) {
+        // Only skills are projected; instructions documents are a separate kind.
+        if (skill.kind !== "skill") continue;
         const qualified = `${workspaceKey(source.workspace)}/${skill.id}`;
         const name =
           context.aliases[qualified] ??
@@ -356,8 +358,14 @@ export class Runtime {
           : "Exact version checked with the authoritative workspace. Observed invocation; success is not inferred.",
     };
   }
+  /**
+   * Caches a retrieved snapshot and records skill usage for it. Instructions
+   * documents are cached too, but they are not skills, so they never count as
+   * skill usage locally or in a cloud upload.
+   */
   observeRead(snapshot: Snapshot, agent: string, invoked = false): void {
     this.cache(snapshot);
+    if (bundleKind(snapshot.bundle.skill) !== "skill") return;
     const types = invoked
       ? (["skill_resolved", "skill_invoked_observed"] as const)
       : (["skill_resolved"] as const);
@@ -457,7 +465,10 @@ export class Runtime {
     key: string,
   ): Promise<unknown> {
     const bundle = await canonicalizeBundle(bytes);
+    const kind = bundleKind(bundle.skill);
+    const entrypoint = bundleEntrypoint(bundle.skill);
     return this.create(context, {
+      ...(kind === "instructions" ? { kind } : {}),
       ...(bundle.skill.formatVersion === 2
         ? {
             composition: {
@@ -472,12 +483,12 @@ export class Runtime {
       description: bundle.skill.description,
       tags: bundle.skill.tags,
       visibility: "private",
-      instructions: new TextDecoder().decode(bundle.files.get("SKILL.md")),
+      instructions: new TextDecoder().decode(bundle.files.get(entrypoint)),
       assets: [...bundle.files]
         .filter(
           ([p]) =>
             ![
-              "SKILL.md",
+              entrypoint,
               "skill.json",
               ...(bundle.skill.formatVersion === 2 ? ["skill.lock.json"] : []),
             ].includes(p),

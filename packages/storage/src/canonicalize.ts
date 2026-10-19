@@ -2,10 +2,10 @@ import { zipSync, type Zippable } from "fflate";
 import {
   canonicalSkillJson,
   stableJson,
+  type BundleJsonIdentity,
   type BundleManifest,
   type CanonicalBundle,
   type SkillFileManifestEntry,
-  type SkillJson,
 } from "./manifest.js";
 import {
   bundlePathCollisionKey,
@@ -102,17 +102,14 @@ export async function canonicalizeBundle(
  * file amendment.
  */
 export async function canonicalizeBundleFiles(options: {
-  readonly skill: SkillJson extends infer S
-    ? S extends SkillJson
-      ? Omit<S, "files">
-      : never
-    : never;
+  readonly skill: BundleJsonIdentity;
   readonly files: ReadonlyMap<string, Uint8Array>;
 }): Promise<CanonicalBundle> {
   const contentFiles = new Map<string, Uint8Array>();
   const collisionKeys = new Set<string>();
+  const allowInstructionsEntrypoint = "kind" in options.skill;
   for (const [rawPath, rawContent] of options.files) {
-    const path = normalizeBundlePath(rawPath);
+    const path = normalizeBundlePath(rawPath, false, { allowInstructionsEntrypoint });
     if (path === "skill.json") continue;
     const collisionKey = bundlePathCollisionKey(path);
     if (collisionKeys.has(collisionKey)) {

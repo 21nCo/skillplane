@@ -13,7 +13,18 @@ import {
 } from "@skillplane/mcp-schema";
 import { registerResourceRoutes } from "@skillplane/api";
 import { executeReadTool, executeMutationTool, type McpToolRuntime } from "./shared.js";
-import { resolveSkill, resolveVersion } from "./resolve.js";
+import { resolveSkill, resolveVersion, type ResolvedSkill } from "./resolve.js";
+
+// CompositionService guards resolve and upgrades; this tool reads the bundle directly.
+function requireSkillKind(skill: ResolvedSkill): void {
+  if (skill.kind !== "skill")
+    throw new McpToolError(
+      "VALIDATION_FAILED",
+      "Instructions documents cannot be resolved, composed or verified as skills",
+      { details: { kind: skill.kind } },
+    );
+}
+
 export function skillResolve(runtime: McpToolRuntime, input: SkillResolveInput) {
   return executeReadTool(
     runtime,
@@ -309,6 +320,7 @@ export function compositionCandidate(
       });
       if (!skill.principal)
         throw new McpToolError("WORKSPACE_FORBIDDEN", "Workspace access is required");
+      requireSkillKind(skill);
       const version = await resolveVersion(runtime, execution, skill, input.version, {
         forDependencyUpgrade: true,
       });
