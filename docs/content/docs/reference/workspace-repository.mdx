@@ -104,7 +104,7 @@ The export also fails with `EXPORT_INVALID`, stating the count, when the whole r
 A Git source that imports the repository discovers each `skills/<slug>/` directory:
 
 - In a workspace that already has these skills but no bindings, every entry is a **conflict** with its matching slug. Skills are never attached silently.
-- After each path is bound to its skill with **Bind an existing workspace skill**, every entry is **unchanged**, and applying the preview creates no version.
+- After each path is bound to its skill with **Bind an existing workspace skill**, every entry is **unchanged**, and applying the preview creates no version. A composed skill's exported `skill.lock.json` is matched as published, so this holds after newer dependency versions are published and when composition writes are disabled.
 
 A Git source that imports the whole repository is limited to 32 skills, 20 MiB of files in total, and 200 GitHub requests, one per distinct file plus three. The preview of a larger export fails as a whole. Create a source for each skill path, such as `skills/review`, instead; these limits then apply to each skill on its own.
 

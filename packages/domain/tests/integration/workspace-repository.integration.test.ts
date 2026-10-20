@@ -30,6 +30,7 @@ import { IdempotencyStore } from "../../src/idempotency.js";
 import { PublicationService } from "../../src/publication.js";
 import { SkillService } from "../../src/skills.js";
 import { SkillVersionService } from "../../src/skill-versions.js";
+import { CompositionService } from "../../src/composition-service.js";
 import { GitSourceService } from "../../src/git-sources.js";
 import { PublicGitHubSourceProvider } from "../../src/git-source-provider.js";
 import type { Principal } from "../../src/principal.js";
@@ -81,6 +82,53 @@ describe("workspace repository export round trip", () => {
       visibility,
       idempotencyKey: `create-${slug}`,
     });
+
+  // Workspace state -> serializer input, by the documented selection rule.
+  const publishedInput = async (ids?: readonly string[]) => {
+    const rows = await pool.query<{
+      id: string;
+      slug: string;
+      visibility: WorkspaceRepositoryVisibility;
+      semantic_version: string;
+      content_digest: `sha256:${string}`;
+      version_id: string;
+    }>(
+      `SELECT s.id, s.slug, s.visibility, v.semantic_version, v.content_digest, v.id AS version_id
+         FROM skills s
+         JOIN skill_versions v ON v.workspace_id=s.workspace_id AND v.id=s.current_published_version_id
+        WHERE s.workspace_id=$1 AND s.kind='skill' AND s.archived_at IS NULL AND v.status='published'
+          AND ($2::text[] IS NULL OR s.id=ANY($2))`,
+      [owner.workspaceId, ids ?? null],
+    );
+    const input: WorkspaceRepositorySkill[] = [];
+    for (const row of rows.rows)
+      input.push({
+        id: row.id,
+        slug: row.slug,
+        visibility: row.visibility,
+        semanticVersion: row.semantic_version,
+        digest: row.content_digest,
+        bundle: await canonicalizeBundle(
+          (
+            await versions.retrieveBundle({
+              skillId: row.id,
+              versionId: row.version_id,
+              principal: owner,
+            })
+          ).bytes,
+        ),
+      });
+    return input;
+  };
+  const versionCount = async () =>
+    Number(
+      (
+        await pool.query<{ count: string }>(
+          "SELECT count(*)::text AS count FROM skill_versions WHERE workspace_id=$1",
+          [owner.workspaceId],
+        )
+      ).rows[0]?.count,
+    );
 
   beforeAll(async () => {
     const url = await resolveTestDatabaseUrl();
@@ -211,39 +259,7 @@ describe("workspace repository export round trip", () => {
       }),
     );
 
-    // Workspace state -> serializer input, by the documented selection rule.
-    const rows = await pool.query<{
-      id: string;
-      slug: string;
-      visibility: WorkspaceRepositoryVisibility;
-      semantic_version: string;
-      content_digest: `sha256:${string}`;
-      version_id: string;
-    }>(
-      `SELECT s.id, s.slug, s.visibility, v.semantic_version, v.content_digest, v.id AS version_id
-         FROM skills s
-         JOIN skill_versions v ON v.workspace_id=s.workspace_id AND v.id=s.current_published_version_id
-        WHERE s.workspace_id=$1 AND s.kind='skill' AND s.archived_at IS NULL AND v.status='published'`,
-      [owner.workspaceId],
-    );
-    const input: WorkspaceRepositorySkill[] = [];
-    for (const row of rows.rows)
-      input.push({
-        id: row.id,
-        slug: row.slug,
-        visibility: row.visibility,
-        semanticVersion: row.semantic_version,
-        digest: row.content_digest,
-        bundle: await canonicalizeBundle(
-          (
-            await versions.retrieveBundle({
-              skillId: row.id,
-              versionId: row.version_id,
-              principal: owner,
-            })
-          ).bytes,
-        ),
-      });
+    const input = await publishedInput();
     const tree = await serializeWorkspaceRepository(input);
     for (const [path, bytes] of tree) {
       mkdirSync(dirname(join(directory, path)), { recursive: true });
@@ -295,15 +311,6 @@ describe("workspace repository export round trip", () => {
         new TextDecoder().decode(bytes).includes("PENDING DRAFT"),
       ),
     ).toBe(false);
-    const versionCount = async () =>
-      Number(
-        (
-          await pool.query<{ count: string }>(
-            "SELECT count(*)::text AS count FROM skill_versions WHERE workspace_id=$1",
-            [owner.workspaceId],
-          )
-        ).rows[0]?.count,
-      );
     const before = await versionCount();
 
     // Unbound: every exported skill is a conflict with its matching manual
@@ -368,6 +375,155 @@ describe("workspace repository export round trip", () => {
     const applied = await sources.apply({ ...m(), sourceId: bound.id, runId: noop.id });
     expect(applied.status).toBe("complete");
     expect(await versionCount()).toBe(before);
+  });
+
+  it("reads an exported composite back as unchanged after its dependency advances, with composition writes on or off", async () => {
+    const workspaceSlug = (
+      await pool.query<{ slug: string }>("SELECT slug FROM workspaces WHERE id=$1", [
+        owner.workspaceId,
+      ])
+    ).rows[0]?.slug;
+    for (const writesEnabled of [true, false]) {
+      const suffix = writesEnabled ? "on" : "off",
+        dependency = `ship-${suffix}`,
+        root = mkdtempSync(join(tmpdir(), "skillplane-workspace-composite-"));
+      try {
+        const ship = await create(
+          dependency,
+          "workspace",
+          await archive(dependency, "# Ship\n"),
+        );
+        const launch = await create(
+          `launch-${suffix}`,
+          "private",
+          (
+            await canonicalizeBundleFiles({
+              skill: {
+                formatVersion: 2,
+                name: `launch-${suffix}`,
+                slug: `launch-${suffix}`,
+                description: "Composed workflow",
+                tags: [],
+                entrypoints: { execute: "SKILL.md" },
+                dependencies: [
+                  {
+                    alias: "ship",
+                    workspace: workspaceSlug ?? "",
+                    skill: dependency,
+                    version: "^1.0.0",
+                    scope: "execution",
+                    mode: "invoke",
+                    required: true,
+                  },
+                ],
+              },
+              files: new Map([["SKILL.md", new TextEncoder().encode("# Launch\n")]]),
+            })
+          ).bytes,
+        );
+        // A newer version that satisfies ^1.0.0 is published after the
+        // composite locked 1.0.0, so re-resolving its lock would differ.
+        const advanced = await versions.createCandidate({
+          ...m(),
+          skillId: ship.skill.id,
+          baseVersionId: ship.version.id,
+          proposedBump: "minor",
+          changeSummary: "Second edition",
+          archiveBytes: await archive(dependency, "# Ship\n\nSecond edition.\n"),
+          idempotencyKey: `candidate-${dependency}`,
+        });
+        await publication.publish({
+          ...m(),
+          skillId: ship.skill.id,
+          candidateVersionId: advanced.id,
+          idempotencyKey: `publish-${dependency}`,
+        });
+        const tree = await serializeWorkspaceRepository(
+          await publishedInput([ship.skill.id, launch.skill.id]),
+        );
+        const lock = new TextDecoder().decode(
+          tree.get(`skills/launch-${suffix}/skill.lock.json`),
+        );
+        expect(lock).toContain(ship.version.id);
+        expect(lock).not.toContain(advanced.id);
+        for (const [path, bytes] of tree) {
+          mkdirSync(dirname(join(root, path)), { recursive: true });
+          writeFileSync(join(root, path), bytes);
+        }
+        commitDirectory(root);
+        const composition = new CompositionService(
+          pool,
+          storage,
+          pool,
+          storage,
+          false,
+          writesEnabled,
+        );
+        const rootSources = new GitSourceService(
+          pool,
+          new SkillService(pool, storage, pool, composition),
+          new SkillVersionService(
+            pool,
+            storage,
+            new IdempotencyStore(pool),
+            composition,
+          ),
+          {
+            snapshot: (config) =>
+              new PublicGitHubSourceProvider(gitRepositoryGitHubFetcher(root)).snapshot(
+                config,
+              ),
+          },
+        );
+        const source = await rootSources.create({
+          ...m(),
+          config: { repositoryUrl: `https://github.com/acme/composite-${suffix}` },
+          idempotencyKey: `source-composite-${suffix}`,
+        });
+        const expected = [
+          { path: `skills/launch-${suffix}`, skillId: launch.skill.id },
+          { path: `skills/${dependency}`, skillId: ship.skill.id },
+        ];
+        for (const { path, skillId } of expected)
+          await rootSources.bind({ ...m(), sourceId: source.id, path, skillId });
+        const before = await versionCount();
+        for (let pass = 0; pass < 2; pass++) {
+          // The first apply records the digests; the next preview matches them.
+          const preview = await rootSources.preview({ ...m(), sourceId: source.id });
+          expect(
+            preview.plan.map(({ path, action, skillId, message }) => ({
+              path,
+              action,
+              skillId,
+              message,
+            })),
+          ).toEqual(
+            expected.map((e) => ({ ...e, action: "unchanged", message: null })),
+          );
+          const applied = await rootSources.apply({
+            ...m(),
+            sourceId: source.id,
+            runId: preview.id,
+          });
+          expect(
+            applied.results.map(({ path, status, versionId }) => ({
+              path,
+              status,
+              versionId,
+            })),
+          ).toEqual(
+            expected.map(({ path }) => ({
+              path,
+              status: "unchanged",
+              versionId: null,
+            })),
+          );
+        }
+        expect(await versionCount()).toBe(before);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
   });
 
   it("refuses to export published skills that the importer would read back as invalid", async () => {
