@@ -377,7 +377,23 @@ describe("workspace repository serializer", () => {
     const accessKey = ["AKIA", "IOSFODNN7EXAMPLE"].join("");
     const privateKey = ["-----BEGIN", "RSA PRIVATE KEY-----"].join(" ");
     const cases: [string, Record<string, string>, string][] = [
-      ["nested", { "templates/SKILL.md": "# Template\n" }, "nested skill root"],
+      [
+        "nested",
+        { "templates/SKILL.md": "# Template\n" },
+        "skills/nested/templates/SKILL.md would be discovered as a nested skill root",
+      ],
+      // Git records a directory named SKILL.md as a tree entry, which the
+      // importer discovers as a root just like a file.
+      [
+        "skill-md-directory",
+        { "templates/SKILL.md/example.txt": "Example\n" },
+        "skills/skill-md-directory/templates/SKILL.md would be discovered as a nested skill root",
+      ],
+      [
+        "deep-skill-md-directory",
+        { "assets/x/SKILL.md/y.txt": "y\n" },
+        "skills/deep-skill-md-directory/assets/x/SKILL.md would be discovered",
+      ],
       ["access-key", { "references/env.md": `key=${accessKey}\n` }, "credential"],
       ["private-key", { "scripts/deploy.sh": `${privateKey}\n` }, "credential"],
       ["too-many-files", distinctAssets(196), "more than 197 distinct files"],

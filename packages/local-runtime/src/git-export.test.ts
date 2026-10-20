@@ -392,6 +392,8 @@ describe("skillplane export --git", () => {
   });
 
   it("refuses to export skills that would not read back unchanged through Git and the importer", async () => {
+    // Every fixture is committed to its own repository with real Git, which
+    // can exceed the default timeout when the whole suite runs in parallel.
     // Built at run time so the fixture is not itself a credential-shaped literal.
     const accessKey = ["AKIA", "IOSFODNN7EXAMPLE"].join("");
     const assets = (count: number) =>
@@ -403,6 +405,9 @@ describe("skillplane export --git", () => {
       );
     const rejected = [
       await publishedWith("nested", { "templates/SKILL.md": "# Template\n" }),
+      await publishedWith("skill-md-directory", {
+        "templates/SKILL.md/example.txt": "Example\n",
+      }),
       await publishedWith("credential", { "references/env.md": `${accessKey}\n` }),
       await publishedWith("too-many-files", assets(196)),
       // Git itself would drop or rewrite files of these skills when committed.
@@ -452,7 +457,7 @@ describe("skillplane export --git", () => {
         bundle: expect.objectContaining({ digest: boundary.digest }),
       }),
     ]);
-  });
+  }, 30_000);
 
   it("validates arguments and writes nothing when a skill changes during export", async () => {
     const { base, state, project, provider } = await workspace();

@@ -6,6 +6,8 @@ import {
   canonicalizeBundleFiles,
   containsSuspectedCredential,
   GIT_IMPORT_LIMITS,
+  gitSkillRoots,
+  nestedGitSkillRoot,
   normalizeBundlePath,
   skillJsonSchema,
   type CanonicalBundle,
@@ -300,9 +302,8 @@ export class PublicGitHubSourceProvider implements GitSourceProvider {
     });
     if (new Set(entries.map((e) => e.path)).size !== entries.length)
       invalid("Repository tree contains duplicate paths");
-    const roots = entries
-      .filter((e) => e.path === "SKILL.md" || e.path.endsWith("/SKILL.md"))
-      .map((e) => e.path.slice(0, -"SKILL.md".length).replace(/\/$/, ""));
+    // Workspace repository export checks its trees with the same discovery.
+    const roots = gitSkillRoots(entries);
     const selected =
       config.path === null ? roots : roots.filter((root) => root === config.path);
     if (selected.length > GIT_IMPORT_LIMITS.skills)
@@ -318,11 +319,7 @@ export class PublicGitHubSourceProvider implements GitSourceProvider {
     for (const root of selected.sort()) {
       try {
         if (!safePath(root)) invalid("Skill directory path is unsafe or too long");
-        if (
-          roots.some(
-            (other) => other !== root && (root === "" || other.startsWith(`${root}/`)),
-          )
-        )
+        if (nestedGitSkillRoot(root, roots) !== undefined)
           invalid("Nested skill roots require separate single-path sources");
         const prefix = root ? `${root}/` : "";
         const files = new Map<string, Uint8Array>();

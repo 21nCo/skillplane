@@ -375,6 +375,11 @@ describe("workspace repository export round trip", () => {
     const accessKey = ["AKIA", "IOSFODNN7EXAMPLE"].join("");
     for (const [slug, files, rule] of [
       ["scaffold", { "templates/SKILL.md": "# Template\n" }, "nested skill root"],
+      [
+        "scaffold-directory",
+        { "templates/SKILL.md/example.txt": "Example\n" },
+        "nested skill root",
+      ],
       ["keyed", { "references/env.md": `key=${accessKey}\n` }, "credential"],
     ] as const) {
       const created = await create(

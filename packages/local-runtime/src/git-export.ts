@@ -41,10 +41,12 @@ export async function workspaceRepository(
   for (const published of listed) {
     const snapshot = await provider.retrieve(published.id, published.versionId);
     // The listing and retrieval are separate reads; a skill republished or
-    // changed in between fails the export instead of mixing two states.
+    // changed in between fails the export instead of mixing two states. The
+    // slug is not compared here: a cloud snapshot reports the bundle's slug,
+    // and the serializer refuses a bundle whose slug is not the workspace's,
+    // while a rename during the export is caught by listing again.
     if (
       snapshot.skill.id !== published.id ||
-      snapshot.skill.slug !== published.slug ||
       snapshot.skill.kind !== "skill" ||
       snapshot.version.id !== published.versionId ||
       snapshot.version.state !== "published" ||

@@ -1,5 +1,10 @@
 import { canonicalizeBundleFiles } from "./canonicalize.js";
-import { gitImportSkillProblem } from "./git-import.js";
+import {
+  gitImportSkillProblem,
+  gitSkillRoots,
+  gitTreeEntries,
+  nestedGitSkillRoot,
+} from "./git-import.js";
 import { bundleKind, type CanonicalBundle } from "./manifest.js";
 import { bundlePathCollisionKey, bytewisePathCompare } from "./paths.js";
 
@@ -249,6 +254,21 @@ export async function serializeWorkspaceRepository(
       copy.set(bytes);
       tree.set(`${manifest.path}/${path}`, copy);
     }
+  // The importer must discover each skill exactly once, at its own directory.
+  // A file or directory named SKILL.md inside a skill would be discovered as a
+  // nested root, which makes the whole skill directory invalid.
+  const roots = gitSkillRoots(gitTreeEntries(tree.keys()));
+  for (const { manifest } of entries) {
+    const nested = nestedGitSkillRoot(manifest.path, roots);
+    if (nested !== undefined || !roots.includes(manifest.path))
+      throw new WorkspaceRepositoryError(
+        `Skill ${manifest.slug} (${manifest.id}) cannot be exported because ${
+          nested === undefined
+            ? `the Git importer would not discover ${manifest.path}`
+            : `${nested}/SKILL.md would be discovered as a nested skill root`
+        }`,
+      );
+  }
   return new Map(
     [...tree.entries()].sort(([left], [right]) => bytewisePathCompare(left, right)),
   );

@@ -11,6 +11,7 @@ import {
   LocalStore,
   Runtime,
   RuntimeError,
+  workspaceRepository,
   type WorkspaceRef,
   type AmendRequest,
   type CreateRequest,
@@ -584,6 +585,40 @@ describe("cloud provider transport contract", () => {
       },
     });
     await expect(corrupt.retrieve(initial.skillId)).rejects.toThrow("DIGEST_MISMATCH");
+  });
+  it("exports a stable workspace and bundle slug mismatch as an invalid skill, not a change", async () => {
+    const { local, workspace, transport } = fixture();
+    const created = await local.create(request);
+    // The workspace slug differs from the slug in the published skill.json,
+    // in every listing or only in the second one.
+    const renamed = (renameListing: (listing: number) => boolean) => {
+      let listings = 0;
+      return new CloudWorkspaceProvider(workspace, {
+        ...transport,
+        async call(name, args) {
+          const result = (await transport.call(name, args)) as {
+            skills?: { id: string; slug: string }[];
+          };
+          if (name !== "skills_list" || !renameListing(listings++)) return result;
+          return {
+            ...result,
+            skills: result.skills?.map((s) =>
+              s.id === created.skillId ? { ...s, slug: "renamed" } : s,
+            ),
+          };
+        },
+      });
+    };
+    await expect(workspaceRepository(renamed(() => true))).rejects.toMatchObject({
+      code: "EXPORT_INVALID",
+      message: `Skill ${created.skillId} cannot be exported because its published bundle declares the slug example, not the workspace slug "renamed"`,
+    });
+    await expect(
+      workspaceRepository(renamed((listing) => listing > 0)),
+    ).rejects.toMatchObject({ code: "EXPORT_STATE_CHANGED" });
+    expect(
+      (await workspaceRepository(renamed(() => false))).has("skills/example/SKILL.md"),
+    ).toBe(true);
   });
   it("caches cloud instructions reads without queueing skill usage", async () => {
     const { cloud, local, workspace } = fixture();

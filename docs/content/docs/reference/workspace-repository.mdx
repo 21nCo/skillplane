@@ -11,7 +11,7 @@ Write it to a directory with the CLI:
 skillplane export --git ./workspace-skills
 ```
 
-The command reads the primary workspace of the current project, local or cloud. A cloud export contains only the skills its credential can read: a member's export omits other members' private skills, so export with an owner or admin credential to capture the whole workspace. All reads finish before anything is written. If a skill is published, republished, archived or reshared while the export reads the workspace, the export fails with `EXPORT_STATE_CHANGED`; run it again.
+The command reads the primary workspace of the current project, local or cloud. Any credential that can list a cloud workspace's skills exports every non-archived published skill in it, whatever its visibility, including private skills. All reads finish before anything is written. If a skill is published, republished, archived, renamed or reshared while the export reads the workspace, the export fails with `EXPORT_STATE_CHANGED`; run it again.
 
 ## Layout
 
@@ -90,7 +90,7 @@ The export fails with `EXPORT_INVALID`, naming the skill and the reason, and wri
 
 - its published bundle declares a slug other than the skill's workspace slug, because Git sources match a bound skill by the bundle's slug;
 - a path segment is a Git control name, compared case-insensitively and including NTFS and HFS+ aliases such as `git~1`: `.git`, `.gitattributes`, `.gitignore` or `.gitmodules`, at any depth, because Git would not commit such a file byte for byte, or would drop or convert the files around it;
-- a file other than its root `SKILL.md` is named `SKILL.md`, such as `templates/SKILL.md`, because Git sources treat every `SKILL.md` as a separate skill root;
+- a file or directory other than its root `SKILL.md` is named `SKILL.md`, such as `templates/SKILL.md` or `templates/SKILL.md/example.txt`, because Git sources treat every tree entry named `SKILL.md` as a separate skill root;
 - a file looks like a credential, such as a private key or a GitHub or AWS access token;
 - it has more than 197 files with distinct contents, a file larger than 5 MiB, or more than 20 MiB of files;
 - one path is both a file and a directory, such as `assets/a` and `assets/a/b.txt`, or two paths differ only by letter case or Unicode normalization.
