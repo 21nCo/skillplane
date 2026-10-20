@@ -128,7 +128,11 @@ skillplane export --git ./workspace-skills --force
 
 `--force` replaces only `skills/`, `skillplane.workspace.json`, and `.gitattributes`. Other entries, such as `.git` or `README.md`, are left alone. Skills that are no longer exported disappear from `skills/`.
 
-The new tree is first written to a temporary `.skillplane-export-*` directory inside the target. Only once every file is written are the existing entries moved aside into that directory and the new ones moved in. If any step fails, the moved entries are put back and the export fails with `EXPORT_WRITE_FAILED`, so the directory is left as it was. In the unlikely case that they cannot be put back, the export fails with `EXPORT_RESTORE_FAILED` and names the directory that holds them. If the process is killed while entries are being replaced, the previous entries are in `.skillplane-export-*/previous`: restore them or run the export again with `--force`, then delete the leftover directory before committing.
+An export first creates a `.skillplane-export` work directory inside the target and holds it until it finishes, so only one export writes to a directory at a time. If that directory already exists, because another export is writing to the same directory or an earlier one was interrupted, the export fails with `EXPORT_BUSY` and changes nothing, with or without `--force`.
+
+The new tree is first written to the work directory. Only once every file is written are the existing entries moved aside into it and the new ones moved in. If any step fails, the moved entries are put back and the export fails with `EXPORT_WRITE_FAILED`, so the directory is left as it was; a target directory that the export created is removed again. In the unlikely case that they cannot be put back, the export fails with `EXPORT_RESTORE_FAILED` and names the directory that holds them.
+
+If the process is killed while entries are being replaced, the previous entries are in `.skillplane-export/previous`. When no export is running, move back any entries you want to keep, delete `.skillplane-export`, and export again. Never commit the work directory: Git would read its contents as extra skills.
 
 A target that is itself a file or a symbolic link is refused with `EXPORT_TARGET_INVALID`. Its parent directories may be symbolic links, and a missing target is created.
 

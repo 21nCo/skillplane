@@ -2,9 +2,9 @@ import {
   chmodSync,
   lstatSync,
   mkdirSync,
-  mkdtempSync,
   readdirSync,
   renameSync,
+  rmdirSync,
   rmSync,
   writeFileSync,
   type Stats,
@@ -98,7 +98,9 @@ const MANAGED = [
   WORKSPACE_MANIFEST_PATH,
   WORKSPACE_SKILLS_DIRECTORY,
 ];
-const STAGING_PREFIX = ".skillplane-export-";
+// One fixed name, so that an export in progress or an interrupted one is
+// visible to every later run.
+const WORK_DIRECTORY = ".skillplane-export";
 
 /** Rejects a tree that is not entirely made of layout-owned, writable paths. */
 function validateTree(tree: ReadonlyMap<string, Uint8Array>) {
@@ -151,11 +153,14 @@ function removeTree(path: string) {
 
 /**
  * Writes a serialized repository tree into a directory. A directory with any
- * entry other than `.git` is refused unless `force` is set. The tree is
- * validated and fully written to a staging directory inside the target first.
- * The existing managed entries are then moved aside into it and the new ones
- * moved in; on any failure the moved entries are put back, so a failed export
- * leaves the target as it was.
+ * entry other than `.git` is refused unless `force` is set. The run first
+ * creates a fixed-name work directory inside the target, which fails if it
+ * already exists, so a concurrent or interrupted export makes the run refuse
+ * rather than touch the other run's entries. The tree is validated and fully
+ * written to that work directory first. The existing managed entries are then
+ * moved aside into it and the new ones moved in; on any failure the moved
+ * entries are put back, and a target this run created is removed again, so a
+ * failed export leaves the target as it was.
  */
 export function writeWorkspaceRepository(
   directory: string,
@@ -164,9 +169,20 @@ export function writeWorkspaceRepository(
 ): string {
   validateTree(tree);
   const root = resolve(directory);
+  let created: string | undefined;
   try {
+    const existing = lstatIfPresent(root);
+    // Only the target itself must be a real directory; its ancestors may be
+    // symbolic links, such as /tmp on macOS.
+    if (existing && (!existing.isDirectory() || existing.isSymbolicLink()))
+      throw new RuntimeError(
+        "EXPORT_TARGET_INVALID",
+        "Export target must be a directory, not a file or symbolic link",
+      );
+    if (!existing) created = mkdirSync(root, { recursive: true, mode: 0o755 });
     writeTree(root, tree, force);
   } catch (error) {
+    if (created) removeCreated(root, created);
     if (error instanceof RuntimeError) throw error;
     throw new RuntimeError(
       "EXPORT_WRITE_FAILED",
@@ -176,26 +192,68 @@ export function writeWorkspaceRepository(
   return root;
 }
 
+/**
+ * Removes the directories from `created` down to `root` that a failed run
+ * made, deepest first, stopping at the first one that is no longer empty.
+ */
+function removeCreated(root: string, created: string) {
+  for (let path = root; ; path = dirname(path)) {
+    try {
+      rmdirSync(path);
+    } catch {
+      return;
+    }
+    if (path === created || dirname(path) === path) return;
+  }
+}
+
 function writeTree(
   root: string,
   tree: ReadonlyMap<string, Uint8Array>,
   force: boolean,
 ) {
-  const existing = lstatIfPresent(root);
-  // Only the target itself must be a real directory; its ancestors may be
-  // symbolic links, such as /tmp on macOS.
-  if (existing && (!existing.isDirectory() || existing.isSymbolicLink()))
+  const work = join(root, WORK_DIRECTORY);
+  try {
+    // Holding this directory gives the run exclusive use of the target until
+    // it is removed, so it is created before the target is inspected.
+    mkdirSync(work, { mode: 0o700 });
+  } catch (error) {
+    if (errorCode(error) !== "EEXIST") throw error;
     throw new RuntimeError(
-      "EXPORT_TARGET_INVALID",
-      "Export target must be a directory, not a file or symbolic link",
+      "EXPORT_BUSY",
+      `${work} exists, so another export is writing to this directory or an earlier one was interrupted. If no export is running, move any entries you want to keep out of ${join(work, "previous")}, delete ${work}, and export again`,
     );
-  if (existing && !force && readdirSync(root).some((name) => name !== ".git"))
+  }
+  let empty: boolean;
+  try {
+    empty = readdirSync(root).every(
+      (name) => name === ".git" || name === WORK_DIRECTORY,
+    );
+  } catch (error) {
+    rmdirSync(work);
+    throw error;
+  }
+  if (!force && !empty) {
+    rmdirSync(work);
     throw new RuntimeError(
       "EXPORT_EXISTS",
       "Export directory is not empty; pass --force to replace its skills",
     );
-  if (!existing) mkdirSync(root, { recursive: true, mode: 0o755 });
-  const work = mkdtempSync(join(root, STAGING_PREFIX));
+  }
+  replaceEntries(root, work, tree);
+}
+
+/**
+ * Stages the tree in the work directory and swaps it for the target's managed
+ * entries, then removes the work directory, which releases the target. The
+ * work directory is kept only when it holds the sole copy of entries that
+ * could not be put back.
+ */
+function replaceEntries(
+  root: string,
+  work: string,
+  tree: ReadonlyMap<string, Uint8Array>,
+) {
   const staged = join(work, "new"),
     previous = join(work, "previous");
   const moved: string[] = [],
@@ -228,7 +286,7 @@ function writeTree(
       // Keep the moved entries rather than delete the only copy.
       throw new RuntimeError(
         "EXPORT_RESTORE_FAILED",
-        `Export failed (${errorCode(error)}) and the previous entries could not be restored; they are in ${previous}`,
+        `Export failed (${errorCode(error)}) and the previous entries could not be restored; they are in ${previous}. Move them back, then delete ${work}`,
       );
     }
     try {
@@ -246,7 +304,7 @@ function writeTree(
   } catch (error) {
     throw new RuntimeError(
       "EXPORT_CLEANUP_FAILED",
-      `Export was written, but ${work} could not be removed (${errorCode(error)}); delete it before committing`,
+      `Export was written, but ${work} could not be removed (${errorCode(error)}); delete it before committing or exporting again`,
     );
   }
 }
