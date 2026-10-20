@@ -4,6 +4,10 @@ import {
   BundleValidationError,
   bundlePathCollisionKey,
   canonicalizeBundleFiles,
+  containsSuspectedCredential,
+  GIT_IMPORT_LIMITS,
+  gitSkillRoots,
+  nestedGitSkillRoot,
   normalizeBundlePath,
   skillJsonSchema,
   type CanonicalBundle,
@@ -119,11 +123,12 @@ interface TreeEntry {
   sha: string;
   size: number;
 }
-const MAX_SNAPSHOT_BYTES = 20 * 1024 * 1024,
-  MAX_BLOB_BYTES = 5 * 1024 * 1024,
-  MAX_REQUESTS = 200,
+// Workspace repository export checks the same per-skill limits.
+const MAX_SNAPSHOT_BYTES = GIT_IMPORT_LIMITS.snapshotBytes,
+  MAX_BLOB_BYTES = GIT_IMPORT_LIMITS.blobBytes,
+  MAX_REQUESTS = GIT_IMPORT_LIMITS.requests,
   // Ref, commit and tree requests leave this many distinct blob fetches for one skill.
-  MAX_SKILL_FILES = MAX_REQUESTS - 3;
+  MAX_SKILL_FILES = GIT_IMPORT_LIMITS.skillFiles;
 export class PublicGitHubSourceProvider implements GitSourceProvider {
   // workerd rejects fetch called with a receiver other than the global scope,
   // so the default looks up and calls the global fetch on each request.
@@ -276,7 +281,7 @@ export class PublicGitHubSourceProvider implements GitSourceProvider {
     if (
       tree.truncated !== false ||
       !Array.isArray(tree.tree) ||
-      tree.tree.length > 10000
+      tree.tree.length > GIT_IMPORT_LIMITS.treeEntries
     )
       invalid(
         "Repository tree is incomplete or too large; import a smaller repository",
@@ -297,12 +302,11 @@ export class PublicGitHubSourceProvider implements GitSourceProvider {
     });
     if (new Set(entries.map((e) => e.path)).size !== entries.length)
       invalid("Repository tree contains duplicate paths");
-    const roots = entries
-      .filter((e) => e.path === "SKILL.md" || e.path.endsWith("/SKILL.md"))
-      .map((e) => e.path.slice(0, -"SKILL.md".length).replace(/\/$/, ""));
+    // Workspace repository export checks its trees with the same discovery.
+    const roots = gitSkillRoots(entries);
     const selected =
       config.path === null ? roots : roots.filter((root) => root === config.path);
-    if (selected.length > 32)
+    if (selected.length > GIT_IMPORT_LIMITS.skills)
       invalid("Import at most 32 skills per source; choose a specific path");
     const blobCache = new Map<string, Uint8Array>();
     const skills: GitDiscoveredSkill[] = [];
@@ -315,11 +319,7 @@ export class PublicGitHubSourceProvider implements GitSourceProvider {
     for (const root of selected.sort()) {
       try {
         if (!safePath(root)) invalid("Skill directory path is unsafe or too long");
-        if (
-          roots.some(
-            (other) => other !== root && (root === "" || other.startsWith(`${root}/`)),
-          )
-        )
+        if (nestedGitSkillRoot(root, roots) !== undefined)
           invalid("Nested skill roots require separate single-path sources");
         const prefix = root ? `${root}/` : "";
         const files = new Map<string, Uint8Array>();
@@ -399,12 +399,7 @@ export class PublicGitHubSourceProvider implements GitSourceProvider {
             throw new SnapshotLimitError(
               "Source exceeds the 20 MiB expanded import limit",
             );
-          const decoded = new TextDecoder().decode(bytes);
-          if (
-            /-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----|\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{50,}|AKIA[0-9A-Z]{16})\b/.test(
-              decoded,
-            )
-          )
+          if (containsSuspectedCredential(bytes))
             invalid("Skill contains a suspected credential; remove it before import");
           files.set(path, bytes);
         }

@@ -16,6 +16,7 @@ import {
   type WorkspaceProvider,
   type WorkspaceRef,
   type SkillInfo,
+  type PublishedSkill,
   type VersionInfo,
   type Snapshot,
   type CreateRequest,
@@ -81,6 +82,21 @@ export class LocalWorkspaceProvider implements WorkspaceProvider {
         "SELECT id,slug,name,description,'skill' AS kind FROM skill WHERE workspace=? UNION ALL SELECT id,slug,name,description,'instructions' AS kind FROM instructions WHERE workspace=? ORDER BY slug,kind",
       )
       .all(this.workspace.id, this.workspace.id) as unknown as SkillInfo[];
+  }
+  // Local workspaces have no sharing settings or archive state, so every skill
+  // whose current version is published exports as private.
+  async publishedSkills(): Promise<PublishedSkill[]> {
+    return this.store.db
+      .prepare(
+        "SELECT s.id,s.slug,s.current FROM skill s JOIN version v ON v.id=s.current AND v.skill=s.id WHERE s.workspace=? AND v.state='published' ORDER BY s.slug,s.id",
+      )
+      .all(this.workspace.id)
+      .map((row) => ({
+        id: String(row.id),
+        slug: String(row.slug),
+        versionId: String(row.current),
+        visibility: "private" as const,
+      }));
   }
   private skill(id: string): Artifact {
     for (const kind of ["skill", "instructions"] as const) {

@@ -109,6 +109,7 @@ trust review, recovery, and observed usage reporting.
 | `candidates SKILL_ID`                | List pending reviews for a skill                    |
 | `decide FILE`                        | Approve or reject an exact review                   |
 | `export SKILL_ID FILE [VERSION_ID]`  | Export an immutable bundle                          |
+| `export --git DIR [--force]`         | Write published skills as a repository tree         |
 | `import FILE KEY`                    | Import a bundle as a new skill                      |
 | `sync`                               | Atomically install or update configured projections |
 | `resolve PROJECTION_ID`              | Resolve a projected skill from live or cached state |
@@ -127,6 +128,8 @@ Global options:
 - `--home DIR` selects the private runtime state directory.
 - `--agent PRODUCT` identifies the calling product for retrieval and resolution.
 - `resolve` accepts `--live-only` or `--cache-only`.
+- `export --git` refuses a non-empty directory unless `--force` is passed; see
+  the [workspace repository layout](https://skillplane.dev/docs/reference/workspace-repository).
 
 Run `skillplane --help` for the authoritative command summary.
 

@@ -21,6 +21,7 @@ import {
   skillCandidateDecisionOutputSchema,
   skillUsageReportOutputSchema,
   type CallerDeclaration,
+  type SkillsListOutput,
 } from "@skillplane/mcp-schema";
 import {
   workspaceKey,
@@ -31,6 +32,7 @@ import {
   type WorkspaceProvider,
   type WorkspaceRef,
   type SkillInfo,
+  type PublishedSkill,
   type VersionInfo,
   type Snapshot,
   type CreateRequest,
@@ -210,8 +212,33 @@ export class CloudWorkspaceProvider implements WorkspaceProvider {
   list(): Promise<SkillInfo[]> {
     return this.listKind("skill");
   }
+  // Every active skill the credential can read, in any visibility; the listing
+  // reports each skill's current published version.
+  async publishedSkills(): Promise<PublishedSkill[]> {
+    return (await this.listed("skill")).flatMap((s) =>
+      s.archivedAt === null && s.currentVersion
+        ? [
+            {
+              id: s.id,
+              slug: s.slug,
+              versionId: s.currentVersion.id,
+              visibility: s.visibility,
+            },
+          ]
+        : [],
+    );
+  }
   private async listKind(kind: SkillInfo["kind"]): Promise<SkillInfo[]> {
-    const items: SkillInfo[] = [];
+    return (await this.listed(kind)).map((s) => ({
+      id: s.id,
+      slug: s.slug,
+      name: s.name,
+      description: s.summary,
+      kind: s.kind ?? ("skill" as const),
+    }));
+  }
+  private async listed(kind: SkillInfo["kind"]): Promise<SkillsListOutput["skills"]> {
+    const items: SkillsListOutput["skills"] = [];
     let cursor: string | null = null;
     const seen = new Set<string>();
     do {
@@ -231,15 +258,7 @@ export class CloudWorkspaceProvider implements WorkspaceProvider {
         throw new RuntimeError("WORKSPACE_MISMATCH");
       if (page.skills.some((s) => (s.kind ?? "skill") !== kind))
         throw new RuntimeError("SKILL_KIND_MISMATCH");
-      items.push(
-        ...page.skills.map((s) => ({
-          id: s.id,
-          slug: s.slug,
-          name: s.name,
-          description: s.summary,
-          kind: s.kind ?? ("skill" as const),
-        })),
-      );
+      items.push(...page.skills);
       cursor = page.nextCursor;
       if (cursor && seen.has(cursor)) throw new RuntimeError("PAGINATION_INVALID");
       if (cursor) seen.add(cursor);

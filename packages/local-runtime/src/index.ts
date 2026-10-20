@@ -8,3 +8,4 @@ export * from "./adapters.js";
 export * from "./trust.js";
 export * from "./analytics.js";
 export * from "./runtime.js";
+export * from "./git-export.js";

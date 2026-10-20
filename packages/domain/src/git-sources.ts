@@ -514,6 +514,12 @@ export class GitSourceService {
         const pending = last?.rows[0]?.status === "pending_review";
         action = binding.last_digest === item.bundle.digest ? "unchanged" : "changed";
         if (action === "unchanged" && pending) message = AWAITING_REVIEW;
+        // Upstream bytes equal to the published head, including its lock, are
+        // that version; re-preparing could re-resolve the lock and differ.
+        if (action === "changed" && item.bundle.digest === binding.current_digest) {
+          action = "unchanged";
+          if (pending) message = PUBLISHED_WHILE_PENDING;
+        }
         // Format-v2 bundles gain a server-generated lock, so an identical explicit
         // binding is recognized by its prepared digest. Additions and unresolved
         // compositions are validated when apply creates them, after earlier
