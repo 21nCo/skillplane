@@ -31,7 +31,7 @@ skills/
 
 - `skills/<slug>/` is named by the skill's workspace slug and holds exactly the files of the skill's current published version: `SKILL.md`, `skill.json`, and any `skill.lock.json`, `README.md`, `LICENSE`, `assets/`, `references/`, `scripts/`, `templates/`, `agents/` or `verification/` entries the bundle contains. Paths follow the same allowlist as uploaded bundles.
 - `skillplane.workspace.json` indexes the exported skills.
-- `.gitattributes` contains `* -text`, so Git commits and checks out exported files without converting line endings, whatever `core.autocrlf` is set to. Skill directories never contain their own Git control files, so nothing in the tree overrides it. A `.git/info/attributes` file in your clone still takes precedence; do not set text or filter attributes there.
+- `.gitattributes` contains `* -text -filter -ident -working-tree-encoding`, so Git commits and checks out exported files byte for byte, whatever `core.autocrlf` is set to: no line-ending conversion, no clean or smudge filter such as Git LFS, no `$Id$` expansion, and no re-encoding. Git resolves each attribute separately, and these unset values take precedence over a global attributes file (`core.attributesFile`, by default `~/.config/git/attributes`). Skill directories never contain their own Git control files, so nothing in the tree overrides it. A `.git/info/attributes` file in your clone still takes precedence; do not set `text`, `eol`, `filter`, `ident` or `working-tree-encoding` there.
 
 ## What is exported
 
@@ -78,9 +78,9 @@ Skills are ordered by slug. No other fields are written.
 The same workspace state always produces the same bytes, and therefore the same Git tree hash:
 
 - Files and manifest entries are sorted by their UTF-8 bytes; JSON keys are sorted.
-- The manifest is two-space indented JSON with LF line endings and a final newline.
+- The files the export generates, `skillplane.workspace.json` and `.gitattributes`, always use LF line endings. The manifest is two-space indented JSON with a final newline.
 - No timestamps, export times, or machine details are written, so the time zone and clock do not matter.
-- Skill files are copied byte for byte from the canonical bundle, including any CRLF line endings they were published with. Rewriting them would change the digest.
+- Skill files are copied byte for byte from the canonical bundle, which is already in its canonical form, including any CRLF line endings it was published with. Normalizing them to LF would change the published digest, so the export never does.
 
 Canonicalizing a skill directory reproduces `digest` exactly. The export fails rather than write a directory that would not.
 

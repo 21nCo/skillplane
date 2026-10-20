@@ -19,13 +19,17 @@ export const WORKSPACE_REPOSITORY_FORMAT_VERSION = 1 as const;
 export const WORKSPACE_MANIFEST_PATH = "skillplane.workspace.json";
 export const WORKSPACE_SKILLS_DIRECTORY = "skills";
 /**
- * Bundle files are exported byte-for-byte, so Git must never convert their
- * line endings on checkout or commit; otherwise a directory could stop
- * canonicalizing to its published digest. Skill directories may not hold
- * their own Git control files, so nothing overrides this one.
+ * Bundle files are exported byte-for-byte, so Git must never rewrite them on
+ * checkout or commit; otherwise a directory could stop canonicalizing to its
+ * published digest. Git resolves each attribute separately, so this file
+ * unsets every attribute that changes content (line-ending conversion, clean
+ * and smudge filters, `$Id$` expansion and re-encoding) rather than only
+ * `text`; a user's `core.attributesFile` cannot set any of them back. Skill
+ * directories may not hold their own Git control files, so nothing in the
+ * tree overrides this one.
  */
 export const WORKSPACE_GITATTRIBUTES_PATH = ".gitattributes";
-const GITATTRIBUTES = "* -text\n";
+const GITATTRIBUTES = "* -text -filter -ident -working-tree-encoding\n";
 
 export type WorkspaceRepositoryVisibility = "private" | "workspace" | "public";
 

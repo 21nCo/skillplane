@@ -160,8 +160,8 @@ async function cli(...args: string[]) {
 }
 
 /** Commits a directory with Git and imports the commit as a Git source would. */
-function snapshot(directory: string) {
-  commitDirectory(directory);
+function snapshot(directory: string, options?: { globalConfig?: string }) {
+  commitDirectory(directory, options);
   return new PublicGitHubSourceProvider(gitRepositoryGitHubFetcher(directory)).snapshot(
     gitSourceConfig({ repositoryUrl: "https://github.com/acme/skills" }),
   );
@@ -458,6 +458,45 @@ describe("skillplane export --git", () => {
       }),
     ]);
   }, 30_000);
+
+  it("keeps exported bytes when the user's global Git attributes would rewrite them", async () => {
+    // A global attributes file expands $Id$ in Markdown and runs a clean
+    // filter on text files; the exported .gitattributes must unset both.
+    const config = root();
+    const attributes = join(config, "attributes");
+    writeFileSync(attributes, "*.md ident\n*.txt filter=upper\n");
+    const globalConfig = join(config, "gitconfig");
+    writeFileSync(
+      globalConfig,
+      `[core]\n\tattributesFile = ${attributes}\n[filter "upper"]\n\tclean = tr a-z A-Z\n\tsmudge = cat\n`,
+    );
+    const skill = await publishedWith("attributes", {
+      "references/notes.md": "$Id: published literal $\n",
+      "assets/data.txt": "lowercase data\n",
+    });
+    // Without the exported .gitattributes, Git rewrites both files ...
+    const raw = root();
+    for (const [path, bytes] of skill.bundle.files) {
+      const target = join(raw, "skills", "attributes", path);
+      mkdirSync(join(target, ".."), { recursive: true });
+      writeFileSync(target, bytes);
+    }
+    const rewritten = (await snapshot(raw, { globalConfig })).skills[0]?.bundle;
+    expect(rewritten?.files.get("references/notes.md")).toEqual(
+      new TextEncoder().encode("$Id$\n"),
+    );
+    expect(rewritten?.files.get("assets/data.txt")).toEqual(
+      new TextEncoder().encode("LOWERCASE DATA\n"),
+    );
+    // ... but the export commits every file as published.
+    const out = join(root(), "repository");
+    writeWorkspaceRepository(out, await serializeWorkspaceRepository([skill]), false);
+    const read = (await snapshot(out, { globalConfig })).skills;
+    expect(read.map((s) => [s.path, s.error, s.bundle?.digest])).toEqual([
+      ["skills/attributes", null, skill.digest],
+    ]);
+    expect(read[0]?.bundle?.files).toEqual(skill.bundle.files);
+  });
 
   it("exports repository trees up to the importer's entry limit and refuses larger ones", async () => {
     // Repeated contents keep each skill within its own limits, so only the

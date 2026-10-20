@@ -176,7 +176,9 @@ describe("workspace repository serializer", () => {
       "skills/pr-review/scripts/check.sh",
       "skills/pr-review/skill.json",
     ]);
-    expect(decoder.decode(tree.get(".gitattributes"))).toBe("* -text\n");
+    expect(decoder.decode(tree.get(".gitattributes"))).toBe(
+      "* -text -filter -ident -working-tree-encoding\n",
+    );
     const [review, minimal, deploy] = skills;
     expect(decoder.decode(tree.get("skillplane.workspace.json"))).toBe(
       expectedManifest
@@ -191,7 +193,7 @@ describe("workspace repository serializer", () => {
     // Golden content digests fix every exported byte, including skill.json.
     expect(await digests(tree)).toEqual({
       ".gitattributes":
-        "705fd4d6451a31d36b3df7de96f83f30ac976c9b4a6d1e51671d8e2f33e2d0da",
+        "ece797f716e9be49128549fe7e26f19cb04bd65dd20bcb3ae3b07910c38542c4",
       "skillplane.workspace.json":
         "cbeb55bf84c812222414ff07a28215ac16556151249644c8477983e7676edc4e",
       "skills/deploy/SKILL.md":
