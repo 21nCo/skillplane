@@ -65,6 +65,11 @@ describe("packaged global CLI", () => {
     const archive = join(root, "export.zip");
     run("export", created.skillId, archive);
     expect(readFileSync(archive).length).toBeGreaterThan(0);
+    const repository = join(root, "repository");
+    expect(run("export", "--git", repository)).toMatchObject({ files: 4 });
+    expect(readFileSync(join(repository, "skills/read/SKILL.md"), "utf8")).toBe(
+      "Read the supplied document.",
+    );
     run("uninstall", record.id);
     expect(run("doctor").projections).toHaveLength(0);
     const overwrite = spawnSync(process.execPath, [

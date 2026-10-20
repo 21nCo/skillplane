@@ -18,6 +18,7 @@ import {
   type AmendRequest,
 } from "./index.js";
 import { readSafe } from "./files.js";
+import { workspaceRepository, writeWorkspaceRepository } from "./git-export.js";
 import { bundleEntrypoint } from "@skillplane/storage";
 const help = `Skillplane local and cloud workspaces (Node >=22.13)
 Global flags: --home DIR (private runtime state), --project DIR
@@ -32,6 +33,7 @@ Global flags: --home DIR (private runtime state), --project DIR
   decide FILE                          Approve/reject exact review; JSON parameters
   retrieve SKILL_ID [VERSION_ID]        Read primary workspace version
   export SKILL_ID FILE [VERSION_ID]     Export an immutable bundle
+  export --git DIR [--force]           Write current published skills as a repository tree
   import FILE KEY                       Import a bundle as a new local/cloud skill
   sync                                 Atomically install/update configured projections
   resolve PROJECTION_ID [--live-only|--cache-only] [--agent PRODUCT]
@@ -63,14 +65,22 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
   const project = resolve(requireValue(value("--project", process.cwd())));
   const agent = requireValue(value("--agent", "unknown"));
   const target = value("--target");
+  const git = value("--git");
   const flags = new Set(
-    args.filter((a) => ["--live-only", "--cache-only", "--online"].includes(a)),
+    args.filter((a) =>
+      ["--live-only", "--cache-only", "--online", "--force"].includes(a),
+    ),
   );
   const [command, ...rest] = args.filter((a) => !flags.has(a));
   if (!command || ["help", "--help", "-h"].includes(command)) {
     console.log(help);
     return;
   }
+  if ((git !== undefined || flags.has("--force")) && command !== "export")
+    throw new RuntimeError(
+      "ARGUMENT_INVALID",
+      "--git and --force apply only to export",
+    );
   const required = (index: number): string => {
     const v = rest[index];
     if (!v) throw new RuntimeError("ARGUMENT_REQUIRED");
@@ -180,6 +190,25 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
         break;
       }
       case "export":
+        if (git !== undefined) {
+          if (rest.length > 0)
+            throw new RuntimeError(
+              "ARGUMENT_INVALID",
+              "export --git takes only a directory",
+            );
+          // Every read completes before the directory is touched.
+          const tree = await workspaceRepository(
+            runtime.provider(runtime.project(project).primary),
+          );
+          result = {
+            exported: true,
+            directory: writeWorkspaceRepository(git, tree, flags.has("--force")),
+            files: tree.size,
+          };
+          break;
+        }
+        if (flags.has("--force"))
+          throw new RuntimeError("ARGUMENT_INVALID", "--force requires export --git");
         runtime.exportBundle(
           await runtime
             .provider(runtime.project(project).primary)

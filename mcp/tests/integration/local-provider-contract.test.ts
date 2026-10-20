@@ -109,6 +109,12 @@ describe("MCP-only cloud provider with real domain services", () => {
     expect((await provider.retrieve(initial.skillId)).version.semanticVersion).toBe(
       "1.0.1",
     );
+    // Repository export selects the newly published head from the server listing.
+    expect(await provider.publishedSkills()).toContainEqual({
+      id: initial.skillId,
+      versionId: amended.versionId,
+      visibility: "private",
+    });
     expect(
       (await provider.retrieve(initial.skillId, initial.versionId)).bundle.digest,
     ).toBe(snapshot.bundle.digest);

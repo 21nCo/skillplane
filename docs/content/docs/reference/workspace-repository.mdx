@@ -1,0 +1,108 @@
+---
+title: Workspace repository layout
+description: The canonical Git repository tree for a workspace's published skills and the skillplane.workspace.json index.
+---
+
+A workspace's current published skills can be rendered as a plain repository tree. The same tree is the contract for workspace Git sync: Git sources read it back without creating any version.
+
+Write it to a directory with the CLI:
+
+```sh
+skillplane export --git ./workspace-skills
+```
+
+The command reads the primary workspace of the current project, local or cloud. All reads finish before anything is written.
+
+## Layout
+
+```text
+.gitattributes
+skillplane.workspace.json
+skills/
+  deploy/
+    SKILL.md
+    scripts/ship.sh
+    skill.json
+  review/
+    SKILL.md
+    references/checklist.md
+    skill.json
+```
+
+- `skills/<slug>/` holds exactly the files of the skill's current published version: `SKILL.md`, `skill.json`, and any `skill.lock.json`, `README.md`, `LICENSE`, `assets/`, `references/`, `scripts/`, `templates/`, `agents/` or `verification/` entries the bundle contains. Paths follow the same allowlist as uploaded bundles.
+- `skillplane.workspace.json` indexes the exported skills.
+- `.gitattributes` contains `* -text`, so Git never rewrites line endings in exported files.
+
+## What is exported
+
+Every skill that is not archived and has a published version, at its current published version, whatever its visibility.
+
+Never exported: drafts and pending or rejected candidates, archived skills, skills with no published version, instructions documents, contexts and their knowledge or notes, skill groups, Git source bindings, members, credentials or other secrets, analytics, and audit events.
+
+Local workspaces have no sharing settings, so their skills are listed as `private`.
+
+## `skillplane.workspace.json`
+
+```json
+{
+  "formatVersion": 1,
+  "skills": [
+    {
+      "digest": "sha256:6eeddf8bbda8d99685e6243821206e934cd30f084b09a5f02dd8e9a0727b6ca7",
+      "id": "skill:c3fd5596-434d-4875-a9b3-cbacfdc6ce05",
+      "path": "skills/deploy",
+      "semanticVersion": "1.0.0",
+      "slug": "deploy",
+      "tags": ["ops"],
+      "visibility": "workspace"
+    }
+  ]
+}
+```
+
+| Field                      | Meaning                                                              |
+| -------------------------- | -------------------------------------------------------------------- |
+| `formatVersion`            | Layout version; currently `1`                                        |
+| `skills[].id`              | Stable workspace skill ID                                            |
+| `skills[].slug`            | Skill slug, also the directory name                                  |
+| `skills[].path`            | Repository-relative skill directory, `skills/<slug>`                 |
+| `skills[].visibility`      | `private`, `workspace`, or `public`                                  |
+| `skills[].tags`            | Tags of the published version                                        |
+| `skills[].semanticVersion` | Semantic version of the current published version                    |
+| `skills[].digest`          | Canonical digest of that version, which the skill directory produces |
+
+Skills are ordered by slug. No other fields are written.
+
+## Determinism
+
+The same workspace state always produces the same bytes, and therefore the same Git tree hash:
+
+- Files and manifest entries are sorted by their UTF-8 bytes; JSON keys are sorted.
+- The manifest is two-space indented JSON with LF line endings and a final newline.
+- No timestamps, export times, or machine details are written, so the time zone and clock do not matter.
+- Skill files are copied byte for byte from the canonical bundle, including any CRLF line endings they were published with. Rewriting them would change the digest.
+
+Canonicalizing a skill directory reproduces `digest` exactly. The export fails rather than write a directory that would not.
+
+## Reading the tree with Git sources
+
+A Git source that imports the repository discovers each `skills/<slug>/` directory:
+
+- In a workspace that already has these skills but no bindings, every entry is a **conflict** with its matching slug. Skills are never attached silently.
+- After each path is bound to its skill with **Bind an existing workspace skill**, every entry is **unchanged**, and applying the preview creates no version.
+
+The Git importer rejects files that look like credentials, such as private keys or GitHub tokens. A published skill containing such text exports normally but reads back as invalid.
+
+## Writing into an existing directory
+
+The target directory must not exist or must be empty; an existing `.git` entry is allowed. Use `--force` to export into a non-empty directory, such as a clone of the repository:
+
+```sh
+skillplane export --git ./workspace-skills --force
+```
+
+`--force` deletes and rewrites only `skills/`, `skillplane.workspace.json`, and `.gitattributes`. Other entries, such as `.git` or `README.md`, are left alone. Skills that are no longer exported disappear from `skills/`. If an export is interrupted, run it again with `--force`.
+
+A target that is a file or a symbolic link is refused.
+
+On Windows, a skill whose slug is a reserved device name, such as `con` or `aux`, cannot be checked out.

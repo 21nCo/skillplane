@@ -117,6 +117,12 @@ export interface SkillInfo {
   description: string;
   kind: "skill" | "instructions";
 }
+/** A non-archived skill's current published version, as repository export selects it. */
+export interface PublishedSkill {
+  id: string;
+  versionId: string;
+  visibility: "private" | "workspace" | "public";
+}
 export interface Snapshot {
   workspace: WorkspaceRef;
   skill: SkillInfo;
@@ -130,6 +136,8 @@ export type AmendRequest = Omit<SkillAmendInput, "caller">;
 export interface WorkspaceProvider {
   readonly workspace: WorkspaceRef;
   list(): Promise<SkillInfo[]>;
+  /** Non-archived skills (never instructions) that have a published version. */
+  publishedSkills(): Promise<PublishedSkill[]>;
   versions(skillId: string): Promise<VersionInfo[]>;
   retrieve(skillId: string, versionId?: string): Promise<Snapshot>;
   create(request: CreateRequest): Promise<{

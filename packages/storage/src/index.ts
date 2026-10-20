@@ -6,3 +6,4 @@ export * from "./r2.js";
 export * from "./validate.js";
 
 export * from "./composition.js";
+export * from "./workspace-repository.js";

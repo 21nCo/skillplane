@@ -79,6 +79,9 @@ verified locally.
 Explicit `export SKILL_ID FILE [VERSION_ID]` and `import FILE IDEMPOTENCY_KEY` move
 canonical bundles between authorities. Import creates a new skill identity in the
 primary workspace; it does not replicate, merge, or overwrite an existing slug.
+`export --git DIR [--force]` writes every current published skill of the primary
+workspace as the canonical repository tree described in
+[workspace repository layout](content/docs/reference/workspace-repository.mdx).
 
 ## Multiple accounts and sources
 
