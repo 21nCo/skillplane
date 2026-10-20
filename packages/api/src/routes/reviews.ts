@@ -4,6 +4,7 @@ import type { Hono } from "hono";
 import type { ApiEnvironment } from "../context.js";
 import { success } from "../envelopes.js";
 import {
+  optionalIdFilter,
   readJsonObject,
   publicSkillVersion,
   requirePrincipal,
@@ -41,6 +42,7 @@ export function registerReviewRoutes(app: Hono<ApiEnvironment>): void {
       skillId: context.req.param("skillId"),
       principal,
       status: reviewStatus(context.req.query("status")),
+      ...optionalIdFilter(context, "proposedVersionId"),
     });
     context.header("Cache-Control", "private, no-store");
     return context.json(success(context, { reviews: reviews.map(publicDetail) }));

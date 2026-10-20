@@ -3,6 +3,7 @@
     BookOpenTextIcon,
     ChartLineUpIcon,
     RobotIcon,
+    ScrollIcon,
     ShieldCheckIcon,
     SquaresFourIcon,
     UsersThreeIcon,
@@ -73,6 +74,19 @@
       >
         <BookOpenTextIcon weight="duotone" aria-hidden="true" />
         Skills
+      </a>
+      {@const instructionsHref = resolve("/(app)/[workspaceSlug]/instructions", {
+        workspaceSlug: store.active.slug,
+      })}
+      <a
+        class:active={pathname === instructionsHref ||
+          pathname.startsWith(`${instructionsHref}/`)}
+        href={instructionsHref}
+        aria-current={pathname === instructionsHref ? "page" : undefined}
+        onclick={onClose}
+      >
+        <ScrollIcon weight="duotone" aria-hidden="true" />
+        Instructions
       </a>
       <a
         href={resolve("/(app)/[workspaceSlug]/groups", {

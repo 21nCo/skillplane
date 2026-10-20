@@ -12,6 +12,7 @@ import type {
   SemanticBump,
   Skill,
   SkillArchiveFilter,
+  SkillKind,
   SkillPage,
   SkillVersion,
   SkillVersionDiff,
@@ -41,6 +42,8 @@ function encodePath(path: string): string {
 }
 
 export async function listSkills(options: {
+  /** Defaults to skills so instructions never reach a skill-only surface. */
+  readonly kind?: SkillKind;
   readonly groupId?: string;
   readonly sourceId?: string;
   readonly workspaceId: string;
@@ -50,8 +53,10 @@ export async function listSkills(options: {
   readonly cursor?: string | null;
   readonly limit?: number;
 }): Promise<SkillPage> {
+  const kind = options.kind ?? "skill";
   if (options.groupId || options.sourceId) {
     const q = new URLSearchParams({
+      kind,
       ...(options.groupId ? { groupId: options.groupId } : {}),
       ...(options.sourceId ? { sourceId: options.sourceId } : {}),
       state: options.archive ?? "active",
@@ -65,7 +70,7 @@ export async function listSkills(options: {
       { headers: workspaceHeaders(options.workspaceId) },
     );
   }
-  return listSkillsWithDatafn(options);
+  return listSkillsWithDatafn({ ...options, kind });
 }
 
 export async function getSkillBySlug(
@@ -183,6 +188,16 @@ export async function getSkillFile(options: {
     )}`,
     options.workspaceId,
   );
+}
+
+/** Instructions keep their document in AGENTS.md; they have no SKILL.md. */
+export async function getInstructionsDocument(options: {
+  readonly workspaceId: string;
+  readonly skillId: string;
+  readonly versionId: string;
+}): Promise<string> {
+  const response = await getSkillFile({ ...options, path: "AGENTS.md" });
+  return response.text();
 }
 
 export async function getSkillRepairBundle(options: {
@@ -315,8 +330,12 @@ export async function listAmendmentReviews(options: {
   readonly workspaceId: string;
   readonly skillId: string;
   readonly status?: AmendmentReviewStatus | "all";
+  readonly proposedVersionId?: string;
 }): Promise<readonly AmendmentReviewDetail[]> {
   const query = new URLSearchParams({ status: options.status ?? "all" });
+  if (options.proposedVersionId !== undefined) {
+    query.set("proposedVersionId", options.proposedVersionId);
+  }
   const data = await apiRequest<{ reviews: readonly AmendmentReviewDetail[] }>(
     `/api/v1/skills/${encodeURIComponent(options.skillId)}/candidates?${query.toString()}`,
     { headers: workspaceHeaders(options.workspaceId) },

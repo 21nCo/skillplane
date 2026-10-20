@@ -3,6 +3,7 @@
   import { page } from "$app/state";
   import { resolve } from "$app/paths";
   import { Button, Input, Select, EmptyState } from "@skillplane/ui";
+  import KindBadge from "$lib/skills/KindBadge.svelte";
   import { useWorkspaceStore } from "$lib/workspaces/store.svelte.js";
   import {
     sourceRequest,
@@ -185,7 +186,7 @@
     const result = await apiRequest<{
       skills: { id: string; name: string; slug: string }[];
     }>(
-      `/api/v1/workspaces/${encodeURIComponent(id)}/skills?q=${encodeURIComponent(bindQuery)}&limit=100`,
+      `/api/v1/workspaces/${encodeURIComponent(id)}/skills?q=${encodeURIComponent(bindQuery)}&kind=skill&limit=100`,
     );
     if (current(id, g)) available = result.skills;
   }
@@ -343,7 +344,7 @@
                 workspaceSlug: workspace?.slug ?? "",
                 skillSlug: binding.slug,
               })}>{binding.name}</a
-            >
+            ><KindBadge kind="skill" />
             · <code>{binding.path || "/"}</code> · {binding.status}{#if canManage && !binding.disconnectedAt}<Button
                 variant="ghost"
                 disabled={busy}
@@ -427,7 +428,8 @@
         ><tbody
           >{#each preview.plan as item (item.path)}<tr
               ><td><code>{item.path || "/"}</code></td><td
-                >{item.slug ?? "Invalid skill"}</td
+                >{#if item.slug}{item.slug} <KindBadge kind="skill" />{:else}Invalid
+                  skill{/if}</td
               ><td>{item.action}</td><td>{item.message ?? ""}</td></tr
             >{/each}</tbody
         >

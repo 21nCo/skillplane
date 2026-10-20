@@ -2,6 +2,8 @@
   import { SvelteURLSearchParams } from "svelte/reactivity";
   import { apiRequest } from "$lib/api/client.js";
   import { Button, Input, Select, Textarea } from "@skillplane/ui";
+  import KindBadge from "./KindBadge.svelte";
+  import type { SkillKind } from "./types.js";
   export interface Dependency {
     alias: string;
     workspace: string;
@@ -38,13 +40,18 @@
       slug: string;
       name: string;
       semanticVersion: string;
+      kind?: SkillKind;
     }[]
   >([]);
   async function search() {
     searching = true;
     searchError = null;
     try {
-      const params = new SvelteURLSearchParams({ q: query, limit: "10" });
+      const params = new SvelteURLSearchParams({
+        q: query,
+        kind: "skill",
+        limit: "10",
+      });
       if (searchScope === "workspace") params.set("workspaceId", workspaceId);
       const result = await apiRequest<{ skills: typeof matches }>(
         `/api/v1/skills/search?${params}`,
@@ -104,12 +111,14 @@
     >
   </div>
   {#if searchError}<p role="alert">{searchError}</p>{/if}
-  {#each matches as match (match.id)}<Button
-      type="button"
-      disabled={dependencies.length >= 32}
-      onclick={() => addMatch(match)}
-      >Add {match.workspaceSlug}/{match.slug} {match.semanticVersion}</Button
-    >{/each}
+  {#each matches as match (match.id)}<div class="match">
+      <Button
+        type="button"
+        disabled={dependencies.length >= 32}
+        onclick={() => addMatch(match)}
+        >Add {match.workspaceSlug}/{match.slug} {match.semanticVersion}</Button
+      ><KindBadge kind={match.kind ?? "skill"} />
+    </div>{/each}
   {#each dependencies as dependency, index (index)}
     <fieldset>
       <legend>Dependency {index + 1}</legend>
@@ -216,6 +225,13 @@
   section {
     display: grid;
     gap: var(--sp-space-4);
+  }
+  /* The result keeps its full-width button, with its kind beside it. */
+  .match {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: var(--sp-space-2);
   }
   fieldset {
     border: 1px solid var(--sp-color-border);

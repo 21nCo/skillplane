@@ -7,6 +7,7 @@
   import { apiRequest } from "$lib/api/client.js";
   import { groupRequest, type Group, type Member } from "$lib/groups/api.js";
   import { useWorkspaceStore } from "$lib/workspaces/store.svelte.js";
+  import KindBadge from "$lib/skills/KindBadge.svelte";
   import type { Skill } from "$lib/skills/types.js";
   const store = useWorkspaceStore();
   const workspace = $derived(
@@ -178,7 +179,7 @@
     if (!workspace || !selected) return;
     const t = token(workspace.id);
     const r = await apiRequest<{ skills: Skill[] }>(
-      `/api/v1/workspaces/${encodeURIComponent(t.workspaceId)}/skills?${new SvelteURLSearchParams({ q: query, limit: "100" })}`,
+      `/api/v1/workspaces/${encodeURIComponent(t.workspaceId)}/skills?${new SvelteURLSearchParams({ q: query, kind: "skill", limit: "100" })}`,
     );
     if (!inDetail(t)) return;
     available = r.skills;
@@ -361,7 +362,7 @@
                 workspaceSlug: workspace?.slug ?? "",
                 skillSlug: skill.slug,
               })}>{skill.name}{skill.archivedAt ? " (archived)" : ""}</a
-            >{#if canManage && !selected.archivedAt}<Button
+            ><KindBadge kind="skill" />{#if canManage && !selected.archivedAt}<Button
                 variant="ghost"
                 disabled={busy}
                 onclick={() => void run(() => assign("skills", skill.id, false))}

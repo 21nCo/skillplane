@@ -1,6 +1,7 @@
 <script lang="ts">
   import { Button } from "@skillplane/ui";
   import { apiRequest, jsonBody, SkillplaneApiError } from "$lib/api/client.js";
+  import KindBadge from "./KindBadge.svelte";
   import type { SkillVersion } from "./types.js";
   interface Plan {
     closureDigest: string;
@@ -218,7 +219,9 @@
                   ? "This skill"
                   : plan.dag.nodes.find((n) => n.versionId === edge.parent)?.skill}</td
               ><td>{edge.alias}</td><td
-                >{child?.workspace}/{child?.skill} {child?.semanticVersion}</td
+                >{child?.workspace}/{child?.skill}
+                {child?.semanticVersion}
+                <KindBadge kind="skill" /></td
               ><td>{edge.scope}</td><td>{edge.mode}</td></tr
             >
           {/each}</tbody

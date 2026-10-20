@@ -98,7 +98,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-  await harness.close();
+  await harness?.close();
 });
 
 test("@analytics-audit matches responsive analytics and audit goldens", async ({

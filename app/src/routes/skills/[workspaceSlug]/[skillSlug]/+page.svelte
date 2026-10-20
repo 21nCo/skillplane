@@ -3,6 +3,7 @@
   import { page } from "$app/state";
   import { Badge, BrandMark, Button, SafeMarkdown } from "@skillplane/ui";
   import CompositionPanel from "$lib/skills/CompositionPanel.svelte";
+  import KindBadge from "$lib/skills/KindBadge.svelte";
   import SkillState from "$lib/skills/SkillState.svelte";
   import { getPublicSkill, getPublicSkillFile } from "$lib/skills/api.js";
   import type { PublicSkill } from "$lib/skills/types.js";
@@ -109,6 +110,7 @@
           <h1>{resource.skill.name}</h1>
           <p>{resource.skill.description || "No description provided."}</p>
           <div class="badges">
+            <KindBadge kind={resource.skill.kind} />
             <Badge tone="success">Public</Badge>
             <Badge tone="info">v{resource.version.semanticVersion}</Badge>
             <Badge tone="neutral">

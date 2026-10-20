@@ -8,6 +8,7 @@ import type {
   Skill,
   SkillArchiveFilter,
   SkillBundleManifest,
+  SkillKind,
   SkillPage,
   SkillVersion,
   SkillVersionStatus,
@@ -60,6 +61,14 @@ function arrayValue(row: DatafnRecord, field: string): readonly unknown[] {
   return Array.isArray(value) ? value : [];
 }
 
+function skillKind(row: DatafnRecord): SkillKind {
+  const kind = requiredString(row, "kind");
+  if (kind !== "skill" && kind !== "instructions") {
+    throw new Error("DataFn returned an invalid kind field");
+  }
+  return kind;
+}
+
 function skillFromDatafn(row: DatafnRecord, workspaceId: string): Skill {
   const currentVersion = row.currentVersion;
   const currentSemanticVersion =
@@ -78,6 +87,7 @@ function skillFromDatafn(row: DatafnRecord, workspaceId: string): Skill {
       (tag): tag is string => typeof tag === "string",
     ),
     visibility: requiredString(row, "visibility") as SkillVisibility,
+    kind: skillKind(row),
     currentPublishedVersionId: optionalString(row, "currentPublishedVersionId"),
     currentSemanticVersion,
     archivedAt: optionalDateString(row, "archivedAt"),
@@ -183,6 +193,10 @@ function datafnBoundary(value: unknown): {
 } {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw cursorError();
   const record = value as Record<string, unknown>;
+  // DataFn returns the next page's boundary as the last row's sort keys.
+  if (record.after === undefined && record.before === undefined) {
+    return { after: record };
+  }
   const key = record.after !== undefined ? "after" : "before";
   const boundary = record[key];
   if (
@@ -205,6 +219,8 @@ function notFound(): SkillplaneApiError {
 
 export async function listSkillsWithDatafn(options: {
   readonly workspaceId: string;
+  /** Skill surfaces list skills only; instructions have their own listing. */
+  readonly kind: SkillKind;
   readonly query?: string;
   readonly visibility?: readonly SkillVisibility[];
   readonly archive?: SkillArchiveFilter;
@@ -218,6 +234,7 @@ export async function listSkillsWithDatafn(options: {
   );
   const scope = JSON.stringify({
     workspaceId: options.workspaceId,
+    kind: options.kind,
     query,
     archive,
     visibility,
@@ -229,6 +246,7 @@ export async function listSkillsWithDatafn(options: {
     if (boundary !== undefined && typeof boundary !== "string") throw cursorError();
     const params = new URLSearchParams({
       q: query,
+      kind: options.kind,
       state: archive,
       limit: String(options.limit ?? 20),
     });
@@ -242,7 +260,10 @@ export async function listSkillsWithDatafn(options: {
   }
   const cursor = boundary === undefined ? undefined : datafnBoundary(boundary);
   return withWorkspaceDatafnReadClient(options.workspaceId, async (client) => {
-    const filters: Record<string, unknown> = archiveFilters(archive);
+    const filters: Record<string, unknown> = {
+      ...archiveFilters(archive),
+      kind: options.kind,
+    };
     if (visibility.length) filters.visibility = { in: visibility };
     const result = await client.skills.query({
       select: ["*", "currentVersion.*"],

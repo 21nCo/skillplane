@@ -4,7 +4,13 @@ export type MarkdownEditorLoadState =
   "loading" | "ready" | "source-fallback" | "failed";
 
 export type MarkdownEditorSurface =
-  "skill-create" | "skill-amend" | "context-create" | "knowledge-revise" | "note";
+  | "skill-create"
+  | "skill-amend"
+  | "instructions-create"
+  | "instructions-revise"
+  | "context-create"
+  | "knowledge-revise"
+  | "note";
 
 export interface MarkdownDiagnostic {
   readonly code: string;

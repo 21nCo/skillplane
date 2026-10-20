@@ -12,6 +12,10 @@ const approvedEditorLoader = "app/src/lib/markdown/load-editor.ts";
 const requiredSurfaces = {
   "app/src/routes/(app)/[workspaceSlug]/skills/new/+page.svelte": "skill-create",
   "app/src/lib/skills/SkillEditor.svelte": "skill-amend",
+  "app/src/routes/(app)/[workspaceSlug]/instructions/-/new/+page.svelte":
+    "instructions-create",
+  "app/src/routes/(app)/[workspaceSlug]/instructions/[instructionsSlug]/edit/+page.svelte":
+    "instructions-revise",
   "app/src/lib/contexts/ContextEditor.svelte": "context-create",
   "app/src/lib/contexts/KnowledgeEditor.svelte": "knowledge-revise",
   "app/src/lib/contexts/NoteEditor.svelte": "note",

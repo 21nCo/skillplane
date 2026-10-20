@@ -20,7 +20,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-  await harness.close();
+  await harness?.close();
 });
 
 test.beforeEach(async ({ context }) => {

@@ -6,6 +6,7 @@
   import { resolve } from "$app/paths";
   import { page } from "$app/state";
   import { Badge, Button, Input, Select } from "@skillplane/ui";
+  import KindBadge from "$lib/skills/KindBadge.svelte";
   import SkillState from "$lib/skills/SkillState.svelte";
   import { listSkills } from "$lib/skills/api.js";
   import type {
@@ -389,6 +390,7 @@
             <span class="copy">
               <span class="title-row">
                 <strong>{skill.name}</strong>
+                <KindBadge kind={skill.kind} />
                 <Badge tone={visibilityTone(skill.visibility)}>
                   {skill.visibility}
                 </Badge>
