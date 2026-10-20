@@ -5,6 +5,7 @@ import { canonicalizeBundle, canonicalizeBundleFiles } from "./canonicalize.js";
 import { bundleJsonSchema, type CanonicalBundle } from "./manifest.js";
 import { sha256Hex } from "./validate.js";
 import {
+  gitControlPathProblem,
   serializeWorkspaceRepository,
   unrepresentableTreeProblem,
   WorkspaceRepositoryError,
@@ -47,6 +48,7 @@ async function fixtures(mtime = new Date("2024-03-05T12:34:00Z"), reverse = fals
   const skills: WorkspaceRepositorySkill[] = [
     {
       id: "skill:review",
+      slug: "pr-review",
       visibility: "public",
       semanticVersion: "2.1.0",
       digest: review.digest,
@@ -54,6 +56,7 @@ async function fixtures(mtime = new Date("2024-03-05T12:34:00Z"), reverse = fals
     },
     {
       id: "skill:minimal",
+      slug: "minimal-skill",
       visibility: "private",
       semanticVersion: "1.0.0",
       digest: minimal.digest,
@@ -61,6 +64,7 @@ async function fixtures(mtime = new Date("2024-03-05T12:34:00Z"), reverse = fals
     },
     {
       id: "skill:deploy",
+      slug: "deploy",
       visibility: "workspace",
       semanticVersion: "1.0.0-rc.1",
       digest: deploy.digest,
@@ -93,6 +97,7 @@ async function publishedWith(
   });
   return {
     id: `skill:${slug}`,
+    slug,
     visibility: "private",
     semanticVersion: "1.0.0",
     digest: bundle.digest,
@@ -333,6 +338,38 @@ describe("workspace repository serializer", () => {
       await expect(serializeWorkspaceRepository(input), label).rejects.toBeInstanceOf(
         WorkspaceRepositoryError,
       );
+    // The importer compares a bound skill's slug with the bundle's, so a
+    // published bundle that declares another slug is refused, not rewritten.
+    await expect(
+      serializeWorkspaceRepository([{ ...review, slug: "renamed" }]),
+    ).rejects.toThrow(
+      'Skill skill:review cannot be exported because its published bundle declares the slug pr-review, not the workspace slug "renamed"',
+    );
+  });
+
+  it("refuses Git control files and their aliases at any depth", async () => {
+    for (const path of [
+      "assets/.git/HEAD",
+      "assets/.GIT/config",
+      "assets/git~1/HEAD",
+      "references/.git./HEAD",
+      "references/.git::$INDEX_ALLOCATION/HEAD",
+      "templates/.g\u200cit/HEAD",
+      "assets/.gitignore",
+      "references/nested/.gitattributes",
+      "scripts/.GitModules",
+      "assets/gitmod~1",
+    ]) {
+      const skill = await publishedWith("controlled", { [path]: "*.txt text\n" });
+      const rejection = serializeWorkspaceRepository([skill]);
+      await expect(rejection, path).rejects.toBeInstanceOf(WorkspaceRepositoryError);
+      await expect(rejection, path).rejects.toThrow(
+        `Skill controlled (skill:controlled) cannot be exported because ${path} is a Git control path`,
+      );
+    }
+    expect(gitControlPathProblem("assets/.github/workflow.yml")).toBeNull();
+    expect(gitControlPathProblem("references/gitignore.md")).toBeNull();
+    expect(gitControlPathProblem("assets/.gitkeep")).toBeNull();
   });
 
   it("refuses skills that the Git source importer would reject or that cannot be written as a tree", async () => {

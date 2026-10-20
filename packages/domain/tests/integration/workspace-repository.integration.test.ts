@@ -6,7 +6,10 @@ import { Pool } from "pg";
 import { migrateDatabase } from "../../../db/src/migrate.js";
 import { resolveTestDatabaseUrl } from "../../../db/src/database-url.js";
 import { seedTenantFixture } from "../../../testing/src/fixtures.js";
-import { directoryGitHubFetcher } from "../../../testing/src/git-directory.js";
+import {
+  commitDirectory,
+  gitRepositoryGitHubFetcher,
+} from "../../../testing/src/git-directory.js";
 import {
   createInstructionsBundleFixture,
   createSkillBundleFixture,
@@ -44,11 +47,12 @@ describe("workspace repository export round trip", () => {
   const storage = new R2BundleRepository(new TestObjectStorage()),
     directory = mkdtempSync(join(tmpdir(), "skillplane-workspace-repository-")),
     m = () => ({ principal: owner, requestId: crypto.randomUUID(), fencingEpoch: 1 });
-  // Each preview reads the exported directory through the production
-  // public GitHub provider, so SKI-12 discovery and validation apply.
+  // Each preview reads the Git commit of the exported directory through the
+  // production public GitHub provider, so SKI-12 discovery and validation
+  // apply to exactly what Git stored.
   const provider = {
     snapshot: (config: Parameters<PublicGitHubSourceProvider["snapshot"]>[0]) =>
-      new PublicGitHubSourceProvider(directoryGitHubFetcher(directory)).snapshot(
+      new PublicGitHubSourceProvider(gitRepositoryGitHubFetcher(directory)).snapshot(
         config,
       ),
   };
@@ -210,12 +214,13 @@ describe("workspace repository export round trip", () => {
     // Workspace state -> serializer input, by the documented selection rule.
     const rows = await pool.query<{
       id: string;
+      slug: string;
       visibility: WorkspaceRepositoryVisibility;
       semantic_version: string;
       content_digest: `sha256:${string}`;
       version_id: string;
     }>(
-      `SELECT s.id, s.visibility, v.semantic_version, v.content_digest, v.id AS version_id
+      `SELECT s.id, s.slug, s.visibility, v.semantic_version, v.content_digest, v.id AS version_id
          FROM skills s
          JOIN skill_versions v ON v.workspace_id=s.workspace_id AND v.id=s.current_published_version_id
         WHERE s.workspace_id=$1 AND s.kind='skill' AND s.archived_at IS NULL AND v.status='published'`,
@@ -225,6 +230,7 @@ describe("workspace repository export round trip", () => {
     for (const row of rows.rows)
       input.push({
         id: row.id,
+        slug: row.slug,
         visibility: row.visibility,
         semanticVersion: row.semantic_version,
         digest: row.content_digest,
@@ -243,6 +249,7 @@ describe("workspace repository export round trip", () => {
       mkdirSync(dirname(join(directory, path)), { recursive: true });
       writeFileSync(join(directory, path), bytes);
     }
+    commitDirectory(directory);
     const manifest = JSON.parse(
       new TextDecoder().decode(tree.get(WORKSPACE_MANIFEST_PATH)),
     ) as WorkspaceManifest;
@@ -391,9 +398,10 @@ describe("workspace repository export round trip", () => {
           mkdirSync(dirname(join(raw, "skills", slug, path)), { recursive: true });
           writeFileSync(join(raw, "skills", slug, path), bytes);
         }
+        commitDirectory(raw);
         const rawSources = new GitSourceService(pool, skills, versions, {
           snapshot: (config) =>
-            new PublicGitHubSourceProvider(directoryGitHubFetcher(raw)).snapshot(
+            new PublicGitHubSourceProvider(gitRepositoryGitHubFetcher(raw)).snapshot(
               config,
             ),
         });
@@ -415,6 +423,7 @@ describe("workspace repository export round trip", () => {
       const rejection = serializeWorkspaceRepository([
         {
           id: created.skill.id,
+          slug,
           visibility: "workspace",
           semanticVersion: "1.0.0",
           digest: created.version.digest,
@@ -425,5 +434,87 @@ describe("workspace repository export round trip", () => {
       await expect(rejection).rejects.toThrow(`Skill ${slug} (${created.skill.id})`);
       await expect(rejection).rejects.toThrow(rule);
     }
+  });
+
+  it("refuses a published bundle whose slug differs from the workspace slug", async () => {
+    // Candidate creation does not compare the bundle slug with the skill's.
+    const created = await create(
+      "renamed",
+      "workspace",
+      await archive("renamed", "# A\n"),
+    );
+    const candidate = await versions.createCandidate({
+      ...m(),
+      skillId: created.skill.id,
+      baseVersionId: created.version.id,
+      proposedBump: "minor",
+      changeSummary: "Bundle declares another slug",
+      archiveBytes: await archive("renamed-bundle", "# B\n"),
+      idempotencyKey: "candidate-renamed",
+    });
+    await publication.publish({
+      ...m(),
+      skillId: created.skill.id,
+      candidateVersionId: candidate.id,
+      idempotencyKey: "publish-renamed",
+    });
+    const bundle = await canonicalizeBundle(
+      (
+        await versions.retrieveBundle({
+          skillId: created.skill.id,
+          versionId: candidate.id,
+          principal: owner,
+        })
+      ).bytes,
+    );
+    expect(bundle.skill.slug).toBe("renamed-bundle");
+    // Written under the workspace slug anyway, the bound skill previews as a
+    // conflict rather than unchanged.
+    const raw = mkdtempSync(join(tmpdir(), "skillplane-workspace-renamed-"));
+    try {
+      for (const [path, bytes] of bundle.files) {
+        mkdirSync(dirname(join(raw, "skills", "renamed", path)), { recursive: true });
+        writeFileSync(join(raw, "skills", "renamed", path), bytes);
+      }
+      commitDirectory(raw);
+      const rawSources = new GitSourceService(pool, skills, versions, {
+        snapshot: (config) =>
+          new PublicGitHubSourceProvider(gitRepositoryGitHubFetcher(raw)).snapshot(
+            config,
+          ),
+      });
+      const source = await rawSources.create({
+        ...m(),
+        config: {
+          repositoryUrl: "https://github.com/acme/renamed",
+          path: "skills/renamed",
+        },
+        idempotencyKey: "source-renamed",
+      });
+      await rawSources.bind({
+        ...m(),
+        sourceId: source.id,
+        path: "skills/renamed",
+        skillId: created.skill.id,
+      });
+      const preview = await rawSources.preview({ ...m(), sourceId: source.id });
+      expect(preview.plan.map(({ path, action }) => ({ path, action }))).toEqual([
+        { path: "skills/renamed", action: "conflict" },
+      ]);
+    } finally {
+      rmSync(raw, { recursive: true, force: true });
+    }
+    await expect(
+      serializeWorkspaceRepository([
+        {
+          id: created.skill.id,
+          slug: "renamed",
+          visibility: "workspace",
+          semanticVersion: "1.1.0",
+          digest: candidate.digest,
+          bundle,
+        },
+      ]),
+    ).rejects.toThrow("declares the slug renamed-bundle");
   });
 });

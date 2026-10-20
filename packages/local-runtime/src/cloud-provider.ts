@@ -217,7 +217,14 @@ export class CloudWorkspaceProvider implements WorkspaceProvider {
   async publishedSkills(): Promise<PublishedSkill[]> {
     return (await this.listed("skill")).flatMap((s) =>
       s.archivedAt === null && s.currentVersion
-        ? [{ id: s.id, versionId: s.currentVersion.id, visibility: s.visibility }]
+        ? [
+            {
+              id: s.id,
+              slug: s.slug,
+              versionId: s.currentVersion.id,
+              visibility: s.visibility,
+            },
+          ]
         : [],
     );
   }

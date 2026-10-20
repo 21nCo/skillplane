@@ -120,6 +120,7 @@ export interface SkillInfo {
 /** A non-archived skill's current published version, as repository export selects it. */
 export interface PublishedSkill {
   id: string;
+  slug: string;
   versionId: string;
   visibility: "private" | "workspace" | "public";
 }

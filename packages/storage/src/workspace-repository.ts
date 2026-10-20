@@ -15,7 +15,8 @@ export const WORKSPACE_SKILLS_DIRECTORY = "skills";
 /**
  * Bundle files are exported byte-for-byte, so Git must never convert their
  * line endings on checkout or commit; otherwise a directory could stop
- * canonicalizing to its published digest.
+ * canonicalizing to its published digest. Skill directories may not hold
+ * their own Git control files, so nothing overrides this one.
  */
 export const WORKSPACE_GITATTRIBUTES_PATH = ".gitattributes";
 const GITATTRIBUTES = "* -text\n";
@@ -25,6 +26,8 @@ export type WorkspaceRepositoryVisibility = "private" | "workspace" | "public";
 export interface WorkspaceRepositorySkill {
   /** Stable workspace skill ID. */
   readonly id: string;
+  /** The workspace's slug for the skill, which names its directory. */
+  readonly slug: string;
   readonly visibility: WorkspaceRepositoryVisibility;
   /** Semantic version of the skill's current published version. */
   readonly semanticVersion: string;
@@ -107,6 +110,38 @@ export function unrepresentableTreeProblem(paths: Iterable<string>): string | nu
   return null;
 }
 
+// Git control files and their NTFS 8.3 short names, as Git's own path checks
+// list them. Git would ignore, rewrite or refuse such a file instead of
+// committing its bytes.
+const GIT_CONTROL_NAMES = new Set([
+  ".git",
+  ".gitattributes",
+  ".gitignore",
+  ".gitmodules",
+]);
+const GIT_SHORT_NAME = /^(?:git|gitmod|gitatt|gitign|gi7eba|gi7d29|gi250a)~[0-9]+$/u;
+// Code points HFS+ ignores when comparing names, so ".g\u200cit" is ".git" there.
+const HFS_IGNORABLE = /[\u200c-\u200f\u202a-\u202e\u206a-\u206f\ufeff]/gu;
+
+/**
+ * Why Git would not commit a skill file path byte for byte, or null. A path
+ * segment that is, or on NTFS or HFS+ aliases, `.git`, `.gitattributes`,
+ * `.gitignore` or `.gitmodules` is never tracked as a plain file, or changes
+ * how Git stores the files around it.
+ */
+export function gitControlPathProblem(path: string): string | null {
+  for (const segment of path.split("/")) {
+    const name = segment
+      .replace(HFS_IGNORABLE, "")
+      .toLowerCase()
+      .replace(/:.*$/u, "")
+      .replace(/[. ]+$/u, "");
+    if (GIT_CONTROL_NAMES.has(name) || GIT_SHORT_NAME.test(name))
+      return `${path} is a Git control path`;
+  }
+  return null;
+}
+
 /** Two-space indented JSON with sorted keys, LF line endings and a final newline. */
 export function workspaceManifestJson(manifest: WorkspaceManifest): string {
   return `${JSON.stringify(sortKeys(manifest), null, 2)}\n`;
@@ -159,11 +194,20 @@ export async function serializeWorkspaceRepository(
       throw new WorkspaceRepositoryError(
         `Skill ${skill.id} bundle does not match its published digest`,
       );
-    const slug = bundle.skill.slug;
-    // Never write a directory that cannot exist on disk or that the Git
-    // source importer would reject, since it could not read back as a no-op.
+    const slug = skill.slug;
+    // The importer matches a bound skill by the bundle's slug, so a bundle
+    // naming another slug would read back as a conflict. Rewriting skill.json
+    // would change the digest instead.
+    if (bundle.skill.slug !== slug)
+      throw new WorkspaceRepositoryError(
+        `Skill ${skill.id} cannot be exported because its published bundle declares the slug ${bundle.skill.slug}, not the workspace slug ${JSON.stringify(slug.slice(0, 100))}`,
+      );
+    // Never write a directory that cannot exist on disk, that Git would not
+    // commit byte for byte, or that the Git source importer would reject,
+    // since it could not read back as a no-op.
     const problem =
       unrepresentableTreeProblem(bundle.files.keys()) ??
+      [...bundle.files.keys()].map(gitControlPathProblem).find(Boolean) ??
       (await gitImportSkillProblem(bundle.files));
     if (problem)
       throw new WorkspaceRepositoryError(

@@ -88,11 +88,12 @@ export class LocalWorkspaceProvider implements WorkspaceProvider {
   async publishedSkills(): Promise<PublishedSkill[]> {
     return this.store.db
       .prepare(
-        "SELECT s.id,s.current FROM skill s JOIN version v ON v.id=s.current AND v.skill=s.id WHERE s.workspace=? AND v.state='published' ORDER BY s.slug,s.id",
+        "SELECT s.id,s.slug,s.current FROM skill s JOIN version v ON v.id=s.current AND v.skill=s.id WHERE s.workspace=? AND v.state='published' ORDER BY s.slug,s.id",
       )
       .all(this.workspace.id)
       .map((row) => ({
         id: String(row.id),
+        slug: String(row.slug),
         versionId: String(row.current),
         visibility: "private" as const,
       }));

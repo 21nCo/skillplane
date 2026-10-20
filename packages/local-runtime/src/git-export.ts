@@ -1,4 +1,5 @@
 import {
+  chmodSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -10,6 +11,7 @@ import {
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import {
+  gitControlPathProblem,
   serializeWorkspaceRepository,
   unrepresentableTreeProblem,
   WORKSPACE_GITATTRIBUTES_PATH,
@@ -26,7 +28,7 @@ import {
 
 const listingKey = (skills: readonly PublishedSkill[]) =>
   skills
-    .map((s) => JSON.stringify([s.id, s.versionId, s.visibility]))
+    .map((s) => JSON.stringify([s.id, s.slug, s.versionId, s.visibility]))
     .sort()
     .join("\n");
 
@@ -42,6 +44,7 @@ export async function workspaceRepository(
     // changed in between fails the export instead of mixing two states.
     if (
       snapshot.skill.id !== published.id ||
+      snapshot.skill.slug !== published.slug ||
       snapshot.skill.kind !== "skill" ||
       snapshot.version.id !== published.versionId ||
       snapshot.version.state !== "published" ||
@@ -53,6 +56,7 @@ export async function workspaceRepository(
       );
     skills.push({
       id: published.id,
+      slug: published.slug,
       visibility: published.visibility,
       semanticVersion: snapshot.version.semanticVersion,
       digest: snapshot.version.digest,
@@ -109,7 +113,12 @@ function validateTree(tree: ReadonlyMap<string, Uint8Array>) {
         `Export path ${JSON.stringify(path.slice(0, 200))} is outside the repository layout`,
       );
   }
-  const problem = unrepresentableTreeProblem(tree.keys());
+  const problem =
+    unrepresentableTreeProblem(tree.keys()) ??
+    [...tree.keys()]
+      .filter((path) => path.startsWith(`${WORKSPACE_SKILLS_DIRECTORY}/`))
+      .map(gitControlPathProblem)
+      .find(Boolean);
   if (problem)
     throw new RuntimeError(
       "EXPORT_INVALID",
@@ -117,11 +126,34 @@ function validateTree(tree: ReadonlyMap<string, Uint8Array>) {
     );
 }
 
+const errorCode = (error: unknown) =>
+  (error as NodeJS.ErrnoException).code ?? "unknown error";
+
+/**
+ * Removes a tree, making its directories writable first when needed, since the
+ * replaced entries may include read-only directories.
+ */
+function removeTree(path: string) {
+  try {
+    rmSync(path, { recursive: true, force: true });
+  } catch {
+    const unlock = (directory: string) => {
+      chmodSync(directory, 0o700);
+      for (const entry of readdirSync(directory, { withFileTypes: true }))
+        if (entry.isDirectory()) unlock(join(directory, entry.name));
+    };
+    unlock(path);
+    rmSync(path, { recursive: true, force: true });
+  }
+}
+
 /**
  * Writes a serialized repository tree into a directory. A directory with any
  * entry other than `.git` is refused unless `force` is set. The tree is
- * validated and fully written to a staging directory inside the target before
- * any existing entry is replaced, so a failed export leaves the target as it was.
+ * validated and fully written to a staging directory inside the target first.
+ * The existing managed entries are then moved aside into it and the new ones
+ * moved in; on any failure the moved entries are put back, so a failed export
+ * leaves the target as it was.
  */
 export function writeWorkspaceRepository(
   directory: string,
@@ -130,6 +162,23 @@ export function writeWorkspaceRepository(
 ): string {
   validateTree(tree);
   const root = resolve(directory);
+  try {
+    writeTree(root, tree, force);
+  } catch (error) {
+    if (error instanceof RuntimeError) throw error;
+    throw new RuntimeError(
+      "EXPORT_WRITE_FAILED",
+      `Export could not be written: ${errorCode(error)}`,
+    );
+  }
+  return root;
+}
+
+function writeTree(
+  root: string,
+  tree: ReadonlyMap<string, Uint8Array>,
+  force: boolean,
+) {
   const existing = lstatIfPresent(root);
   // Only the target itself must be a real directory; its ancestors may be
   // symbolic links, such as /tmp on macOS.
@@ -144,21 +193,58 @@ export function writeWorkspaceRepository(
       "Export directory is not empty; pass --force to replace its skills",
     );
   if (!existing) mkdirSync(root, { recursive: true, mode: 0o755 });
-  const staging = mkdtempSync(join(root, STAGING_PREFIX));
+  const work = mkdtempSync(join(root, STAGING_PREFIX));
+  const staged = join(work, "new"),
+    previous = join(work, "previous");
+  const moved: string[] = [],
+    installed: string[] = [];
   try {
     for (const [path, bytes] of tree) {
-      const target = join(staging, ...path.split("/"));
+      const target = join(staged, ...path.split("/"));
       mkdirSync(dirname(target), { recursive: true, mode: 0o755 });
       // Exclusive creation never follows or replaces an existing entry.
       writeFileSync(target, bytes, { flag: "wx", mode: 0o644 });
     }
-    for (const name of MANAGED) {
-      rmSync(join(root, name), { recursive: true, force: true });
-      if (lstatIfPresent(join(staging, name)))
-        renameSync(join(staging, name), join(root, name));
+    mkdirSync(previous);
+    for (const name of MANAGED)
+      if (lstatIfPresent(join(root, name))) {
+        renameSync(join(root, name), join(previous, name));
+        moved.push(name);
+      }
+    for (const name of MANAGED)
+      if (lstatIfPresent(join(staged, name))) {
+        renameSync(join(staged, name), join(root, name));
+        installed.push(name);
+      }
+  } catch (error) {
+    try {
+      for (const name of installed.reverse())
+        renameSync(join(root, name), join(staged, name));
+      for (const name of moved.reverse())
+        renameSync(join(previous, name), join(root, name));
+    } catch {
+      // Keep the moved entries rather than delete the only copy.
+      throw new RuntimeError(
+        "EXPORT_RESTORE_FAILED",
+        `Export failed (${errorCode(error)}) and the previous entries could not be restored; they are in ${previous}`,
+      );
     }
-  } finally {
-    rmSync(staging, { recursive: true, force: true });
+    try {
+      removeTree(work);
+    } catch {
+      throw new RuntimeError(
+        "EXPORT_WRITE_FAILED",
+        `Export could not be written (${errorCode(error)}); delete ${work}`,
+      );
+    }
+    throw error;
   }
-  return root;
+  try {
+    removeTree(work);
+  } catch (error) {
+    throw new RuntimeError(
+      "EXPORT_CLEANUP_FAILED",
+      `Export was written, but ${work} could not be removed (${errorCode(error)}); delete it before committing`,
+    );
+  }
 }

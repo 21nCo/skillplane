@@ -112,6 +112,7 @@ describe("MCP-only cloud provider with real domain services", () => {
     // Repository export selects the newly published head from the server listing.
     expect(await provider.publishedSkills()).toContainEqual({
       id: initial.skillId,
+      slug: "client-contract",
       versionId: amended.versionId,
       visibility: "private",
     });

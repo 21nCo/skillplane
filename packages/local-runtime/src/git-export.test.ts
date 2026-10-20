@@ -17,7 +17,10 @@ import {
   gitSourceConfig,
   PublicGitHubSourceProvider,
 } from "../../domain/src/git-source-provider.js";
-import { directoryGitHubFetcher } from "../../testing/src/git-directory.js";
+import {
+  commitDirectory,
+  gitRepositoryGitHubFetcher,
+} from "../../testing/src/git-directory.js";
 import {
   canonicalizeBundleFiles,
   serializeWorkspaceRepository,
@@ -63,7 +66,7 @@ const review: CreateRequest = {
   tags: ["quality"],
   visibility: "private",
   instructions: "Read the changes and explain problems.",
-  assets: [{ path: "references/checklist.md", content: "- Tests\n" }],
+  assets: [{ path: "references/checklist.md", content: "- Tests\r\n- Docs\r\n" }],
   idempotencyKey: "create-review",
 };
 
@@ -156,8 +159,10 @@ async function cli(...args: string[]) {
   }
 }
 
+/** Commits a directory with Git and imports the commit as a Git source would. */
 function snapshot(directory: string) {
-  return new PublicGitHubSourceProvider(directoryGitHubFetcher(directory)).snapshot(
+  commitDirectory(directory);
+  return new PublicGitHubSourceProvider(gitRepositoryGitHubFetcher(directory)).snapshot(
     gitSourceConfig({ repositoryUrl: "https://github.com/acme/skills" }),
   );
 }
@@ -184,6 +189,7 @@ async function publishedWith(
   });
   return {
     id: `skill:${slug}`,
+    slug,
     visibility: "private",
     semanticVersion: "1.0.0",
     digest: bundle.digest,
@@ -258,12 +264,15 @@ describe("skillplane export --git", () => {
       "# Review\n\nRun the checklist first.\n",
     );
 
-    // SKI-12 discovery and canonicalization reproduce every published digest.
-    const snapshot = await new PublicGitHubSourceProvider(
-      directoryGitHubFetcher(out),
-    ).snapshot(gitSourceConfig({ repositoryUrl: "https://github.com/acme/skills" }));
+    // CRLF bytes are exported as published, and the root .gitattributes
+    // keeps Git from converting them even under core.autocrlf=true.
     expect(
-      snapshot.skills.map((s) => ({
+      readFileSync(join(out, "skills/review/references/checklist.md"), "utf8"),
+    ).toBe("- Tests\r\n- Docs\r\n");
+    // After a Git commit, SKI-12 discovery and canonicalization reproduce
+    // every published digest.
+    expect(
+      (await snapshot(out)).skills.map((s) => ({
         path: s.path,
         error: s.error,
         digest: s.bundle?.digest,
@@ -370,7 +379,7 @@ describe("skillplane export --git", () => {
       [extend({ "skills/../escape": "x" }), "EXPORT_INVALID"],
       // Valid paths whose write fails part way through, after other files
       // were already staged.
-      [extend({ [`skills/zz/${"a".repeat(300)}`]: "x" }), "ENAMETOOLONG"],
+      [extend({ [`skills/zz/${"a".repeat(300)}`]: "x" }), "EXPORT_WRITE_FAILED"],
     ];
     for (const [input, code] of cases) {
       expect(() => writeWorkspaceRepository(out, input, true)).toThrow(
@@ -382,7 +391,7 @@ describe("skillplane export --git", () => {
     }
   });
 
-  it("refuses to export skills the Git source importer would reject", async () => {
+  it("refuses to export skills that would not read back unchanged through Git and the importer", async () => {
     // Built at run time so the fixture is not itself a credential-shaped literal.
     const accessKey = ["AKIA", "IOSFODNN7EXAMPLE"].join("");
     const assets = (count: number) =>
@@ -396,9 +405,22 @@ describe("skillplane export --git", () => {
       await publishedWith("nested", { "templates/SKILL.md": "# Template\n" }),
       await publishedWith("credential", { "references/env.md": `${accessKey}\n` }),
       await publishedWith("too-many-files", assets(196)),
+      // Git itself would drop or rewrite files of these skills when committed.
+      await publishedWith("ignored", {
+        "assets/.gitignore": "*.txt\n",
+        "assets/a.txt": "kept only on disk\n",
+      }),
+      await publishedWith("converted", {
+        "assets/.gitattributes": "* text\n",
+        "assets/crlf.txt": "one\r\ntwo\r\n",
+      }),
+      await publishedWith("nested-git", {
+        "assets/.git/HEAD": "ref: refs/heads/main\n",
+      }),
     ];
     for (const skill of rejected) {
-      // The importer itself marks the skill's directory invalid ...
+      // Committed with Git and imported, the directory is invalid or reads
+      // back to another digest ...
       const directory = root();
       for (const [path, bytes] of skill.bundle.files) {
         const target = join(directory, "skills", skill.bundle.skill.slug, path);
@@ -408,8 +430,8 @@ describe("skillplane export --git", () => {
       const read = (await snapshot(directory)).skills.find(
         (s) => s.path === `skills/${skill.bundle.skill.slug}`,
       );
-      expect(read?.bundle).toBeNull();
-      expect(read?.error).toEqual(expect.any(String));
+      expect(read).toBeDefined();
+      expect(read?.bundle?.digest).not.toBe(skill.digest);
       // ... so the serializer refuses to export it.
       await expect(serializeWorkspaceRepository([skill])).rejects.toBeInstanceOf(
         WorkspaceRepositoryError,
@@ -554,9 +576,9 @@ describe("skillplane export --git", () => {
       transport,
     );
     expect(await cloud.publishedSkills()).toEqual([
-      { id: "skill:private", versionId: "v:1", visibility: "private" },
-      { id: "skill:shared", versionId: "v:2", visibility: "workspace" },
-      { id: "skill:public", versionId: "v:3", visibility: "public" },
+      { id: "skill:private", slug: "private", versionId: "v:1", visibility: "private" },
+      { id: "skill:shared", slug: "shared", versionId: "v:2", visibility: "workspace" },
+      { id: "skill:public", slug: "public", versionId: "v:3", visibility: "public" },
     ]);
     // Only skills are listed; instructions documents need an explicit kind.
     expect(args[0]).not.toHaveProperty("kind");
