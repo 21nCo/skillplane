@@ -3,8 +3,8 @@ import { sha256Hex } from "./validate.js";
 
 /**
  * Limits of a Git source import. The source provider enforces them while it
- * reads a repository, and workspace repository export checks the per-skill
- * ones so it never writes a skill directory the importer would reject.
+ * reads a repository, and workspace repository export checks them so it never
+ * writes a tree the importer would reject.
  */
 export const GIT_IMPORT_LIMITS = {
   /** GitHub API requests per snapshot, including ref, commit and tree reads. */
@@ -13,6 +13,11 @@ export const GIT_IMPORT_LIMITS = {
   skillFiles: 197,
   /** Skill directories per source. */
   skills: 32,
+  /**
+   * Entries of the recursive repository tree, files and directories alike.
+   * The importer refuses a larger repository before choosing a source path.
+   */
+  treeEntries: 10000,
   blobBytes: 5 * 1024 * 1024,
   /** Expanded bytes of every imported file in a snapshot. */
   snapshotBytes: 20 * 1024 * 1024,

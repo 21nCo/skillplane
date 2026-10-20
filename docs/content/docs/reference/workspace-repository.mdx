@@ -97,6 +97,8 @@ The export fails with `EXPORT_INVALID`, naming the skill and the reason, and wri
 
 Publish a new version without the offending files, then export again.
 
+The export also fails with `EXPORT_INVALID`, stating the count, when the whole repository tree would have more than 10,000 Git entries, counting every file and directory. Git sources refuse such a repository before they choose a path, so neither a whole-repository nor a per-path source could read it. Archive skills or publish versions with fewer files to bring the tree under the limit.
+
 ## Reading the tree with Git sources
 
 A Git source that imports the repository discovers each `skills/<slug>/` directory:
@@ -104,7 +106,17 @@ A Git source that imports the repository discovers each `skills/<slug>/` directo
 - In a workspace that already has these skills but no bindings, every entry is a **conflict** with its matching slug. Skills are never attached silently.
 - After each path is bound to its skill with **Bind an existing workspace skill**, every entry is **unchanged**, and applying the preview creates no version.
 
-A Git source that imports the whole repository is limited to 32 skills, 20 MiB of files in total, and 200 GitHub requests, one per distinct file plus three. The preview of a larger export fails as a whole. Create a source for each skill path, such as `skills/review`, instead.
+A Git source that imports the whole repository is limited to 32 skills, 20 MiB of files in total, and 200 GitHub requests, one per distinct file plus three. The preview of a larger export fails as a whole. Create a source for each skill path, such as `skills/review`, instead; these limits then apply to each skill on its own.
+
+### Committing the export yourself
+
+Git applies your ignore rules when you stage the export, including `core.excludesFile` and `.git/info/exclude`, which the exported `.gitattributes` cannot override. A skill file that matches a pattern such as `*.log` or `build/` is left out of the commit, and that skill then previews as **changed**. Before committing, check that nothing under `skills/` is ignored:
+
+```sh
+git status --ignored --short skills/
+```
+
+Any line starting with `!!` names an ignored file. Add it with `git add --force`, or remove the rule that matches it.
 
 ## Writing into an existing directory
 

@@ -281,7 +281,7 @@ export class PublicGitHubSourceProvider implements GitSourceProvider {
     if (
       tree.truncated !== false ||
       !Array.isArray(tree.tree) ||
-      tree.tree.length > 10000
+      tree.tree.length > GIT_IMPORT_LIMITS.treeEntries
     )
       invalid(
         "Repository tree is incomplete or too large; import a smaller repository",

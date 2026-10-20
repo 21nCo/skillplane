@@ -435,6 +435,32 @@ describe("workspace repository serializer", () => {
     ).toBe(true);
   });
 
+  it("refuses a repository tree with more entries than the Git source importer reads", async () => {
+    // Repeated contents keep every skill within its own import limits. Each
+    // skill adds skills/<slug>, SKILL.md, skill.json, assets/ and its assets,
+    // beside the root .gitattributes, skillplane.workspace.json and skills/.
+    const repeated = (count: number) =>
+      Object.fromEntries(
+        Array.from({ length: count }, (_, index) => [
+          `assets/${String(index)}.txt`,
+          "same\n",
+        ]),
+      );
+    const large: WorkspaceRepositorySkill[] = [];
+    for (let index = 0; index < 10; index += 1)
+      large.push(await publishedWith(`large-${String(index)}`, repeated(900)));
+    const atLimit = [...large, await publishedWith("last", repeated(953))];
+    const tree = await serializeWorkspaceRepository(atLimit);
+    // 9977 files plus 23 directories: skills/, 11 skill directories and their assets/.
+    expect(tree.size).toBe(2 + 11 * 2 + 10 * 900 + 953);
+    const overLimit = [...large, await publishedWith("last", repeated(954))];
+    const rejection = serializeWorkspaceRepository(overLimit);
+    await expect(rejection).rejects.toBeInstanceOf(WorkspaceRepositoryError);
+    await expect(rejection).rejects.toThrow(
+      "The repository tree would have 10001 Git entries, more than the 10000",
+    );
+  }, 60_000);
+
   it("reports paths that cannot coexist in one directory tree", () => {
     expect(unrepresentableTreeProblem(["skills/a/SKILL.md", "skills/b/SKILL.md"])).toBe(
       null,

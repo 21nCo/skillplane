@@ -459,6 +459,36 @@ describe("skillplane export --git", () => {
     ]);
   }, 30_000);
 
+  it("exports repository trees up to the importer's entry limit and refuses larger ones", async () => {
+    // Repeated contents keep each skill within its own limits, so only the
+    // repository-wide tree entry count is at stake.
+    const repeated = (count: number) =>
+      Object.fromEntries(
+        Array.from({ length: count }, (_, index) => [
+          `assets/${String(index)}.txt`,
+          "same\n",
+        ]),
+      );
+    const large: WorkspaceRepositorySkill[] = [];
+    for (let index = 0; index < 10; index += 1)
+      large.push(await publishedWith(`large-${String(index)}`, repeated(900)));
+    const atLimit = [...large, await publishedWith("last", repeated(953))];
+    const out = join(root(), "repository");
+    writeWorkspaceRepository(out, await serializeWorkspaceRepository(atLimit), false);
+    const read = await snapshot(out);
+    expect(read.skills.map((s) => [s.path, s.error, s.bundle?.digest]).sort()).toEqual(
+      atLimit.map((s) => [`skills/${s.slug}`, null, s.digest]).sort(),
+    );
+    // One more file is a tree the importer refuses before choosing any path,
+    // so the serializer refuses it as well.
+    const overLimit = [...large, await publishedWith("last", repeated(954))];
+    writeFileSync(join(out, "skills", "last", "assets", "953.txt"), "same\n");
+    await expect(snapshot(out)).rejects.toThrow("too large");
+    await expect(serializeWorkspaceRepository(overLimit)).rejects.toThrow(
+      "10001 Git entries",
+    );
+  }, 60_000);
+
   it("validates arguments and writes nothing when a skill changes during export", async () => {
     const { base, state, project, provider } = await workspace();
     const run = (...args: string[]) =>

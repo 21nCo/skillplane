@@ -1,5 +1,6 @@
 import { canonicalizeBundleFiles } from "./canonicalize.js";
 import {
+  GIT_IMPORT_LIMITS,
   gitImportSkillProblem,
   gitSkillRoots,
   gitTreeEntries,
@@ -257,7 +258,14 @@ export async function serializeWorkspaceRepository(
   // The importer must discover each skill exactly once, at its own directory.
   // A file or directory named SKILL.md inside a skill would be discovered as a
   // nested root, which makes the whole skill directory invalid.
-  const roots = gitSkillRoots(gitTreeEntries(tree.keys()));
+  const gitEntries = gitTreeEntries(tree.keys());
+  // The importer refuses an oversized repository tree before it selects any
+  // path, so no source scope could read such an export back.
+  if (gitEntries.length > GIT_IMPORT_LIMITS.treeEntries)
+    throw new WorkspaceRepositoryError(
+      `The repository tree would have ${String(gitEntries.length)} Git entries, more than the ${String(GIT_IMPORT_LIMITS.treeEntries)} the Git source importer reads; archive or slim skills before exporting`,
+    );
+  const roots = gitSkillRoots(gitEntries);
   for (const { manifest } of entries) {
     const nested = nestedGitSkillRoot(manifest.path, roots);
     if (nested !== undefined || !roots.includes(manifest.path))
