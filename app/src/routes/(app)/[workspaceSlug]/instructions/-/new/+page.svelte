@@ -42,8 +42,16 @@
     error = null;
   }
 
+  // The slug follows the name until it is typed by hand; clearing it resumes that.
+  let slugEdited = false;
+
   function deriveSlug() {
-    slug = slugFromName(name);
+    if (!slugEdited) slug = slugFromName(name);
+    changed();
+  }
+
+  function editSlug() {
+    slugEdited = slug !== "";
     changed();
   }
 
@@ -140,7 +148,7 @@
               maxlength={120}
               pattern="[a-z0-9]+(?:-[a-z0-9]+)*"
               bind:value={slug}
-              oninput={changed}
+              oninput={editSlug}
             />
           </div>
         </div>

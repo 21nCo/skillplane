@@ -256,7 +256,11 @@ test("@instructions gives a document with the slug new its own route", async ({
 
   await page.goto(`${workspacePath}/instructions`);
   await page.getByRole("link", { name: "New instructions" }).click();
-  await page.getByLabel("Name").fill("New");
+  await page.getByLabel("Name").fill("Draft name");
+  await expect(page.getByLabel("Slug")).toHaveValue("draft-name");
+  // A slug typed by hand survives later name edits and is the one submitted.
+  await page.getByLabel("Slug").fill("new");
+  await page.getByLabel("Name").fill("Fresh start");
   await expect(page.getByLabel("Slug")).toHaveValue("new");
   await page
     .getByLabel("AGENTS.md", { exact: true })
@@ -264,7 +268,7 @@ test("@instructions gives a document with the slug new its own route", async ({
   await page.getByRole("button", { name: "Publish version 1.0.0" }).click();
 
   await expect(page).toHaveURL(/\/instructions\/new\?created=true$/u);
-  await expect(page.locator("header h1")).toHaveText("New");
+  await expect(page.locator("header h1")).toHaveText("Fresh start");
   await expect(page.getByText("Reachable at its own route.")).toBeVisible();
 
   // Reopening it from the inventory shows the document, not the creation form.

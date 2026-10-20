@@ -105,11 +105,33 @@ export async function startWorkspaceBrowserHarness(): Promise<WorkspaceBrowserHa
   const suffix = `workspace-browser-${crypto.randomUUID().replaceAll("-", "").slice(0, 12)}`;
   const invitedSuffix = `${suffix}-invited`;
   const diagnostics = new HarnessDiagnostics(suffix);
-  await diagnostics.phase("migrate", () => migrateDatabase(databaseUrl));
-  const [fixture, invitedFixture] = await diagnostics.phase("seed", async () => [
-    await seedTenantFixture(databaseUrl, suffix),
-    await seedTenantFixture(databaseUrl, invitedSuffix),
-  ]);
+  // Every startup phase, seeding included, fails through here: it releases what
+  // was started, purges both fixtures (an unseeded one removes nothing) and
+  // finishes the diagnostics record.
+  async function abortStartup(
+    error: unknown,
+    release: () => Promise<void> = () => Promise.resolve(),
+  ): Promise<never> {
+    await diagnostics.finish(error).catch(() => undefined);
+    await release().catch(() => undefined);
+    await purgeTenantFixture(databaseUrl, suffix).catch(() => undefined);
+    await purgeTenantFixture(databaseUrl, invitedSuffix).catch(() => undefined);
+    throw new Error(
+      `Workspace browser harness did not start. ${diagnostics.summary()}`,
+      { cause: error },
+    );
+  }
+  const [fixture, invitedFixture] = await (async () => {
+    await diagnostics.phase("migrate", () => migrateDatabase(databaseUrl));
+    return diagnostics.phase(
+      "seed",
+      async () =>
+        [
+          await seedTenantFixture(databaseUrl, suffix),
+          await seedTenantFixture(databaseUrl, invitedSuffix),
+        ] as const,
+    );
+  })().catch((error: unknown) => abortStartup(error));
   const email = `${suffix}@example.test`;
   const invitedEmail = `${invitedSuffix}@example.test`;
   const messages: unknown[] = [];
@@ -117,6 +139,7 @@ export async function startWorkspaceBrowserHarness(): Promise<WorkspaceBrowserHa
   const originalWorkingDirectory = process.cwd();
   process.chdir(appRoot);
   let vite: ViteDevServer;
+  let startedVite: ViteDevServer | undefined;
   try {
     vite = await diagnostics.phase("vite", () =>
       createViteServer({
@@ -127,6 +150,7 @@ export async function startWorkspaceBrowserHarness(): Promise<WorkspaceBrowserHa
         logLevel: "error",
       }),
     );
+    startedVite = vite;
     // On a cold cache Vite pre-bundles dependencies in the background once it
     // starts, compiling Svelte on this event loop for seconds at a time. A
     // database connection opened meanwhile can miss its connect timeout, so
@@ -139,6 +163,10 @@ export async function startWorkspaceBrowserHarness(): Promise<WorkspaceBrowserHa
           (dependency) => dependency.processing,
         ),
       );
+    });
+  } catch (error) {
+    return await abortStartup(error, async () => {
+      await startedVite?.close();
     });
   } finally {
     process.chdir(originalWorkingDirectory);
@@ -174,7 +202,9 @@ export async function startWorkspaceBrowserHarness(): Promise<WorkspaceBrowserHa
       outgoing.end("The workspace test application could not be served");
     });
   });
-  const port = await listen(server);
+  const port = await listen(server).catch((error: unknown) =>
+    abortStartup(error, () => vite.close()),
+  );
   const origin = `http://localhost:${port}`;
   const services = await (async () => {
     let initialized: Awaited<ReturnType<typeof buildApiServices>> | undefined;
@@ -220,18 +250,13 @@ export async function startWorkspaceBrowserHarness(): Promise<WorkspaceBrowserHa
       console.info(diagnostics.summary());
       return built;
     } catch (error) {
-      await diagnostics.finish(error).catch(() => undefined);
-      await closeHttpServer(server).catch(() => undefined);
-      await vite.close().catch(() => undefined);
-      await initialized?.datafn.close().catch(() => undefined);
-      await initialized?.email?.close().catch(() => undefined);
-      await initialized?.database.close().catch(() => undefined);
-      await purgeTenantFixture(databaseUrl, suffix).catch(() => undefined);
-      await purgeTenantFixture(databaseUrl, invitedSuffix).catch(() => undefined);
-      throw new Error(
-        `Workspace browser harness did not start. ${diagnostics.summary()}`,
-        { cause: error },
-      );
+      return await abortStartup(error, async () => {
+        await closeHttpServer(server).catch(() => undefined);
+        await vite.close().catch(() => undefined);
+        await initialized?.datafn.close().catch(() => undefined);
+        await initialized?.email?.close().catch(() => undefined);
+        await initialized?.database.close().catch(() => undefined);
+      });
     }
   })();
   let observabilitySeeded = false;
