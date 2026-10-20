@@ -11,7 +11,7 @@ Write it to a directory with the CLI:
 skillplane export --git ./workspace-skills
 ```
 
-The command reads the primary workspace of the current project, local or cloud. All reads finish before anything is written.
+The command reads the primary workspace of the current project, local or cloud. All reads finish before anything is written. If a skill is published, republished, archived or reshared while the export reads the workspace, the export fails with `EXPORT_STATE_CHANGED`; run it again.
 
 ## Layout
 
@@ -84,6 +84,17 @@ The same workspace state always produces the same bytes, and therefore the same 
 
 Canonicalizing a skill directory reproduces `digest` exactly. The export fails rather than write a directory that would not.
 
+## Skills that cannot be exported
+
+The export fails with `EXPORT_INVALID`, naming the skill and the reason, and writes nothing, when any published skill would not read back unchanged through a Git source or cannot be written as a directory tree. A skill is refused when:
+
+- a file other than its root `SKILL.md` is named `SKILL.md`, such as `templates/SKILL.md`, because Git sources treat every `SKILL.md` as a separate skill root;
+- a file looks like a credential, such as a private key or a GitHub or AWS access token;
+- it has more than 197 files with distinct contents, a file larger than 5 MiB, or more than 20 MiB of files;
+- one path is both a file and a directory, such as `assets/a` and `assets/a/b.txt`, or two paths differ only by letter case or Unicode normalization.
+
+Publish a new version without the offending files, then export again.
+
 ## Reading the tree with Git sources
 
 A Git source that imports the repository discovers each `skills/<slug>/` directory:
@@ -91,7 +102,7 @@ A Git source that imports the repository discovers each `skills/<slug>/` directo
 - In a workspace that already has these skills but no bindings, every entry is a **conflict** with its matching slug. Skills are never attached silently.
 - After each path is bound to its skill with **Bind an existing workspace skill**, every entry is **unchanged**, and applying the preview creates no version.
 
-The Git importer rejects files that look like credentials, such as private keys or GitHub tokens. A published skill containing such text exports normally but reads back as invalid.
+A Git source that imports the whole repository is limited to 32 skills, 20 MiB of files in total, and 200 GitHub requests, one per distinct file plus three. The preview of a larger export fails as a whole. Create a source for each skill path, such as `skills/review`, instead.
 
 ## Writing into an existing directory
 
@@ -101,8 +112,10 @@ The target directory must not exist or must be empty; an existing `.git` entry i
 skillplane export --git ./workspace-skills --force
 ```
 
-`--force` deletes and rewrites only `skills/`, `skillplane.workspace.json`, and `.gitattributes`. Other entries, such as `.git` or `README.md`, are left alone. Skills that are no longer exported disappear from `skills/`. If an export is interrupted, run it again with `--force`.
+`--force` replaces only `skills/`, `skillplane.workspace.json`, and `.gitattributes`. Other entries, such as `.git` or `README.md`, are left alone. Skills that are no longer exported disappear from `skills/`.
 
-A target that is a file or a symbolic link is refused.
+The new tree is first written to a temporary `.skillplane-export-*` directory inside the target, and the existing entries are replaced only once every file is written, so a failed export leaves the directory as it was. If the process is killed while entries are being replaced, run the export again with `--force`, and delete any leftover `.skillplane-export-*` directory.
+
+A target that is itself a file or a symbolic link is refused with `EXPORT_TARGET_INVALID`. Its parent directories may be symbolic links, and a missing target is created.
 
 On Windows, a skill whose slug is a reserved device name, such as `con` or `aux`, cannot be checked out.

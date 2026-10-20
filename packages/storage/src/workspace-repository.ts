@@ -1,6 +1,7 @@
 import { canonicalizeBundleFiles } from "./canonicalize.js";
+import { gitImportSkillProblem } from "./git-import.js";
 import { bundleKind, type CanonicalBundle } from "./manifest.js";
-import { bytewisePathCompare } from "./paths.js";
+import { bundlePathCollisionKey, bytewisePathCompare } from "./paths.js";
 
 /**
  * The canonical workspace repository layout (SKI-28): one `skills/<slug>/`
@@ -74,6 +75,38 @@ function sortKeys(value: unknown): unknown {
   return value;
 }
 
+/**
+ * The first reason a set of slash-separated file paths cannot be written as a
+ * directory tree, or null. A path that is also another path's ancestor, or two
+ * entries that differ only by Unicode normalization or case, cannot coexist on
+ * disk or in Git on case-insensitive file systems.
+ */
+export function unrepresentableTreeProblem(paths: Iterable<string>): string | null {
+  const entries = new Map<string, { path: string; directory: boolean }>();
+  const claim = (path: string, directory: boolean) => {
+    const key = bundlePathCollisionKey(path);
+    const existing = entries.get(key);
+    if (!existing) {
+      entries.set(key, { path, directory });
+      return null;
+    }
+    if (existing.path === path && existing.directory && directory) return null;
+    return existing.directory !== directory
+      ? `${path} is both a file and a directory`
+      : `${existing.path} and ${path} differ only by case or Unicode normalization`;
+  };
+  for (const path of paths) {
+    const segments = path.split("/");
+    for (let end = 1; end < segments.length; end += 1) {
+      const problem = claim(segments.slice(0, end).join("/"), true);
+      if (problem) return problem;
+    }
+    const problem = claim(path, false);
+    if (problem) return problem;
+  }
+  return null;
+}
+
 /** Two-space indented JSON with sorted keys, LF line endings and a final newline. */
 export function workspaceManifestJson(manifest: WorkspaceManifest): string {
   return `${JSON.stringify(sortKeys(manifest), null, 2)}\n`;
@@ -127,6 +160,15 @@ export async function serializeWorkspaceRepository(
         `Skill ${skill.id} bundle does not match its published digest`,
       );
     const slug = bundle.skill.slug;
+    // Never write a directory that cannot exist on disk or that the Git
+    // source importer would reject, since it could not read back as a no-op.
+    const problem =
+      unrepresentableTreeProblem(bundle.files.keys()) ??
+      (await gitImportSkillProblem(bundle.files));
+    if (problem)
+      throw new WorkspaceRepositoryError(
+        `Skill ${slug} (${skill.id}) cannot be exported because ${problem}`,
+      );
     if (slugs.has(slug))
       throw new WorkspaceRepositoryError(`Several skills use the slug ${slug}`);
     slugs.add(slug);

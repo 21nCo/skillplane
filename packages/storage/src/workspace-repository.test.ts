@@ -6,6 +6,7 @@ import { bundleJsonSchema, type CanonicalBundle } from "./manifest.js";
 import { sha256Hex } from "./validate.js";
 import {
   serializeWorkspaceRepository,
+  unrepresentableTreeProblem,
   WorkspaceRepositoryError,
   type WorkspaceRepositorySkill,
 } from "./workspace-repository.js";
@@ -68,6 +69,45 @@ async function fixtures(mtime = new Date("2024-03-05T12:34:00Z"), reverse = fals
   ];
   return reverse ? skills.reverse() : skills;
 }
+
+/** A published skill whose bundle holds exactly these extra files besides SKILL.md. */
+async function publishedWith(
+  slug: string,
+  files: Record<string, string>,
+): Promise<WorkspaceRepositorySkill> {
+  const bundle = await canonicalizeBundleFiles({
+    skill: {
+      formatVersion: 1,
+      entrypoint: "SKILL.md",
+      name: slug,
+      slug,
+      description: "Exported workflow",
+      tags: [],
+    },
+    files: new Map(
+      Object.entries({ "SKILL.md": `# ${slug}\n`, ...files }).map(([path, text]) => [
+        path,
+        strToU8(text),
+      ]),
+    ),
+  });
+  return {
+    id: `skill:${slug}`,
+    visibility: "private",
+    semanticVersion: "1.0.0",
+    digest: bundle.digest,
+    bundle,
+  };
+}
+
+/** `count` asset files with distinct contents. */
+const distinctAssets = (count: number) =>
+  Object.fromEntries(
+    Array.from({ length: count }, (_, index) => [
+      `assets/${String(index)}.txt`,
+      `${String(index)}\n`,
+    ]),
+  );
 
 async function digests(tree: ReadonlyMap<string, Uint8Array>) {
   const result: Record<string, string> = {};
@@ -293,6 +333,68 @@ describe("workspace repository serializer", () => {
       await expect(serializeWorkspaceRepository(input), label).rejects.toBeInstanceOf(
         WorkspaceRepositoryError,
       );
+  });
+
+  it("refuses skills that the Git source importer would reject or that cannot be written as a tree", async () => {
+    // Built at run time so the fixture is not itself a credential-shaped literal.
+    const accessKey = ["AKIA", "IOSFODNN7EXAMPLE"].join("");
+    const privateKey = ["-----BEGIN", "RSA PRIVATE KEY-----"].join(" ");
+    const cases: [string, Record<string, string>, string][] = [
+      ["nested", { "templates/SKILL.md": "# Template\n" }, "nested skill root"],
+      ["access-key", { "references/env.md": `key=${accessKey}\n` }, "credential"],
+      ["private-key", { "scripts/deploy.sh": `${privateKey}\n` }, "credential"],
+      ["too-many-files", distinctAssets(196), "more than 197 distinct files"],
+      [
+        "file-and-directory",
+        { "assets/a": "file\n", "assets/a/b.txt": "child\n" },
+        "both a file and a directory",
+      ],
+      [
+        "case-directories",
+        { "assets/A/x.txt": "x\n", "assets/a/y.txt": "y\n" },
+        "differ only by case",
+      ],
+    ];
+    for (const [slug, files, rule] of cases) {
+      const skill = await publishedWith(slug, files);
+      const minimal = await publishedWith("minimal", {});
+      const rejection = serializeWorkspaceRepository([minimal, skill]);
+      await expect(rejection, slug).rejects.toBeInstanceOf(WorkspaceRepositoryError);
+      await expect(rejection, slug).rejects.toThrow(`Skill ${slug} (skill:${slug})`);
+      await expect(rejection, slug).rejects.toThrow(rule);
+    }
+    // The importer limit counts distinct contents, so SKILL.md, skill.json,
+    // 194 distinct assets and one repeated reference fit exactly.
+    const boundary = await publishedWith("boundary", {
+      ...distinctAssets(194),
+      ...Object.fromEntries(
+        Array.from({ length: 50 }, (_, index) => [
+          `references/${String(index)}.md`,
+          "same\n",
+        ]),
+      ),
+      "references/same.md": "same\n",
+    });
+    expect(
+      (await serializeWorkspaceRepository([boundary])).has(
+        "skills/boundary/assets/193.txt",
+      ),
+    ).toBe(true);
+  });
+
+  it("reports paths that cannot coexist in one directory tree", () => {
+    expect(unrepresentableTreeProblem(["skills/a/SKILL.md", "skills/b/SKILL.md"])).toBe(
+      null,
+    );
+    expect(unrepresentableTreeProblem(["skills/a", "skills/a/SKILL.md"])).toContain(
+      "both a file and a directory",
+    );
+    expect(unrepresentableTreeProblem(["skills/a/SKILL.md", "skills/a"])).toContain(
+      "both a file and a directory",
+    );
+    expect(unrepresentableTreeProblem(["skills/É/x", "skills/é/y"])).toContain(
+      "differ only by case",
+    );
   });
 
   it("serializes an empty workspace as a manifest without skills", async () => {

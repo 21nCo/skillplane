@@ -21,6 +21,7 @@ import {
   type WorkspaceManifest,
   type WorkspaceRepositorySkill,
   type WorkspaceRepositoryVisibility,
+  WorkspaceRepositoryError,
 } from "@skillplane/storage";
 import { IdempotencyStore } from "../../src/idempotency.js";
 import { PublicationService } from "../../src/publication.js";
@@ -360,5 +361,69 @@ describe("workspace repository export round trip", () => {
     const applied = await sources.apply({ ...m(), sourceId: bound.id, runId: noop.id });
     expect(applied.status).toBe("complete");
     expect(await versionCount()).toBe(before);
+  });
+
+  it("refuses to export published skills that the importer would read back as invalid", async () => {
+    // Built at run time so the fixture is not itself a credential-shaped literal.
+    const accessKey = ["AKIA", "IOSFODNN7EXAMPLE"].join("");
+    for (const [slug, files, rule] of [
+      ["scaffold", { "templates/SKILL.md": "# Template\n" }, "nested skill root"],
+      ["keyed", { "references/env.md": `key=${accessKey}\n` }, "credential"],
+    ] as const) {
+      const created = await create(
+        slug,
+        "workspace",
+        await archive(slug, "# Skill\n", files),
+      );
+      const bundle = await canonicalizeBundle(
+        (
+          await versions.retrieveBundle({
+            skillId: created.skill.id,
+            versionId: created.version.id,
+            principal: owner,
+          })
+        ).bytes,
+      );
+      // Written anyway, the directory previews as invalid rather than unchanged.
+      const raw = mkdtempSync(join(tmpdir(), "skillplane-workspace-invalid-"));
+      try {
+        for (const [path, bytes] of bundle.files) {
+          mkdirSync(dirname(join(raw, "skills", slug, path)), { recursive: true });
+          writeFileSync(join(raw, "skills", slug, path), bytes);
+        }
+        const rawSources = new GitSourceService(pool, skills, versions, {
+          snapshot: (config) =>
+            new PublicGitHubSourceProvider(directoryGitHubFetcher(raw)).snapshot(
+              config,
+            ),
+        });
+        const source = await rawSources.create({
+          ...m(),
+          config: {
+            repositoryUrl: `https://github.com/acme/${slug}`,
+            path: `skills/${slug}`,
+          },
+          idempotencyKey: `source-${slug}`,
+        });
+        const preview = await rawSources.preview({ ...m(), sourceId: source.id });
+        expect(preview.plan.map(({ path, action }) => ({ path, action }))).toEqual([
+          { path: `skills/${slug}`, action: "invalid" },
+        ]);
+      } finally {
+        rmSync(raw, { recursive: true, force: true });
+      }
+      const rejection = serializeWorkspaceRepository([
+        {
+          id: created.skill.id,
+          visibility: "workspace",
+          semanticVersion: "1.0.0",
+          digest: created.version.digest,
+          bundle,
+        },
+      ]);
+      await expect(rejection).rejects.toBeInstanceOf(WorkspaceRepositoryError);
+      await expect(rejection).rejects.toThrow(`Skill ${slug} (${created.skill.id})`);
+      await expect(rejection).rejects.toThrow(rule);
+    }
   });
 });

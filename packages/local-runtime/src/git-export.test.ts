@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -17,6 +18,12 @@ import {
   PublicGitHubSourceProvider,
 } from "../../domain/src/git-source-provider.js";
 import { directoryGitHubFetcher } from "../../testing/src/git-directory.js";
+import {
+  canonicalizeBundleFiles,
+  serializeWorkspaceRepository,
+  WorkspaceRepositoryError,
+  type WorkspaceRepositorySkill,
+} from "@skillplane/storage";
 import {
   CloudWorkspaceProvider,
   LocalStore,
@@ -147,6 +154,41 @@ async function cli(...args: string[]) {
   } finally {
     log.mockRestore();
   }
+}
+
+function snapshot(directory: string) {
+  return new PublicGitHubSourceProvider(directoryGitHubFetcher(directory)).snapshot(
+    gitSourceConfig({ repositoryUrl: "https://github.com/acme/skills" }),
+  );
+}
+
+async function publishedWith(
+  slug: string,
+  extra: Record<string, string>,
+): Promise<WorkspaceRepositorySkill> {
+  const bundle = await canonicalizeBundleFiles({
+    skill: {
+      formatVersion: 1,
+      entrypoint: "SKILL.md",
+      name: slug,
+      slug,
+      description: "Exported workflow",
+      tags: [],
+    },
+    files: new Map(
+      Object.entries({ "SKILL.md": `# ${slug}\n`, ...extra }).map(([path, text]) => [
+        path,
+        new TextEncoder().encode(text),
+      ]),
+    ),
+  });
+  return {
+    id: `skill:${slug}`,
+    visibility: "private",
+    semanticVersion: "1.0.0",
+    digest: bundle.digest,
+    bundle,
+  };
 }
 
 function files(directory: string, prefix = ""): string[] {
@@ -284,13 +326,110 @@ describe("skillplane export --git", () => {
     const file = join(base, "file");
     writeFileSync(file, "not a directory");
     expect(() => writeWorkspaceRepository(file, tree, true)).toThrow(
-      expect.objectContaining({ code: "UNSAFE_DIRECTORY" }),
+      expect.objectContaining({ code: "EXPORT_TARGET_INVALID" }),
     );
     const link = join(base, "link");
     symlinkSync(out, link);
     expect(() => writeWorkspaceRepository(link, tree, true)).toThrow(
-      expect.objectContaining({ code: "UNSAFE_DIRECTORY" }),
+      expect.objectContaining({ code: "EXPORT_TARGET_INVALID" }),
     );
+    // Ancestors may be symbolic links, as /tmp is on macOS, and a shared clone
+    // may be group-writable; only the target itself must be a real directory.
+    const linked = join(base, "linked");
+    symlinkSync(base, linked);
+    writeWorkspaceRepository(join(linked, "nested", "export"), tree, false);
+    expect(files(join(base, "nested", "export"))).toEqual([...tree.keys()]);
+    const shared = join(base, "shared");
+    mkdirSync(shared);
+    chmodSync(shared, 0o775);
+    writeWorkspaceRepository(shared, tree, false);
+    expect(files(shared)).toEqual([...tree.keys()]);
+  });
+
+  it("leaves an existing export untouched when a tree cannot be written", async () => {
+    const { base, provider } = await workspace();
+    const tree = await workspaceRepository(provider);
+    const out = join(base, "clone");
+    writeWorkspaceRepository(out, tree, false);
+    writeFileSync(join(out, "README.md"), "Team skills\n");
+    const before = files(out).map((path) => [path, readFileSync(join(out, path))]);
+    const extend = (entries: Record<string, string>) =>
+      new Map([
+        ...tree,
+        ...Object.entries(entries).map(
+          ([path, text]) => [path, new TextEncoder().encode(text)] as const,
+        ),
+      ]);
+    const cases: [Map<string, Uint8Array>, string][] = [
+      [
+        extend({ "skills/x/assets/a": "file", "skills/x/assets/a/b.txt": "child" }),
+        "EXPORT_INVALID",
+      ],
+      [extend({ "skills/x/A/b": "x", "skills/x/a/c": "y" }), "EXPORT_INVALID"],
+      [extend({ "README.md": "Replaced\n" }), "EXPORT_INVALID"],
+      [extend({ "skills/../escape": "x" }), "EXPORT_INVALID"],
+      // Valid paths whose write fails part way through, after other files
+      // were already staged.
+      [extend({ [`skills/zz/${"a".repeat(300)}`]: "x" }), "ENAMETOOLONG"],
+    ];
+    for (const [input, code] of cases) {
+      expect(() => writeWorkspaceRepository(out, input, true)).toThrow(
+        expect.objectContaining({ code }),
+      );
+      expect(files(out).map((path) => [path, readFileSync(join(out, path))])).toEqual(
+        before,
+      );
+    }
+  });
+
+  it("refuses to export skills the Git source importer would reject", async () => {
+    // Built at run time so the fixture is not itself a credential-shaped literal.
+    const accessKey = ["AKIA", "IOSFODNN7EXAMPLE"].join("");
+    const assets = (count: number) =>
+      Object.fromEntries(
+        Array.from({ length: count }, (_, index) => [
+          `assets/${String(index)}.txt`,
+          `${String(index)}\n`,
+        ]),
+      );
+    const rejected = [
+      await publishedWith("nested", { "templates/SKILL.md": "# Template\n" }),
+      await publishedWith("credential", { "references/env.md": `${accessKey}\n` }),
+      await publishedWith("too-many-files", assets(196)),
+    ];
+    for (const skill of rejected) {
+      // The importer itself marks the skill's directory invalid ...
+      const directory = root();
+      for (const [path, bytes] of skill.bundle.files) {
+        const target = join(directory, "skills", skill.bundle.skill.slug, path);
+        mkdirSync(join(target, ".."), { recursive: true });
+        writeFileSync(target, bytes);
+      }
+      const read = (await snapshot(directory)).skills.find(
+        (s) => s.path === `skills/${skill.bundle.skill.slug}`,
+      );
+      expect(read?.bundle).toBeNull();
+      expect(read?.error).toEqual(expect.any(String));
+      // ... so the serializer refuses to export it.
+      await expect(serializeWorkspaceRepository([skill])).rejects.toBeInstanceOf(
+        WorkspaceRepositoryError,
+      );
+    }
+    // A skill at the distinct-file limit exports and reads back to its digest.
+    const boundary = await publishedWith("boundary", assets(195));
+    const out = join(root(), "repository");
+    writeWorkspaceRepository(
+      out,
+      await serializeWorkspaceRepository([boundary]),
+      false,
+    );
+    expect((await snapshot(out)).skills).toEqual([
+      expect.objectContaining({
+        path: "skills/boundary",
+        error: null,
+        bundle: expect.objectContaining({ digest: boundary.digest }),
+      }),
+    ]);
   });
 
   it("validates arguments and writes nothing when a skill changes during export", async () => {
@@ -322,6 +461,35 @@ describe("skillplane export --git", () => {
     await expect(workspaceRepository(racing)).rejects.toMatchObject({
       code: "EXPORT_STATE_CHANGED",
     });
+    // A skill published while the listing was read is caught by listing again.
+    let listings = 0;
+    const growing: WorkspaceProvider = Object.assign(
+      Object.create(provider) as object,
+      {
+        publishedSkills: async () => {
+          const listed = await provider.publishedSkills();
+          return listings++ === 0 ? listed.slice(1) : listed;
+        },
+      },
+    ) as WorkspaceProvider;
+    await expect(workspaceRepository(growing)).rejects.toMatchObject({
+      code: "EXPORT_STATE_CHANGED",
+    });
+
+    // A published skill the importer would reject fails the export before
+    // anything is written.
+    await provider.create({
+      ...review,
+      slug: "nested",
+      name: "Nested",
+      assets: [{ path: "templates/SKILL.md", content: "# Template\n" }],
+      idempotencyKey: "create-nested",
+    });
+    await expect(run("export", "--git", join(base, "nested"))).rejects.toMatchObject({
+      code: "EXPORT_INVALID",
+      message: expect.stringContaining("nested skill root"),
+    });
+    expect(existsSync(join(base, "nested"))).toBe(false);
   });
 
   it("selects active cloud skills with a published version in every visibility", async () => {
