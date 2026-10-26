@@ -47,9 +47,6 @@ describe("local app Wrangler configurations", () => {
     assert.equal(config.r2_buckets[0].bucket_name, "skillplane-skill-bundles-local");
     assert.notEqual(config.name, "skillplane-mcp");
     assert.notEqual(config.r2_buckets[0].bucket_name, "skillplane-skill-bundles");
-    assert.deepEqual(config.compatibility_flags, [
-      "nodejs_compat",
-      "allow_eval_during_startup",
-    ]);
+    assert.deepEqual(config.compatibility_flags, ["nodejs_compat"]);
   });
 });

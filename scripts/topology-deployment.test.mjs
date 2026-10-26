@@ -96,16 +96,10 @@ describe("multi-cell Cloudflare topology adapter", () => {
     assert.equal(configs.gateway.mcp.vars.DATAFN_DIRECT_ENABLED, undefined);
     assert.equal(configs.gateway.app.vars.EMAIL_PROVIDER, "cloudflare-email");
     assert.equal(configs.gateway.app.send_email[0].name, "SEND_EMAIL");
-    assert.deepEqual(configs.gateway.mcp.compatibility_flags, [
-      "nodejs_compat",
-      "allow_eval_during_startup",
-    ]);
+    assert.deepEqual(configs.gateway.mcp.compatibility_flags, ["nodejs_compat"]);
     assert.deepEqual(configs.gateway.app.compatibility_flags, ["nodejs_compat"]);
     for (const pair of Object.values(configs.cells)) {
-      assert.deepEqual(pair.mcp.compatibility_flags, [
-        "nodejs_compat",
-        "allow_eval_during_startup",
-      ]);
+      assert.deepEqual(pair.mcp.compatibility_flags, ["nodejs_compat"]);
       assert.deepEqual(pair.app.compatibility_flags, ["nodejs_compat"]);
       assert.deepEqual(pair.projection.compatibility_flags, ["nodejs_compat"]);
     }

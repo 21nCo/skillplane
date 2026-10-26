@@ -97,10 +97,7 @@ function workerBase(name, kind, variables) {
           ? "src/regional-datafn-worker.ts"
           : "src/index.ts",
     compatibility_date: "2026-05-03",
-    compatibility_flags:
-      kind === "mcp"
-        ? ["nodejs_compat", "allow_eval_during_startup"]
-        : ["nodejs_compat"],
+    compatibility_flags: ["nodejs_compat"],
     workers_dev: false,
     ...(kind === "app"
       ? {
