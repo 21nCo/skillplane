@@ -57,9 +57,14 @@ the canonical production URL and the control-plane URL, matching the topology
 deployment invariant. `WORKSPACE_ROUTING_KEYS` is the complete JSON keyring
 required by `deployment/topology.production.json`.
 
-Grant this repository access to the organization secret `NPM_TOKEN` for CLI
-publication. Only the approved publication job requests an OIDC token so npm
-can attach build provenance.
+The CLI publishes through npm trusted publishing (OIDC). The `skillplane`
+package's trusted publisher on npm is GitHub Actions with repository
+`21nCo/skillplane`, workflow `publish-tag.yml` and environment `production`.
+Only the approved publication job requests an OIDC token; npm uses it to
+authenticate the publish and attach build provenance. The publication job
+installs npm 11.21.0 because trusted publishing needs npm 11.5.1 or newer. The
+organization secret `NPM_TOKEN` remains a fallback that npm uses only when the
+OIDC exchange fails.
 
 ## Creating a release
 
