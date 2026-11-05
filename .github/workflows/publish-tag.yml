@@ -150,8 +150,11 @@ jobs:
       - name: Set up Node.js for npm
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: 22.13.0
+          node-version: 24
           registry-url: https://registry.npmjs.org
+
+      - name: Set up npm with trusted publishing
+        run: npm install --global npm@11.21.0 --ignore-scripts --registry=https://registry.npmjs.org
 
       - name: Restore verified package
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
