@@ -64,7 +64,15 @@ Only the approved publication job requests an OIDC token; npm uses it to
 authenticate the publish and attach build provenance. The publication job
 installs npm 11.21.0 because trusted publishing needs npm 11.5.1 or newer. The
 organization secret `NPM_TOKEN` remains a fallback that npm uses only when the
-OIDC exchange fails.
+OIDC exchange fails. The publication job runs on Node 24 because trusted
+publishing needs Node 22.14.0 or newer as well as npm 11.5.1 or newer.
+
+When creating or recreating the trusted publisher, enable **Allow npm publish**:
+npm defaults connections created after 2026-09-03 to staged publishing only, and
+the workflow runs `npm publish`. npm also expires a trusted publisher
+configuration that has not completed a successful publish within 2 days of
+creation, so release within 2 days of creating it, or delete and recreate it
+before the next release.
 
 ## Creating a release
 
