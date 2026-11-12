@@ -64,8 +64,15 @@ Only the approved publication job requests an OIDC token; npm uses it to
 authenticate the publish and attach build provenance. The publication job
 installs npm 11.21.0 because trusted publishing needs npm 11.5.1 or newer. The
 workflow has no npm token, so a publish fails if the OIDC exchange fails. The
-publication job runs on Node 24 because trusted
-publishing needs Node 22.14.0 or newer as well as npm 11.5.1 or newer.
+publication job runs on Node 24 because trusted publishing needs Node 22.14.0 or
+newer as well as npm 11.5.1 or newer.
+
+npm can only attach a trusted publisher to a package that already exists.
+`skillplane` is already on npm. A package name that has never been published
+(for example after a rename) needs one manual step before its first tag: a
+maintainer publishes a `0.0.0` placeholder by hand with 2FA, then adds the
+trusted publisher as described below and releases the real version through the
+workflow.
 
 When creating or recreating the trusted publisher, enable **Allow npm publish**:
 npm defaults connections created after 2026-09-03 to staged publishing only, and
