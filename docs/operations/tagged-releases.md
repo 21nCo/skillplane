@@ -63,9 +63,24 @@ package's trusted publisher on npm is GitHub Actions with repository
 Only the approved publication job requests an OIDC token; npm uses it to
 authenticate the publish and attach build provenance. The publication job
 installs npm 11.21.0 because trusted publishing needs npm 11.5.1 or newer. The
-organization secret `NPM_TOKEN` remains a fallback that npm uses only when the
-OIDC exchange fails. The publication job runs on Node 24 because trusted
-publishing needs Node 22.14.0 or newer as well as npm 11.5.1 or newer.
+workflow has no npm token, so a publish fails if the OIDC exchange fails. The
+publication job runs on Node 24 because trusted publishing needs Node 22.14.0 or
+newer as well as npm 11.5.1 or newer.
+
+npm can only attach a trusted publisher to a package that already exists.
+`skillplane` is already on npm. A package name that has never been published
+(for example after a rename) needs one manual step before its first tag: a
+maintainer claims the name with a `0.0.0` placeholder. In a new empty directory
+outside the repository, write a `package.json` containing only the `"name"` and
+`"version": "0.0.0"` (not the CLI package, whose `publishConfig.provenance`
+makes a local publish fail), check that `npm pack --dry-run` lists only
+`package.json`, then run `npm publish --access public` with 2FA. Then add the
+trusted publisher as described below and release the real version through the
+workflow. After that release, deprecate the placeholder with
+`npm deprecate <name>@0.0.0 "Name placeholder; install a released version"`.
+The placeholder keeps `latest` until the first stable release, so make the first
+release a stable version; after a prerelease-only first release, an unqualified
+install gets the empty placeholder, which has no executable.
 
 When creating or recreating the trusted publisher, enable **Allow npm publish**:
 npm defaults connections created after 2026-09-03 to staged publishing only, and
