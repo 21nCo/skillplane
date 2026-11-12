@@ -71,7 +71,9 @@ npm can only attach a trusted publisher to a package that already exists.
 `skillplane` is already on npm. A package name that has never been published
 (for example after a rename) needs one manual step before its first tag: a
 maintainer publishes a `0.0.0` placeholder by hand with
-`npm publish --access public` and 2FA, then adds the trusted publisher as
+`npm publish --access public` and 2FA from a minimal `package.json` holding only
+the name and version (not from the CLI package, whose
+`publishConfig.provenance` makes a local publish fail), then adds the trusted publisher as
 described below and releases the real version through the workflow. After that
 release, deprecate the placeholder with
 `npm deprecate <name>@0.0.0 "Name placeholder; install a released version"`.
