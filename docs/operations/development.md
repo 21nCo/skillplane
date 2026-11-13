@@ -163,16 +163,38 @@ pnpm db:prepare:dev:topology -- \
   --confirm-regionalize-database <india-database-name>
 ```
 
-Render, deploy private cells before gateways, and run the normal public smoke and
-OAuth gates:
+Render, migrate, deploy private cells before gateways, and run the normal public
+smoke and OAuth gates:
 
 ```bash
 pnpm deploy:check
 pnpm deploy:dev:topology:render
+pnpm db:migrate:dev:topology
 pnpm deploy:dev:topology
 pnpm smoke:dev
 pnpm test:dev:oauth
 ```
+
+`db:migrate:dev:topology` brings an already converted topology to the code's
+migration head in place: control-role migrations to
+`SKILLPLANE_DEV_CONTROL_DATABASE_URL`, then regional migrations to each cell URL,
+then the same schema-head and table-ownership checks the deployment runs. It
+never runs the `db:prepare:dev:topology` conversion and never drops, prunes, or
+rewrites tables; it refuses with `TOPOLOGY_NOT_PREPARED:<database>:<table>` before
+any migration when a database still holds tables of the other role. It takes no
+backup, because development data is disposable, but it refuses any URL that
+identifies the same database as a production variable (`SKILLPLANE_CONTROL_DATABASE_URL`,
+`SKILLPLANE_CELL_<REGION>_DATABASE_URL`, `SKILLPLANE_PRODUCTION_DATABASE_URL`,
+`SKILLPLANE_PRODUCTION_MIGRATION_SOURCE_DATABASE_URL`, or `RAILWAY_DATABASE_URL`)
+before opening a connection. Each database migrates in one transaction under the
+shared migration lock, so a second or concurrent run applies nothing, and a run
+interrupted between databases resumes when rerun.
+
+Before uploading any Worker, `deploy:dev:topology` compares each database's
+migration ledger with the code and fails with
+`SCHEMA_BEHIND:<database>:<applied>-><head>` (for example
+`SCHEMA_BEHIND:us-east:0050_regional_verification_immutability->0054_regional_artifact_kind`)
+when a migration is pending. Run `pnpm db:migrate:dev:topology` and deploy again.
 
 To roll out only selected Worker kinds during a canary, pass `--only` to the
 deployment script with a comma-separated list of `app`, `datafn`, `mcp`, and
@@ -194,9 +216,12 @@ remove that development data explicitly rather than silently granting access.
 `.github/workflows/deploy-cloudflare-dev.yml` builds pull requests and deploys
 the three-cell development topology to the `21n-dev` account on every push to
 the `dev` branch (or a manual `workflow_dispatch` of the `dev` branch; dispatches
-from any other ref skip the deploy job). It runs `pnpm deploy:check`
-and then `pnpm deploy:dev:topology`; database preparation, `r2:sync:dev`, and the
-interactive OAuth verifier remain manual.
+from any other ref skip the deploy job). It runs `pnpm deploy:check`,
+`pnpm db:migrate:dev:topology`, and then `pnpm deploy:dev:topology`, so a push
+after a new migration deploys against migrated databases. The migration step
+runs inside the same dev-only job, after its ref and account guard. The
+one-time database preparation, `r2:sync:dev`, and the interactive OAuth verifier
+remain manual.
 
 The deploy job uses the GitHub `dev` environment. The org secret
 `CLOUDFLARE_DEV_API_TOKEN` and org variable `CLOUDFLARE_DEV_ACCOUNT_ID` select the

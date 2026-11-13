@@ -7,6 +7,7 @@ import {
   GLOBAL_CONTROL_TABLES,
   REGIONAL_WORKSPACE_TABLES,
 } from "../../packages/control-plane/dist/table-ownership.js";
+import { loadMigrations } from "../../packages/db/dist/src/migrate.js";
 import { renderDevelopmentTopologyConfigs } from "../render-development-topology-config.mjs";
 import {
   developmentCloudflareEnvironment,
@@ -30,16 +31,31 @@ const databaseVariables = Object.freeze({
   "eu-west": "SKILLPLANE_DEV_EUWEST_DATABASE_URL",
 });
 
-function assertNotProductionDatabase(database, name) {
-  for (const productionVariable of [
+// The first cell that received the converted combined development database.
+export const developmentInitialWorkspaceRegion = "in-south";
+
+// Every variable that can name a production database: the single-database
+// names plus the production topology control and SKILLPLANE_CELL_<REGION>
+// cell databases read by `db:migrate:topology` and `deploy:all`.
+export function productionDatabaseVariables(environment = process.env) {
+  return [
     "RAILWAY_DATABASE_URL",
     "SKILLPLANE_PRODUCTION_DATABASE_URL",
     "SKILLPLANE_PRODUCTION_MIGRATION_SOURCE_DATABASE_URL",
-  ]) {
+    "SKILLPLANE_CONTROL_DATABASE_URL",
+    ...Object.keys(environment)
+      .filter((name) => /^SKILLPLANE_CELL_[A-Z0-9_]+_DATABASE_URL$/u.test(name))
+      .sort(),
+  ];
+}
+
+function assertNotProductionDatabase(database, name) {
+  for (const productionVariable of productionDatabaseVariables()) {
     const productionUrl = process.env[productionVariable]?.trim();
     if (
       productionUrl &&
-      database.fingerprint === parseDirectPostgresUrl(productionUrl).fingerprint
+      database.fingerprint ===
+        parseDirectPostgresUrl(productionUrl, productionVariable).fingerprint
     ) {
       throw new Error(`${name} must differ from ${productionVariable}`);
     }
@@ -58,12 +74,12 @@ export function developmentTopologyDatabases() {
   const cells = Object.fromEntries(
     Object.entries(databaseVariables).map(([regionId, variable]) => [
       regionId,
-      regionId === "in-south"
-        ? developmentDatabase()
-        : assertNotProductionDatabase(
-            parseDirectPostgresUrl(requireEnvironment(variable), variable),
-            `The ${regionId} development database`,
-          ),
+      assertNotProductionDatabase(
+        regionId === developmentInitialWorkspaceRegion
+          ? developmentDatabase()
+          : parseDirectPostgresUrl(requireEnvironment(variable), variable),
+        `The ${regionId} development database`,
+      ),
     ]),
   );
   const all = [control, ...Object.values(cells)];
@@ -91,6 +107,121 @@ async function relations(database) {
     return new Set(result.rows.map((row) => row.table_name));
   } finally {
     await pool.end();
+  }
+}
+
+function migrationName(id) {
+  return id.replace(/\.sql$/u, "");
+}
+
+// Compares one database's migration ledger with the code's migrations for its
+// role. Returns the SCHEMA_BEHIND detail, or null when nothing is pending.
+export function schemaHeadStatus(label, role, migrations, appliedIds) {
+  const roleMigrations = migrations
+    .filter((migration) => migration.roles.includes(role))
+    .map((migration) => migration.id);
+  if (roleMigrations.length === 0) {
+    throw new Error(`No ${role} migrations found`);
+  }
+  const applied = new Set(appliedIds);
+  const head = roleMigrations.at(-1);
+  const pending = roleMigrations.filter((id) => !applied.has(id));
+  const latestApplied = roleMigrations.filter((id) => applied.has(id)).at(-1);
+  return {
+    database: label,
+    role,
+    applied: latestApplied ? migrationName(latestApplied) : "none",
+    head: migrationName(head),
+    pending: pending.map(migrationName),
+  };
+}
+
+async function appliedMigrationIds(database, label) {
+  const pool = new Pool({
+    connectionString: database.url,
+    application_name: `skillplane-dev-topology-schema-${label}`,
+    max: 1,
+  });
+  try {
+    const ledger = await pool.query(
+      "SELECT to_regclass('public.skillplane_schema_migrations')::text AS relation",
+    );
+    if (!ledger.rows[0]?.relation) return [];
+    const result = await pool.query(
+      "SELECT id FROM skillplane_schema_migrations ORDER BY id",
+    );
+    return result.rows.map((row) => row.id);
+  } finally {
+    await pool.end();
+  }
+}
+
+// Reads every ledger before reporting, so one error names each database that
+// is behind instead of the indirect CELL_TABLE_MISSING from the ownership check.
+export async function verifyDevelopmentTopologySchemaHeads(databases, options = {}) {
+  const migrations = options.migrations ?? (await loadMigrations());
+  const targets = [
+    ["control", "control", databases.control],
+    ...Object.entries(databases.cells).map(([regionId, database]) => [
+      regionId,
+      "regional",
+      database,
+    ]),
+  ];
+  const statuses = [];
+  for (const [label, role, database] of targets) {
+    statuses.push(
+      schemaHeadStatus(
+        label,
+        role,
+        migrations,
+        await appliedMigrationIds(database, label),
+      ),
+    );
+  }
+  const behind = statuses.filter((status) => status.pending.length > 0);
+  if (behind.length > 0) {
+    throw new Error(
+      behind
+        .map(
+          (status) =>
+            `SCHEMA_BEHIND:${status.database}:${status.applied}->${status.head}`,
+        )
+        .join("; "),
+    );
+  }
+  return {
+    control: { head: statuses[0].head },
+    cells: Object.fromEntries(
+      statuses.slice(1).map((status) => [status.database, { head: status.head }]),
+    ),
+  };
+}
+
+// The pre-upload database gate: schema heads first, then table ownership.
+export async function verifyDevelopmentTopologyDatabases(databases, options = {}) {
+  const schema = await verifyDevelopmentTopologySchemaHeads(databases, options);
+  const ownership = await verifyDevelopmentTopologyDatabaseOwnership(databases);
+  return { schema, ownership };
+}
+
+// Read-only guard for in-place migrations: every database must already have
+// the converted topology shape (or be empty). A combined database must go
+// through the one-time `db:prepare:dev:topology` conversion instead.
+export async function assertDevelopmentTopologyPrepared(databases) {
+  const control = await relations(databases.control);
+  for (const forbidden of REGIONAL_WORKSPACE_TABLES) {
+    if (control.has(forbidden)) {
+      throw new Error(`TOPOLOGY_NOT_PREPARED:control:${forbidden}`);
+    }
+  }
+  for (const [regionId, database] of Object.entries(databases.cells)) {
+    const tables = await relations(database);
+    for (const forbidden of GLOBAL_CONTROL_TABLES) {
+      if (tables.has(forbidden)) {
+        throw new Error(`TOPOLOGY_NOT_PREPARED:${regionId}:${forbidden}`);
+      }
+    }
   }
 }
 
@@ -182,7 +313,7 @@ export async function deployDevelopmentTopology(options = {}) {
       ]),
     ),
   };
-  const ownership = await verifyDevelopmentTopologyDatabaseOwnership(databases);
+  const { schema, ownership } = await verifyDevelopmentTopologyDatabases(databases);
   const bucketNames = new Set([
     rendered.resources.publicBucketName,
     ...Object.values(rendered.resources.cells).map((cell) => cell.bucketName),
@@ -230,6 +361,7 @@ export async function deployDevelopmentTopology(options = {}) {
     environment: "development",
     commit,
     hyperdrives,
+    schema,
     ownership,
     buckets,
     workers,

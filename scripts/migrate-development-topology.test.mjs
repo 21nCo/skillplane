@@ -1,0 +1,192 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
+import { describe, it } from "node:test";
+import { migrateDevelopmentTopology } from "./migrate-development-topology.mjs";
+import { schemaHeadStatus } from "./lib/development-topology-deployment.mjs";
+import { root } from "./lib/production-deployment.mjs";
+
+// `.invalid` hosts never resolve: a refusal message, rather than ENOTFOUND,
+// proves the command stopped before opening a connection.
+const developmentUrls = {
+  SKILLPLANE_DEV_CONTROL_DATABASE_URL:
+    "postgresql://dev:secret@control.dev.invalid:5432/skillplane_control",
+  SKILLPLANE_DEV_DATABASE_URL:
+    "postgresql://dev:secret@insouth.dev.invalid:5432/skillplane",
+  SKILLPLANE_DEV_USEAST_DATABASE_URL:
+    "postgresql://dev:secret@useast.dev.invalid:5432/skillplane",
+  SKILLPLANE_DEV_EUWEST_DATABASE_URL:
+    "postgresql://dev:secret@euwest.dev.invalid:5432/skillplane",
+};
+
+async function withEnvironment(values, operation) {
+  const saved = { ...process.env };
+  for (const name of Object.keys(process.env)) {
+    if (/^(SKILLPLANE_|RAILWAY_DATABASE_URL$)/u.test(name))
+      Reflect.deleteProperty(process.env, name);
+  }
+  Object.assign(process.env, values);
+  try {
+    return await operation();
+  } finally {
+    for (const name of Object.keys(process.env))
+      Reflect.deleteProperty(process.env, name);
+    Object.assign(process.env, saved);
+  }
+}
+
+describe("development topology migration safety", () => {
+  for (const [productionVariable, developmentVariable] of [
+    ["SKILLPLANE_CONTROL_DATABASE_URL", "SKILLPLANE_DEV_CONTROL_DATABASE_URL"],
+    ["SKILLPLANE_CELL_IN_SOUTH_DATABASE_URL", "SKILLPLANE_DEV_DATABASE_URL"],
+    ["SKILLPLANE_CELL_US_EAST_DATABASE_URL", "SKILLPLANE_DEV_USEAST_DATABASE_URL"],
+    ["SKILLPLANE_PRODUCTION_DATABASE_URL", "SKILLPLANE_DEV_EUWEST_DATABASE_URL"],
+  ]) {
+    it(`refuses a development URL equal to ${productionVariable} before connecting`, async () => {
+      let migrations = 0;
+      await withEnvironment(
+        {
+          ...developmentUrls,
+          // The same database with a different password and SSL mode.
+          [productionVariable]: developmentUrls[developmentVariable]
+            .replace(":secret@", ":production@")
+            .concat("?sslmode=verify-full"),
+        },
+        () =>
+          assert.rejects(
+            migrateDevelopmentTopology({
+              migrate: async () => {
+                migrations += 1;
+              },
+            }),
+            new RegExp(`must differ from ${productionVariable}$`, "u"),
+          ),
+      );
+      assert.equal(migrations, 0);
+    });
+  }
+
+  it("connects to the configured databases when no production URL matches", async () => {
+    let migrations = 0;
+    await withEnvironment(
+      {
+        ...developmentUrls,
+        SKILLPLANE_CELL_US_EAST_DATABASE_URL:
+          "postgresql://prod:secret@useast.prod.invalid:5432/skillplane",
+      },
+      () =>
+        assert.rejects(
+          migrateDevelopmentTopology({
+            migrate: async () => {
+              migrations += 1;
+            },
+          }),
+          /ENOTFOUND|EAI_AGAIN|getaddrinfo/u,
+        ),
+    );
+    assert.equal(migrations, 0);
+  });
+});
+
+describe("development topology schema head status", () => {
+  const migrations = [
+    { id: "0001_core.sql", roles: ["combined", "control", "regional"] },
+    { id: "0002_control_a.sql", roles: ["combined", "control"] },
+    { id: "0003_regional_a.sql", roles: ["combined", "regional"] },
+    { id: "0004_control_b.sql", roles: ["combined", "control"] },
+    { id: "0005_regional_b.sql", roles: ["combined", "regional"] },
+  ];
+
+  it("reports the latest applied migration of the role and its head", () => {
+    // A cell converted from the combined database still lists control migrations.
+    assert.deepEqual(
+      schemaHeadStatus("in-south", "regional", migrations, [
+        "0001_core.sql",
+        "0002_control_a.sql",
+        "0003_regional_a.sql",
+        "0004_control_b.sql",
+      ]),
+      {
+        database: "in-south",
+        role: "regional",
+        applied: "0003_regional_a",
+        head: "0005_regional_b",
+        pending: ["0005_regional_b"],
+      },
+    );
+    assert.deepEqual(
+      schemaHeadStatus("control", "control", migrations, [
+        "0001_core.sql",
+        "0002_control_a.sql",
+        "0004_control_b.sql",
+      ]).pending,
+      [],
+    );
+    assert.equal(
+      schemaHeadStatus("us-east", "regional", migrations, []).applied,
+      "none",
+    );
+  });
+});
+
+function workflowJob(text, name) {
+  const lines = text.split("\n");
+  const start = lines.indexOf(`  ${name}:`);
+  assert.ok(start >= 0, `job ${name} is missing`);
+  const end = lines.findIndex(
+    (line, index) => index > start && /^ {2}[a-z][\w-]*:$/u.test(line),
+  );
+  return lines.slice(start, end < 0 ? undefined : end);
+}
+
+function workflowSteps(job) {
+  const steps = [];
+  for (const line of job) {
+    const name = /^ {6}- name: (.+)$/u.exec(line)?.[1];
+    if (name) steps.push({ name, lines: [] });
+    else if (steps.length > 0) steps.at(-1).lines.push(line);
+  }
+  return steps;
+}
+
+describe("development deploy workflow", () => {
+  it("migrates the topology after the dev-only guard and before deploying, only on refs/heads/dev", async () => {
+    const text = await readFile(
+      resolve(root, ".github", "workflows", "deploy-cloudflare-dev.yml"),
+      "utf8",
+    );
+    const deploy = workflowJob(text, "deploy");
+    assert.ok(
+      deploy.includes(
+        "    if: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/dev' }}",
+      ),
+    );
+    const steps = workflowSteps(deploy);
+    const index = (name) => steps.findIndex((step) => step.name === name);
+    const guard = index("Verify development ref and account");
+    const migrate = index("Migrate development topology databases");
+    const deployStep = index("Deploy development topology");
+    assert.ok(guard === 0 && guard < migrate && migrate === deployStep - 1);
+    assert.ok(
+      steps[guard].lines.some((line) =>
+        line.includes('if [[ "${GITHUB_REF}" != "refs/heads/dev" ]]; then'),
+      ),
+    );
+    assert.ok(
+      steps[migrate].lines.includes("        run: pnpm db:migrate:dev:topology"),
+    );
+    assert.deepEqual(
+      steps[migrate].lines
+        .map((line) => /^ {10}([A-Z_]+): /u.exec(line)?.[1])
+        .filter(Boolean),
+      [
+        "SKILLPLANE_DEV_CONTROL_DATABASE_URL",
+        "SKILLPLANE_DEV_DATABASE_URL",
+        "SKILLPLANE_DEV_USEAST_DATABASE_URL",
+        "SKILLPLANE_DEV_EUWEST_DATABASE_URL",
+      ],
+    );
+    assert.equal(text.split("db:migrate:dev:topology").length - 1, 1);
+    assert.ok(!workflowJob(text, "build").join("\n").includes("db:migrate"));
+  });
+});

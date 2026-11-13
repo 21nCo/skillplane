@@ -129,6 +129,17 @@ jobs:
       - name: Validate Cloudflare configs
         run: pnpm deploy:check
 
+      # Applies pending control and regional migrations in place before the
+      # deploy's SCHEMA_BEHIND and ownership checks. It never converts or drops
+      # tables and refuses any URL that names a production database.
+      - name: Migrate development topology databases
+        run: pnpm db:migrate:dev:topology
+        env:
+          SKILLPLANE_DEV_CONTROL_DATABASE_URL: ${{ secrets.SKILLPLANE_DEV_CONTROL_DATABASE_URL }}
+          SKILLPLANE_DEV_DATABASE_URL: ${{ secrets.SKILLPLANE_DEV_DATABASE_URL }}
+          SKILLPLANE_DEV_USEAST_DATABASE_URL: ${{ secrets.SKILLPLANE_DEV_USEAST_DATABASE_URL }}
+          SKILLPLANE_DEV_EUWEST_DATABASE_URL: ${{ secrets.SKILLPLANE_DEV_EUWEST_DATABASE_URL }}
+
       - name: Deploy development topology
         run: pnpm deploy:dev:topology
         env:
