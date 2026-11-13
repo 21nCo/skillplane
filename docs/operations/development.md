@@ -199,6 +199,13 @@ hostname that reaches a production database. The command refuses with
 `PRODUCTION_ISOLATION_UNCONFIGURED` before reading any URL whenever the variable is
 empty, locally and in CI, because the production URL variables are usually absent
 from `.env.development.local` and would otherwise be compared against nothing.
+The comparison uses the host, port, and database the PostgreSQL driver will
+connect to, so `db:migrate:dev:topology`, `deploy:dev:topology`, and
+`db:prepare:dev:topology` refuse a development URL with
+`DEVELOPMENT_DATABASE_DESTINATION_AMBIGUOUS` when its destination differs from
+its URL authority: a `host`, `hostaddr`, or `port` query parameter, a
+percent-encoded, trailing-dot, or numeric (non dotted-quad) host, or a URL
+without a port while `PGPORT` names another port.
 Each database migrates in one transaction under the
 shared migration lock, so a second or concurrent run applies nothing, and a run
 interrupted between databases resumes when rerun.

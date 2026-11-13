@@ -3,7 +3,10 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { describe, it } from "node:test";
 import { migrateDevelopmentTopology } from "./migrate-development-topology.mjs";
-import { schemaHeadStatus } from "./lib/development-topology-deployment.mjs";
+import {
+  developmentTopologyDatabases,
+  schemaHeadStatus,
+} from "./lib/development-topology-deployment.mjs";
 import { root } from "./lib/production-deployment.mjs";
 
 // `.invalid` hosts never resolve: a refusal message, rather than ENOTFOUND,
@@ -27,7 +30,9 @@ const unrelatedProductionIdentities =
 async function withEnvironment(values, operation) {
   const saved = { ...process.env };
   for (const name of Object.keys(process.env)) {
-    if (/^(SKILLPLANE_|RAILWAY_DATABASE_URL$|GITHUB_ACTIONS$)/u.test(name))
+    if (
+      /^(SKILLPLANE_|RAILWAY_DATABASE_URL$|GITHUB_ACTIONS$|PGHOST$|PGPORT$)/u.test(name)
+    )
       Reflect.deleteProperty(process.env, name);
   }
   Object.assign(process.env, values);
@@ -206,6 +211,99 @@ describe("development topology migration production isolation in GitHub Actions"
       workflowEnvironment(
         "control.prod.invalid:5432/skillplane_control insouth.prod.invalid/skillplane",
       ),
+      /ENOTFOUND|EAI_AGAIN|getaddrinfo/u,
+    ));
+});
+
+// The production database every destination-changing form below reaches.
+// The driver (pg-connection-string) lets query `host` and `port` override the
+// URL authority and decodes a percent-encoded host, so an authority-only
+// comparison would see a development host while the driver connects here.
+const productionTarget = "prod.invalid:5432/skillplane";
+const destinationChangingForms = [
+  [
+    "a query host",
+    (url) => url.replace(/@[^/]+\//u, "@dev.invalid:5432/") + "?host=prod.invalid",
+  ],
+  [
+    "a query port",
+    (url) => url.replace(/@[^/]+\//u, "@prod.invalid:15432/") + "?port=5432",
+  ],
+  [
+    "a percent-encoded host",
+    (url) => url.replace(/@[^/]+\//u, "@%70rod.invalid:5432/"),
+  ],
+];
+const destinationAmbiguous = /^Error: DEVELOPMENT_DATABASE_DESTINATION_AMBIGUOUS: /u;
+
+describe("development topology migration compares the driver's destination", () => {
+  for (const variable of Object.keys(developmentUrls)) {
+    for (const [form, rewrite] of destinationChangingForms) {
+      it(`refuses ${form} in ${variable} before connecting`, async () => {
+        const environment = {
+          ...developmentUrls,
+          SKILLPLANE_PRODUCTION_DATABASE_IDENTITIES: `control.prod.invalid/skillplane_control ${productionTarget}`,
+          [variable]: rewrite(developmentUrls[variable]).replace(
+            /\/skillplane(?:_control)?(?=\?|$)/u,
+            "/skillplane",
+          ),
+        };
+        await rejectsBeforeMigrating(environment, destinationAmbiguous);
+        await withEnvironment(environment, () =>
+          assert.throws(() => developmentTopologyDatabases(), destinationAmbiguous),
+        );
+      });
+    }
+  }
+
+  it("refuses a numeric or trailing-dot host before connecting", async () => {
+    for (const host of ["2130706433", "0x7f.1", "control.dev.invalid."]) {
+      await rejectsBeforeMigrating(
+        {
+          ...developmentUrls,
+          SKILLPLANE_PRODUCTION_DATABASE_IDENTITIES: unrelatedProductionIdentities,
+          SKILLPLANE_DEV_CONTROL_DATABASE_URL: `postgresql://dev:secret@${host}:5432/skillplane_control`,
+        },
+        destinationAmbiguous,
+      );
+    }
+  });
+
+  it("refuses a URL without a port when PGPORT moves the driver elsewhere", () =>
+    rejectsBeforeMigrating(
+      {
+        ...developmentUrls,
+        SKILLPLANE_PRODUCTION_DATABASE_IDENTITIES: unrelatedProductionIdentities,
+        SKILLPLANE_DEV_USEAST_DATABASE_URL:
+          "postgresql://dev:secret@useast.dev.invalid/skillplane",
+        PGPORT: "6543",
+      },
+      destinationAmbiguous,
+    ));
+
+  it("compares a production URL variable by the driver's destination too", () =>
+    rejectsBeforeMigrating(
+      {
+        ...developmentUrls,
+        SKILLPLANE_PRODUCTION_DATABASE_IDENTITIES: unrelatedProductionIdentities,
+        SKILLPLANE_CONTROL_DATABASE_URL:
+          "postgresql://prod:secret@elsewhere.invalid:5432/skillplane?host=euwest.dev.invalid",
+      },
+      /^Error: The eu-west development database must differ from SKILLPLANE_CONTROL_DATABASE_URL$/u,
+    ));
+
+  it("matches a production identity written with a trailing dot", () =>
+    rejectsBeforeMigrating(
+      workflowEnvironment("control.dev.invalid.:5432/skillplane_control"),
+      /must differ from SKILLPLANE_PRODUCTION_DATABASE_IDENTITIES$/u,
+    ));
+
+  it("still connects to plain development URLs that match no production target", () =>
+    rejectsBeforeMigrating(
+      {
+        ...developmentUrls,
+        SKILLPLANE_PRODUCTION_DATABASE_IDENTITIES: `control.prod.invalid/skillplane_control ${productionTarget}`,
+      },
       /ENOTFOUND|EAI_AGAIN|getaddrinfo/u,
     ));
 });

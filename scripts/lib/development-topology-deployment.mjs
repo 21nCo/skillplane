@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, unlink } from "node:fs/promises";
 import { resolve } from "node:path";
 import { Pool } from "pg";
+import ConnectionParameters from "pg/lib/connection-parameters.js";
 import {
   GLOBAL_CONTROL_TABLES,
   REGIONAL_WORKSPACE_TABLES,
@@ -49,12 +50,22 @@ export function productionDatabaseVariables(environment = process.env) {
   ];
 }
 
+// Compares destinations as DNS does: case-insensitive, with or without the
+// root label's trailing dot.
+function destinationKey({ host, port, database }) {
+  return JSON.stringify([
+    String(host).toLowerCase().replace(/\.$/u, ""),
+    String(port),
+    database,
+  ]);
+}
+
 export const productionIdentitiesVariable = "SKILLPLANE_PRODUCTION_DATABASE_IDENTITIES";
 
 // Non-secret production database identities (`host[:port]/database`, separated
 // by commas or whitespace) let an environment without production credentials,
 // such as the development deploy job, still refuse a production database.
-export function productionDatabaseIdentityFingerprints(environment = process.env) {
+export function productionDatabaseIdentityKeys(environment = process.env) {
   const raw = environment[productionIdentitiesVariable]?.trim() ?? "";
   return raw
     .split(/[\s,]+/u)
@@ -67,10 +78,12 @@ export function productionDatabaseIdentityFingerprints(environment = process.env
           `${productionIdentitiesVariable} entries must be host[:port]/database without credentials`,
         );
       }
-      return parseDirectPostgresUrl(
-        `postgresql://identity:identity@${identity}`,
-        productionIdentitiesVariable,
-      ).fingerprint;
+      return destinationKey(
+        parseDirectPostgresUrl(
+          `postgresql://identity:identity@${identity}`,
+          productionIdentitiesVariable,
+        ).identity,
+      );
     });
 }
 
@@ -80,23 +93,87 @@ export function productionDatabaseIdentityFingerprints(environment = process.env
 // nothing. Every development migration therefore fails closed until the
 // non-secret production identities are configured, on any host.
 export function assertProductionIsolationConfigured(environment = process.env) {
-  if (productionDatabaseIdentityFingerprints(environment).length === 0) {
+  if (productionDatabaseIdentityKeys(environment).length === 0) {
     throw new Error(
       `PRODUCTION_ISOLATION_UNCONFIGURED: ${productionIdentitiesVariable} must list the production database identities`,
     );
   }
 }
 
+// The destination node-postgres will connect to for a URL. Its parser lets
+// query `host` and `port` override the authority, decodes a percent-encoded
+// host, and falls back to PGPORT for a URL without a port.
+export function driverDestination(url) {
+  const parameters = new ConnectionParameters({ connectionString: url });
+  return {
+    host: parameters.host,
+    port: parameters.port,
+    database: parameters.database,
+  };
+}
+
+const destinationQueryParameters = new Set(["host", "hostaddr", "port"]);
+const canonicalHost =
+  /^(?:\[[0-9a-f:.]+\]|[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*)$/u;
+const canonicalIpv4 =
+  /^(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)$/u;
+
+// The production comparison below is by URL authority, so a development URL
+// must connect exactly where its authority says. Refuses, before any
+// connection, query parameters that move the connection, a percent-encoded or
+// otherwise non-canonical host (a trailing dot, a numeric IPv4 form such as
+// 2130706433 or 0x7f.1), and any remaining difference from the driver's parse.
+export function assertDevelopmentDestination(database, name) {
+  const url = new URL(database.url);
+  const refuse = (reason) => {
+    throw new Error(`DEVELOPMENT_DATABASE_DESTINATION_AMBIGUOUS: ${name} ${reason}`);
+  };
+  for (const key of url.searchParams.keys()) {
+    if (destinationQueryParameters.has(key.toLowerCase())) {
+      refuse(`must not set the ${key} query parameter`);
+    }
+  }
+  const host = database.identity.host;
+  const lastLabel = host.split(".").at(-1);
+  if (
+    !canonicalHost.test(host) ||
+    (/^(?:\d+|0x[0-9a-f]*)$/u.test(lastLabel) && !canonicalIpv4.test(host))
+  ) {
+    refuse("must name its host in canonical form");
+  }
+  let destination;
+  try {
+    destination = driverDestination(database.url);
+  } catch {
+    refuse("is not a connection string the PostgreSQL driver accepts");
+  }
+  if (destinationKey(destination) !== destinationKey(database.identity)) {
+    refuse("connects somewhere other than its URL host, port, and database");
+  }
+  return database;
+}
+
 function assertNotProductionDatabase(database, name) {
-  if (productionDatabaseIdentityFingerprints().includes(database.fingerprint)) {
+  assertDevelopmentDestination(database, name);
+  const destination = destinationKey(database.identity);
+  if (productionDatabaseIdentityKeys().includes(destination)) {
     throw new Error(`${name} must differ from ${productionIdentitiesVariable}`);
   }
   for (const productionVariable of productionDatabaseVariables()) {
     const productionUrl = process.env[productionVariable]?.trim();
+    if (!productionUrl) continue;
+    const production = parseDirectPostgresUrl(productionUrl, productionVariable);
+    // A production URL is compared both by its authority and by where the
+    // driver would send it.
+    let productionDestination;
+    try {
+      productionDestination = destinationKey(driverDestination(production.url));
+    } catch {
+      productionDestination = undefined;
+    }
     if (
-      productionUrl &&
-      database.fingerprint ===
-        parseDirectPostgresUrl(productionUrl, productionVariable).fingerprint
+      destination === destinationKey(production.identity) ||
+      destination === productionDestination
     ) {
       throw new Error(`${name} must differ from ${productionVariable}`);
     }
