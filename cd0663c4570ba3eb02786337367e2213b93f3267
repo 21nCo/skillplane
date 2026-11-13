@@ -1,0 +1,44 @@
+scripts/lib/topology-deployment.mjs
+  s_ba56058519ffbc::t_5d1d1c94bf4088 75
+  s_ba56058519ffbc::t_b7c5a9976263da 58-74,76-88,143-145,309
+packages/control-plane/src/topology.ts
+  s_ba56058519ffbc::t_b7c5a9976263da 31-44
+app/tests/unit/regional-datafn-worker.test.ts
+  s_ba56058519ffbc::t_b7c5a9976263da 95-116
+scripts/topology-deployment.test.mjs
+  s_ba56058519ffbc::t_ff0b8cd3be22c7 178-179,181-185
+  s_ba56058519ffbc::t_5d1d1c94bf4088 174
+  s_ba56058519ffbc::t_b7c5a9976263da 163,167-173,175-177,180,186-210
+  s_9ab4ca7dfe56d4::t_b2508947916104 211-212
+packages/control-plane/src/topology.test.ts
+  s_ba56058519ffbc::t_b7c5a9976263da 115-125
+app/src/regional-datafn-worker.ts
+  s_ba56058519ffbc::t_b7c5a9976263da 53,74
+  s_ba56058519ffbc::t_5d1d1c94bf4088 70
+packages/config/src/index.test.ts
+  s_ba56058519ffbc::t_b7c5a9976263da 230
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "cd0663c4570ba3eb02786337367e2213b93f3267",
+  "prompts": {},
+  "sessions": {
+    "s_9ab4ca7dfe56d4": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0c77b-792d-77b3-a4db-ea9dd7195376",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    },
+    "s_ba56058519ffbc": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0c30c-478d-7a03-957d-9a521dfa26a9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}

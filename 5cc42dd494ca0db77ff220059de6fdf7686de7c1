@@ -1,0 +1,79 @@
+scripts/lib/local-wrangler-config.test.mjs
+  s_450bc0bce405cf::t_49113f1ac65798 50
+deployment/wrangler/mcp.development.json
+  s_450bc0bce405cf::t_8239401a31da74 6
+mcp/tests/integration/mcp-mutations.integration.test.ts
+  s_ee5d9d808851a0::t_ff6a2b2b95e8a6 762,791-792,797-798,803
+packages/auth/src/server.ts
+  s_ee5d9d808851a0::t_da8e2c75719e2f 231
+  s_ee5d9d808851a0::t_2d474ab7896d57 230
+mcp/package.json
+  s_450bc0bce405cf::t_8239401a31da74 16-17,34
+mcp/tests/conformance/mcp.official-conformance.test.ts
+  s_ee5d9d808851a0::t_b158f9de15c0bb 70-76,78,125-137
+  s_ee5d9d808851a0::t_5cdeeab2d50416 2,67-69,138-155,157-192,194-195,197-230,232-233,235-246
+mcp/tests/integration/mcp-skill-lifecycle.integration.test.ts
+  s_ee5d9d808851a0::t_ff6a2b2b95e8a6 223-224
+  s_ee5d9d808851a0::t_7d36f75763273d 431-433
+  s_ee5d9d808851a0::t_e0981ae4a5c58a 434
+packages/api/tests/integration/public-projection-current.integration.test.ts
+  s_ee5d9d808851a0::t_d0cc2443480ac1 63-64,70
+  s_ee5d9d808851a0::t_74aff8ae0aca4e 65-69
+scripts/development-topology-deployment.test.mjs
+  s_450bc0bce405cf::t_932e226a148e8b 48-51
+mcp/wrangler.jsonc
+  s_450bc0bce405cf::t_8239401a31da74 6
+pnpm-workspace.yaml
+  s_ee5d9d808851a0::t_da8e2c75719e2f 37,85
+  s_ee5d9d808851a0::t_74aff8ae0aca4e 16-18
+  s_450bc0bce405cf::t_8239401a31da74 115-118
+packages/api/tests/integration/utc-rollups.integration.test.ts
+  s_ee5d9d808851a0::t_12c91c0564ae9d 1-5,19-22
+  s_ee5d9d808851a0::t_ad48ec9c84ea5a 15-18,23-30,32-71,73-84,86-106,109-120,125-154,156-159,161-163
+  s_ee5d9d808851a0::t_eb7b91d3af4368 6-14,31,72,85,107-108,121-124,155,160
+deployment/wrangler/mcp.production.json
+  s_450bc0bce405cf::t_8239401a31da74 6
+docs/operations/mcpfn.md
+  s_450bc0bce405cf::t_8239401a31da74 26-28
+  s_ee5d9d808851a0::t_cb10ef56bfb0ea 52-54,58,93-94,96-98
+  s_450bc0bce405cf::t_932e226a148e8b 44-51,59-66
+  s_ee5d9d808851a0::t_74aff8ae0aca4e 55-57
+packages/authfn-mcp-oauth/package.json
+  s_450bc0bce405cf::t_8239401a31da74 24
+mcp/tests/integration/mcp-read.integration.test.ts
+  s_ee5d9d808851a0::t_ff6a2b2b95e8a6 76,78-81,85-90,114-120,124
+packages/api/tests/security/redaction.security.test.ts
+  s_ee5d9d808851a0::t_20a23d8b632f17 25,92-93,136,200
+packages/observability/src/rollups.ts
+  s_ee5d9d808851a0::t_a6f9e33503d45c 48-49,181-182,219-220,269-270,337-338
+scripts/topology-deployment.test.mjs
+  s_450bc0bce405cf::t_49113f1ac65798 99,102
+scripts/lib/topology-deployment.mjs
+  s_450bc0bce405cf::t_8239401a31da74 100
+pnpm-lock.yaml
+  s_ee5d9d808851a0::t_0175a1ccf91102 164,181,380-381,383-384,387,390,429-430,486-487,526-527,554-555,566-567,638-639,681-682,737-738,754,855-856,1262-1264,2531-2532,2540-2541,2544-2545,2548-2549,4086-4087,6989,6999,7026,7037,7627-7628,8589,8591,8605,8607,8618,8620-8621,8624,8629,8631-8634,8636,8642,8745,8764-8765,8910,8912,10232
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5cc42dd494ca0db77ff220059de6fdf7686de7c1",
+  "prompts": {},
+  "sessions": {
+    "s_450bc0bce405cf": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0ee94-5c8b-7f80-9749-4ef3aa946da8",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    },
+    "s_ee5d9d808851a0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0f1e3-16d3-72f2-af1e-998d62994d47",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}

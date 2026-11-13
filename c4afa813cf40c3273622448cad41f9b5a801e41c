@@ -1,0 +1,227 @@
+docs/operations/deployment.md
+  s_55a3fd9e5a0577::t_d5dc242cd25193 11-50,86-89
+  s_55a3fd9e5a0577::t_1d92fab26f7b90 90
+  s_55a3fd9e5a0577::t_e7434a96773fad 317-318
+scripts/lib/cloudflare-production.mjs
+  s_55a3fd9e5a0577::t_8e34b42e382094 78-81
+scripts/lib/development-topology-deployment.mjs
+  s_55a3fd9e5a0577::t_8cf9ea764c7ba1 35
+  s_55a3fd9e5a0577::t_d9979425fad8ee 137-154,202
+scripts/development-deployment.test.mjs
+  s_55a3fd9e5a0577::t_f02cdc7f2e4ed7 3,24,145-174,184
+  s_55a3fd9e5a0577::t_03592db8de7b9f 175-183,185-191
+scripts/security-scan.mjs
+  s_55a3fd9e5a0577::t_6754fce58e52d6 54,134,180
+scripts/lib/development-deployment.mjs
+  s_55a3fd9e5a0577::t_57a6ffd05d1da3 82-83,157,187
+.claude/settings.json
+  s_55a3fd9e5a0577::t_83177263b2190b 1-90
+.conduct/authfn-schema.lock.json
+  s_55a3fd9e5a0577::t_37f49968a437b1 2,4-6,15-16
+.conduct/verification/SKI-6/official-conformance-summary.json
+  s_55a3fd9e5a0577::t_9408a411c4f20f 2,67-68,71-72,75,79,83-84,87,91-92,95,99,103,107,111,115,119,123,127,131-132,135,139-140,143-144,147,151,155,159,163,167,171,175,179,183-184,187,193,198,202
+.factory/settings.json
+  s_55a3fd9e5a0577::t_f44fad390490c3 1-85
+.github/workflows/pull-request.yml
+  s_55a3fd9e5a0577::t_0f72b13d88560d 1-73
+.opencode/plugins/entire.ts
+  s_55a3fd9e5a0577::t_0c4a2d5986f0de 1-269
+.pi/extensions/entire/index.ts
+  s_55a3fd9e5a0577::t_5ab5cba19a6011 1-147
+README.md
+  s_55a3fd9e5a0577::t_02b1e594c34064 210-212,221-241,246-248,255-257,269-272
+app/package.json
+  s_55a3fd9e5a0577::t_0275ae0810f63d 18,25
+app/src/lib/analytics/AnalyticsDashboard.svelte
+  s_55a3fd9e5a0577::t_a4de0bec0fb190 2-9,150-154,156-161,312,336
+app/src/lib/api/client.ts
+  s_55a3fd9e5a0577::t_941c68a4abbca2 35,82-87
+app/src/lib/audit/AuditExplorer.svelte
+  s_55a3fd9e5a0577::t_3545e4ce0bf5e3 2-10,229-235,237-247,403,415,463,470
+app/src/lib/auth/client.ts
+  s_55a3fd9e5a0577::t_54ae693f9a2b2d 6,33-45,88,96-100
+app/src/lib/datafn/client.ts
+  s_55a3fd9e5a0577::t_de120409324e13 1-3,5,20-36,54-83,92-170,172-174,176-190,193
+app/src/lib/markdown/MarkdownEditor.svelte
+  s_55a3fd9e5a0577::t_e3c66eeeb14c43 73,75,123,167,170-183,185-198,281
+app/src/lib/skills/SkillState.svelte
+  s_55a3fd9e5a0577::t_07a74074c6c163 2-3,23-33,40-49,51,53,68,80,114
+app/src/lib/skills/datafn.ts
+  s_55a3fd9e5a0577::t_54fd2a39de498b 2,244,265,295,318
+app/src/lib/workspaces/credential-issuance.svelte.ts
+  s_55a3fd9e5a0577::t_d267cc9bc30cc8 1-5,7-9,11-14,17-21,24-28,31-33,36-39,41
+app/src/regional-datafn-worker.ts
+  s_55a3fd9e5a0577::t_32098a3340fef9 1-80
+app/src/routes/(app)/settings/agents/+page.svelte
+  s_55a3fd9e5a0577::t_593120dca09c0b 3,5-14,65,76,85-89,121-135,140-142,159,161,163,172,180-187,190,198,200,211-212,217-218,221-226,241-249,264,271-273,277-279,281,284,286-292,314-315,317-319,321-322,330-332,335,337,341-358,396-400,402-407,409-410,419-454,456-458,460-461,464-493,579,608-611,776,778
+app/src/routes/(app)/settings/members/+page.svelte
+  s_55a3fd9e5a0577::t_6524ebe25f03a9 2-7,12-21,58,67-76,109,112,130,175,207-210,234-236,238-241,244,248,250-256,258-259,266-268,271,273,297-312,315-316,335-342,357-359,363-364,376-389,498,511,518-520,589,599-600,603-604,606,621,630,635
+app/src/routes/(app)/workspaces/+page.svelte
+  s_55a3fd9e5a0577::t_dd8b489ae24afc 2-7,9,24,30,36,57,60,83,92,95,110,128-131,155-157,159,163,165,193-205,208-213,215-216,224-226,229,231,235,237-242,278-280,282,285,287-301,305-312,508-511,620-623
+app/src/routes/+error.svelte
+  s_55a3fd9e5a0577::t_5beb57cb9ed71c 3,14-21,29-30,33-34,36-37
+app/svelte.config.js
+  s_55a3fd9e5a0577::t_5e8dbcca4a9b67 3-18,41
+app/tests/unit/auth-client.test.ts
+  s_55a3fd9e5a0577::t_9f4e27bb4d1cda 1-52
+app/tests/unit/credential-issuance.test.ts
+  s_55a3fd9e5a0577::t_5ca20fce2ba71c 1-47
+app/tests/unit/datafn-direct-client.test.ts
+  s_55a3fd9e5a0577::t_ca981fe4cd563e 1-272
+app/tests/unit/markdown.test.ts
+  s_55a3fd9e5a0577::t_f2f538642d7f0e 1,16
+app/tests/unit/regional-datafn-worker.test.ts
+  s_55a3fd9e5a0577::t_12e20335f28b04 1-200
+app/tests/unit/skills.test.ts
+  s_55a3fd9e5a0577::t_e9e3009b917671 1
+app/vite.config.ts
+  s_55a3fd9e5a0577::t_394cd89324a758 5-28,30
+deployment/topology.development.json
+  s_55a3fd9e5a0577::t_81ae91ed107221 27-31,45-49,63-67
+deployment/topology.production.json
+  s_55a3fd9e5a0577::t_b65c90883d77e0 27-31,45-49
+deployment/wrangler/mcp.development.json
+  s_55a3fd9e5a0577::t_823d2a0e58d282 6
+docs/content/docs/concepts/composability.mdx
+  s_55a3fd9e5a0577::t_8069f422b8e515 3,6,8,10,20-23,25
+docs/content/docs/reference/mcp-tools.mdx
+  s_55a3fd9e5a0577::t_758de396f29d1e 3,6-8,22-45
+docs/operations/data-operation-ownership.md
+  s_55a3fd9e5a0577::t_c37ffedee2e900 13,35
+docs/operations/development.md
+  s_55a3fd9e5a0577::t_506b10f4b5d4ec 72,165-174
+docs/operations/mcpfn.md
+  s_55a3fd9e5a0577::t_bf20a1cd125537 26-28,44-66,93-94,96-108
+eslint.config.js
+  s_55a3fd9e5a0577::t_c1e3538f1bf150 12-14
+mcp/package.json
+  s_55a3fd9e5a0577::t_db762287a2c4d2 16-17,34
+mcp/src/server.ts
+  s_55a3fd9e5a0577::t_a9fbdc9c71809e 591-598
+mcp/src/tool-catalog.test.ts
+  s_55a3fd9e5a0577::t_4381d03c77ad1d 1-39
+mcp/src/tool-catalog.ts
+  s_55a3fd9e5a0577::t_c787fbafbc8cd6 1-45,48,50,52-57,60-69
+mcp/tests/conformance/mcp.conformance.test.ts
+  s_55a3fd9e5a0577::t_5277374c29db88 10-17,108,110-116,118-119,130,146
+mcp/tests/conformance/mcp.official-conformance.test.ts
+  s_55a3fd9e5a0577::t_502d79ac4b19cd 2,67-76,78,125-155,157-192,194-195,197-230,232-233,235-246
+mcp/tests/integration/mcp-mutations.integration.test.ts
+  s_55a3fd9e5a0577::t_b76c7076588d15 762,791-792,797-798,803
+mcp/tests/integration/mcp-read.integration.test.ts
+  s_55a3fd9e5a0577::t_ac93d18b81935e 13,58-59,77-83,87
+mcp/tests/integration/mcp-skill-lifecycle.integration.test.ts
+  s_55a3fd9e5a0577::t_a6550e74ca65ea 223-224,431-434
+mcp/wrangler.jsonc
+  s_55a3fd9e5a0577::t_85051e795f9cbe 6
+package.json
+  s_55a3fd9e5a0577::t_aadc87070ff09c 93
+packages/api/src/app.ts
+  s_55a3fd9e5a0577::t_6b62bd760a4f08 142-156
+packages/api/src/context.ts
+  s_55a3fd9e5a0577::t_cad9f5a4f9fcbb 43
+packages/api/src/middleware/authentication.ts
+  s_55a3fd9e5a0577::t_245aa3a7447e77 61-71
+packages/api/src/middleware/authorization.ts
+  s_55a3fd9e5a0577::t_18b8c5ecdcba10 53-60
+packages/api/src/middleware/rate-limit.test.ts
+  s_55a3fd9e5a0577::t_50352297b360bf 1-53
+packages/api/src/middleware/rate-limit.ts
+  s_55a3fd9e5a0577::t_86969a8b791618 22-31
+packages/api/src/services.ts
+  s_55a3fd9e5a0577::t_9eb6a45a97595e 5,17-28,57-61,67-87,114-116,132-141,165-274,288,295,400
+packages/api/tests/integration/migrated-workspace-maintenance.integration.test.ts
+  s_55a3fd9e5a0577::t_41430daa7baa17 15-16,18-22,65-73
+packages/api/tests/integration/public-projection-current.integration.test.ts
+  s_55a3fd9e5a0577::t_d2691c4e943010 63-70
+packages/api/tests/integration/utc-rollups.integration.test.ts
+  s_55a3fd9e5a0577::t_fa05fcd5de45c0 1-177
+packages/api/tests/security/redaction.security.test.ts
+  s_55a3fd9e5a0577::t_44f65d0c4b8fd5 25-26,93-94,119,136-140,142,206
+packages/auth/src/server.ts
+  s_55a3fd9e5a0577::t_081c2f10c59d29 7,10,14,61-66,73-74,165,192-213,219-224,230-231
+packages/authfn-mcp-oauth/package.json
+  s_55a3fd9e5a0577::t_e291327a7acb64 24
+packages/config/src/index.test.ts
+  s_55a3fd9e5a0577::t_2ee370f3ed700e 58-62,71-75,114-179,230
+packages/config/src/index.ts
+  s_55a3fd9e5a0577::t_e068638a9bde55 53-58,129-136,517,520-612,801-806
+packages/control-plane/src/topology.test.ts
+  s_55a3fd9e5a0577::t_36cb4599f94a9e 32-33,74-161
+packages/control-plane/src/topology.ts
+  s_55a3fd9e5a0577::t_4f2689d685158a 21-23,27,31-44,56-87,104,147,252-268
+packages/datafn/src/client.ts
+  s_55a3fd9e5a0577::t_55d232078aac66 3,8-9,16,26-27,40
+packages/datafn/src/regional-ticket.test.ts
+  s_55a3fd9e5a0577::t_a0a47697a754fd 1-204
+packages/datafn/src/server.ts
+  s_55a3fd9e5a0577::t_7c4c1dfc709ce8 5-6,8,11-15,43-44,50-57,61-62,64,69,72,90,96-116
+packages/datafn/tests/integration/read-model.integration.test.ts
+  s_55a3fd9e5a0577::t_1877ae2b984c63 18-26,60-108,161-205,239-262
+packages/db/src/principals.ts
+  s_55a3fd9e5a0577::t_85ea636a8fe111 26-35,45,55
+packages/observability/src/rollups.ts
+  s_55a3fd9e5a0577::t_8e9556b0b20539 30-39,46,49,58,179,185,192,229,258,279,329,347
+packages/storage/src/canonicalize.test.ts
+  s_55a3fd9e5a0577::t_ef62a9e49de814 31-45
+packages/storage/src/canonicalize.ts
+  s_55a3fd9e5a0577::t_ab85c85906f2f6 23-25
+packages/ui/src/components/Dialog.svelte
+  s_55a3fd9e5a0577::t_234577e45e93c6 10,77
+packages/ui/src/components/EmptyState.svelte
+  s_55a3fd9e5a0577::t_efaade08675720 22
+packages/ui/src/components/ErrorState.svelte
+  s_55a3fd9e5a0577::t_21c9a2f6b2cd95 10,16,23,53,59
+packages/ui/src/markdown.ts
+  s_55a3fd9e5a0577::t_8526bc66a62a95 7-13
+packages/ui/tests/unit/markdown.test.ts
+  s_55a3fd9e5a0577::t_ba8165a1444019 1,53-64
+pnpm-lock.yaml
+  s_55a3fd9e5a0577::t_2b7451244061b1 13-14,16-17,22-23,25-26,34-35,39-41,58-59,161,178,243-245,266-268,377-378,380-381,384,387,426-427,451,483-484,509,512,515,523-524,551-552,561,563-564,599,602,618,621,624,633,635-636,658,661,664,676,678-679,734-735,751,852-853,1026-1027,1029-1030,1035-1036,1038-1039,1256-1258,1345-1346,1348-1349,1352-1353,2525-2526,2534-2535,2538-2539,2542-2543,3492-3506,3525-3527,4080-4081,6975,6978,6985,6988,7012,7015,7022,7026,7385,7524-7525,7557,7616-7617,7735,7737,7741,7743,7745-7747,8578,8580,8594,8596,8607,8609-8610,8613,8618,8620-8623,8625,8631,8734,8753-8754,8899,8901,9611-9617,9636-9639,10221
+pnpm-workspace.yaml
+  s_55a3fd9e5a0577::t_d2616afb5792f3 16-18,36-40,42-44,50,83-87,89-91,93,114-117,132
+scripts/datafn-ticket-keys.test.mjs
+  s_55a3fd9e5a0577::t_b40c84c0706062 1-59
+scripts/deploy-development-topology.mjs
+  s_55a3fd9e5a0577::t_cb891dfaf8e656 8-20,22,24
+scripts/deploy-topology.mjs
+  s_55a3fd9e5a0577::t_864e60dba637d9 3,64,69-90,94-97,298-299
+scripts/development-topology-deployment.test.mjs
+  s_55a3fd9e5a0577::t_51977e21fa85ee 5-6,16-23,47-61,77-84
+scripts/lib/datafn-ticket-keys.mjs
+  s_55a3fd9e5a0577::t_2048ae5fa24347 1-45
+scripts/lib/development-topology-secrets.mjs
+  s_55a3fd9e5a0577::t_911d42e62f759f 5-9,12,20-27,33-41,50-53
+scripts/lib/local-wrangler-config.test.mjs
+  s_55a3fd9e5a0577::t_7a73435dadbda0 50
+scripts/lib/topology-deployment.mjs
+  s_55a3fd9e5a0577::t_9ffeef8d81a988 58-88,93-98,100,140-142,151-152,167-182,196-197,279-283,286-315
+scripts/render-development-topology-config.mjs
+  s_55a3fd9e5a0577::t_2dba098bc44691 96-100,116,135-147,149-150
+scripts/render-topology-config.mjs
+  s_55a3fd9e5a0577::t_451e054db560af 71-75,99-114
+scripts/run-unit-tests.mjs
+  s_55a3fd9e5a0577::t_254194a1d46605 41
+scripts/test-mcp-production.mjs
+  s_55a3fd9e5a0577::t_ae2fed9ee05823 1,5,78-79,183-198
+scripts/topology-deployment.test.mjs
+  s_55a3fd9e5a0577::t_df90b9cace5197 41-42,60-70,76-79,95-96,99,102,131-229,262-264,267-271
+docs/operations/mdfn.md
+  s_55a3fd9e5a0577::t_41eddd9476cf22 12
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c4afa813cf40c3273622448cad41f9b5a801e41c",
+  "prompts": {},
+  "sessions": {
+    "s_55a3fd9e5a0577": {
+      "agent_id": {
+        "tool": "pi",
+        "id": "01a10be1-522e-765d-9c95-775003c02c7a",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}

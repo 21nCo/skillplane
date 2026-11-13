@@ -1,0 +1,24 @@
+packages/db/tests/integration/git-source-schema.integration.test.ts
+  s_b0f5ac773d2bd4::t_117137d052e78f 1-2,9-11,15,27-83
+packages/testing/e2e/git-sources.spec.ts
+  s_b0f5ac773d2bd4::t_9a8e776bb77d53 1-110
+  s_b0f5ac773d2bd4::t_beff98ef441506 111
+app/src/routes/(app)/[workspaceSlug]/sources/+page.svelte
+  s_b0f5ac773d2bd4::t_9f153302ac0c20 36-38,106,127-134
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c0990b695460eb7da65463ad6f4cab15f739e6d4",
+  "prompts": {},
+  "sessions": {
+    "s_b0f5ac773d2bd4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ca62123f-e191-43ba-a12e-6d1b29e43d5c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}

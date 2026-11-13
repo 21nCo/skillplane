@@ -1,0 +1,25 @@
+app/src/routes/(app)/[workspaceSlug]/sources/+page.svelte
+  s_3d9cf2f71e25cd::t_7d06bc6c467c58 241,244
+docs/operations/git-sources.md
+  s_3d9cf2f71e25cd::t_46ffe3c1dad384 5-7
+packages/domain/src/git-source-provider.test.ts
+  s_3d9cf2f71e25cd::t_316b8e4c68f284 64-72,127-130
+packages/domain/src/git-source-provider.ts
+  s_3d9cf2f71e25cd::t_024c9bc2a1ed70 72,77-82
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "290634e4a8d8ee65e3311c16780371fce0e8c3cc",
+  "prompts": {},
+  "sessions": {
+    "s_3d9cf2f71e25cd": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1139c-4793-73e3-92a4-57fc99ae0685",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}

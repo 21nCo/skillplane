@@ -1,0 +1,30 @@
+packages/db/tests/integration/git-source-schema.integration.test.ts
+  s_b0f5ac773d2bd4::t_0a9a17970ca949 1-49
+  s_b0f5ac773d2bd4::t_6a30e4ff2d4fa9 50-51
+app/src/routes/(app)/[workspaceSlug]/sources/+page.svelte
+  s_b0f5ac773d2bd4::t_30bf4db87b3002 104-105,121,123-124
+docs/operations/git-sources.md
+  s_b0f5ac773d2bd4::t_a085d323d5ddda 74-77
+packages/db/src/schema/git-sources.ts
+  s_b0f5ac773d2bd4::t_0247064689b561 59-64
+packages/domain/src/git-source-provider.test.ts
+  s_b0f5ac773d2bd4::t_b2340e8e2b8c46 212-214
+packages/domain/src/git-source-provider.ts
+  s_b0f5ac773d2bd4::t_be390df31b45ea 120,269
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e342c96fa38cb640a0d6dd610f2b6c7ca3be6048",
+  "prompts": {},
+  "sessions": {
+    "s_b0f5ac773d2bd4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ca62123f-e191-43ba-a12e-6d1b29e43d5c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}

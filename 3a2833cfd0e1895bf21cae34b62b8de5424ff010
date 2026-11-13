@@ -1,0 +1,24 @@
+app/tests/unit/auth-client.test.ts
+  s_ba56058519ffbc::t_4830ee31de6ef3 1,22-25
+  s_ba56058519ffbc::t_649bfbd370173e 39
+app/tests/unit/regional-datafn-worker.test.ts
+  s_ba56058519ffbc::t_4830ee31de6ef3 84-85
+app/tests/unit/datafn-direct-client.test.ts
+  s_ba56058519ffbc::t_4830ee31de6ef3 164,167,169,190-200
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3a2833cfd0e1895bf21cae34b62b8de5424ff010",
+  "prompts": {},
+  "sessions": {
+    "s_ba56058519ffbc": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0c30c-478d-7a03-957d-9a521dfa26a9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}

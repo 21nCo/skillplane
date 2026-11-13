@@ -1,0 +1,31 @@
+packages/datafn/tests/integration/read-model.integration.test.ts
+  s_85aec2585b9146::t_632d4c3516af21 18-26
+  s_85aec2585b9146::t_500850392046ce 60-108
+  s_85aec2585b9146::t_1f512086639814 194-217
+pnpm-workspace.yaml
+  s_85aec2585b9146::t_df93fcea154874 86-88,90
+  s_85aec2585b9146::t_4dafed5f62583a 47
+  s_85aec2585b9146::t_5d66cbd332237b 129
+  s_85aec2585b9146::t_fff9bae10b39f4 39-41
+packages/datafn/src/server.ts
+  s_85aec2585b9146::t_eafb1e6cb06ef4 50
+  s_85aec2585b9146::t_ea8969d93aa240 10
+pnpm-lock.yaml
+  s_85aec2585b9146::t_f7bf71f9a36bb8 34-35,39-41,58-59,450,560,598,601,617,620,623,632,675,1344-1345,1347-1348,1351-1352,3491-3505,3524-3526,7389,7528-7529,7561,7737,7739,7743,7745,7747-7749,9607-9613,9632-9635
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7d788e6bdd5bc33961af5dd917106f76b4d51490",
+  "prompts": {},
+  "sessions": {
+    "s_85aec2585b9146": {
+      "agent_id": {
+        "tool": "droid",
+        "id": "53b5e45e-9d51-46dc-995c-c638259427c4",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}

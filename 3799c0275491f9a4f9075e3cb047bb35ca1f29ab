@@ -1,0 +1,51 @@
+app/src/lib/layout/Sidebar.svelte
+  s_3d9cf2f71e25cd::t_4fbc50cd1cb92a 89
+app/src/routes/(app)/[workspaceSlug]/skills/+page.svelte
+  s_3d9cf2f71e25cd::t_4f34759fb456b6 106-110,197,252-256,259-263
+app/src/routes/(app)/[workspaceSlug]/sources/+page.svelte
+  s_3d9cf2f71e25cd::t_758b5002ed0633 71-72,78,80,86-89,97-104,174-186,188-189,275
+docs/operations/git-sources.md
+  s_3d9cf2f71e25cd::t_5471ab4e500883 35-39,85
+packages/api/src/routes/git-sources.ts
+  s_3d9cf2f71e25cd::t_6541fe70e8db1d 1,115-129,134,141
+packages/api/tests/integration/git-sources.integration.test.ts
+  s_3d9cf2f71e25cd::t_64694cc8292b37 1-4,9,14-16,24,26-28,46,129-201
+packages/db/migrations/0053_regional_git_sources.sql
+  s_3d9cf2f71e25cd::t_8fc186d334958b 30,37-38,41,45
+packages/db/src/schema/git-sources.ts
+  s_3d9cf2f71e25cd::t_1f121694afd020 84-86,111-114
+packages/domain/src/errors.ts
+  s_3d9cf2f71e25cd::t_28156ccb8f0a99 9
+packages/domain/src/git-provenance.ts
+  s_3d9cf2f71e25cd::t_ca40709cdc515a 2-23
+packages/domain/src/git-source-provider.test.ts
+  s_3d9cf2f71e25cd::t_0301a0948d878c 47,133-139,178-183,216-244
+packages/domain/src/git-source-provider.ts
+  s_3d9cf2f71e25cd::t_b907a49f70b3f9 27-31,134-135,172-181,183-191,255,278-281,310-312,372-376
+packages/domain/src/git-sources.ts
+  s_3d9cf2f71e25cd::t_889353b3c93507 1,74,281,435-451,456,548-553,564,605-610,636,678-701,718-752,765,778,786,810
+packages/domain/src/skill-versions.ts
+  s_3d9cf2f71e25cd::t_7e920082844537 1,181,234-239,312-317
+packages/domain/src/skills.ts
+  s_3d9cf2f71e25cd::t_35c3f8fd6f1db4 1,324-331,340,408-409
+packages/domain/tests/integration/git-sources.integration.test.ts
+  s_3d9cf2f71e25cd::t_3a76b153c93317 1,8-12,115-119,426-624
+packages/testing/src/fixtures.ts
+  s_3d9cf2f71e25cd::t_717c0699c7586f 168-180
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3799c0275491f9a4f9075e3cb047bb35ca1f29ab",
+  "prompts": {},
+  "sessions": {
+    "s_3d9cf2f71e25cd": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1139c-4793-73e3-92a4-57fc99ae0685",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}

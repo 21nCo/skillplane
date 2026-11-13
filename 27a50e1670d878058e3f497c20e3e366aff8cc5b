@@ -1,0 +1,21 @@
+packages/domain/src/git-provenance.ts
+  s_3d9cf2f71e25cd::t_c708b04f87fdf5 13-18
+packages/domain/tests/integration/git-sources.integration.test.ts
+  s_3d9cf2f71e25cd::t_a008d6f7948b92 1,626-661
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "27a50e1670d878058e3f497c20e3e366aff8cc5b",
+  "prompts": {},
+  "sessions": {
+    "s_3d9cf2f71e25cd": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1139c-4793-73e3-92a4-57fc99ae0685",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}

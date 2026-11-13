@@ -1,0 +1,29 @@
+packages/datafn/src/server.ts
+  s_1646a01a1f58c3::t_a889992531aeb9 10-15,41-66,81
+packages/datafn/tests/integration/read-model.integration.test.ts
+  s_58efaed7f26038::t_ac987a64da604d 161-205
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9483e2738553cbe81ecc91d6d301acb337217eb8",
+  "prompts": {},
+  "sessions": {
+    "s_1646a01a1f58c3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "65440b7b-aab9-4ecf-893f-994eda853f8b",
+        "model": "claude-opus-5"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    },
+    "s_58efaed7f26038": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0a9de-eab0-7b11-9a62-9ddbd11eaf0d",
+        "model": "unknown"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}

@@ -1,0 +1,51 @@
+.github/workflows/deploy-cloudflare-dev.yml
+  s_ce12272281eb3b::t_e4bb023770a3cd 1-119
+app/tests/unit/datafn-direct-client.test.ts
+  s_ce12272281eb3b::t_1743ef6ac539e1 17,49-50,56,93,204,210,222,246
+app/tests/unit/regional-datafn-worker.test.ts
+  s_ce12272281eb3b::t_9ab111dbfecf67 4,11,29
+deployment/topology.development.json
+  s_ce12272281eb3b::t_721209ce73d370 5-6,12-13,28-29,46-47,64-65
+deployment/wrangler/app.development.json
+  s_ce12272281eb3b::t_cab8a6aa478755 14,27,36-39
+deployment/wrangler/mcp.development.json
+  s_ce12272281eb3b::t_227efd2af1bb2a 17,30-31
+docs/operations/development.md
+  s_ce12272281eb3b::t_8338e304676479 10-11,16,18,30-38,40-42,57,185-209
+packages/config/src/index.test.ts
+  s_ce12272281eb3b::t_940ba2e06aa819 108-110,232-234,240-241,251,256-257,267,282,316-317
+packages/config/src/index.ts
+  s_ce12272281eb3b::t_8f1b1b4934b370 260-262,459,471
+packages/control-plane/src/topology.test.ts
+  s_ce12272281eb3b::t_02901f25ca2b5b 65-66
+packages/email/src/templates/templates.test.ts
+  s_ce12272281eb3b::t_113127a3466dcf 12,17,19,53
+scripts/development-topology-deployment.test.mjs
+  s_ce12272281eb3b::t_ce56debe68b297 65,74,80
+scripts/lib/development-deployment.mjs
+  s_ce12272281eb3b::t_f0fdd7768930ba 16-17,26,34
+scripts/render-development-topology-config.mjs
+  s_ce12272281eb3b::t_45a4592fad2864 103-104
+scripts/smoke-development.mjs
+  s_ce12272281eb3b::t_e6d373df0616ce 80
+scripts/test-local-oauth.test.mjs
+  s_ce12272281eb3b::t_7fb8dc8b778f1f 99,110,119,121,125
+scripts/topology-manifest.test.mjs
+  s_ce12272281eb3b::t_669f4b161e1cd1 31-32
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f40eb0436a21758afce8589ce1c83429eda88084",
+  "prompts": {},
+  "sessions": {
+    "s_ce12272281eb3b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1d2376f8-4af3-4920-96da-dff6a042ab4c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}

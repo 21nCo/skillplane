@@ -1,0 +1,16 @@
+.conduct/verification/SKI-6/official-conformance-summary.json
+  h_a39f9495f9ec1d 2,67-68,71-72,75,79,83-84,87,91-92,95,99,103,107,111,115,119,123,127,131-132,135,139-140,143-144,147,151,155,159,163,167,171,175,179,183-184,187,193,198,202
+docs/operations/mcpfn.md
+  h_a39f9495f9ec1d 99-102
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "245eeafb877acb261e42d80bc564ff0a963a54b6",
+  "prompts": {},
+  "humans": {
+    "h_a39f9495f9ec1d": {
+      "author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}

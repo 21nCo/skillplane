@@ -1,0 +1,19 @@
+packages/domain/tests/integration/git-sources.integration.test.ts
+  s_3d9cf2f71e25cd::t_ad24cb7438aedf 11-12,204-252
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b98f2ad3782ff49979a55e0caa96003b682a6f3a",
+  "prompts": {},
+  "sessions": {
+    "s_3d9cf2f71e25cd": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1139c-4793-73e3-92a4-57fc99ae0685",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}

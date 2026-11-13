@@ -1,0 +1,35 @@
+app/src/routes/(app)/[workspaceSlug]/groups/+page.svelte
+  s_3d9cf2f71e25cd::t_cc762db9c7b0ae 26-28,49,79,81-84,152-156,238
+app/src/routes/(app)/[workspaceSlug]/skills/+page.svelte
+  s_3d9cf2f71e25cd::t_a0b603f8002c97 29,80,100,158
+app/src/routes/(app)/settings/members/+page.svelte
+  s_3d9cf2f71e25cd::t_9871e1ad12c923 2,297-301
+docs/operations/skill-groups.md
+  s_3d9cf2f71e25cd::t_8d7c8b0b79fc8d 12-16
+packages/api/src/routes/skill-groups.ts
+  s_3d9cf2f71e25cd::t_03d38871c44bdf 22-28,35,94-107
+packages/api/tests/integration/skill-groups.integration.test.ts
+  s_3d9cf2f71e25cd::t_d96b56e5e1acfe 95-103
+packages/db/src/migrate.test.ts
+  s_3d9cf2f71e25cd::t_dfab41104f7f1d 66,76
+packages/domain/src/skill-groups.ts
+  s_3d9cf2f71e25cd::t_6a5950bf58cf99 217,261-289,313-321
+packages/domain/tests/integration/skill-groups.integration.test.ts
+  s_3d9cf2f71e25cd::t_21bb2ea4d1d4c0 84-107,144,191-214
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "59a10e1e6466bb00ea3aa1c92d2d87668267a719",
+  "prompts": {},
+  "sessions": {
+    "s_3d9cf2f71e25cd": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1139c-4793-73e3-92a4-57fc99ae0685",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}

@@ -1,0 +1,79 @@
+app/src/lib/layout/Sidebar.svelte
+  s_3d9cf2f71e25cd::t_2d5f408d33bf81 86-92
+app/src/lib/skills/api.ts
+  s_3d9cf2f71e25cd::t_5deabecea95302 45,59,63,65-67
+app/src/lib/sources/VersionSource.svelte
+  s_3d9cf2f71e25cd::t_7a945ec2cd5e23 1-59
+app/src/lib/sources/api.ts
+  s_3d9cf2f71e25cd::t_f4949cb87708ef 1-69
+app/src/routes/(app)/[workspaceSlug]/skills/+page.svelte
+  s_3d9cf2f71e25cd::t_c92559545da737 2,32,59,84,85-86,88-107,186-190,194-198
+app/src/routes/(app)/[workspaceSlug]/skills/[skillSlug]/+page.svelte
+  s_3d9cf2f71e25cd::t_7442e5e8fcaf80 3,67-71
+app/src/routes/(app)/[workspaceSlug]/skills/[skillSlug]/versions/[versionId]/+page.svelte
+  s_3d9cf2f71e25cd::t_4e11f1fd3d0dd2 2,324-328
+app/src/routes/(app)/[workspaceSlug]/sources/+page.svelte
+  s_3d9cf2f71e25cd::t_a3cb1e96f8262d 1-419
+docs/operations/git-sources.md
+  s_3d9cf2f71e25cd::t_e559299151f2f4 1-86
+packages/api/src/app.ts
+  s_3d9cf2f71e25cd::t_ec525659854569 2,138
+packages/api/src/routes/git-sources.ts
+  s_3d9cf2f71e25cd::t_04fd834f67861b 1-150
+packages/api/src/routes/skills.ts
+  s_3d9cf2f71e25cd::t_6cd4ae21c568b0 131-133,165-167
+packages/api/tests/integration/git-sources.integration.test.ts
+  s_3d9cf2f71e25cd::t_a0d167af4e1e05 1-118
+packages/control-plane/src/concrete-migration.ts
+  s_3d9cf2f71e25cd::t_31ada87ca45196 39-42
+packages/control-plane/src/table-ownership.ts
+  s_3d9cf2f71e25cd::t_5f9341755ceab2 43-46
+packages/db/migrations/0053_regional_git_sources.sql
+  s_3d9cf2f71e25cd::t_a1496421cbdf56 1-46
+packages/db/src/migrate.test.ts
+  s_3d9cf2f71e25cd::t_80dd8b64e82143 67,77
+packages/db/src/schema/git-sources.ts
+  s_3d9cf2f71e25cd::t_9f774cfec1b815 1-136
+packages/db/src/schema/index.ts
+  s_3d9cf2f71e25cd::t_a6e46b184ae133 2,53,78,102,104
+packages/domain/package.json
+  s_3d9cf2f71e25cd::t_e863989f492800 29-30
+packages/domain/src/git-provenance.ts
+  s_3d9cf2f71e25cd::t_8e83c778c380bf 1-29
+packages/domain/src/git-source-provider.test.ts
+  s_3d9cf2f71e25cd::t_1d7af7ce38a848 1-193
+packages/domain/src/git-source-provider.ts
+  s_3d9cf2f71e25cd::t_5934fe79c79cf0 1-360
+packages/domain/src/git-sources.ts
+  s_3d9cf2f71e25cd::t_90a7765d13005c 1-759
+packages/domain/src/index.ts
+  s_3d9cf2f71e25cd::t_6ade35aa69ac33 32,34-36
+packages/domain/src/search.ts
+  s_3d9cf2f71e25cd::t_d1f4e9321c1df5 274,313,335-336,338-339,383,428,430
+packages/domain/src/skill-versions.ts
+  s_3d9cf2f71e25cd::t_075d52b6328289 1-4,179,198,295-299,331-338
+packages/domain/src/skills.ts
+  s_3d9cf2f71e25cd::t_4156dd88403806 1-4,92,330,350,432-436,450-457,566-570,653,669-674,709,725
+packages/domain/tests/integration/git-sources.integration.test.ts
+  s_3d9cf2f71e25cd::t_7e5f75008ebde6 1-365
+packages/storage/src/paths.ts
+  s_3d9cf2f71e25cd::t_f01cac69f6bcdb 3-18
+pnpm-lock.yaml
+  s_3d9cf2f71e25cd::t_6f21ead8cbc222 717-719
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "042e82cce7c628507ef85bb104743b6dfd23814d",
+  "prompts": {},
+  "sessions": {
+    "s_3d9cf2f71e25cd": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1139c-4793-73e3-92a4-57fc99ae0685",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
