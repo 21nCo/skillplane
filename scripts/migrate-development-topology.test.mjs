@@ -11,7 +11,7 @@ import { root } from "./lib/production-deployment.mjs";
 import {
   accountListing,
   developmentAccountId,
-  developmentCloudflareVariables,
+  withDevelopmentCloudflare,
 } from "./lib/cloudflare-accounts-fixture.mjs";
 
 // `.invalid` hosts never resolve: a refusal message, rather than ENOTFOUND,
@@ -34,25 +34,15 @@ const unrelatedProductionIdentities =
 
 // Every run passes the development Cloudflare token preflight against a
 // stubbed account listing, so the database checks are the ones under test.
-async function withEnvironment(values, operation) {
-  const saved = { ...process.env };
-  const savedFetch = globalThis.fetch;
-  globalThis.fetch = accountListing([developmentAccountId]);
-  for (const name of Object.keys(process.env)) {
-    if (
-      /^(SKILLPLANE_|RAILWAY_DATABASE_URL$|GITHUB_ACTIONS$|PGHOST$|PGPORT$)/u.test(name)
-    )
-      Reflect.deleteProperty(process.env, name);
-  }
-  Object.assign(process.env, developmentCloudflareVariables, values);
-  try {
-    return await operation();
-  } finally {
-    globalThis.fetch = savedFetch;
-    for (const name of Object.keys(process.env))
-      Reflect.deleteProperty(process.env, name);
-    Object.assign(process.env, saved);
-  }
+// PGHOST and PGPORT are cleared too, so no ambient default reaches a check.
+function withEnvironment(values, operation) {
+  return withDevelopmentCloudflare(
+    {
+      fetch: accountListing([developmentAccountId]),
+      environment: { PGHOST: undefined, PGPORT: undefined, ...values },
+    },
+    operation,
+  );
 }
 
 describe("development topology migration safety", () => {

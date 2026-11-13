@@ -11,7 +11,7 @@ function assert(value, message) {
   if (!value) throw new Error(message);
 }
 
-async function request(url, expected) {
+async function request(fetch, url, expected) {
   const response = await fetch(url, { signal: AbortSignal.timeout(15_000) });
   if (!expected.includes(response.status)) {
     throw new Error(`${new URL(url).pathname} returned HTTP ${response.status}`);
@@ -25,14 +25,21 @@ async function json(response, label) {
   });
 }
 
+// `options.fetch` replaces the global fetch for the account listing and every
+// smoke request alike.
 export async function smokeDevelopment(options = {}) {
-  await verifiedDevelopmentCloudflareEnvironment(options);
-  const ready = await request(`${developmentIssuer}/api/v1/health/ready`, [200]);
+  const fetch = options.fetch ?? globalThis.fetch;
+  await verifiedDevelopmentCloudflareEnvironment({ fetch });
+  const ready = await request(fetch, `${developmentIssuer}/api/v1/health/ready`, [200]);
   const readiness = await json(ready, "Development readiness");
   assert(readiness.ok === true, "Development app is not ready");
 
   const authorization = await json(
-    await request(`${developmentIssuer}/.well-known/oauth-authorization-server`, [200]),
+    await request(
+      fetch,
+      `${developmentIssuer}/.well-known/oauth-authorization-server`,
+      [200],
+    ),
     "Development OAuth metadata",
   );
   assert(
@@ -45,7 +52,7 @@ export async function smokeDevelopment(options = {}) {
     developmentResource,
   );
   const protectedResource = await json(
-    await request(resourceMetadataUrl, [200]),
+    await request(fetch, resourceMetadataUrl, [200]),
     "Development protected-resource metadata",
   );
   assert(

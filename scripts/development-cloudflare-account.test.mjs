@@ -153,6 +153,44 @@ describe("development Cloudflare token account preflight", () => {
 
   const json = (body, status = 200) => Response.json(body, { status });
   const fullPage = Array.from({ length: 50 }, () => ({ id: developmentAccountId }));
+  // A successful listing page with documented `result_info`, overridden per case.
+  const page = (ids, info = {}) => ({
+    success: true,
+    result: ids.map((id) => ({ id })),
+    result_info: { page: 1, per_page: 50, count: ids.length, ...info },
+  });
+  const pagedFetch = (bodies) => async (url) =>
+    json(bodies[Number(new URL(String(url)).searchParams.get("page")) - 1]);
+
+  it("walks pages until the accounts seen reach total_count", async () => {
+    const calls = [];
+    const message = await refusal(
+      accountListing([[developmentAccountId], [otherAccountId]], calls),
+    );
+    assert.ok(
+      message.includes(
+        `can access an account other than the development account: ${otherAccountId}`,
+      ),
+      message,
+    );
+    assert.deepEqual(
+      calls.map(({ url }) => new URL(url).searchParams.get("page")),
+      ["1", "2"],
+    );
+  });
+
+  it("passes a development-only listing whose total_pages agrees", async () => {
+    const calls = [];
+    const listing = failingFetch(
+      json(page([developmentAccountId], { total_count: 1, total_pages: 1 })),
+    );
+    await preflight(async (...request) => {
+      calls.push(request);
+      return listing();
+    });
+    assert.equal(calls.length, 1);
+  });
+
   for (const [label, fetch, reason] of [
     ["an HTTP error", failingFetch(json({ success: false }, 403)), "HTTP 403"],
     [
@@ -194,9 +232,25 @@ describe("development Cloudflare token account preflight", () => {
       "the response contained an invalid account ID",
     ],
     [
+      "a short page without pagination",
+      failingFetch(json({ success: true, result: [{ id: developmentAccountId }] })),
+      "the response omitted its pagination",
+    ],
+    [
       "a full page without pagination",
       failingFetch(json({ success: true, result: fullPage })),
-      "a full page omitted its pagination",
+      "the response omitted its pagination",
+    ],
+    [
+      "pagination without total_count",
+      failingFetch(
+        json({
+          success: true,
+          result: [{ id: developmentAccountId }],
+          result_info: { page: 1, per_page: 50, count: 1, total_pages: 1 },
+        }),
+      ),
+      "the response omitted its pagination",
     ],
     [
       "invalid pagination",
@@ -204,20 +258,74 @@ describe("development Cloudflare token account preflight", () => {
         json({
           success: true,
           result: [{ id: developmentAccountId }],
-          result_info: { total_pages: "1" },
+          result_info: { count: 1, total_count: "1" },
         }),
       ),
       "the response had invalid pagination",
     ],
     [
-      "unbounded pagination",
-      failingFetch(() =>
-        json({
-          success: true,
-          result: [{ id: developmentAccountId }],
-          result_info: { total_pages: 1000 },
-        }),
+      "an invalid total_pages",
+      failingFetch(
+        json(page([developmentAccountId], { total_count: 1, total_pages: "1" })),
       ),
+      "the response had invalid pagination",
+    ],
+    [
+      // The account listing's reported total names an account that no page
+      // returned; Cloudflare repeats or empties later pages.
+      "a short page whose total_count reports more accounts",
+      failingFetch(() => json(page([developmentAccountId], { total_count: 2 }))),
+      "a page added no accounts before the reported total",
+    ],
+    [
+      "a later empty page before the reported total",
+      pagedFetch([
+        page([developmentAccountId], { total_count: 2 }),
+        page([], { page: 2, total_count: 2 }),
+      ]),
+      "a page added no accounts before the reported total",
+    ],
+    [
+      "total_pages that ends before total_count",
+      failingFetch(
+        json(page([developmentAccountId], { total_count: 2, total_pages: 1 })),
+      ),
+      "the response had inconsistent pagination",
+    ],
+    [
+      "total_pages that continues past total_count",
+      failingFetch(
+        json(page([developmentAccountId], { total_count: 1, total_pages: 2 })),
+      ),
+      "the response had inconsistent pagination",
+    ],
+    [
+      "a count that disagrees with the results",
+      failingFetch(json(page([developmentAccountId], { count: 2, total_count: 2 }))),
+      "the response had inconsistent pagination",
+    ],
+    [
+      "more accounts than total_count",
+      failingFetch(
+        json(page([developmentAccountId, otherAccountId], { total_count: 1 })),
+      ),
+      "the response had inconsistent pagination",
+    ],
+    [
+      "a total_count that changes between pages",
+      pagedFetch([
+        page([developmentAccountId], { total_count: 2 }),
+        page([otherAccountId], { page: 2, total_count: 3 }),
+      ]),
+      "the response had inconsistent pagination",
+    ],
+    [
+      "unbounded pagination",
+      async (url) => {
+        const number = Number(new URL(String(url)).searchParams.get("page"));
+        const id = number.toString(16).padStart(32, "0");
+        return json(page([id], { page: number, total_count: 1000 }));
+      },
       "more than 20 pages of accounts",
     ],
   ]) {
@@ -328,6 +436,30 @@ describe("development entrypoints verify the Cloudflare token first", () => {
         },
       },
       () => assert.rejects(smokeDevelopment(), /smoke request stopped by the test/u),
+    );
+    assert.deepEqual(requested, ["accounts", "skillplane-app.21n.dev"]);
+  });
+
+  it("smoke:dev sends the listing and smoke requests through options.fetch", async () => {
+    const requested = [];
+    const listing = accountListing([developmentAccountId]);
+    const refuseGlobal = async () => {
+      throw new Error("the global fetch must not be used");
+    };
+    await withDevelopmentCloudflare({ fetch: refuseGlobal }, () =>
+      assert.rejects(
+        smokeDevelopment({
+          fetch: async (url, init) => {
+            if (String(url).startsWith("https://api.cloudflare.com/")) {
+              requested.push("accounts");
+              return listing(url, init);
+            }
+            requested.push(new URL(String(url)).host);
+            throw new Error("smoke request stopped by the test");
+          },
+        }),
+        /smoke request stopped by the test/u,
+      ),
     );
     assert.deepEqual(requested, ["accounts", "skillplane-app.21n.dev"]);
   });

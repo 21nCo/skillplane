@@ -140,8 +140,8 @@ jobs:
       # deploy's SCHEMA_BEHIND and ownership checks. It never converts or drops
       # tables, refuses an empty or unconverted database, and refuses any URL
       # that names a production database identity from the job environment.
-      # It first verifies that the development Cloudflare token can reach only
-      # the development account.
+      # The migration script verifies that the development Cloudflare token can
+      # reach only the development account before it opens any database.
       - name: Migrate development topology databases
         run: pnpm db:migrate:dev:topology
         env:

@@ -113,7 +113,10 @@ configuration, runs Wrangler, or opens a database. It stops with
 - no account.
 
 It also stops when the listing fails, for example on a network error or an HTTP
-error status. There is no skip flag. Neither error contains the token. A scope
+error status. It also stops when the listing cannot be shown to be complete:
+the pages must return as many accounts as the reported `total_count`, and
+missing or contradictory pagination totals count as a failure. There is no skip
+flag. Neither error contains the token. A scope
 refusal names the variable that supplied the token, the development account ID,
 the accessible account IDs, and any production account ID it found. A listing
 failure names the variable, the development account ID, and the failure class,

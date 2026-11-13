@@ -198,9 +198,16 @@ function requestFailure(error) {
     : "request failed";
 }
 
+const isCount = (value) => Number.isSafeInteger(value) && value >= 0;
+
+// The listing is complete only when the accounts seen reach the documented
+// `result_info.total_count`. Missing, invalid or contradictory totals, and a
+// page that adds nothing while accounts remain, fail closed: an incomplete
+// listing could hide a production account.
 async function listCloudflareAccounts(token, developmentAccountId, fetchAccounts) {
   const fail = (reason) => listingError(reason, developmentAccountId);
   const accounts = new Set();
+  let expectedTotal;
   for (let page = 1; page <= accountListingMaxPages; page += 1) {
     const url = new URL(cloudflareAccountsUrl);
     url.searchParams.set("page", String(page));
@@ -225,6 +232,7 @@ async function listCloudflareAccounts(token, developmentAccountId, fetchAccounts
     if (body?.success !== true || !Array.isArray(body.result)) {
       throw fail("the response was not a successful account list");
     }
+    const seenBefore = accounts.size;
     for (const account of body.result) {
       const id = typeof account?.id === "string" ? account.id.toLowerCase() : "";
       if (!cloudflareAccountIdPattern.test(id)) {
@@ -232,15 +240,35 @@ async function listCloudflareAccounts(token, developmentAccountId, fetchAccounts
       }
       accounts.add(id);
     }
-    const totalPages = body.result_info?.total_pages;
-    if (totalPages === undefined) {
-      if (body.result.length < accountListingPageSize) return [...accounts];
-      throw fail("a full page omitted its pagination");
+    const info = body.result_info;
+    if (info?.count === undefined || info.total_count === undefined) {
+      throw fail("the response omitted its pagination");
     }
-    if (!Number.isSafeInteger(totalPages) || totalPages < 0) {
+    const totalPages = info.total_pages;
+    if (
+      !isCount(info.count) ||
+      !isCount(info.total_count) ||
+      (totalPages !== undefined && !isCount(totalPages))
+    ) {
       throw fail("the response had invalid pagination");
     }
-    if (page >= totalPages) return [...accounts];
+    expectedTotal ??= info.total_count;
+    if (
+      info.count !== body.result.length ||
+      info.total_count !== expectedTotal ||
+      accounts.size > expectedTotal
+    ) {
+      throw fail("the response had inconsistent pagination");
+    }
+    const complete = accounts.size === expectedTotal;
+    // `total_pages` is undocumented; when present it must agree with the total.
+    if (totalPages !== undefined && complete !== page >= totalPages) {
+      throw fail("the response had inconsistent pagination");
+    }
+    if (complete) return [...accounts];
+    if (accounts.size === seenBefore) {
+      throw fail("a page added no accounts before the reported total");
+    }
   }
   throw fail(`more than ${accountListingMaxPages} pages of accounts`);
 }

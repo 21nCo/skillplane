@@ -16,8 +16,10 @@ export const developmentCloudflareVariables = Object.freeze({
 const accountsUrl = "https://api.cloudflare.com/client/v4/accounts";
 
 // `pages` is a list of account-ID pages; a flat list of IDs is one page.
-// Every request is recorded in `calls`; anything but the account listing
-// throws, so a request that should not happen fails the test.
+// Each response carries the documented `result_info` (page, per_page, count,
+// total_count) without the undocumented `total_pages`. Every request is
+// recorded in `calls`; anything but the account listing throws, so a request
+// that should not happen fails the test.
 export function accountListing(pages, calls = []) {
   const listed = pages.length > 0 && Array.isArray(pages[0]) ? pages : [pages];
   return async (url, init = {}) => {
@@ -41,7 +43,6 @@ export function accountListing(pages, calls = []) {
         per_page: Number(target.searchParams.get("per_page") ?? "20"),
         count: result.length,
         total_count: listed.flat().length,
-        total_pages: listed.length,
       },
     });
   };
