@@ -56,6 +56,10 @@ jobs:
       CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_DEV_ACCOUNT_ID }}
       # Deploy scripts refuse to run when the account above equals this one.
       SKILLPLANE_PRODUCTION_CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_PROD_ACCOUNT_ID }}
+      # Non-secret production database identities (host[:port]/database). The
+      # database scripts refuse a development URL that names one of them, and
+      # the topology migration step refuses to run when this is empty.
+      SKILLPLANE_PRODUCTION_DATABASE_IDENTITIES: ${{ vars.SKILLPLANE_PRODUCTION_DATABASE_IDENTITIES }}
       CLOUDFLARE_DEV_CONTROL_HYPERDRIVE_ID: ${{ vars.CLOUDFLARE_DEV_CONTROL_HYPERDRIVE_ID }}
       CLOUDFLARE_DEV_CELL_IN_SOUTH_HYPERDRIVE_ID: ${{ vars.CLOUDFLARE_DEV_CELL_IN_SOUTH_HYPERDRIVE_ID }}
       CLOUDFLARE_DEV_CELL_US_EAST_HYPERDRIVE_ID: ${{ vars.CLOUDFLARE_DEV_CELL_US_EAST_HYPERDRIVE_ID }}
@@ -128,6 +132,18 @@ jobs:
 
       - name: Validate Cloudflare configs
         run: pnpm deploy:check
+
+      # Applies pending control and regional migrations in place before the
+      # deploy's SCHEMA_BEHIND and ownership checks. It never converts or drops
+      # tables, refuses an empty or unconverted database, and refuses any URL
+      # that names a production database identity from the job environment.
+      - name: Migrate development topology databases
+        run: pnpm db:migrate:dev:topology
+        env:
+          SKILLPLANE_DEV_CONTROL_DATABASE_URL: ${{ secrets.SKILLPLANE_DEV_CONTROL_DATABASE_URL }}
+          SKILLPLANE_DEV_DATABASE_URL: ${{ secrets.SKILLPLANE_DEV_DATABASE_URL }}
+          SKILLPLANE_DEV_USEAST_DATABASE_URL: ${{ secrets.SKILLPLANE_DEV_USEAST_DATABASE_URL }}
+          SKILLPLANE_DEV_EUWEST_DATABASE_URL: ${{ secrets.SKILLPLANE_DEV_EUWEST_DATABASE_URL }}
 
       - name: Deploy development topology
         run: pnpm deploy:dev:topology

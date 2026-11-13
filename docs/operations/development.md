@@ -137,6 +137,7 @@ SKILLPLANE_DEV_CONTROL_DATABASE_URL=postgresql://...
 SKILLPLANE_DEV_DATABASE_URL=postgresql://... # in-south compatibility name
 SKILLPLANE_DEV_USEAST_DATABASE_URL=postgresql://...
 SKILLPLANE_DEV_EUWEST_DATABASE_URL=postgresql://...
+SKILLPLANE_PRODUCTION_DATABASE_IDENTITIES=host[:port]/database,... # production control and cells, no credentials
 CLOUDFLARE_DEV_CONTROL_HYPERDRIVE_ID=...
 CLOUDFLARE_DEV_CELL_IN_SOUTH_HYPERDRIVE_ID=...
 CLOUDFLARE_DEV_CELL_US_EAST_HYPERDRIVE_ID=...
@@ -163,16 +164,74 @@ pnpm db:prepare:dev:topology -- \
   --confirm-regionalize-database <india-database-name>
 ```
 
-Render, deploy private cells before gateways, and run the normal public smoke and
-OAuth gates:
+Render, migrate, deploy private cells before gateways, and run the normal public
+smoke and OAuth gates:
 
 ```bash
 pnpm deploy:check
 pnpm deploy:dev:topology:render
+pnpm db:migrate:dev:topology
 pnpm deploy:dev:topology
 pnpm smoke:dev
 pnpm test:dev:oauth
 ```
+
+`db:migrate:dev:topology` brings an already converted topology to the code's
+migration head in place: control-role migrations to
+`SKILLPLANE_DEV_CONTROL_DATABASE_URL`, then regional migrations to each cell URL,
+then the same schema-head and table-ownership checks the deployment runs. It
+never runs the `db:prepare:dev:topology` conversion and never drops, prunes, or
+rewrites tables. It checks the databases in order and migrates none of them until
+every check passes. The first database that is not converted stops it with
+`TOPOLOGY_NOT_PREPARED:<database>:<detail>`, so a rerun can name the next one:
+`<detail>` is `empty` when the database has no applied migration (the early
+migrations apply to every role, so only the conversion can give an empty database
+its role's shape), or the first table of the other role it still holds. Convert
+the topology with `db:prepare:dev:topology` first. That command migrates the
+control database and every cell database, not only the one named in the error.
+It backs up only the India database, and only when India still holds the combined
+schema and needs regionalization; the control, US, and EU databases get no backup.
+`db:migrate:dev:topology` itself takes no backup, because development data is
+disposable, but before opening a connection it refuses any URL
+that identifies the same database (host, port, and database name) as a production
+variable (`SKILLPLANE_CONTROL_DATABASE_URL`, `SKILLPLANE_CELL_<REGION>_DATABASE_URL`,
+`SKILLPLANE_PRODUCTION_DATABASE_URL`,
+`SKILLPLANE_PRODUCTION_MIGRATION_SOURCE_DATABASE_URL`, or `RAILWAY_DATABASE_URL`)
+or an entry of `SKILLPLANE_PRODUCTION_DATABASE_IDENTITIES`. That variable lists
+production databases without credentials as `host[:port]/database` entries
+separated by commas or whitespace (the port defaults to `5432`); list every
+hostname that reaches a production database. The command refuses with
+`PRODUCTION_ISOLATION_UNCONFIGURED` before reading any URL whenever the variable is
+empty, locally and in CI, because the production URL variables are usually absent
+from `.env.development.local` and would otherwise be compared against nothing.
+The comparison uses the host, port, and database the PostgreSQL driver will
+connect to, so `db:migrate:dev:topology`, `deploy:dev:topology`, and
+`db:prepare:dev:topology` refuse a development URL with
+`DEVELOPMENT_DATABASE_DESTINATION_AMBIGUOUS` when its destination differs from
+its URL authority: a `host`, `hostaddr`, or `port` query parameter, a
+percent-encoded, trailing-dot, or numeric (non dotted-quad) host, or a URL
+without a port while `PGPORT` names another port. They also refuse a control
+character (`U+0000` to `U+001F` or `U+007F`, usually written `%00`, `%0A`, or `%7F`)
+in the user, password, database, or any query parameter name or value. PostgreSQL
+receives connection settings as NUL-terminated strings, so such a value can send a
+second database name. The same rule applies to
+`SKILLPLANE_PRODUCTION_DATABASE_IDENTITIES` entries and production URL variables.
+Production targets follow the same host rule, so a production target can never
+silently fail to match: write each `SKILLPLANE_PRODUCTION_DATABASE_IDENTITIES`
+entry and each production URL variable with a lowercase DNS name or a
+dotted-quad IPv4 address (a trailing dot and letter case are normalized). The
+commands refuse a numeric (`2130706433`), shortened (`127.1`), hex (`0x7f.1`),
+or octal (`0177.0.0.1`) host in an identity entry, naming the variable, and in a
+production URL variable with `PRODUCTION_DATABASE_DESTINATION_AMBIGUOUS`.
+Each database migrates in one transaction under the
+shared migration lock, so a second or concurrent run applies nothing, and a run
+interrupted between databases resumes when rerun.
+
+Before uploading any Worker, `deploy:dev:topology` compares each database's
+migration ledger with the code and fails with
+`SCHEMA_BEHIND:<database>:<applied>-><head>` (for example
+`SCHEMA_BEHIND:us-east:0050_regional_verification_immutability->0054_regional_artifact_kind`)
+when a migration is pending. Run `pnpm db:migrate:dev:topology` and deploy again.
 
 To roll out only selected Worker kinds during a canary, pass `--only` to the
 deployment script with a comma-separated list of `app`, `datafn`, `mcp`, and
@@ -194,16 +253,22 @@ remove that development data explicitly rather than silently granting access.
 `.github/workflows/deploy-cloudflare-dev.yml` builds pull requests and deploys
 the three-cell development topology to the `21n-dev` account on every push to
 the `dev` branch (or a manual `workflow_dispatch` of the `dev` branch; dispatches
-from any other ref skip the deploy job). It runs `pnpm deploy:check`
-and then `pnpm deploy:dev:topology`; database preparation, `r2:sync:dev`, and the
-interactive OAuth verifier remain manual.
+from any other ref skip the deploy job). It runs `pnpm deploy:check`,
+`pnpm db:migrate:dev:topology`, and then `pnpm deploy:dev:topology`, so a push
+after a new migration deploys against migrated databases. The migration step
+runs inside the same dev-only job, after its ref and account guard. The
+one-time database preparation, `r2:sync:dev`, and the interactive OAuth verifier
+remain manual.
 
 The deploy job uses the GitHub `dev` environment. The org secret
 `CLOUDFLARE_DEV_API_TOKEN` and org variable `CLOUDFLARE_DEV_ACCOUNT_ID` select the
 account. The org variable `CLOUDFLARE_PROD_ACCOUNT_ID` is required too: the job
 fails closed when it is missing, and refuses to deploy when the development
 account equals it or the production release account (`vars.CLOUDFLARE_ACCOUNT_ID`).
-The `dev` environment must provide:
+The variable `SKILLPLANE_PRODUCTION_DATABASE_IDENTITIES` (org or `dev`
+environment) must list the production control and cell database identities as
+`host[:port]/database` with canonical hosts, never URLs or credentials; the
+migration step refuses to run without it. The `dev` environment must provide:
 
 - Secrets: `SKILLPLANE_DEV_CONTROL_DATABASE_URL`, `SKILLPLANE_DEV_DATABASE_URL`,
   `SKILLPLANE_DEV_USEAST_DATABASE_URL`, `SKILLPLANE_DEV_EUWEST_DATABASE_URL`,

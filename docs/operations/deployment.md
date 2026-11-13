@@ -295,6 +295,26 @@ inventory, and app/MCP release-smoke results. Listing the landing host describes
 the production topology; it does not claim that `deploy:all` deployed or
 validated the landing Worker. The manifest records secret names only.
 
+## Development topology migrations
+
+The development topology does not use `db:migrate:topology`. Its control and
+cell databases migrate with `pnpm db:migrate:dev:topology`, which the
+`Deploy Cloudflare development topology` workflow runs before
+`pnpm deploy:dev:topology` on the `dev` branch. It applies pending migrations in
+place without a backup or safety record, never drops tables, refuses an empty or
+unconverted database before migrating any, and refuses any URL that matches a
+production database variable or an entry of the non-secret
+`SKILLPLANE_PRODUCTION_DATABASE_IDENTITIES` variable, comparing the destination
+the PostgreSQL driver will connect to rather than the URL text alone, and
+refusing a production target whose host is not in canonical form. Any URL or
+identity with a control character (such as `%00`) in a user, password, database,
+or query parameter is refused, because it can send PostgreSQL a second database
+name. It refuses to
+run whenever that variable is empty, locally (set it in `.env.development.local`) and
+in the workflow (an org or `dev` environment variable).
+Production migration behavior is unchanged. See
+[`development.md`](./development.md#three-cell-gateway-development-topology).
+
 ## Live OAuth, MCP, and email gates
 
 The McpFn ownership boundary, automated gates, controlled Claude and ChatGPT

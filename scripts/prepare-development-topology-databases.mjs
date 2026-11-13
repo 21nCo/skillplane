@@ -6,6 +6,7 @@ import { GLOBAL_CONTROL_TABLES } from "../packages/control-plane/dist/index.js";
 import { migrateDatabase } from "../packages/db/dist/src/index.js";
 import { backupProductionDatabase } from "./production-backup.mjs";
 import {
+  developmentInitialWorkspaceRegion,
   developmentTopologyDatabases,
   verifyDevelopmentTopologyDatabaseOwnership,
 } from "./lib/development-topology-deployment.mjs";
@@ -101,7 +102,7 @@ export async function prepareDevelopmentTopologyDatabases(options = {}) {
 
   const control = await migrateDatabase(databases.control.url, {
     role: "control",
-    initialWorkspaceRegion: "in-south",
+    initialWorkspaceRegion: developmentInitialWorkspaceRegion,
     workspaceRegions: Object.keys(databases.cells),
   });
   const cells = {};
