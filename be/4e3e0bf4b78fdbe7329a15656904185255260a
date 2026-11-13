@@ -1,0 +1,55 @@
+app/src/lib/auth/client.ts
+  s_2409648105d207::t_7103ff038b5c5f 6,30-37
+app/tests/unit/auth-client-csrf.test.ts
+  s_717022bb6e13a7::t_01959d97083dac 1-81
+packages/auth/src/session.ts
+  s_2409648105d207::t_88aee489543544 1-2
+packages/testing/e2e/shell.spec.ts
+  s_93bb564ee72fbe::t_efdbe510fa492f 155-161,164-167,171-176
+pnpm-lock.yaml
+  s_b66d0e9dd4fae0::t_252282c9bb13f1 263-265
+app/package.json
+  s_717022bb6e13a7::t_81a6df9af7159b 24
+packages/auth/package.json
+  s_717022bb6e13a7::t_aaaccfac28c1dc 12-16
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "be4e3e0bf4b78fdbe7329a15656904185255260a",
+  "prompts": {},
+  "sessions": {
+    "s_2409648105d207": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d70d3597-81a1-4d05-8bd3-05ad69afb585",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    },
+    "s_717022bb6e13a7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d55f48e0-451c-4cd6-9af6-1e9e4e28d687",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    },
+    "s_93bb564ee72fbe": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d0a2098d-c1e1-4fa8-a938-9959098109e7",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    },
+    "s_b66d0e9dd4fae0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e9c393cf-f180-42b3-b545-a1dbf02818e0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
