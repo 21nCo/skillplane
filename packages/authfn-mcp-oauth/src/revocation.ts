@@ -44,6 +44,29 @@ export async function revokeToken(
   const database = await runtime.pool.connect();
   try {
     await database.query("BEGIN");
+    // The subject columns never change, so read them unlocked and share-lock
+    // the user's consents for this client before any token row lock. A
+    // concurrent revokeConsent holds those consents FOR UPDATE while it sweeps
+    // token rows, so taking the locks in the same order avoids a deadlock. A
+    // token whose consent is gone is still revoked.
+    const subject = await database.query<{
+      readonly user_id: string;
+      readonly client_id: string;
+    }>(
+      `SELECT user_id, client_id
+         FROM authfn_oauth_refresh_tokens
+        WHERE token_hash = $1
+       UNION ALL
+       SELECT user_id, client_id
+         FROM authfn_oauth_access_tokens
+        WHERE token_hash = $1
+       LIMIT 1`,
+      [hash],
+    );
+    const owner = subject.rows[0];
+    if (owner?.client_id === input.clientId) {
+      await lockClientConsents(database, owner.user_id, owner.client_id, "SHARE");
+    }
     const refresh = await database.query<TokenRow>(
       `SELECT id, family_id, user_id, client_id, resource
          FROM authfn_oauth_refresh_tokens
@@ -103,6 +126,28 @@ interface ConsentRow {
   readonly revoked_at: Date | null;
 }
 
+/**
+ * Locks every consent the user holds for one client, ordered by ID, so the
+ * consent revoke (UPDATE) and the RFC 7009 token revoke (SHARE) acquire the
+ * same rows in the same order before either touches a code or token row.
+ */
+async function lockClientConsents(
+  database: PoolClient,
+  userId: string,
+  clientId: string,
+  mode: "SHARE" | "UPDATE",
+): Promise<ConsentRow[]> {
+  const result = await database.query<ConsentRow>(
+    `SELECT id, client_id, resource, revoked_at
+       FROM authfn_oauth_consents
+      WHERE user_id = $1 AND client_id = $2
+      ORDER BY id
+      FOR ${mode === "UPDATE" ? "UPDATE" : "SHARE"}`,
+    [userId, clientId],
+  );
+  return result.rows;
+}
+
 export type ConsentRevocationResult = "revoked" | "already_revoked" | "not_found";
 
 /**
@@ -123,23 +168,22 @@ export async function revokeConsent(
   const database = await runtime.pool.connect();
   try {
     await database.query("BEGIN");
-    // Lock every consent of this user and client in one ordered statement so
-    // concurrent revocations and token issuance (see lockConsentForIssuance)
-    // serialize on the consent rows before any code or token row is locked.
-    const locked = await database.query<ConsentRow>(
-      `SELECT id, client_id, resource, revoked_at
+    // A consent's client never changes, so read it unlocked, then lock every
+    // consent of this user and client in one ordered statement. Concurrent
+    // revocations, RFC 7009 revocation and token issuance (see
+    // lockConsentForIssuance) serialize on the consent rows before any code or
+    // token row is locked.
+    const target = await database.query<{ readonly client_id: string }>(
+      `SELECT client_id
          FROM authfn_oauth_consents
-        WHERE user_id = $1
-          AND client_id = (
-            SELECT client_id
-              FROM authfn_oauth_consents
-             WHERE id = $2 AND user_id = $1
-          )
-        ORDER BY id
-        FOR UPDATE`,
-      [input.userId, input.consentId],
+        WHERE id = $1 AND user_id = $2`,
+      [input.consentId, input.userId],
     );
-    const consent = locked.rows.find((row) => row.id === input.consentId);
+    const clientId = target.rows[0]?.client_id;
+    const locked = clientId
+      ? await lockClientConsents(database, input.userId, clientId, "UPDATE")
+      : [];
+    const consent = locked.find((row) => row.id === input.consentId);
     if (!consent) {
       await database.query("ROLLBACK");
       return "not_found";

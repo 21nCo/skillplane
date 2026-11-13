@@ -327,4 +327,60 @@ describe("OAuth connection listing and revocation", () => {
       blocker.release();
     }
   });
+
+  it("completes a consent revoke racing the client's own RFC 7009 revoke", async () => {
+    const client = await environment.registerClient({ name: "Self-revoking Agent" });
+    const first = await connect(client);
+    const rotated = await refresh(client, first.refresh_token);
+    expect(rotated.status).toBe(200);
+    const current = (await rotated.json()) as TokenPair;
+    const consent = await consentFor(client);
+    const blocker = await environment.services.database.pool.connect();
+    try {
+      // Hold the current refresh token so /oauth/revoke queues on it first.
+      // Without a shared consent lock order, the consent sweep then locks the
+      // consumed parent and waits on this row while the family revoke waits on
+      // the parent, and Postgres aborts one side with a deadlock.
+      await blocker.query("BEGIN");
+      await blocker.query(
+        `SELECT id FROM authfn_oauth_refresh_tokens
+          WHERE user_id = $1 AND client_id = $2 AND consumed_at IS NULL
+          FOR UPDATE`,
+        [environment.fixture.userId, client.clientId],
+      );
+      const clientRevocation = environment.app.fetch(
+        new Request(
+          `${OAUTH_ISSUER}/auth/oauth/revoke`,
+          oauthForm({
+            client_id: client.clientId,
+            token: current.refresh_token,
+            token_type_hint: "refresh_token",
+          }),
+        ),
+      );
+      await waitForLockWaiters(1);
+      const consentRevocation = revoke(consent.consentId);
+      await waitForLockWaiters(2);
+      await blocker.query("ROLLBACK");
+
+      expect((await clientRevocation).status).toBe(200);
+      expect((await consentRevocation).status).toBe(204);
+      expect(await consentRevokedAt(consent.consentId)).toBeInstanceOf(Date);
+      expect(await revocationAudits(consent.consentId)).toHaveLength(1);
+      const live = await environment.services.database.pool.query<{
+        live: string;
+      }>(
+        `SELECT (SELECT count(*) FROM authfn_oauth_refresh_tokens
+                  WHERE user_id = $1 AND client_id = $2 AND revoked_at IS NULL)
+              + (SELECT count(*) FROM authfn_oauth_access_tokens
+                  WHERE user_id = $1 AND client_id = $2 AND revoked_at IS NULL)
+                AS live`,
+        [environment.fixture.userId, client.clientId],
+      );
+      expect(Number(live.rows[0]?.live)).toBe(0);
+    } finally {
+      await blocker.query("ROLLBACK").catch(() => undefined);
+      blocker.release();
+    }
+  });
 });
