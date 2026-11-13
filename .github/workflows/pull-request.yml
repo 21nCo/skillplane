@@ -127,6 +127,9 @@ jobs:
       - name: Instructions browser e2e
         run: pnpm test:e2e instructions.spec.ts
 
+      - name: Shell and sign-out browser e2e
+        run: pnpm test:e2e shell.spec.ts
+
       - name: Skill and instructions page accessibility
         run: pnpm test:a11y --filter skill-pages
 

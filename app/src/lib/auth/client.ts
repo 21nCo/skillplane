@@ -3,6 +3,7 @@ import {
   type AuthFnErrorEnvelope,
   type AuthFnSession,
 } from "@authfn/client";
+import { AUTH_COOKIE_PREFIX } from "@skillplane/auth/session";
 import { resetWorkspaceDatafnClients } from "$lib/datafn/client.js";
 
 type OtpPurpose = "sign-up";
@@ -26,7 +27,14 @@ export class AuthClientError extends Error {
   }
 }
 
-const client = createAuthFnClient({ baseUrl: "/auth", credentials: "include" });
+// The session cookie is HttpOnly, so AuthFn cannot infer the prefix from
+// document.cookie. Without the server's prefix it reads `authfn.csrf` and
+// sends no CSRF header, and every `csrf: true` call (sign-out) gets a 403.
+const client = createAuthFnClient({
+  baseUrl: "/auth",
+  credentials: "include",
+  cookiePrefix: AUTH_COOKIE_PREFIX,
+});
 const OTP_CONTEXT_KEY = "skillplane.auth.otp";
 const RETURN_TO_KEY = "skillplane.auth.return-to";
 

@@ -152,9 +152,26 @@ test("@shell provides accessible responsive navigation, themes, commands, and si
   await page.keyboard.press("Escape");
   await expect(page.getByRole("button", { name: "Open navigation" })).toBeVisible();
 
+  // The session cookie is HttpOnly, so the browser AuthFn client must take the
+  // CSRF cookie name from configuration rather than infer it (SKI-45).
+  const signOutResponse = page.waitForResponse(
+    (response) =>
+      response.url() === `${harness.origin}/auth/sign-out` &&
+      response.request().method() === "POST",
+  );
   await page.getByRole("button", { name: "Account", exact: true }).click();
   await page.getByRole("menuitem", { name: /Sign out/u }).click();
+  const signOut = await signOutResponse;
+  expect(await signOut.request().headerValue("x-authfn-csrf")).toBe(harness.csrfToken);
+  expect(signOut.status()).toBe(200);
+  expect(await signOut.json()).toMatchObject({ ok: true, data: { revoked: true } });
   await expect(page).toHaveURL(/\/sign-in$/u);
   const session = await page.request.get(`${harness.origin}/auth/session`);
   expect((await session.json()).data.session).toBeNull();
+
+  await page.goto(`${harness.origin}/workspaces`);
+  await expect(page).toHaveURL(
+    new RegExp(`/sign-in\\?next=${encodeURIComponent("/workspaces")}$`, "u"),
+  );
+  await expect(page.getByRole("heading", { name: "Workspaces" })).toHaveCount(0);
 });

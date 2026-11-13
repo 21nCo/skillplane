@@ -435,7 +435,9 @@ describe("workspace repository serializer", () => {
         "skills/boundary/assets/193.txt",
       ),
     ).toBe(true);
-  });
+    // Canonicalizing the 194- and 196-asset fixtures takes ~0.6s alone in CI but
+    // exceeded the 5s default under parallel turbo test:unit load.
+  }, 30_000);
 
   it("refuses a repository tree with more entries than the Git source importer reads", async () => {
     // Repeated contents keep every skill within its own import limits. Each
