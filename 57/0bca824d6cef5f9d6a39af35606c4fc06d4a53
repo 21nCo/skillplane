@@ -1,0 +1,29 @@
+packages/api/tests/integration/oauth-connections.integration.test.ts
+  s_31023aa946825c::t_834f7ed6a3892c 330-385
+packages/authfn-mcp-oauth/src/revocation.ts
+  s_31023aa946825c::t_7499ab38beca5e 47-69,129-150,171-177,179-180,182-186
+packages/db/migrations/0055_control_oauth_refresh_user_client_index.sql
+  s_31023aa946825c::t_98f75cf3358f5d 1-11
+packages/db/migrations/rollback/0055_control_oauth_refresh_user_client_index.sql
+  s_31023aa946825c::t_c0cc18f7a2900e 1-11
+packages/db/src/migrate.test.ts
+  s_31023aa946825c::t_6d2303ac6d700a 69,79
+packages/db/tests/integration/development-topology-migration.integration.test.mjs
+  s_31023aa946825c::t_9c298dbb510f85 40-41,54-57,134-143
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "570bca824d6cef5f9d6a39af35606c4fc06d4a53",
+  "prompts": {},
+  "sessions": {
+    "s_31023aa946825c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_31023aa946825c",
+        "model": "unknown"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
