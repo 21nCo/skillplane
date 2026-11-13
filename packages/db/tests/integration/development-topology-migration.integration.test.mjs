@@ -23,6 +23,8 @@ const names = {
   control: `skillplane_devtopo_control_${suffix}_test`,
   "in-south": `skillplane_devtopo_insouth_${suffix}_test`,
   "us-east": `skillplane_devtopo_useast_${suffix}_test`,
+  // Never migrated: a freshly provisioned database with no tables.
+  empty: `skillplane_devtopo_empty_${suffix}_test`,
 };
 const urls = {};
 let admin;
@@ -276,15 +278,67 @@ describe("development topology migration", () => {
       migrateDevelopmentTopology({
         databases: topology({ "in-south": database("control") }),
       }),
-      /^Error: TOPOLOGY_NOT_PREPARED:in-south:authfn_users$/u,
+      /^Error: TOPOLOGY_NOT_PREPARED:in-south:authfn_users \(run pnpm db:prepare:dev:topology first\)$/u,
     );
     await assert.rejects(
       migrateDevelopmentTopology({
         databases: topology({ control: database("us-east") }),
       }),
-      /^Error: TOPOLOGY_NOT_PREPARED:control:skills$/u,
+      /^Error: TOPOLOGY_NOT_PREPARED:control:skills \(run pnpm db:prepare:dev:topology first\)$/u,
     );
     assert.deepEqual(await ledger("control"), controlLedger);
     assert.deepEqual(await ledger("us-east"), usEastLedger);
+  });
+
+  it("refuses an empty control or cell database before writing to any database", async () => {
+    await rewind();
+    const before = {
+      control: await ledger("control"),
+      "in-south": await ledger("in-south"),
+      "us-east": await ledger("us-east"),
+    };
+    let migrations = 0;
+    const migrate = async (url, options) => {
+      migrations += 1;
+      return migrateDatabase(url, options);
+    };
+    for (const [label, overrides] of [
+      ["control", { control: database("empty") }],
+      ["us-east", { "us-east": database("empty") }],
+    ]) {
+      await assert.rejects(
+        migrateDevelopmentTopology({ databases: topology(overrides), migrate }),
+        new RegExp(
+          `^Error: TOPOLOGY_NOT_PREPARED:${label}:empty \\(run pnpm db:prepare:dev:topology first\\)$`,
+          "u",
+        ),
+      );
+      // No migration ledger or migration-created table was written.
+      assert.deepEqual(await tables("empty"), []);
+    }
+    // A ledger left by a first run that never committed a migration is empty too.
+    await withPool("empty", (pool) =>
+      pool.query(`CREATE TABLE skillplane_schema_migrations (
+        id text PRIMARY KEY, sha256 text NOT NULL,
+        applied_at timestamptz NOT NULL DEFAULT now(),
+        execution_ms integer NOT NULL CHECK (execution_ms >= 0))`),
+    );
+    await assert.rejects(
+      migrateDevelopmentTopology({
+        databases: topology({ "in-south": database("empty") }),
+        migrate,
+      }),
+      /^Error: TOPOLOGY_NOT_PREPARED:in-south:empty /u,
+    );
+    assert.deepEqual(await tables("empty"), ["skillplane_schema_migrations"]);
+    assert.deepEqual(await ledger("empty"), []);
+    await withPool("empty", (pool) =>
+      pool.query("DROP TABLE skillplane_schema_migrations"),
+    );
+
+    assert.equal(migrations, 0);
+    for (const [label, previous] of Object.entries(before)) {
+      assert.deepEqual(await ledger(label), previous, `${label} was migrated`);
+    }
   });
 });

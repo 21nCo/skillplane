@@ -49,7 +49,48 @@ export function productionDatabaseVariables(environment = process.env) {
   ];
 }
 
+export const productionIdentitiesVariable = "SKILLPLANE_PRODUCTION_DATABASE_IDENTITIES";
+
+// Non-secret production database identities (`host[:port]/database`, separated
+// by commas or whitespace) let an environment without production credentials,
+// such as the development deploy job, still refuse a production database.
+export function productionDatabaseIdentityFingerprints(environment = process.env) {
+  const raw = environment[productionIdentitiesVariable]?.trim() ?? "";
+  return raw
+    .split(/[\s,]+/u)
+    .filter(Boolean)
+    .map((identity) => {
+      if (
+        !/^(?:[a-z0-9._-]+|\[[0-9a-f:.]+\])(?::\d{1,5})?\/[^\s/?#@:]+$/iu.test(identity)
+      ) {
+        throw new Error(
+          `${productionIdentitiesVariable} entries must be host[:port]/database without credentials`,
+        );
+      }
+      return parseDirectPostgresUrl(
+        `postgresql://identity:identity@${identity}`,
+        productionIdentitiesVariable,
+      ).fingerprint;
+    });
+}
+
+// GitHub Actions has no production database credentials to compare against, so
+// an automatic migration there fails closed until the identities are set.
+export function assertProductionIsolationConfigured(environment = process.env) {
+  if (
+    environment.GITHUB_ACTIONS === "true" &&
+    productionDatabaseIdentityFingerprints(environment).length === 0
+  ) {
+    throw new Error(
+      `PRODUCTION_ISOLATION_UNCONFIGURED: ${productionIdentitiesVariable} must list the production database identities`,
+    );
+  }
+}
+
 function assertNotProductionDatabase(database, name) {
+  if (productionDatabaseIdentityFingerprints().includes(database.fingerprint)) {
+    throw new Error(`${name} must differ from ${productionIdentitiesVariable}`);
+  }
   for (const productionVariable of productionDatabaseVariables()) {
     const productionUrl = process.env[productionVariable]?.trim();
     if (
@@ -205,23 +246,61 @@ export async function verifyDevelopmentTopologyDatabases(databases, options = {}
   return { schema, ownership };
 }
 
-// Read-only guard for in-place migrations: every database must already have
-// the converted topology shape (or be empty). A combined database must go
-// through the one-time `db:prepare:dev:topology` conversion instead.
-export async function assertDevelopmentTopologyPrepared(databases) {
-  const control = await relations(databases.control);
-  for (const forbidden of REGIONAL_WORKSPACE_TABLES) {
-    if (control.has(forbidden)) {
-      throw new Error(`TOPOLOGY_NOT_PREPARED:control:${forbidden}`);
-    }
+async function migrationState(database) {
+  const pool = new Pool({
+    connectionString: database.url,
+    application_name: "skillplane-dev-topology-preflight",
+    max: 1,
+  });
+  try {
+    const result = await pool.query(
+      `SELECT table_name
+         FROM information_schema.tables
+        WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+        ORDER BY table_name`,
+    );
+    const tables = new Set(result.rows.map((row) => row.table_name));
+    const applied = tables.has("skillplane_schema_migrations")
+      ? Number(
+          (
+            await pool.query(
+              "SELECT count(*) AS count FROM skillplane_schema_migrations",
+            )
+          ).rows[0].count,
+        )
+      : 0;
+    return { tables, applied };
+  } finally {
+    await pool.end();
   }
-  for (const [regionId, database] of Object.entries(databases.cells)) {
-    const tables = await relations(database);
-    for (const forbidden of GLOBAL_CONTROL_TABLES) {
-      if (tables.has(forbidden)) {
-        throw new Error(`TOPOLOGY_NOT_PREPARED:${regionId}:${forbidden}`);
-      }
-    }
+}
+
+function notPrepared(label, detail) {
+  return new Error(
+    `TOPOLOGY_NOT_PREPARED:${label}:${detail} (run pnpm db:prepare:dev:topology first)`,
+  );
+}
+
+// Read-only guard for in-place migrations, run against every database before
+// any of them is migrated. Each database must already be converted: it has a
+// migration ledger with at least one applied migration and no table of the
+// other role. An empty database is refused too, because the early migrations
+// apply to every role and only the one-time `db:prepare:dev:topology`
+// conversion prunes the other role's tables afterwards.
+export async function assertDevelopmentTopologyPrepared(databases) {
+  const targets = [
+    ["control", databases.control, REGIONAL_WORKSPACE_TABLES],
+    ...Object.entries(databases.cells).map(([regionId, database]) => [
+      regionId,
+      database,
+      GLOBAL_CONTROL_TABLES,
+    ]),
+  ];
+  for (const [label, database, forbiddenTables] of targets) {
+    const state = await migrationState(database);
+    if (state.applied === 0) throw notPrepared(label, "empty");
+    const forbidden = forbiddenTables.find((table) => state.tables.has(table));
+    if (forbidden) throw notPrepared(label, forbidden);
   }
 }
 

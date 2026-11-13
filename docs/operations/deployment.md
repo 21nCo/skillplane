@@ -301,9 +301,11 @@ The development topology does not use `db:migrate:topology`. Its control and
 cell databases migrate with `pnpm db:migrate:dev:topology`, which the
 `Deploy Cloudflare development topology` workflow runs before
 `pnpm deploy:dev:topology` on the `dev` branch. It applies pending migrations in
-place without a backup or safety record, never drops tables, and refuses any URL
-that matches a production database variable. Production migration behavior is
-unchanged. See
+place without a backup or safety record, never drops tables, refuses an empty or
+unconverted database before migrating any, and refuses any URL that matches a
+production database variable or an entry of the non-secret
+`SKILLPLANE_PRODUCTION_DATABASE_IDENTITIES` variable, which the workflow requires.
+Production migration behavior is unchanged. See
 [`development.md`](./development.md#three-cell-gateway-development-topology).
 
 ## Live OAuth, MCP, and email gates

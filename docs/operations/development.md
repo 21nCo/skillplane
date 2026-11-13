@@ -180,13 +180,22 @@ migration head in place: control-role migrations to
 `SKILLPLANE_DEV_CONTROL_DATABASE_URL`, then regional migrations to each cell URL,
 then the same schema-head and table-ownership checks the deployment runs. It
 never runs the `db:prepare:dev:topology` conversion and never drops, prunes, or
-rewrites tables; it refuses with `TOPOLOGY_NOT_PREPARED:<database>:<table>` before
-any migration when a database still holds tables of the other role. It takes no
-backup, because development data is disposable, but it refuses any URL that
-identifies the same database as a production variable (`SKILLPLANE_CONTROL_DATABASE_URL`,
-`SKILLPLANE_CELL_<REGION>_DATABASE_URL`, `SKILLPLANE_PRODUCTION_DATABASE_URL`,
+rewrites tables. It reads every database before migrating any of them and
+refuses with `TOPOLOGY_NOT_PREPARED:<database>:<detail>` when one is not converted:
+`<detail>` is `empty` when the database has no applied migration (the early
+migrations apply to every role, so only the conversion can give an empty database
+its role's shape), or the first table of the other role it still holds. Run
+`db:prepare:dev:topology` for that database first. It takes no backup, because
+development data is disposable, but before opening a connection it refuses any URL
+that identifies the same database (host, port, and database name) as a production
+variable (`SKILLPLANE_CONTROL_DATABASE_URL`, `SKILLPLANE_CELL_<REGION>_DATABASE_URL`,
+`SKILLPLANE_PRODUCTION_DATABASE_URL`,
 `SKILLPLANE_PRODUCTION_MIGRATION_SOURCE_DATABASE_URL`, or `RAILWAY_DATABASE_URL`)
-before opening a connection. Each database migrates in one transaction under the
+or an entry of `SKILLPLANE_PRODUCTION_DATABASE_IDENTITIES`. That variable lists
+production databases without credentials as `host[:port]/database` entries
+separated by commas or whitespace (the port defaults to `5432`); list every
+hostname that reaches a production database. Under GitHub Actions the command
+refuses with `PRODUCTION_ISOLATION_UNCONFIGURED` when the variable is empty. Each database migrates in one transaction under the
 shared migration lock, so a second or concurrent run applies nothing, and a run
 interrupted between databases resumes when rerun.
 
@@ -228,7 +237,10 @@ The deploy job uses the GitHub `dev` environment. The org secret
 account. The org variable `CLOUDFLARE_PROD_ACCOUNT_ID` is required too: the job
 fails closed when it is missing, and refuses to deploy when the development
 account equals it or the production release account (`vars.CLOUDFLARE_ACCOUNT_ID`).
-The `dev` environment must provide:
+The variable `SKILLPLANE_PRODUCTION_DATABASE_IDENTITIES` (org or `dev`
+environment) must list the production control and cell database identities as
+`host[:port]/database`, never URLs or credentials; the migration step refuses to
+run without it. The `dev` environment must provide:
 
 - Secrets: `SKILLPLANE_DEV_CONTROL_DATABASE_URL`, `SKILLPLANE_DEV_DATABASE_URL`,
   `SKILLPLANE_DEV_USEAST_DATABASE_URL`, `SKILLPLANE_DEV_EUWEST_DATABASE_URL`,

@@ -3,6 +3,7 @@
 import { migrateDatabase } from "../packages/db/dist/src/migrate.js";
 import {
   assertDevelopmentTopologyPrepared,
+  assertProductionIsolationConfigured,
   developmentInitialWorkspaceRegion,
   developmentTopologyDatabases,
   verifyDevelopmentTopologyDatabases,
@@ -15,9 +16,17 @@ import { isMain } from "./lib/production-deployment.mjs";
 // is disposable, while production keeps `db:migrate:topology`.
 export async function migrateDevelopmentTopology(options = {}) {
   // Parsing the topology refuses any URL that names a production database
-  // before the first connection.
-  const databases = options.databases ?? developmentTopologyDatabases();
+  // before the first connection. In GitHub Actions, where no production
+  // credentials exist to compare against, the production identities must be
+  // configured or the command refuses before parsing any URL.
+  let databases = options.databases;
+  if (!databases) {
+    assertProductionIsolationConfigured();
+    databases = developmentTopologyDatabases();
+  }
   const migrate = options.migrate ?? migrateDatabase;
+  // Reads every database before writing to any: an empty or unconverted
+  // database stops the run with TOPOLOGY_NOT_PREPARED and nothing changes.
   await assertDevelopmentTopologyPrepared(databases);
   // Each call holds the shared schema-migration advisory lock and applies its
   // pending migrations in one transaction, so a racing or retried run either

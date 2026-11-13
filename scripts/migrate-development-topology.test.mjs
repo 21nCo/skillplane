@@ -22,7 +22,7 @@ const developmentUrls = {
 async function withEnvironment(values, operation) {
   const saved = { ...process.env };
   for (const name of Object.keys(process.env)) {
-    if (/^(SKILLPLANE_|RAILWAY_DATABASE_URL$)/u.test(name))
+    if (/^(SKILLPLANE_|RAILWAY_DATABASE_URL$|GITHUB_ACTIONS$)/u.test(name))
       Reflect.deleteProperty(process.env, name);
   }
   Object.assign(process.env, values);
@@ -86,6 +86,79 @@ describe("development topology migration safety", () => {
     );
     assert.equal(migrations, 0);
   });
+});
+
+// The development deploy job's environment: the four development URLs, the
+// production identities variable (empty when unset), and no production URLs.
+function workflowEnvironment(identities) {
+  return {
+    ...developmentUrls,
+    GITHUB_ACTIONS: "true",
+    SKILLPLANE_PRODUCTION_DATABASE_IDENTITIES: identities,
+  };
+}
+
+async function rejectsBeforeMigrating(environment, expected) {
+  let migrations = 0;
+  await withEnvironment(environment, () =>
+    assert.rejects(
+      migrateDevelopmentTopology({
+        migrate: async () => {
+          migrations += 1;
+        },
+      }),
+      expected,
+    ),
+  );
+  assert.equal(migrations, 0);
+}
+
+describe("development topology migration production isolation in GitHub Actions", () => {
+  for (const [label, identities] of [
+    ["unset", ""],
+    ["blank", " , \n"],
+  ]) {
+    it(`refuses before connecting when the production identities are ${label}`, () =>
+      rejectsBeforeMigrating(
+        workflowEnvironment(identities),
+        /^Error: PRODUCTION_ISOLATION_UNCONFIGURED: SKILLPLANE_PRODUCTION_DATABASE_IDENTITIES /u,
+      ));
+  }
+
+  it("refuses a development URL that matches a production identity before connecting", () =>
+    rejectsBeforeMigrating(
+      workflowEnvironment(
+        "control.prod.invalid/skillplane_control,\nUsEast.Dev.Invalid:5432/skillplane",
+      ),
+      /^Error: The us-east development database must differ from SKILLPLANE_PRODUCTION_DATABASE_IDENTITIES$/u,
+    ));
+
+  it("matches a production identity that omits the default port", () =>
+    rejectsBeforeMigrating(
+      workflowEnvironment("control.dev.invalid/skillplane_control"),
+      /must differ from SKILLPLANE_PRODUCTION_DATABASE_IDENTITIES$/u,
+    ));
+
+  it("refuses identities that carry credentials or a URL", async () => {
+    for (const identities of [
+      "postgresql://prod:secret@control.prod.invalid/skillplane",
+      "prod:secret@control.prod.invalid/skillplane",
+      "control.prod.invalid",
+    ]) {
+      await rejectsBeforeMigrating(
+        workflowEnvironment(identities),
+        /^Error: SKILLPLANE_PRODUCTION_DATABASE_IDENTITIES entries must be host\[:port\]\/database without credentials$/u,
+      );
+    }
+  });
+
+  it("connects when the identities are configured and none matches", () =>
+    rejectsBeforeMigrating(
+      workflowEnvironment(
+        "control.prod.invalid:5432/skillplane_control insouth.prod.invalid/skillplane",
+      ),
+      /ENOTFOUND|EAI_AGAIN|getaddrinfo/u,
+    ));
 });
 
 describe("development topology schema head status", () => {
@@ -161,6 +234,11 @@ describe("development deploy workflow", () => {
         "    if: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/dev' }}",
       ),
     );
+    // The production database identities reach every step from the job env.
+    const identities = deploy.indexOf(
+      "      SKILLPLANE_PRODUCTION_DATABASE_IDENTITIES: ${{ vars.SKILLPLANE_PRODUCTION_DATABASE_IDENTITIES }}",
+    );
+    assert.ok(identities > 0 && identities < deploy.indexOf("    steps:"));
     const steps = workflowSteps(deploy);
     const index = (name) => steps.findIndex((step) => step.name === name);
     const guard = index("Verify development ref and account");
