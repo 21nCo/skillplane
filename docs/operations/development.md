@@ -46,10 +46,11 @@ these development identities.
    `r2:sync:dev` reads production bundles from the account in
    `SKILLPLANE_PRODUCTION_CLOUDFLARE_ACCOUNT_ID` (the production `21n` account),
    while `CLOUDFLARE_ACCOUNT_ID` keeps selecting `21n-dev` for development writes.
-   Every development deploy, migration, sync, and smoke command requires both
-   values and refuses to run when the development token can access the
-   production account, the release account, or any account other than
-   `CLOUDFLARE_ACCOUNT_ID`: see
+   Only `r2:sync:dev` needs `SKILLPLANE_PRODUCTION_R2_READ_TOKEN`. Every
+   development deploy, migration, sync, and smoke command needs
+   `SKILLPLANE_PRODUCTION_CLOUDFLARE_ACCOUNT_ID` and refuses to run when the
+   development token can access the production account, the release account,
+   or any account other than `CLOUDFLARE_ACCOUNT_ID`: see
    [Development token account check](#development-token-account-check).
 8. Create a dedicated PostHog development project and configure its managed
    reverse proxy at `user-dev.skillplane.dev`. Keep its project token distinct
@@ -69,6 +70,8 @@ CLOUDFLARE_DEV_HYPERDRIVE_ID=...
 SKILLPLANE_DEV_CLOUDFLARE_API_TOKEN=...
 SKILLPLANE_PRODUCTION_R2_READ_TOKEN=...
 SKILLPLANE_PRODUCTION_CLOUDFLARE_ACCOUNT_ID=<21n production account ID>
+# Optional: the production release account, when it differs from the above.
+SKILLPLANE_RELEASE_CLOUDFLARE_ACCOUNT_ID=<production release account ID>
 SKILLPLANE_DEV_AUTHFN_SECRET=...
 SKILLPLANE_DEV_OAUTH_TOKEN_PEPPER=...
 SKILLPLANE_DEV_TURNSTILE_SECRET_KEY=...
