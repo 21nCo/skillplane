@@ -1,0 +1,27 @@
+packages/api/tests/integration/oauth-connections.integration.test.ts
+  s_fd964b3848b063::t_f73993866c9cd0 7,169-181,195-201,225,299-305,310-318,342,344,392,394
+packages/api/tests/security/oauth-connections.security.test.ts
+  s_fd964b3848b063::t_0d6198e3f67c51 138
+packages/authfn-mcp-oauth/src/revocation.ts
+  s_fd964b3848b063::t_6d7e5f01d5e91c 214-218,222-227
+packages/db/src/migrate.test.ts
+  s_fd964b3848b063::t_b35be2aa9d07eb 78
+packages/db/tests/integration/development-topology-migration.integration.test.mjs
+  s_fd964b3848b063::t_204d07f983a01f 40,53
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3cc0b7147f12a2c460c4bc98297bc8b7b93ef319",
+  "prompts": {},
+  "sessions": {
+    "s_fd964b3848b063": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_fd964b3848b063",
+        "model": "unknown"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
