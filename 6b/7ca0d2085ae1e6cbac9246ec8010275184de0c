@@ -1,0 +1,19 @@
+packages/storage/src/workspace-repository.test.ts
+  s_c2832c8bd89bdf::t_5ae521a0d2a4a3 438-440
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6b7ca0d2085ae1e6cbac9246ec8010275184de0c",
+  "prompts": {},
+  "sessions": {
+    "s_c2832c8bd89bdf": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_c2832c8bd89bdf",
+        "model": "unknown"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
