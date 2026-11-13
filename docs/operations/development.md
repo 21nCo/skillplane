@@ -39,7 +39,8 @@ these development identities.
 6. Create a dedicated `SKILLPLANE_DEV_CLOUDFLARE_API_TOKEN`. Do not reuse the
    production or ambient Wrangler token. Limit it to the `21n-dev` account and
    the `21n.dev` zone needed by the development Workers, R2 buckets, Hyperdrive,
-   and custom domains.
+   and custom domains. The token must be single-account: see
+   [Development token account check](#development-token-account-check).
 7. Create `SKILLPLANE_PRODUCTION_R2_READ_TOKEN` with read-only object access to
    `skillplane-skill-bundles`. Keep it distinct from the development token.
    `r2:sync:dev` reads production bundles from the account in
@@ -88,6 +89,28 @@ The development renderer exposes `PUBLIC_POSTHOG_KEY` and
 project token to the MCP Worker as the `POSTHOG_PROJECT_TOKEN` secret and uses
 the canonical US ingestion host for MCP traffic. The token must differ from a
 production `POSTHOG_PROJECT_TOKEN` present in the invoking environment.
+
+## Development token account check
+
+Every development deploy, migration, sync, and smoke command (`deploy:dev`,
+`deploy:dev:topology`, `db:migrate:dev`, `db:migrate:dev:topology`,
+`db:prepare:dev:topology`, `r2:sync:dev`, `smoke:dev`, and `test:dev:oauth`)
+first lists the Cloudflare accounts that `SKILLPLANE_DEV_CLOUDFLARE_API_TOKEN`
+can access (`GET /accounts`). The command continues only when that list is
+exactly the account in `CLOUDFLARE_ACCOUNT_ID`, before it renders a
+configuration, runs Wrangler, or opens a database. It stops with
+`DEV_CLOUDFLARE_TOKEN_SCOPE:` when the token can access:
+
+- `SKILLPLANE_PRODUCTION_CLOUDFLARE_ACCOUNT_ID` or, when set,
+  `SKILLPLANE_RELEASE_CLOUDFLARE_ACCOUNT_ID` (the production release account);
+- any other account, even alongside the development account; or
+- no account.
+
+It also stops when the listing fails, for example on a network error or an HTTP
+error status. There is no skip flag. The error names the account IDs and the
+variable that supplied the token, never the token. Every one of these commands
+therefore needs the development token, the development account ID, and the
+production account ID, including the migration and smoke commands.
 
 ## Deploy and verify
 
@@ -265,6 +288,10 @@ The deploy job uses the GitHub `dev` environment. The org secret
 account. The org variable `CLOUDFLARE_PROD_ACCOUNT_ID` is required too: the job
 fails closed when it is missing, and refuses to deploy when the development
 account equals it or the production release account (`vars.CLOUDFLARE_ACCOUNT_ID`).
+The job passes both to the scripts, as `SKILLPLANE_PRODUCTION_CLOUDFLARE_ACCOUNT_ID`
+and `SKILLPLANE_RELEASE_CLOUDFLARE_ACCOUNT_ID`, and gives the development token to
+the migration and deploy steps, so each step runs the
+[token account check](#development-token-account-check) first.
 The variable `SKILLPLANE_PRODUCTION_DATABASE_IDENTITIES` (org or `dev`
 environment) must list the production control and cell database identities as
 `host[:port]/database` with canonical hosts, never URLs or credentials; the

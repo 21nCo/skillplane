@@ -3,6 +3,7 @@
 import {
   developmentIssuer,
   developmentResource,
+  verifiedDevelopmentCloudflareEnvironment,
 } from "./lib/development-deployment.mjs";
 import { isMain } from "./lib/production-deployment.mjs";
 
@@ -24,7 +25,8 @@ async function json(response, label) {
   });
 }
 
-export async function smokeDevelopment() {
+export async function smokeDevelopment(options = {}) {
+  await verifiedDevelopmentCloudflareEnvironment(options);
   const ready = await request(`${developmentIssuer}/api/v1/health/ready`, [200]);
   const readiness = await json(ready, "Development readiness");
   assert(readiness.ok === true, "Development app is not ready");

@@ -9,10 +9,10 @@ import { join } from "node:path";
 import { Pool } from "pg";
 import {
   developmentBucket,
-  developmentCloudflareEnvironment,
   developmentDatabase,
   ensureDevelopmentBucket,
   productionBundleReadEnvironment,
+  verifiedDevelopmentCloudflareEnvironment,
 } from "./lib/development-deployment.mjs";
 import {
   isMain,
@@ -202,14 +202,16 @@ export async function reconcileDevelopmentBundles(options = {}) {
     minimumLength: 20,
     trim: false,
   });
+  // Verified before the development database is read or any bucket touched.
+  const targetEnvironment =
+    options.targetEnvironment ??
+    (await verifiedDevelopmentCloudflareEnvironment(options));
   const references =
     options.references ?? (await referencedBundles(developmentDatabase()));
   const getSourceObject = options.getSourceObject ?? wranglerObjectGet;
   const putTargetObject = options.putTargetObject ?? cloudflareObjectPut;
   const sourceEnvironment =
     options.sourceEnvironment ?? productionBundleReadEnvironment();
-  const targetEnvironment =
-    options.targetEnvironment ?? developmentCloudflareEnvironment();
   const targetAccountId =
     options.targetAccountId ?? cloudflareAccountId(targetEnvironment);
   await (options.ensureTargetBucket ?? ensureDevelopmentBucket)({

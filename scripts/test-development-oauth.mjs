@@ -3,6 +3,7 @@
 import {
   developmentIssuer,
   developmentResource,
+  verifiedDevelopmentCloudflareEnvironment,
 } from "./lib/development-deployment.mjs";
 import { developmentTopologyDatabases } from "./lib/development-topology-deployment.mjs";
 import { isMain } from "./lib/production-deployment.mjs";
@@ -28,6 +29,7 @@ export function developmentOAuthConfiguration(options = {}) {
 }
 
 export async function testDevelopmentOAuth(options = {}) {
+  await verifiedDevelopmentCloudflareEnvironment(options);
   const verify = options.verify ?? testLocalOAuth;
   return verify(developmentOAuthConfiguration(options));
 }

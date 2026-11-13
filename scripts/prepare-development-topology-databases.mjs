@@ -10,9 +10,9 @@ import {
   developmentTopologyDatabases,
   verifyDevelopmentTopologyDatabaseOwnership,
 } from "./lib/development-topology-deployment.mjs";
+import { verifiedDevelopmentCloudflareEnvironment } from "./lib/development-deployment.mjs";
 import {
   isMain,
-  requireEnvironment,
   requireSecretEnvironment,
   root,
 } from "./lib/production-deployment.mjs";
@@ -53,6 +53,7 @@ export function assertDevelopmentControlDatabaseShape(input) {
 }
 
 export async function prepareDevelopmentTopologyDatabases(options = {}) {
+  await verifiedDevelopmentCloudflareEnvironment(options);
   const databases = options.databases ?? developmentTopologyDatabases();
   const controlConfirmation =
     options.confirmControlDatabase ?? argument("--confirm-control-database");
@@ -121,7 +122,6 @@ export async function prepareDevelopmentTopologyDatabases(options = {}) {
 }
 
 if (isMain(import.meta.url)) {
-  requireEnvironment("SKILLPLANE_DEV_CONTROL_DATABASE_URL");
   process.stdout.write(
     `${JSON.stringify(await prepareDevelopmentTopologyDatabases(), null, 2)}\n`,
   );

@@ -16,6 +16,7 @@ const localRuntimeTests = spawnSync(
     "scripts/lib/local-worker-vars.test.mjs",
     "scripts/local-init.test.mjs",
     "scripts/development-deployment.test.mjs",
+    "scripts/development-cloudflare-account.test.mjs",
     "scripts/development-topology-deployment.test.mjs",
     "scripts/deploy-topology.test.mjs",
     "scripts/production-deployment.test.mjs",
