@@ -9,11 +9,31 @@ import {
   resolveTestDatabaseUrl,
 } from "../../src/index.js";
 import { packageRoot } from "../../src/database-url.js";
-import { migrateDevelopmentTopology } from "../../../../scripts/migrate-development-topology.mjs";
+import { migrateDevelopmentTopology as migrateDevelopmentTopologyEntrypoint } from "../../../../scripts/migrate-development-topology.mjs";
+import {
+  accountListing,
+  developmentAccountId,
+  withDevelopmentCloudflare,
+} from "../../../../scripts/lib/cloudflare-accounts-fixture.mjs";
 import {
   verifyDevelopmentTopologyDatabaseOwnership,
   verifyDevelopmentTopologyDatabases,
 } from "../../../../scripts/lib/development-topology-deployment.mjs";
+
+// The entrypoint first verifies the development Cloudflare token's account
+// scope. These tests supply the fixture variables and a stubbed single-account
+// listing, so they need no Cloudflare credentials and make no network call.
+// The fixture swaps process.env and fetch, so concurrent runs share one scope.
+function withDevelopmentAccount(operation) {
+  return withDevelopmentCloudflare(
+    { fetch: accountListing([developmentAccountId]) },
+    operation,
+  );
+}
+
+function migrateDevelopmentTopology(options) {
+  return withDevelopmentAccount(() => migrateDevelopmentTopologyEntrypoint(options));
+}
 
 // One control and two cell databases stand in for the development topology.
 // The fixture rewinds them to the state observed on 2026-11-05: control before
@@ -254,10 +274,12 @@ describe("development topology migration", () => {
     assert.deepEqual(resumed.cells["us-east"].applied, cellsRewound);
 
     await rewind();
-    const racing = await Promise.all([
-      migrateDevelopmentTopology({ databases: topology() }),
-      migrateDevelopmentTopology({ databases: topology() }),
-    ]);
+    const racing = await withDevelopmentAccount(() =>
+      Promise.all([
+        migrateDevelopmentTopologyEntrypoint({ databases: topology() }),
+        migrateDevelopmentTopologyEntrypoint({ databases: topology() }),
+      ]),
+    );
     for (const [label, expected] of [
       ["control", controlRewound],
       ["in-south", cellsRewound],

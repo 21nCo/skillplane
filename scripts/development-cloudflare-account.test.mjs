@@ -230,9 +230,9 @@ describe("development Cloudflare token account preflight", () => {
 });
 
 // The environment of each entrypoint holds only the Cloudflare variables, so
-// any step that ran before the preflight (git, render, Wrangler, a database
-// parse or connection, a smoke request) would fail with a different error or
-// make an unexpected request that the stub refuses.
+// a render, Wrangler, database parse or connection, or smoke request that ran
+// before the preflight would fail with a different error, make a request the
+// stub refuses, or count as an injected step.
 describe("development entrypoints verify the Cloudflare token first", () => {
   const productionOnly =
     /^Error: DEV_CLOUDFLARE_TOKEN_SCOPE: .*can access the production account/u;
