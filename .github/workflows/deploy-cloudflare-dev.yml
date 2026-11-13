@@ -56,6 +56,9 @@ jobs:
       CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_DEV_ACCOUNT_ID }}
       # Deploy scripts refuse to run when the account above equals this one.
       SKILLPLANE_PRODUCTION_CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_PROD_ACCOUNT_ID }}
+      # The production release account. Every dev command refuses a token that
+      # can reach it, the account above, or any account but the development one.
+      SKILLPLANE_RELEASE_CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
       # Non-secret production database identities (host[:port]/database). The
       # database scripts refuse a development URL that names one of them, and
       # the topology migration step refuses to run when this is empty.
@@ -137,9 +140,12 @@ jobs:
       # deploy's SCHEMA_BEHIND and ownership checks. It never converts or drops
       # tables, refuses an empty or unconverted database, and refuses any URL
       # that names a production database identity from the job environment.
+      # The migration script verifies that the development Cloudflare token can
+      # reach only the development account before it opens any database.
       - name: Migrate development topology databases
         run: pnpm db:migrate:dev:topology
         env:
+          SKILLPLANE_DEV_CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_DEV_API_TOKEN }}
           SKILLPLANE_DEV_CONTROL_DATABASE_URL: ${{ secrets.SKILLPLANE_DEV_CONTROL_DATABASE_URL }}
           SKILLPLANE_DEV_DATABASE_URL: ${{ secrets.SKILLPLANE_DEV_DATABASE_URL }}
           SKILLPLANE_DEV_USEAST_DATABASE_URL: ${{ secrets.SKILLPLANE_DEV_USEAST_DATABASE_URL }}

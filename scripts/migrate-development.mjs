@@ -1,9 +1,13 @@
 #!/usr/bin/env node
 
-import { developmentDatabase } from "./lib/development-deployment.mjs";
+import {
+  developmentDatabase,
+  verifiedDevelopmentCloudflareEnvironment,
+} from "./lib/development-deployment.mjs";
 import { isMain, root, run } from "./lib/production-deployment.mjs";
 
-export function migrateDevelopment(options = {}) {
+export async function migrateDevelopment(options = {}) {
+  await verifiedDevelopmentCloudflareEnvironment(options);
   const database = options.database ?? developmentDatabase();
   const execute = options.run ?? run;
   execute("pnpm", ["--filter", "@skillplane/db", "migrate"], {
@@ -34,5 +38,5 @@ export function migrateDevelopment(options = {}) {
 }
 
 if (isMain(import.meta.url)) {
-  process.stdout.write(`${JSON.stringify(migrateDevelopment(), null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify(await migrateDevelopment(), null, 2)}\n`);
 }

@@ -8,6 +8,11 @@ import {
   schemaHeadStatus,
 } from "./lib/development-topology-deployment.mjs";
 import { root } from "./lib/production-deployment.mjs";
+import {
+  accountListing,
+  developmentAccountId,
+  withDevelopmentCloudflare,
+} from "./lib/cloudflare-accounts-fixture.mjs";
 
 // `.invalid` hosts never resolve: a refusal message, rather than ENOTFOUND,
 // proves the command stopped before opening a connection.
@@ -27,22 +32,17 @@ const developmentUrls = {
 const unrelatedProductionIdentities =
   "control.prod.invalid/skillplane_control insouth.prod.invalid/skillplane";
 
-async function withEnvironment(values, operation) {
-  const saved = { ...process.env };
-  for (const name of Object.keys(process.env)) {
-    if (
-      /^(SKILLPLANE_|RAILWAY_DATABASE_URL$|GITHUB_ACTIONS$|PGHOST$|PGPORT$)/u.test(name)
-    )
-      Reflect.deleteProperty(process.env, name);
-  }
-  Object.assign(process.env, values);
-  try {
-    return await operation();
-  } finally {
-    for (const name of Object.keys(process.env))
-      Reflect.deleteProperty(process.env, name);
-    Object.assign(process.env, saved);
-  }
+// Every run passes the development Cloudflare token preflight against a
+// stubbed account listing, so the database checks are the ones under test.
+// PGHOST and PGPORT are cleared too, so no ambient default reaches a check.
+function withEnvironment(values, operation) {
+  return withDevelopmentCloudflare(
+    {
+      fetch: accountListing([developmentAccountId]),
+      environment: { PGHOST: undefined, PGPORT: undefined, ...values },
+    },
+    operation,
+  );
 }
 
 describe("development topology migration safety", () => {
@@ -606,11 +606,26 @@ describe("development deploy workflow", () => {
         .map((line) => /^ {10}([A-Z_]+): /u.exec(line)?.[1])
         .filter(Boolean),
       [
+        "SKILLPLANE_DEV_CLOUDFLARE_API_TOKEN",
         "SKILLPLANE_DEV_CONTROL_DATABASE_URL",
         "SKILLPLANE_DEV_DATABASE_URL",
         "SKILLPLANE_DEV_USEAST_DATABASE_URL",
         "SKILLPLANE_DEV_EUWEST_DATABASE_URL",
       ],
+    );
+    // The token preflight refuses the release and production accounts, which
+    // reach every step from the job env.
+    for (const line of [
+      "      SKILLPLANE_PRODUCTION_CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_PROD_ACCOUNT_ID }}",
+      "      SKILLPLANE_RELEASE_CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}",
+    ]) {
+      const position = deploy.indexOf(line);
+      assert.ok(position > 0 && position < deploy.indexOf("    steps:"), line);
+    }
+    assert.ok(
+      steps[deployStep].lines.includes(
+        "          SKILLPLANE_DEV_CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_DEV_API_TOKEN }}",
+      ),
     );
     assert.equal(text.split("db:migrate:dev:topology").length - 1, 1);
     assert.ok(!workflowJob(text, "build").join("\n").includes("db:migrate"));

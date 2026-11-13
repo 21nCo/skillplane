@@ -8,6 +8,7 @@ import {
   developmentTopologyDatabases,
   verifyDevelopmentTopologyDatabases,
 } from "./lib/development-topology-deployment.mjs";
+import { verifiedDevelopmentCloudflareEnvironment } from "./lib/development-deployment.mjs";
 import { isMain } from "./lib/production-deployment.mjs";
 
 // Brings the development control database and every development cell to the
@@ -15,6 +16,9 @@ import { isMain } from "./lib/production-deployment.mjs";
 // converts, drops, or prunes tables, and it takes no backup: development data
 // is disposable, while production keeps `db:migrate:topology`.
 export async function migrateDevelopmentTopology(options = {}) {
+  // The development Cloudflare token must reach only the development account
+  // before any database is parsed or touched.
+  await verifiedDevelopmentCloudflareEnvironment(options);
   // Before parsing any URL, the production identities must be configured on
   // every invocation, local or CI. Parsing the topology then refuses any URL
   // that names a production identity or a production URL variable before the

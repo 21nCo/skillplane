@@ -10,6 +10,11 @@ import {
   developmentOAuthConfiguration,
   testDevelopmentOAuth,
 } from "./test-development-oauth.mjs";
+import {
+  accountListing,
+  developmentAccountId,
+  withDevelopmentCloudflare,
+} from "./lib/cloudflare-accounts-fixture.mjs";
 
 describe("development OAuth topology", () => {
   it("uses the global control database for OAuth verifier cleanup", async () => {
@@ -29,14 +34,18 @@ describe("development OAuth topology", () => {
     assert.deepEqual(configured.workspaceSlugs, ["india-workspace"]);
 
     let received;
-    const result = await testDevelopmentOAuth({
-      databases,
-      workspaceSlugs: ["india-workspace"],
-      verify: async (options) => {
-        received = options;
-        return { ok: true };
-      },
-    });
+    const result = await withDevelopmentCloudflare(
+      { fetch: accountListing([developmentAccountId]) },
+      () =>
+        testDevelopmentOAuth({
+          databases,
+          workspaceSlugs: ["india-workspace"],
+          verify: async (options) => {
+            received = options;
+            return { ok: true };
+          },
+        }),
+    );
     assert.equal(received.databaseUrl, databases.control.url);
     assert.deepEqual(result, { ok: true });
   });

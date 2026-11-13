@@ -11,14 +11,13 @@ import {
 import { loadMigrations } from "../../packages/db/dist/src/migrate.js";
 import { renderDevelopmentTopologyConfigs } from "../render-development-topology-config.mjs";
 import {
-  developmentCloudflareEnvironment,
   developmentDatabase,
   ensurePrivateDevelopmentBucket,
+  verifiedDevelopmentCloudflareEnvironment,
   verifyDevelopmentHyperdrive,
 } from "./development-deployment.mjs";
 import {
   capture,
-  captureWrangler,
   parseDirectPostgresUrl,
   requireEnvironment,
   root,
@@ -533,6 +532,7 @@ export function selectDevelopmentTopologyOutputs(outputs, onlyKinds) {
 }
 
 export async function deployDevelopmentTopology(options = {}) {
+  const cloudflareEnvironment = await verifiedDevelopmentCloudflareEnvironment(options);
   const commit = capture("git", ["rev-parse", "HEAD"]).stdout.trim();
   const changes = capture("git", [
     "status",
@@ -544,10 +544,8 @@ export async function deployDevelopmentTopology(options = {}) {
       "Development topology deployment requires a committed clean worktree",
     );
   }
-  const cloudflareEnvironment = developmentCloudflareEnvironment();
   const databases = developmentTopologyDatabases();
   const rendered = await renderDevelopmentTopologyConfigs();
-  captureWrangler(["whoami"], { env: cloudflareEnvironment });
   const hyperdrives = {
     control: verifyDevelopmentHyperdrive(databases.control, {
       env: cloudflareEnvironment,

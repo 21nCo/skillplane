@@ -132,27 +132,208 @@ export function developmentSiteKey() {
 }
 
 const cloudflareAccountIdPattern = /^[a-f0-9]{32}$/iu;
+export const developmentCloudflareTokenVariable = "SKILLPLANE_DEV_CLOUDFLARE_API_TOKEN";
+// CI sets this from `vars.CLOUDFLARE_ACCOUNT_ID`, the account production
+// releases deploy to; it is optional on an operator's machine.
+export const releaseCloudflareAccountVariable =
+  "SKILLPLANE_RELEASE_CLOUDFLARE_ACCOUNT_ID";
+const cloudflareAccountsUrl = "https://api.cloudflare.com/client/v4/accounts";
+const accountListingPageSize = 50;
+const accountListingMaxPages = 20;
+
+// Production account IDs mapped to the variable that named each one.
+export function productionCloudflareAccounts() {
+  const accounts = new Map([
+    [
+      requireEnvironment("SKILLPLANE_PRODUCTION_CLOUDFLARE_ACCOUNT_ID", {
+        pattern: cloudflareAccountIdPattern,
+      }).toLowerCase(),
+      "SKILLPLANE_PRODUCTION_CLOUDFLARE_ACCOUNT_ID",
+    ],
+  ]);
+  if (process.env[releaseCloudflareAccountVariable]?.trim()) {
+    const releaseAccountId = requireEnvironment(releaseCloudflareAccountVariable, {
+      pattern: cloudflareAccountIdPattern,
+    }).toLowerCase();
+    if (!accounts.has(releaseAccountId)) {
+      accounts.set(releaseAccountId, releaseCloudflareAccountVariable);
+    }
+  }
+  return accounts;
+}
 
 // Fails closed unless the development account is set and differs from the
-// production account, so an over-scoped token cannot deploy dev Workers to 21n.
+// production accounts, so an over-scoped token cannot deploy dev Workers to 21n.
 export function developmentCloudflareAccountId() {
   const accountId = requireEnvironment("CLOUDFLARE_ACCOUNT_ID", {
     pattern: cloudflareAccountIdPattern,
   }).toLowerCase();
-  const productionAccountId = requireEnvironment(
-    "SKILLPLANE_PRODUCTION_CLOUDFLARE_ACCOUNT_ID",
-    { pattern: cloudflareAccountIdPattern },
-  ).toLowerCase();
-  if (accountId === productionAccountId) {
+  const variable = productionCloudflareAccounts().get(accountId);
+  if (variable) {
     throw new Error(
-      "CLOUDFLARE_ACCOUNT_ID must be the development account, not SKILLPLANE_PRODUCTION_CLOUDFLARE_ACCOUNT_ID",
+      `CLOUDFLARE_ACCOUNT_ID must be the development account, not ${variable}`,
     );
   }
   return accountId;
 }
 
+function tokenScopeError(detail) {
+  return new Error(`DEV_CLOUDFLARE_TOKEN_SCOPE: ${detail}`);
+}
+
+function listingError(reason, developmentAccountId) {
+  return tokenScopeError(
+    `could not list the Cloudflare accounts ${developmentCloudflareTokenVariable} can access (${reason}), so it cannot be verified as limited to the development account ${developmentAccountId} (CLOUDFLARE_ACCOUNT_ID); the development run stops`,
+  );
+}
+
+// Names only a failure class, never the error message: a rejected header value
+// would otherwise echo the token.
+function requestFailure(error) {
+  if (error?.name === "TimeoutError" || error?.name === "AbortError")
+    return "timed out";
+  const code = error?.cause?.code ?? error?.code;
+  return typeof code === "string" && /^[A-Z0-9_]+$/u.test(code)
+    ? `request failed: ${code}`
+    : "request failed";
+}
+
+const isCount = (value) => Number.isSafeInteger(value) && value >= 0;
+
+// The listing is complete only when the accounts seen reach the documented
+// `result_info.total_count`. Missing, invalid or contradictory totals, and a
+// page that adds nothing while accounts remain, fail closed: an incomplete
+// listing could hide a production account.
+async function listCloudflareAccounts(token, developmentAccountId, fetchAccounts) {
+  const fail = (reason) => listingError(reason, developmentAccountId);
+  const accounts = new Set();
+  let expectedTotal;
+  for (let page = 1; page <= accountListingMaxPages; page += 1) {
+    const url = new URL(cloudflareAccountsUrl);
+    url.searchParams.set("page", String(page));
+    url.searchParams.set("per_page", String(accountListingPageSize));
+    let response;
+    try {
+      response = await fetchAccounts(url, {
+        headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
+        redirect: "error",
+        signal: AbortSignal.timeout(30_000),
+      });
+    } catch (error) {
+      throw fail(requestFailure(error));
+    }
+    if (!response.ok) throw fail(`HTTP ${response.status}`);
+    let body;
+    try {
+      body = await response.json();
+    } catch {
+      throw fail("the response was not JSON");
+    }
+    if (body?.success !== true || !Array.isArray(body.result)) {
+      throw fail("the response was not a successful account list");
+    }
+    const seenBefore = accounts.size;
+    for (const account of body.result) {
+      const id = typeof account?.id === "string" ? account.id.toLowerCase() : "";
+      if (!cloudflareAccountIdPattern.test(id)) {
+        throw fail("the response contained an invalid account ID");
+      }
+      accounts.add(id);
+    }
+    const info = body.result_info;
+    if (info?.count === undefined || info.total_count === undefined) {
+      throw fail("the response omitted its pagination");
+    }
+    const totalPages = info.total_pages;
+    if (
+      !isCount(info.count) ||
+      !isCount(info.total_count) ||
+      (totalPages !== undefined && !isCount(totalPages))
+    ) {
+      throw fail("the response had invalid pagination");
+    }
+    expectedTotal ??= info.total_count;
+    if (
+      info.count !== body.result.length ||
+      info.total_count !== expectedTotal ||
+      accounts.size > expectedTotal
+    ) {
+      throw fail("the response had inconsistent pagination");
+    }
+    const complete = accounts.size === expectedTotal;
+    // `total_pages` is undocumented; when present it must agree with the total.
+    if (totalPages !== undefined && complete !== page >= totalPages) {
+      throw fail("the response had inconsistent pagination");
+    }
+    if (complete) return [...accounts];
+    if (accounts.size === seenBefore) {
+      throw fail("a page added no accounts before the reported total");
+    }
+  }
+  throw fail(`more than ${accountListingMaxPages} pages of accounts`);
+}
+
+// Development tokens must be single-account: the listing must be exactly the
+// pinned development account, even when another listed account is harmless.
+export function assertDevelopmentCloudflareAccountScope(
+  accounts,
+  developmentAccountId,
+  productionAccounts,
+) {
+  const listed = accounts.length > 0 ? accounts.join(", ") : "none";
+  const refuse = (detail) =>
+    tokenScopeError(
+      `${developmentCloudflareTokenVariable} ${detail}; a development token must access only the development account ${developmentAccountId} (CLOUDFLARE_ACCOUNT_ID). Accessible accounts: ${listed}`,
+    );
+  const production = accounts.filter((id) => productionAccounts.has(id));
+  if (production.length > 0) {
+    throw refuse(
+      `can access the production account ${production
+        .map((id) => `${id} (${productionAccounts.get(id)})`)
+        .join(", ")}`,
+    );
+  }
+  const others = accounts.filter((id) => id !== developmentAccountId);
+  if (others.length > 0) {
+    throw refuse(
+      `can access an account other than the development account: ${others.join(", ")}`,
+    );
+  }
+  if (accounts.length !== 1) throw refuse("cannot access the development account");
+}
+
+// The shared first step of every development deploy, migration and smoke
+// command: it refuses a token that can reach any account but the pinned
+// development account, before any render, Wrangler or database call. There is
+// no skip: a listing that fails stops the run.
+export async function verifiedDevelopmentCloudflareEnvironment(options = {}) {
+  const environment = developmentCloudflareEnvironment();
+  const token = environment.CLOUDFLARE_API_TOKEN;
+  try {
+    const accounts = await listCloudflareAccounts(
+      token,
+      environment.CLOUDFLARE_ACCOUNT_ID,
+      options.fetch ?? globalThis.fetch,
+    );
+    assertDevelopmentCloudflareAccountScope(
+      accounts,
+      environment.CLOUDFLARE_ACCOUNT_ID,
+      productionCloudflareAccounts(),
+    );
+  } catch (error) {
+    // Defense in depth: every message above is built without the token.
+    if (typeof error?.message === "string" && error.message.includes(token)) {
+      throw tokenScopeError(
+        `${developmentCloudflareTokenVariable} account verification failed`,
+      );
+    }
+    throw error;
+  }
+  return environment;
+}
+
 export function developmentCloudflareEnvironment() {
-  const token = requireSecretEnvironment("SKILLPLANE_DEV_CLOUDFLARE_API_TOKEN");
+  const token = requireSecretEnvironment(developmentCloudflareTokenVariable);
   for (const name of ["CLOUDFLARE_API_TOKEN"]) {
     if (process.env[name] !== undefined && token === process.env[name]) {
       throw new Error(`SKILLPLANE_DEV_CLOUDFLARE_API_TOKEN must differ from ${name}`);
@@ -411,7 +592,8 @@ async function withDevelopmentSecrets(kind, operation) {
   }
 }
 
-export async function deployDevelopment() {
+export async function deployDevelopment(options = {}) {
+  const cloudflareEnvironment = await verifiedDevelopmentCloudflareEnvironment(options);
   const commit = capture("git", ["rev-parse", "HEAD"]).stdout.trim();
   const changes = capture("git", [
     "status",
@@ -420,10 +602,8 @@ export async function deployDevelopment() {
   ]).stdout.trim();
   if (changes)
     throw new Error("Development deployment requires a committed clean worktree");
-  const cloudflareEnvironment = developmentCloudflareEnvironment();
   const database = developmentDatabase();
   await renderDevelopmentConfigs();
-  captureWrangler(["whoami"], { env: cloudflareEnvironment });
   const hyperdrive = verifyDevelopmentHyperdrive(database, {
     env: cloudflareEnvironment,
   });

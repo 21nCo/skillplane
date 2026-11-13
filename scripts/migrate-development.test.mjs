@@ -1,21 +1,30 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { migrateDevelopment } from "./migrate-development.mjs";
+import {
+  accountListing,
+  developmentAccountId,
+  withDevelopmentCloudflare,
+} from "./lib/cloudflare-accounts-fixture.mjs";
 
 describe("development database migration", () => {
-  it("migrates and verifies the same explicit development database", () => {
+  it("migrates and verifies the same explicit development database", async () => {
     const database = {
       url: "postgresql://dev:secret@database.example.test:5432/skillplane_dev",
       fingerprint: "development-database-fingerprint",
     };
     const calls = [];
 
-    const result = migrateDevelopment({
-      database,
-      run(command, arguments_, options) {
-        calls.push({ command, arguments_, options });
-      },
-    });
+    const result = await withDevelopmentCloudflare(
+      { fetch: accountListing([developmentAccountId]) },
+      () =>
+        migrateDevelopment({
+          database,
+          run(command, arguments_, options) {
+            calls.push({ command, arguments_, options });
+          },
+        }),
+    );
 
     assert.equal(result.databaseFingerprint, database.fingerprint);
     assert.equal(calls.length, 2);
