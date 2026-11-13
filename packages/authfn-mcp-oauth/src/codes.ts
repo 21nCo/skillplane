@@ -1,6 +1,7 @@
 import type { PoolClient } from "pg";
 import type { ValidatedAuthorizationRequest } from "./authorization.js";
 import type { OAuthRuntime } from "./config.js";
+import { lockConsentForIssuance } from "./consents.js";
 import { OAuthError } from "./errors.js";
 import { issueTokenPair, type TokenResponse } from "./tokens.js";
 import {
@@ -70,18 +71,40 @@ export async function exchangeAuthorizationCode(
   const database = await runtime.pool.connect();
   try {
     await database.query("BEGIN");
+    const hash = keyedHash(input.code, runtime.tokenPepper);
+    // The subject columns never change, so read them unlocked and take the
+    // consent share lock before the code row lock (see lockConsentForIssuance).
+    const subject = await database.query<{
+      readonly user_id: string;
+      readonly client_id: string;
+      readonly resource: string;
+    }>(
+      `SELECT user_id, client_id, resource
+         FROM authfn_oauth_authorization_codes
+        WHERE code_hash = $1`,
+      [hash],
+    );
+    const owner = subject.rows[0];
+    const consentActive = owner
+      ? await lockConsentForIssuance(database, {
+          userId: owner.user_id,
+          clientId: owner.client_id,
+          resource: owner.resource,
+        })
+      : false;
     const result = await database.query<AuthorizationCodeRow>(
       `SELECT id, user_id, client_id, redirect_uri, resource, scopes,
               code_challenge, expires_at, consumed_at
          FROM authfn_oauth_authorization_codes
         WHERE code_hash = $1
         FOR UPDATE`,
-      [keyedHash(input.code, runtime.tokenPepper)],
+      [hash],
     );
     const code = result.rows[0];
     const verifierChallenge = sha256Base64Url(input.codeVerifier);
     if (
       !code ||
+      !consentActive ||
       code.consumed_at ||
       code.expires_at.getTime() <= runtime.now().getTime() ||
       code.client_id !== input.clientId ||

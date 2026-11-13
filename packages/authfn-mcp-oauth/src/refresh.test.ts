@@ -15,7 +15,11 @@ vi.mock("./audit.js", () => ({
 const now = new Date("2026-09-10T10:00:00Z");
 const pepper = "test-only-diagnostic-pepper-with-32-characters";
 const secret = "spr_private-refresh-credential";
-function harness(overrides: Record<string, unknown> | null = {}, failCommit = false) {
+function harness(
+  overrides: Record<string, unknown> | null = {},
+  failCommit = false,
+  consent: { revoked_at: Date | null } | null = { revoked_at: null },
+) {
   const events: OAuthSecurityEvent[] = [];
   const row =
     overrides === null
@@ -35,7 +39,12 @@ function harness(overrides: Record<string, unknown> | null = {}, failCommit = fa
         };
   const query = vi.fn(async (sql: string) => {
     if (failCommit && sql === "COMMIT") throw new Error("database password=private");
-    return { rows: sql.includes("SELECT id, parent_id") && row ? [row] : [] };
+    if (sql.includes("FROM authfn_oauth_consents")) {
+      return { rows: consent ? [consent] : [] };
+    }
+    const tokenLookup =
+      sql.includes("SELECT id, parent_id") || sql.includes("SELECT user_id, client_id");
+    return { rows: tokenLookup && row ? [row] : [] };
   });
   const release = vi.fn();
   const runtime = normalizeOAuthConfig({
@@ -83,6 +92,34 @@ describe("refresh completion diagnostics", () => {
     });
     expect(h.events.at(-1)?.requestId).toBe("oauth:test-request");
   });
+
+  it.each([
+    ["revoked", { revoked_at: now }],
+    ["missing", null],
+  ] as const)(
+    "rejects an unrevoked token whose consent is %s, locking the consent first",
+    async (_state, consent) => {
+      const h = harness({}, false, consent);
+      await expect(exchangeRefreshToken(h.runtime, h.input)).rejects.toMatchObject({
+        code: "invalid_grant",
+      });
+      expect(h.events.at(-1)?.metadata).toMatchObject({
+        reason: "revoked_consent",
+        transactionCommitted: false,
+      });
+      const statements = h.query.mock.calls.map(([sql]) => sql);
+      const consentLock = statements.findIndex(
+        (sql) =>
+          sql.includes("FROM authfn_oauth_consents") && sql.includes("FOR SHARE"),
+      );
+      const tokenLock = statements.findIndex(
+        (sql) => sql.includes("SELECT id, parent_id") && sql.includes("FOR UPDATE"),
+      );
+      expect(consentLock).toBeGreaterThan(0);
+      expect(tokenLock).toBeGreaterThan(consentLock);
+      expect(statements.some((sql) => sql.includes("INSERT INTO"))).toBe(false);
+    },
+  );
 
   it("links committed rotation to the replacement without emitting secrets or lookup hashes", async () => {
     const h = harness();

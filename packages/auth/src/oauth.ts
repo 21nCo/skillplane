@@ -9,14 +9,18 @@ export function createSkillplaneOAuth(config: AuthFnMcpOAuthConfig) {
 
 export type {
   AuthFnMcpOAuthConfig,
+  ConsentRevocationResult,
+  OAuthConnection,
   OAuthRuntime,
   VerifiedOAuthPrincipal,
 } from "@skillplane/authfn-mcp-oauth";
 export {
   authorizationServerMetadata,
+  listConsents,
   metadataResponse,
   protectedResourceMetadata,
   protectedResourceChallenge,
   readBearerToken,
+  revokeConsent,
   verifyAccessToken,
 } from "@skillplane/authfn-mcp-oauth";

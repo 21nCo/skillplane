@@ -86,6 +86,9 @@ export interface McpTestEnvironment {
     readonly version: SkillVersionRecord;
   };
   readonly app: ReturnType<typeof createMcpApp>;
+  /** The Skillplane API app and owner browser session that granted OAuth tokens. */
+  readonly api: ReturnType<typeof createApiApp>;
+  readonly ownerCookie: string;
   readonly serviceToken: string;
   readonly skillsOnlyToken: string;
   readonly outsiderServiceToken: string;
@@ -555,6 +558,8 @@ export async function startMcpTestEnvironment(
     skill,
     privateSkill,
     app: mcpApp,
+    api: apiApp,
+    ownerCookie: cookie,
     serviceToken,
     skillsOnlyToken,
     outsiderServiceToken,

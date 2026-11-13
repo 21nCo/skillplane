@@ -2,6 +2,7 @@ export * from "./authorization.js";
 export * from "./clients.js";
 export * from "./codes.js";
 export * from "./config.js";
+export * from "./consents.js";
 export * from "./errors.js";
 export * from "./metadata.js";
 export * from "./plugin.js";
