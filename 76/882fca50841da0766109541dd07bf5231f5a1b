@@ -1,0 +1,49 @@
+.github/workflows/deploy-cloudflare-dev.yml
+  s_74960722bb251e::t_8c9be71b944ca7 59-61,143-144,148
+docs/operations/development.md
+  s_74960722bb251e::t_008040c4c4f85d 42-43,93-114,291-294
+scripts/development-cloudflare-account.test.mjs
+  s_74960722bb251e::t_57f8c7b66ca207 1-328
+scripts/lib/cloudflare-accounts-fixture.mjs
+  s_74960722bb251e::t_ead9f8b7fd3570 1-81
+scripts/lib/development-deployment.mjs
+  s_74960722bb251e::t_209141c945afcb 135-163,166,171-172,174,180-304,306,565-566
+scripts/lib/development-topology-deployment.mjs
+  s_74960722bb251e::t_8b2180fe4941e7 16,535
+scripts/migrate-development-topology.mjs
+  s_74960722bb251e::t_1a6eec517d2855 11,19-21
+scripts/migrate-development-topology.test.mjs
+  s_74960722bb251e::t_c3e443aaf13ae3 11-15,35-36,39-40,47,51,619,626-639
+scripts/migrate-development.mjs
+  s_74960722bb251e::t_8f2dcb6572e906 3-6,9-10,41
+scripts/migrate-development.test.mjs
+  s_74960722bb251e::t_3bb39991024797 4-8,11,18-27
+scripts/prepare-development-topology-databases.mjs
+  s_74960722bb251e::t_8bc3f9b0b7f891 13,56
+scripts/reconcile-development-bundles.mjs
+  s_74960722bb251e::t_c344dfffa7b3a8 15,205-208
+scripts/run-unit-tests.mjs
+  s_74960722bb251e::t_8dcd61f154077f 19
+scripts/smoke-development.mjs
+  s_74960722bb251e::t_06dd17bb43d2c0 6,28-29
+scripts/test-development-oauth.mjs
+  s_74960722bb251e::t_a47b7f450e640b 6,32
+scripts/test-local-oauth.test.mjs
+  s_74960722bb251e::t_07f01a6ef01ce1 13-17,37-48
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "76882fca50841da0766109541dd07bf5231f5a1b",
+  "prompts": {},
+  "sessions": {
+    "s_74960722bb251e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_74960722bb251e",
+        "model": "unknown"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}

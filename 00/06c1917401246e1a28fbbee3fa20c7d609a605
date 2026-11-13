@@ -1,0 +1,23 @@
+docs/operations/development.md
+  s_bf4b492f77da1c::t_768dcdecf83840 116-120
+scripts/development-cloudflare-account.test.mjs
+  s_bf4b492f77da1c::t_819a47085fa72c 228-233
+scripts/lib/development-deployment.mjs
+  s_bf4b492f77da1c::t_986b8fd70433e6 184,186,201-202,216,218,223,226,231,238,241,245,287
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0006c1917401246e1a28fbbee3fa20c7d609a605",
+  "prompts": {},
+  "sessions": {
+    "s_bf4b492f77da1c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1b0dbb1d-2b65-4127-85d5-232755430943",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}

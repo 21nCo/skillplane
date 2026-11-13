@@ -1,0 +1,23 @@
+docs/operations/development.md
+  s_3b7e58a223b444::t_5a3d4891afb3a2 49-53
+packages/db/tests/integration/development-topology-migration.integration.test.mjs
+  s_3b7e58a223b444::t_a8388231478e60 12-17,23-37,277-282
+scripts/development-cloudflare-account.test.mjs
+  s_3b7e58a223b444::t_8c56a5b665e569 233-235
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "483757388a337be4e33f0399c377fa6f41031642",
+  "prompts": {},
+  "sessions": {
+    "s_3b7e58a223b444": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_3b7e58a223b444",
+        "model": "unknown"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
