@@ -1,0 +1,49 @@
+packages/api/src/app.ts
+  s_d831a85476715e::t_8c0abcdcdf1836 27,130
+packages/api/src/middleware/rate-limit.ts
+  s_d831a85476715e::t_ee22c964105a69 12-15
+.conduct/verification/SKI-6/official-conformance-summary.json
+  s_d831a85476715e::t_81bd24ad9904bd 198,202
+mcp/tests/security/mcp-read.security.test.ts
+  s_d831a85476715e::t_86d0dcf5829215 17,183-244
+mcp/tests/support/mcp-test-environment.ts
+  s_d831a85476715e::t_7bc1917e43fee1 89-91,561-562
+packages/api/src/routes/oauth-connections.ts
+  s_d831a85476715e::t_4527a652388e40 1-83
+packages/api/tests/integration/oauth-connections.integration.test.ts
+  s_d831a85476715e::t_7bc0c75de7bb84 1-330
+packages/api/tests/security/oauth-connections.security.test.ts
+  s_d831a85476715e::t_be24a03c49aa07 1-146
+packages/api/tests/support/oauth-test-environment.test.support.ts
+  s_d831a85476715e::t_694925ea08768a 38-51,63-67,97,143-147,163,177,187-188
+packages/auth/src/oauth.ts
+  s_d831a85476715e::t_a9ab0d84aa672b 12-13,19,24
+packages/authfn-mcp-oauth/src/codes.ts
+  s_d831a85476715e::t_5d0bcdcc653119 4,74-94,101,107
+packages/authfn-mcp-oauth/src/consents.ts
+  s_d831a85476715e::t_0d8f421431fd44 1-95
+packages/authfn-mcp-oauth/src/index.ts
+  s_d831a85476715e::t_1f80c7c1b360d0 5
+packages/authfn-mcp-oauth/src/refresh.test.ts
+  s_d831a85476715e::t_a60be186660634 18-22,42-47,96-123
+packages/authfn-mcp-oauth/src/refresh.ts
+  s_d831a85476715e::t_8a268b4fcf61ad 4,74-94,101,147-156
+packages/authfn-mcp-oauth/src/revocation.ts
+  s_d831a85476715e::t_b46dec9853f2bc 2,4,15-34,68,98-210
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "11c4675a97b6c0b9ea9923a258dfcf382e9cc7bf",
+  "prompts": {},
+  "sessions": {
+    "s_d831a85476715e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d60f0393-6f29-44d0-a5a5-440b989f4dab",
+        "model": "unknown"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
