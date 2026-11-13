@@ -225,6 +225,12 @@ describe("development Cloudflare token account preflight", () => {
       const message = await refusal(fetch);
       assert.match(message, listingRefusal);
       assert.ok(message.includes(`(${reason})`), message);
+      assert.ok(
+        message.includes(
+          `the development account ${developmentAccountId} (CLOUDFLARE_ACCOUNT_ID)`,
+        ),
+        message,
+      );
     });
   }
 });

@@ -113,8 +113,11 @@ configuration, runs Wrangler, or opens a database. It stops with
 - no account.
 
 It also stops when the listing fails, for example on a network error or an HTTP
-error status. There is no skip flag. The error names the account IDs and the
-variable that supplied the token, never the token. Every one of these commands
+error status. There is no skip flag. Neither error contains the token. A scope
+refusal names the variable that supplied the token, the development account ID,
+the accessible account IDs, and any production account ID it found. A listing
+failure names the variable, the development account ID, and the failure class,
+such as `HTTP 403` or `timed out`. Every one of these commands
 therefore needs the development token, the development account ID, and the
 production account ID, including the migration and smoke commands.
 

@@ -181,9 +181,9 @@ function tokenScopeError(detail) {
   return new Error(`DEV_CLOUDFLARE_TOKEN_SCOPE: ${detail}`);
 }
 
-function listingError(reason) {
+function listingError(reason, developmentAccountId) {
   return tokenScopeError(
-    `could not list the Cloudflare accounts ${developmentCloudflareTokenVariable} can access (${reason}); the development run stops`,
+    `could not list the Cloudflare accounts ${developmentCloudflareTokenVariable} can access (${reason}), so it cannot be verified as limited to the development account ${developmentAccountId} (CLOUDFLARE_ACCOUNT_ID); the development run stops`,
   );
 }
 
@@ -198,7 +198,8 @@ function requestFailure(error) {
     : "request failed";
 }
 
-async function listCloudflareAccounts(token, fetchAccounts) {
+async function listCloudflareAccounts(token, developmentAccountId, fetchAccounts) {
+  const fail = (reason) => listingError(reason, developmentAccountId);
   const accounts = new Set();
   for (let page = 1; page <= accountListingMaxPages; page += 1) {
     const url = new URL(cloudflareAccountsUrl);
@@ -212,36 +213,36 @@ async function listCloudflareAccounts(token, fetchAccounts) {
         signal: AbortSignal.timeout(30_000),
       });
     } catch (error) {
-      throw listingError(requestFailure(error));
+      throw fail(requestFailure(error));
     }
-    if (!response.ok) throw listingError(`HTTP ${response.status}`);
+    if (!response.ok) throw fail(`HTTP ${response.status}`);
     let body;
     try {
       body = await response.json();
     } catch {
-      throw listingError("the response was not JSON");
+      throw fail("the response was not JSON");
     }
     if (body?.success !== true || !Array.isArray(body.result)) {
-      throw listingError("the response was not a successful account list");
+      throw fail("the response was not a successful account list");
     }
     for (const account of body.result) {
       const id = typeof account?.id === "string" ? account.id.toLowerCase() : "";
       if (!cloudflareAccountIdPattern.test(id)) {
-        throw listingError("the response contained an invalid account ID");
+        throw fail("the response contained an invalid account ID");
       }
       accounts.add(id);
     }
     const totalPages = body.result_info?.total_pages;
     if (totalPages === undefined) {
       if (body.result.length < accountListingPageSize) return [...accounts];
-      throw listingError("a full page omitted its pagination");
+      throw fail("a full page omitted its pagination");
     }
     if (!Number.isSafeInteger(totalPages) || totalPages < 0) {
-      throw listingError("the response had invalid pagination");
+      throw fail("the response had invalid pagination");
     }
     if (page >= totalPages) return [...accounts];
   }
-  throw listingError(`more than ${accountListingMaxPages} pages of accounts`);
+  throw fail(`more than ${accountListingMaxPages} pages of accounts`);
 }
 
 // Development tokens must be single-account: the listing must be exactly the
@@ -283,6 +284,7 @@ export async function verifiedDevelopmentCloudflareEnvironment(options = {}) {
   try {
     const accounts = await listCloudflareAccounts(
       token,
+      environment.CLOUDFLARE_ACCOUNT_ID,
       options.fetch ?? globalThis.fetch,
     );
     assertDevelopmentCloudflareAccountScope(
