@@ -9,6 +9,11 @@
       "types": "./src/index.ts",
       "development": "./src/index.ts",
       "default": "./dist/index.js"
+    },
+    "./session": {
+      "types": "./src/session.ts",
+      "development": "./src/session.ts",
+      "default": "./dist/session.js"
     }
   },
   "files": [

@@ -260,6 +260,9 @@ importers:
       '@skillplane/api':
         specifier: workspace:*
         version: link:../packages/api
+      '@skillplane/auth':
+        specifier: workspace:*
+        version: link:../packages/auth
       '@skillplane/config':
         specifier: workspace:*
         version: link:../packages/config

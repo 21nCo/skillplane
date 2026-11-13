@@ -1,3 +1,5 @@
+// The browser app imports this module through `@skillplane/auth/session`, so
+// it must stay free of runtime imports from server-only packages.
 import type { AuthFnCookieConfig } from "authfn";
 
 export const AUTH_COOKIE_PREFIX = "skillplane";
