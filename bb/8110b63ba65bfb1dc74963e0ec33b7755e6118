@@ -1,0 +1,29 @@
+docs/operations/deployment.md
+  s_ecbfc716ea68da::t_999ae53d22b696 309-312
+docs/operations/development.md
+  s_ecbfc716ea68da::t_92aa70060fbecd 184-186,189-195,213-218
+scripts/lib/development-topology-deployment.mjs
+  s_ecbfc716ea68da::t_2edb565c7261a0 88-135,154-160,162,201-203,211-212,243-248
+scripts/migrate-development-topology.mjs
+  s_ecbfc716ea68da::t_0c30c681c4b5a6 28-30
+scripts/migrate-development-topology.test.mjs
+  s_ecbfc716ea68da::t_1476eef46ba45e 378-511
+turbo.json
+  s_ecbfc716ea68da::t_e844b7db1a99cf 45-50
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "bb8110b63ba65bfb1dc74963e0ec33b7755e6118",
+  "prompts": {},
+  "sessions": {
+    "s_ecbfc716ea68da": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_ecbfc716ea68da",
+        "model": "unknown"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
