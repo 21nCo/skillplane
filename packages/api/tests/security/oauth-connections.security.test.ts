@@ -135,7 +135,7 @@ describe("OAuth connection route defenses", () => {
     await assertUnchanged();
   });
 
-  it("shares one rate-limit bucket across guessed consent IDs", () => {
+  it("maps every guessed consent ID to one rate-limit route key", () => {
     expect(rateLimitRouteKey(`/api/v1/me/oauth-connections/${consentId}`)).toBe(
       "/api/v1/me/oauth-connections/:consentId",
     );

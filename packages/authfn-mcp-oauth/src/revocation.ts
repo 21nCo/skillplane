@@ -211,10 +211,20 @@ export async function revokeConsent(
           AND consumed_at IS NULL AND expires_at > $3`,
       subject,
     );
+    // Refresh tokens have no user index and are never pruned, so reach them
+    // through their families. issueTokenPair writes every refresh token with
+    // an access token of the same family, user and client, and access tokens
+    // are never deleted, so the user-indexed access rows name every family.
+    // The family index then bounds the sweep to this user's rows.
     const refreshTokens = await database.query(
       `UPDATE authfn_oauth_refresh_tokens
           SET revoked_at = $3
-        WHERE user_id = $1 AND client_id = $2 AND revoked_at IS NULL`,
+        WHERE family_id IN (
+                SELECT family_id
+                  FROM authfn_oauth_access_tokens
+                 WHERE user_id = $1 AND client_id = $2
+              )
+          AND user_id = $1 AND client_id = $2 AND revoked_at IS NULL`,
       subject,
     );
     const accessTokens = await database.query(

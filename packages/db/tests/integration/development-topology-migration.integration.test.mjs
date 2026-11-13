@@ -37,8 +37,7 @@ function migrateDevelopmentTopology(options) {
 
 // One control and two cell databases stand in for the development topology.
 // The fixture rewinds them to the state observed on 2026-11-05: control before
-// 0051 (so also without the later 0055) and cells at 0050, with the 0052-0054
-// regional objects absent.
+// 0051 and cells at 0050, with the 0052-0054 regional objects absent.
 const suffix = crypto.randomUUID().replaceAll("-", "").slice(0, 12);
 const names = {
   control: `skillplane_devtopo_control_${suffix}_test`,
@@ -51,10 +50,7 @@ const urls = {};
 let admin;
 let migrations;
 
-const controlRewound = [
-  "0051_control_composition_visibility.sql",
-  "0055_control_oauth_refresh_user_client_index.sql",
-];
+const controlRewound = ["0051_control_composition_visibility.sql"];
 const cellsRewound = [
   "0052_regional_skill_groups.sql",
   "0053_regional_git_sources.sql",
@@ -131,16 +127,6 @@ async function migrateToHead() {
 // test starts from the same behind-head state.
 async function rewind() {
   await migrateToHead();
-  const oauthIndexRollback = await readFile(
-    resolve(
-      packageRoot,
-      "migrations",
-      "rollback",
-      "0055_control_oauth_refresh_user_client_index.sql",
-    ),
-    "utf8",
-  );
-  await withPool("control", (pool) => pool.query(oauthIndexRollback));
   await withPool("control", (pool) =>
     pool.query(`BEGIN;
       ALTER TABLE public_skill_version_lifecycle

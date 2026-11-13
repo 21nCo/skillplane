@@ -4,6 +4,7 @@ import {
   seedTenantFixture,
   type TenantFixture,
 } from "@skillplane/testing";
+import type { PoolClient } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   OAUTH_ISSUER,
@@ -165,6 +166,19 @@ describe("OAuth connection listing and revocation", () => {
       await environment.registerClient({ name: "Unrelated Agent" }),
     );
     const consent = await consentFor(client);
+    // An access-only RFC 7009 revoke leaves that family's refresh token live;
+    // the consent sweep must still reach it.
+    const accessOnly = await environment.app.fetch(
+      new Request(
+        `${OAUTH_ISSUER}/auth/oauth/revoke`,
+        oauthForm({
+          client_id: client.clientId,
+          token: first.access_token,
+          token_type_hint: "access_token",
+        }),
+      ),
+    );
+    expect(accessOnly.status).toBe(200);
 
     const response = await revoke(consent.consentId);
     expect(response.status).toBe(204);
@@ -178,6 +192,13 @@ describe("OAuth connection listing and revocation", () => {
       expect(refreshed.status).toBe(400);
       await expect(refreshed.json()).resolves.toMatchObject({ error: "invalid_grant" });
     }
+    // The refresh grant also refuses a revoked consent, so check the rows.
+    const liveRefresh = await environment.services.database.pool.query(
+      `SELECT id FROM authfn_oauth_refresh_tokens
+        WHERE user_id = $1 AND client_id = $2 AND revoked_at IS NULL`,
+      [environment.fixture.userId, client.clientId],
+    );
+    expect(liveRefresh.rows).toEqual([]);
     expect(await consentRevokedAt(consent.consentId)).toBeInstanceOf(Date);
     expect((await list()).map((entry) => entry.consentId)).not.toContain(
       consent.consentId,
@@ -201,7 +222,7 @@ describe("OAuth connection listing and revocation", () => {
         consentId: consent.consentId,
         clientId: client.clientId,
         resource: OAUTH_RESOURCE,
-        revokedGrants: { codes: 0, access: 2, refresh: 2 },
+        revokedGrants: { codes: 0, access: 1, refresh: 2 },
       },
     });
     const serialized = JSON.stringify(audits);
@@ -275,16 +296,26 @@ describe("OAuth connection listing and revocation", () => {
     expect(await revocationAudits(consent.consentId)).toHaveLength(1);
   });
 
-  async function waitForLockWaiters(count: number): Promise<void> {
+  // Counts only sessions queued behind this test's blocker, directly or through
+  // another waiter (the consent revoke waits on the in-flight request that
+  // holds the consent share lock), so lock waits from other test files that
+  // share the database cannot release the blocker early.
+  async function waitForLockWaiters(blocker: PoolClient, count: number): Promise<void> {
+    const pid = await blocker.query<{ pid: number }>("SELECT pg_backend_pid() AS pid");
+    const blockerPid = pid.rows[0]?.pid;
     for (let attempt = 0; attempt < 200; attempt += 1) {
       const result = await environment.services.database.pool.query<{
         waiting: string;
       }>(
-        `SELECT count(*) AS waiting
-           FROM pg_stat_activity
-          WHERE datname = current_database()
-            AND wait_event_type = 'Lock'
-            AND query LIKE '%authfn_oauth_%'`,
+        `WITH RECURSIVE chain(pid) AS (
+           SELECT $1::int
+           UNION
+           SELECT activity.pid
+             FROM pg_stat_activity AS activity
+             JOIN chain ON chain.pid = ANY(pg_blocking_pids(activity.pid))
+         )
+         SELECT count(*) - 1 AS waiting FROM chain`,
+        [blockerPid],
       );
       if (Number(result.rows[0]?.waiting) >= count) return;
       await new Promise((resolve) => setTimeout(resolve, 25));
@@ -308,9 +339,9 @@ describe("OAuth connection listing and revocation", () => {
         [environment.fixture.userId, client.clientId],
       );
       const rotation = refresh(client, tokens.refresh_token);
-      await waitForLockWaiters(1);
+      await waitForLockWaiters(blocker, 1);
       const revocation = revoke(consent.consentId);
-      await waitForLockWaiters(2);
+      await waitForLockWaiters(blocker, 2);
       await blocker.query("ROLLBACK");
 
       const rotated = await rotation;
@@ -358,9 +389,9 @@ describe("OAuth connection listing and revocation", () => {
           }),
         ),
       );
-      await waitForLockWaiters(1);
+      await waitForLockWaiters(blocker, 1);
       const consentRevocation = revoke(consent.consentId);
-      await waitForLockWaiters(2);
+      await waitForLockWaiters(blocker, 2);
       await blocker.query("ROLLBACK");
 
       expect((await clientRevocation).status).toBe(200);
