@@ -308,6 +308,73 @@ describe("development topology migration compares the driver's destination", () 
     ));
 });
 
+// Both sides of the production comparison reduce to one canonical destination.
+// A production target spelled any other way could never equal an accepted
+// development URL, so it is refused instead of silently counting as isolation.
+describe("development topology migration requires canonical production targets", () => {
+  const nonCanonicalHosts = ["2130706433", "0x7f.1", "0177.0.0.1", "127.1"];
+
+  for (const identity of [
+    "2130706433:5432/skillplane",
+    "0x7f.1/skillplane",
+    "0177.0.0.1/skillplane",
+    "127.1/skillplane",
+  ]) {
+    it(`refuses the production identity ${identity} before connecting`, () =>
+      rejectsBeforeMigrating(
+        workflowEnvironment(`control.prod.invalid/skillplane_control ${identity}`),
+        new RegExp(
+          `^Error: SKILLPLANE_PRODUCTION_DATABASE_IDENTITIES entries must name their host in canonical form: ${identity.replaceAll(".", "\\.")}$`,
+          "u",
+        ),
+      ));
+  }
+
+  it("refuses a production URL variable with a non-canonical host before connecting", async () => {
+    for (const host of nonCanonicalHosts) {
+      await rejectsBeforeMigrating(
+        {
+          ...workflowEnvironment(unrelatedProductionIdentities),
+          SKILLPLANE_CONTROL_DATABASE_URL: `postgresql://prod:secret@${host}:5432/skillplane`,
+        },
+        /^Error: PRODUCTION_DATABASE_DESTINATION_AMBIGUOUS: SKILLPLANE_CONTROL_DATABASE_URL must name its host in canonical form$/u,
+      );
+    }
+  });
+
+  it("refuses a production URL variable whose driver destination is non-canonical", () =>
+    rejectsBeforeMigrating(
+      {
+        ...workflowEnvironment(unrelatedProductionIdentities),
+        SKILLPLANE_CELL_EU_WEST_DATABASE_URL:
+          "postgresql://prod:secret@euwest.prod.invalid:5432/skillplane?host=2130706433",
+      },
+      /^Error: PRODUCTION_DATABASE_DESTINATION_AMBIGUOUS: SKILLPLANE_CELL_EU_WEST_DATABASE_URL must name its host in canonical form$/u,
+    ));
+
+  it("refuses a dotted-quad development URL equal to a dotted-quad production identity", () =>
+    rejectsBeforeMigrating(
+      {
+        ...workflowEnvironment("127.0.0.1:5432/skillplane"),
+        SKILLPLANE_DEV_USEAST_DATABASE_URL:
+          "postgresql://dev:secret@127.0.0.1:5432/skillplane",
+      },
+      /^Error: The us-east development database must differ from SKILLPLANE_PRODUCTION_DATABASE_IDENTITIES$/u,
+    ));
+
+  it("still connects when canonical production targets match no development URL", () =>
+    rejectsBeforeMigrating(
+      {
+        ...workflowEnvironment(
+          "10.0.0.1:5432/skillplane control.prod.invalid./skillplane_control",
+        ),
+        SKILLPLANE_CONTROL_DATABASE_URL:
+          "postgresql://prod:secret@Control.Prod.Invalid.:5432/skillplane_control",
+      },
+      /ENOTFOUND|EAI_AGAIN|getaddrinfo/u,
+    ));
+});
+
 describe("development topology schema head status", () => {
   const migrations = [
     { id: "0001_core.sql", roles: ["combined", "control", "regional"] },

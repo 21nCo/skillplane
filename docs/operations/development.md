@@ -206,6 +206,13 @@ connect to, so `db:migrate:dev:topology`, `deploy:dev:topology`, and
 its URL authority: a `host`, `hostaddr`, or `port` query parameter, a
 percent-encoded, trailing-dot, or numeric (non dotted-quad) host, or a URL
 without a port while `PGPORT` names another port.
+Production targets follow the same host rule, so a production target can never
+silently fail to match: write each `SKILLPLANE_PRODUCTION_DATABASE_IDENTITIES`
+entry and each production URL variable with a lowercase DNS name or a
+dotted-quad IPv4 address (a trailing dot and letter case are normalized). The
+commands refuse a numeric (`2130706433`), shortened (`127.1`), hex (`0x7f.1`),
+or octal (`0177.0.0.1`) host in an identity entry, naming the variable, and in a
+production URL variable with `PRODUCTION_DATABASE_DESTINATION_AMBIGUOUS`.
 Each database migrates in one transaction under the
 shared migration lock, so a second or concurrent run applies nothing, and a run
 interrupted between databases resumes when rerun.
@@ -250,8 +257,8 @@ fails closed when it is missing, and refuses to deploy when the development
 account equals it or the production release account (`vars.CLOUDFLARE_ACCOUNT_ID`).
 The variable `SKILLPLANE_PRODUCTION_DATABASE_IDENTITIES` (org or `dev`
 environment) must list the production control and cell database identities as
-`host[:port]/database`, never URLs or credentials; the migration step refuses to
-run without it. The `dev` environment must provide:
+`host[:port]/database` with canonical hosts, never URLs or credentials; the
+migration step refuses to run without it. The `dev` environment must provide:
 
 - Secrets: `SKILLPLANE_DEV_CONTROL_DATABASE_URL`, `SKILLPLANE_DEV_DATABASE_URL`,
   `SKILLPLANE_DEV_USEAST_DATABASE_URL`, `SKILLPLANE_DEV_EUWEST_DATABASE_URL`,

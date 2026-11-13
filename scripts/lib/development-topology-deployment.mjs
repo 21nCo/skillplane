@@ -60,6 +60,31 @@ function destinationKey({ host, port, database }) {
   ]);
 }
 
+const destinationQueryParameters = new Set(["host", "hostaddr", "port"]);
+const canonicalHostPattern =
+  /^(?:\[[0-9a-f:.]+\]|[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*)$/u;
+const canonicalIpv4 =
+  /^(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)$/u;
+
+// One spelling per destination, shared by both sides of the production
+// comparison: lowercase DNS labels or a bracketed IPv6 literal, and an IPv4
+// address only as a dotted quad. A name whose last label is numeric or hex
+// (2130706433, 127.1, 0x7f.1, 0177.0.0.1) is an alternative IPv4 spelling, so
+// it could never equal the canonical spelling of the same address.
+function isCanonicalHost(host) {
+  if (typeof host !== "string" || !canonicalHostPattern.test(host)) return false;
+  const lastLabel = host.split(".").at(-1);
+  return !/^(?:\d+|0x[0-9a-f]*)$/u.test(lastLabel) || canonicalIpv4.test(host);
+}
+
+// A production target is compared after DNS normalization (case and the root
+// label's trailing dot), but its host must otherwise be canonical.
+function isCanonicalProductionHost(host) {
+  return (
+    typeof host === "string" && isCanonicalHost(host.toLowerCase().replace(/\.$/u, ""))
+  );
+}
+
 export const productionIdentitiesVariable = "SKILLPLANE_PRODUCTION_DATABASE_IDENTITIES";
 
 // Non-secret production database identities (`host[:port]/database`, separated
@@ -78,12 +103,16 @@ export function productionDatabaseIdentityKeys(environment = process.env) {
           `${productionIdentitiesVariable} entries must be host[:port]/database without credentials`,
         );
       }
-      return destinationKey(
-        parseDirectPostgresUrl(
-          `postgresql://identity:identity@${identity}`,
-          productionIdentitiesVariable,
-        ).identity,
+      const { identity: destination } = parseDirectPostgresUrl(
+        `postgresql://identity:identity@${identity}`,
+        productionIdentitiesVariable,
       );
+      if (!isCanonicalProductionHost(destination.host)) {
+        throw new Error(
+          `${productionIdentitiesVariable} entries must name their host in canonical form: ${identity}`,
+        );
+      }
+      return destinationKey(destination);
     });
 }
 
@@ -112,12 +141,6 @@ export function driverDestination(url) {
   };
 }
 
-const destinationQueryParameters = new Set(["host", "hostaddr", "port"]);
-const canonicalHost =
-  /^(?:\[[0-9a-f:.]+\]|[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*)$/u;
-const canonicalIpv4 =
-  /^(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)$/u;
-
 // The production comparison below is by URL authority, so a development URL
 // must connect exactly where its authority says. Refuses, before any
 // connection, query parameters that move the connection, a percent-encoded or
@@ -133,12 +156,7 @@ export function assertDevelopmentDestination(database, name) {
       refuse(`must not set the ${key} query parameter`);
     }
   }
-  const host = database.identity.host;
-  const lastLabel = host.split(".").at(-1);
-  if (
-    !canonicalHost.test(host) ||
-    (/^(?:\d+|0x[0-9a-f]*)$/u.test(lastLabel) && !canonicalIpv4.test(host))
-  ) {
+  if (!isCanonicalHost(database.identity.host)) {
     refuse("must name its host in canonical form");
   }
   let destination;
@@ -164,16 +182,27 @@ function assertNotProductionDatabase(database, name) {
     if (!productionUrl) continue;
     const production = parseDirectPostgresUrl(productionUrl, productionVariable);
     // A production URL is compared both by its authority and by where the
-    // driver would send it.
-    let productionDestination;
+    // driver would send it. Either side that cannot be reduced to a canonical
+    // destination is refused rather than compared, because no accepted
+    // development URL could ever equal it.
+    let driverTarget;
     try {
-      productionDestination = destinationKey(driverDestination(production.url));
+      driverTarget = driverDestination(production.url);
     } catch {
-      productionDestination = undefined;
+      driverTarget = undefined;
+    }
+    if (
+      !driverTarget ||
+      !isCanonicalProductionHost(production.identity.host) ||
+      !isCanonicalProductionHost(driverTarget.host)
+    ) {
+      throw new Error(
+        `PRODUCTION_DATABASE_DESTINATION_AMBIGUOUS: ${productionVariable} must name its host in canonical form`,
+      );
     }
     if (
       destination === destinationKey(production.identity) ||
-      destination === productionDestination
+      destination === destinationKey(driverTarget)
     ) {
       throw new Error(`${name} must differ from ${productionVariable}`);
     }
