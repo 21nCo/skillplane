@@ -15,10 +15,10 @@ import { isMain } from "./lib/production-deployment.mjs";
 // converts, drops, or prunes tables, and it takes no backup: development data
 // is disposable, while production keeps `db:migrate:topology`.
 export async function migrateDevelopmentTopology(options = {}) {
-  // Parsing the topology refuses any URL that names a production database
-  // before the first connection. In GitHub Actions, where no production
-  // credentials exist to compare against, the production identities must be
-  // configured or the command refuses before parsing any URL.
+  // Before parsing any URL, the production identities must be configured on
+  // every invocation, local or CI. Parsing the topology then refuses any URL
+  // that names a production identity or a production URL variable before the
+  // first connection.
   let databases = options.databases;
   if (!databases) {
     assertProductionIsolationConfigured();

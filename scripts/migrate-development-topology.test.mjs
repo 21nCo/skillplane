@@ -19,6 +19,11 @@ const developmentUrls = {
     "postgresql://dev:secret@euwest.dev.invalid:5432/skillplane",
 };
 
+// Production identities that match none of the development URLs, so the
+// production URL variable comparison is the check under test.
+const unrelatedProductionIdentities =
+  "control.prod.invalid/skillplane_control insouth.prod.invalid/skillplane";
+
 async function withEnvironment(values, operation) {
   const saved = { ...process.env };
   for (const name of Object.keys(process.env)) {
@@ -47,6 +52,7 @@ describe("development topology migration safety", () => {
       await withEnvironment(
         {
           ...developmentUrls,
+          SKILLPLANE_PRODUCTION_DATABASE_IDENTITIES: unrelatedProductionIdentities,
           // The same database with a different password and SSL mode.
           [productionVariable]: developmentUrls[developmentVariable]
             .replace(":secret@", ":production@")
@@ -71,6 +77,7 @@ describe("development topology migration safety", () => {
     await withEnvironment(
       {
         ...developmentUrls,
+        SKILLPLANE_PRODUCTION_DATABASE_IDENTITIES: unrelatedProductionIdentities,
         SKILLPLANE_CELL_US_EAST_DATABASE_URL:
           "postgresql://prod:secret@useast.prod.invalid:5432/skillplane",
       },
@@ -113,16 +120,58 @@ async function rejectsBeforeMigrating(environment, expected) {
   assert.equal(migrations, 0);
 }
 
+const isolationUnconfigured =
+  /^Error: PRODUCTION_ISOLATION_UNCONFIGURED: SKILLPLANE_PRODUCTION_DATABASE_IDENTITIES /u;
+
+// An operator's machine: `.env.development.local` supplies the four development
+// URLs, GITHUB_ACTIONS is unset, and production URLs live elsewhere if at all.
+describe("development topology migration production isolation on a local host", () => {
+  it("refuses before connecting when no production identities are configured", () =>
+    rejectsBeforeMigrating({ ...developmentUrls }, isolationUnconfigured));
+
+  it("refuses without identities even when a production URL variable is set", async () => {
+    // Neither a matching nor an unrelated production URL substitutes for the
+    // identities: the refusal comes before any URL comparison.
+    for (const productionUrl of [
+      developmentUrls.SKILLPLANE_DEV_CONTROL_DATABASE_URL,
+      "postgresql://prod:secret@control.prod.invalid:5432/skillplane_control",
+    ]) {
+      await rejectsBeforeMigrating(
+        { ...developmentUrls, SKILLPLANE_CONTROL_DATABASE_URL: productionUrl },
+        isolationUnconfigured,
+      );
+    }
+  });
+
+  it("refuses with GITHUB_ACTIONS set to anything but true", () =>
+    rejectsBeforeMigrating(
+      { ...developmentUrls, GITHUB_ACTIONS: "false" },
+      isolationUnconfigured,
+    ));
+
+  it("refuses before validating the development URLs", () =>
+    rejectsBeforeMigrating(
+      { ...developmentUrls, SKILLPLANE_DEV_CONTROL_DATABASE_URL: "not a url" },
+      isolationUnconfigured,
+    ));
+
+  it("connects when the identities are configured and none matches", () =>
+    rejectsBeforeMigrating(
+      {
+        ...developmentUrls,
+        SKILLPLANE_PRODUCTION_DATABASE_IDENTITIES: unrelatedProductionIdentities,
+      },
+      /ENOTFOUND|EAI_AGAIN|getaddrinfo/u,
+    ));
+});
+
 describe("development topology migration production isolation in GitHub Actions", () => {
   for (const [label, identities] of [
     ["unset", ""],
     ["blank", " , \n"],
   ]) {
     it(`refuses before connecting when the production identities are ${label}`, () =>
-      rejectsBeforeMigrating(
-        workflowEnvironment(identities),
-        /^Error: PRODUCTION_ISOLATION_UNCONFIGURED: SKILLPLANE_PRODUCTION_DATABASE_IDENTITIES /u,
-      ));
+      rejectsBeforeMigrating(workflowEnvironment(identities), isolationUnconfigured));
   }
 
   it("refuses a development URL that matches a production identity before connecting", () =>

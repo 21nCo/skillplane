@@ -74,13 +74,13 @@ export function productionDatabaseIdentityFingerprints(environment = process.env
     });
 }
 
-// GitHub Actions has no production database credentials to compare against, so
-// an automatic migration there fails closed until the identities are set.
+// The production URL variables are only present where an operator happens to
+// keep them (the development commands load only `.env.development.local`, and
+// GitHub Actions has none), so comparing against them alone can compare against
+// nothing. Every development migration therefore fails closed until the
+// non-secret production identities are configured, on any host.
 export function assertProductionIsolationConfigured(environment = process.env) {
-  if (
-    environment.GITHUB_ACTIONS === "true" &&
-    productionDatabaseIdentityFingerprints(environment).length === 0
-  ) {
+  if (productionDatabaseIdentityFingerprints(environment).length === 0) {
     throw new Error(
       `PRODUCTION_ISOLATION_UNCONFIGURED: ${productionIdentitiesVariable} must list the production database identities`,
     );

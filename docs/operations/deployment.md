@@ -304,7 +304,9 @@ cell databases migrate with `pnpm db:migrate:dev:topology`, which the
 place without a backup or safety record, never drops tables, refuses an empty or
 unconverted database before migrating any, and refuses any URL that matches a
 production database variable or an entry of the non-secret
-`SKILLPLANE_PRODUCTION_DATABASE_IDENTITIES` variable, which the workflow requires.
+`SKILLPLANE_PRODUCTION_DATABASE_IDENTITIES` variable. The command refuses to run
+whenever that variable is empty, locally (set it in `.env.development.local`) and
+in the workflow (an org or `dev` environment variable).
 Production migration behavior is unchanged. See
 [`development.md`](./development.md#three-cell-gateway-development-topology).
 

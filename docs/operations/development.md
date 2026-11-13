@@ -137,6 +137,7 @@ SKILLPLANE_DEV_CONTROL_DATABASE_URL=postgresql://...
 SKILLPLANE_DEV_DATABASE_URL=postgresql://... # in-south compatibility name
 SKILLPLANE_DEV_USEAST_DATABASE_URL=postgresql://...
 SKILLPLANE_DEV_EUWEST_DATABASE_URL=postgresql://...
+SKILLPLANE_PRODUCTION_DATABASE_IDENTITIES=host[:port]/database,... # production control and cells, no credentials
 CLOUDFLARE_DEV_CONTROL_HYPERDRIVE_ID=...
 CLOUDFLARE_DEV_CELL_IN_SOUTH_HYPERDRIVE_ID=...
 CLOUDFLARE_DEV_CELL_US_EAST_HYPERDRIVE_ID=...
@@ -194,8 +195,11 @@ variable (`SKILLPLANE_CONTROL_DATABASE_URL`, `SKILLPLANE_CELL_<REGION>_DATABASE_
 or an entry of `SKILLPLANE_PRODUCTION_DATABASE_IDENTITIES`. That variable lists
 production databases without credentials as `host[:port]/database` entries
 separated by commas or whitespace (the port defaults to `5432`); list every
-hostname that reaches a production database. Under GitHub Actions the command
-refuses with `PRODUCTION_ISOLATION_UNCONFIGURED` when the variable is empty. Each database migrates in one transaction under the
+hostname that reaches a production database. The command refuses with
+`PRODUCTION_ISOLATION_UNCONFIGURED` before reading any URL whenever the variable is
+empty, locally and in CI, because the production URL variables are usually absent
+from `.env.development.local` and would otherwise be compared against nothing.
+Each database migrates in one transaction under the
 shared migration lock, so a second or concurrent run applies nothing, and a run
 interrupted between databases resumes when rerun.
 
