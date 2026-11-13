@@ -375,6 +375,140 @@ describe("development topology migration requires canonical production targets",
     ));
 });
 
+// pg sends startup parameters as NUL-terminated strings, so an encoded control
+// character in any URL component can add a second `database` key that the
+// server uses. Each form names a database other than the production target
+// while sending the production target's name on the wire.
+const controlCharacterForms = [
+  [
+    "the database path",
+    "postgresql://dev:secret@prod.invalid:5432/skillplane%00application_name%00x",
+  ],
+  [
+    "application_name",
+    "postgresql://dev:secret@prod.invalid:5432/dev_only?application_name=x%00database%00skillplane",
+  ],
+  [
+    "fallback_application_name",
+    "postgresql://dev:secret@prod.invalid:5432/dev_only?fallback_application_name=x%00database%00skillplane",
+  ],
+  [
+    "options",
+    "postgresql://dev:secret@prod.invalid:5432/dev_only?options=x%00database%00skillplane",
+  ],
+  [
+    "an encoded query key",
+    "postgresql://dev:secret@prod.invalid:5432/dev_only?application%5Fname=x%00database%00skillplane",
+  ],
+  [
+    "a query key",
+    "postgresql://dev:secret@prod.invalid:5432/dev_only?x%00database%00skillplane=1",
+  ],
+  [
+    "the user",
+    "postgresql://dev%00database%00skillplane:secret@prod.invalid:5432/dev_only",
+  ],
+  ["the password", "postgresql://dev:se%00cret@prod.invalid:5432/dev_only"],
+  [
+    "a newline",
+    "postgresql://dev:secret@prod.invalid:5432/dev_only?application_name=x%0Ay",
+  ],
+  ["a DEL", "postgresql://dev:secret@prod.invalid:5432/dev_only%7F"],
+];
+const controlCharacterRefused =
+  /^Error: DEVELOPMENT_DATABASE_DESTINATION_AMBIGUOUS: .+ must not contain a control character in its [a-z_ ]+$/u;
+
+describe("development topology migration refuses control characters in database URLs", () => {
+  for (const variable of Object.keys(developmentUrls)) {
+    it(`refuses every control-character form in ${variable} before connecting`, async () => {
+      for (const [form, url] of controlCharacterForms) {
+        const environment = {
+          ...workflowEnvironment(
+            `control.prod.invalid/skillplane_control ${productionTarget}`,
+          ),
+          [variable]: url,
+        };
+        await rejectsBeforeMigrating(environment, controlCharacterRefused).catch(
+          (error) => {
+            throw new Error(`${form}: ${error.message}`);
+          },
+        );
+        await withEnvironment(environment, () =>
+          assert.throws(
+            () => developmentTopologyDatabases(),
+            controlCharacterRefused,
+            form,
+          ),
+        );
+      }
+    });
+  }
+
+  it("never echoes the refused value", async () => {
+    await withEnvironment(
+      {
+        ...workflowEnvironment(unrelatedProductionIdentities),
+        SKILLPLANE_DEV_CONTROL_DATABASE_URL:
+          "postgresql://dev:hunter2%00x@control.dev.invalid:5432/skillplane_control",
+      },
+      () =>
+        assert.throws(
+          () => developmentTopologyDatabases(),
+          (error) =>
+            /in its password$/u.test(error.message) &&
+            !error.message.includes("hunter2"),
+        ),
+    );
+  });
+
+  it("refuses a URL with an undecodable component before connecting", () =>
+    rejectsBeforeMigrating(
+      {
+        ...workflowEnvironment(
+          `control.prod.invalid/skillplane_control ${productionTarget}`,
+        ),
+        SKILLPLANE_DEV_CONTROL_DATABASE_URL:
+          "postgresql://dev:se%zzcret@prod.invalid:5432/dev_only?application_name=x%00database%00skillplane",
+      },
+      /^URIError: URI malformed$|^Error: DEVELOPMENT_DATABASE_DESTINATION_AMBIGUOUS: The development control database must not contain /u,
+    ));
+
+  it("refuses a production identity with a control character before connecting", () =>
+    rejectsBeforeMigrating(
+      workflowEnvironment(
+        "control.prod.invalid/skillplane_control prod.invalid/skillplane%00x",
+      ),
+      /^Error: SKILLPLANE_PRODUCTION_DATABASE_IDENTITIES entries must not contain a control character in its database$/u,
+    ));
+
+  it("refuses a production URL variable with a control character before connecting", async () => {
+    for (const url of [
+      "postgresql://prod:secret@control.prod.invalid:5432/skillplane%00x",
+      "postgresql://prod:secret@control.prod.invalid:5432/skillplane?application_name=x%00database%00y",
+    ]) {
+      await rejectsBeforeMigrating(
+        {
+          ...workflowEnvironment(unrelatedProductionIdentities),
+          SKILLPLANE_CONTROL_DATABASE_URL: url,
+        },
+        /^Error: PRODUCTION_DATABASE_DESTINATION_AMBIGUOUS: SKILLPLANE_CONTROL_DATABASE_URL must not contain a control character in its [a-z_ ]+$/u,
+      );
+    }
+  });
+
+  it("still connects to plain URLs with printable startup parameters", () =>
+    rejectsBeforeMigrating(
+      {
+        ...workflowEnvironment(
+          `control.prod.invalid/skillplane_control ${productionTarget}`,
+        ),
+        SKILLPLANE_DEV_USEAST_DATABASE_URL:
+          "postgresql://dev:secret@useast.dev.invalid:5432/skillplane?application_name=dev%20migrate&options=-c%20statement_timeout%3D0",
+      },
+      /ENOTFOUND|EAI_AGAIN|getaddrinfo/u,
+    ));
+});
+
 describe("development topology schema head status", () => {
   const migrations = [
     { id: "0001_core.sql", roles: ["combined", "control", "regional"] },

@@ -306,7 +306,10 @@ unconverted database before migrating any, and refuses any URL that matches a
 production database variable or an entry of the non-secret
 `SKILLPLANE_PRODUCTION_DATABASE_IDENTITIES` variable, comparing the destination
 the PostgreSQL driver will connect to rather than the URL text alone, and
-refusing a production target whose host is not in canonical form. It refuses to
+refusing a production target whose host is not in canonical form. Any URL or
+identity with a control character (such as `%00`) in a user, password, database,
+or query parameter is refused, because it can send PostgreSQL a second database
+name. It refuses to
 run whenever that variable is empty, locally (set it in `.env.development.local`) and
 in the workflow (an org or `dev` environment variable).
 Production migration behavior is unchanged. See

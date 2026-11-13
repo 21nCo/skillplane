@@ -181,13 +181,18 @@ migration head in place: control-role migrations to
 `SKILLPLANE_DEV_CONTROL_DATABASE_URL`, then regional migrations to each cell URL,
 then the same schema-head and table-ownership checks the deployment runs. It
 never runs the `db:prepare:dev:topology` conversion and never drops, prunes, or
-rewrites tables. It reads every database before migrating any of them and
-refuses with `TOPOLOGY_NOT_PREPARED:<database>:<detail>` when one is not converted:
+rewrites tables. It checks the databases in order and migrates none of them until
+every check passes. The first database that is not converted stops it with
+`TOPOLOGY_NOT_PREPARED:<database>:<detail>`, so a rerun can name the next one:
 `<detail>` is `empty` when the database has no applied migration (the early
 migrations apply to every role, so only the conversion can give an empty database
-its role's shape), or the first table of the other role it still holds. Run
-`db:prepare:dev:topology` for that database first. It takes no backup, because
-development data is disposable, but before opening a connection it refuses any URL
+its role's shape), or the first table of the other role it still holds. Convert
+the topology with `db:prepare:dev:topology` first. That command migrates the
+control database and every cell database, not only the one named in the error.
+It backs up only the India database, and only when India still holds the combined
+schema and needs regionalization; the control, US, and EU databases get no backup.
+`db:migrate:dev:topology` itself takes no backup, because development data is
+disposable, but before opening a connection it refuses any URL
 that identifies the same database (host, port, and database name) as a production
 variable (`SKILLPLANE_CONTROL_DATABASE_URL`, `SKILLPLANE_CELL_<REGION>_DATABASE_URL`,
 `SKILLPLANE_PRODUCTION_DATABASE_URL`,
@@ -205,7 +210,12 @@ connect to, so `db:migrate:dev:topology`, `deploy:dev:topology`, and
 `DEVELOPMENT_DATABASE_DESTINATION_AMBIGUOUS` when its destination differs from
 its URL authority: a `host`, `hostaddr`, or `port` query parameter, a
 percent-encoded, trailing-dot, or numeric (non dotted-quad) host, or a URL
-without a port while `PGPORT` names another port.
+without a port while `PGPORT` names another port. They also refuse a control
+character (`U+0000` to `U+001F` or `U+007F`, usually written `%00`, `%0A`, or `%7F`)
+in the user, password, database, or any query parameter name or value. PostgreSQL
+receives connection settings as NUL-terminated strings, so such a value can send a
+second database name. The same rule applies to
+`SKILLPLANE_PRODUCTION_DATABASE_IDENTITIES` entries and production URL variables.
 Production targets follow the same host rule, so a production target can never
 silently fail to match: write each `SKILLPLANE_PRODUCTION_DATABASE_IDENTITIES`
 entry and each production URL variable with a lowercase DNS name or a

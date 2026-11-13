@@ -85,6 +85,54 @@ function isCanonicalProductionHost(host) {
   );
 }
 
+// U+0000-U+001F or U+007F.
+function hasControlCharacter(value) {
+  return [...value].some((character) => {
+    const code = character.codePointAt(0);
+    return code <= 0x1f || code === 0x7f;
+  });
+}
+
+// The PostgreSQL startup packet is a list of NUL-terminated key and value
+// strings, so a control character in any of them can split a value or add a
+// key: an application_name of `x\0database\0prod` sends a second database that
+// the server uses. Every component is checked on its own, as written and as
+// the driver parses it, and one that cannot be decoded fails closed. Returns
+// the reason a URL is refused, or null. The reason never contains the value,
+// because it can be a password.
+function controlCharacterRefusal(url) {
+  let parsed;
+  let parameters;
+  try {
+    parsed = new URL(url);
+    parameters = new ConnectionParameters({ connectionString: url });
+  } catch {
+    return "a value the PostgreSQL driver cannot parse";
+  }
+  const encoded = [
+    ["user", parsed.username],
+    ["password", parsed.password],
+    ["database", parsed.pathname.slice(1)],
+  ];
+  const decoded = [...parsed.searchParams].flatMap(([key, value]) => [
+    ["query parameter name", key],
+    ["query parameter value", value],
+  ]);
+  for (const [name, value] of encoded) {
+    try {
+      decoded.push([name, decodeURIComponent(value)]);
+    } catch {
+      return `an undecodable ${name}`;
+    }
+  }
+  // `password` is not enumerable on ConnectionParameters.
+  decoded.push(["password", parameters.password], ...Object.entries(parameters));
+  const found = decoded.find(
+    ([, value]) => typeof value === "string" && hasControlCharacter(value),
+  );
+  return found ? `a control character in its ${found[0]}` : null;
+}
+
 export const productionIdentitiesVariable = "SKILLPLANE_PRODUCTION_DATABASE_IDENTITIES";
 
 // Non-secret production database identities (`host[:port]/database`, separated
@@ -103,8 +151,15 @@ export function productionDatabaseIdentityKeys(environment = process.env) {
           `${productionIdentitiesVariable} entries must be host[:port]/database without credentials`,
         );
       }
+      const identityUrl = `postgresql://identity:identity@${identity}`;
+      const refusal = controlCharacterRefusal(identityUrl);
+      if (refusal) {
+        throw new Error(
+          `${productionIdentitiesVariable} entries must not contain ${refusal}`,
+        );
+      }
       const { identity: destination } = parseDirectPostgresUrl(
-        `postgresql://identity:identity@${identity}`,
+        identityUrl,
         productionIdentitiesVariable,
       );
       if (!isCanonicalProductionHost(destination.host)) {
@@ -143,7 +198,9 @@ export function driverDestination(url) {
 
 // The production comparison below is by URL authority, so a development URL
 // must connect exactly where its authority says. Refuses, before any
-// connection, query parameters that move the connection, a percent-encoded or
+// connection, a control character in any component (it can add a startup
+// parameter, such as a second database), query parameters that move the
+// connection, a percent-encoded or
 // otherwise non-canonical host (a trailing dot, a numeric IPv4 form such as
 // 2130706433 or 0x7f.1), and any remaining difference from the driver's parse.
 export function assertDevelopmentDestination(database, name) {
@@ -151,6 +208,8 @@ export function assertDevelopmentDestination(database, name) {
   const refuse = (reason) => {
     throw new Error(`DEVELOPMENT_DATABASE_DESTINATION_AMBIGUOUS: ${name} ${reason}`);
   };
+  const refusal = controlCharacterRefusal(database.url);
+  if (refusal) refuse(`must not contain ${refusal}`);
   for (const key of url.searchParams.keys()) {
     if (destinationQueryParameters.has(key.toLowerCase())) {
       refuse(`must not set the ${key} query parameter`);
@@ -181,6 +240,12 @@ function assertNotProductionDatabase(database, name) {
     const productionUrl = process.env[productionVariable]?.trim();
     if (!productionUrl) continue;
     const production = parseDirectPostgresUrl(productionUrl, productionVariable);
+    const refusal = controlCharacterRefusal(production.url);
+    if (refusal) {
+      throw new Error(
+        `PRODUCTION_DATABASE_DESTINATION_AMBIGUOUS: ${productionVariable} must not contain ${refusal}`,
+      );
+    }
     // A production URL is compared both by its authority and by where the
     // driver would send it. Either side that cannot be reduced to a canonical
     // destination is refused rather than compared, because no accepted

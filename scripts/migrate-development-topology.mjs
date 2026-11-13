@@ -25,8 +25,9 @@ export async function migrateDevelopmentTopology(options = {}) {
     databases = developmentTopologyDatabases();
   }
   const migrate = options.migrate ?? migrateDatabase;
-  // Reads every database before writing to any: an empty or unconverted
-  // database stops the run with TOPOLOGY_NOT_PREPARED and nothing changes.
+  // Checks the databases in order before writing to any: the first empty or
+  // unconverted database stops the run with TOPOLOGY_NOT_PREPARED and nothing
+  // changes.
   await assertDevelopmentTopologyPrepared(databases);
   // Each call holds the shared schema-migration advisory lock and applies its
   // pending migrations in one transaction, so a racing or retried run either
