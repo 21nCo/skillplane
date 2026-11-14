@@ -13,6 +13,7 @@ const filters = args.flatMap((argument, index) =>
 const focusedSpecs = new Map([
   ["skill-pages", "skill-pages.a11y.spec.ts"],
   ["context-pages", "context-pages.a11y.spec.ts"],
+  ["connected-apps", "connected-apps.a11y.spec.ts"],
 ]);
 const focusedSpec = filters.length === 1 ? focusedSpecs.get(filters[0]) : undefined;
 
@@ -44,7 +45,7 @@ if (focusedSpec) {
 
 if (filters.length > 0) {
   process.stderr.write(
-    `Unknown accessibility suite "${filters.join(", ")}". Available suites: context-pages, skill-pages\n`,
+    `Unknown accessibility suite "${filters.join(", ")}". Available suites: connected-apps, context-pages, skill-pages\n`,
   );
   process.exit(2);
 }

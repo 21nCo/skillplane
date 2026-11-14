@@ -11,7 +11,12 @@
     type CommandItem,
     type Theme,
   } from "@skillplane/ui";
-  import { RobotIcon, SquaresFourIcon, UsersThreeIcon } from "phosphor-svelte";
+  import {
+    PlugsConnectedIcon,
+    RobotIcon,
+    SquaresFourIcon,
+    UsersThreeIcon,
+  } from "phosphor-svelte";
   import { onMount, type Snippet } from "svelte";
   import { signOut, type BrowserSession } from "$lib/auth/client.js";
   import { identifyPostHog, resetPostHog } from "$lib/analytics/posthog.client.js";
@@ -58,6 +63,14 @@
       keywords: ["service principal", "tokens"],
       icon: RobotIcon,
       run: () => goto(resolve("/settings/agents")),
+    },
+    {
+      id: "connected-apps",
+      label: "Manage connected apps",
+      group: "Navigate",
+      keywords: ["oauth", "mcp", "revoke", "account"],
+      icon: PlugsConnectedIcon,
+      run: () => goto(resolve("/account/connected-apps")),
     },
   ];
 
