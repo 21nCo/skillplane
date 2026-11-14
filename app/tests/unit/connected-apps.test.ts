@@ -158,14 +158,46 @@ describe("ConnectedApps", () => {
     );
   });
 
-  it("treats 404 as already gone rather than restoring the row", async () => {
-    const { apps, calls } = await loaded([connection("a")]);
+  it("treats the route's NOT_FOUND as already gone rather than restoring the row", async () => {
+    const { apps, calls } = await loaded([connection("a", "Claude")]);
     const revoking = apps.revoke("ocn_a");
     calls[1]?.settle.reject(apiError(404, "The OAuth connection was not found"));
     await expect(revoking).resolves.toBe("revoked");
     expect(apps.visible).toEqual([]);
     expect(apps.revokeError).toBeNull();
+    expect(apps.announcement).toBe("Revoked access for Claude.");
   });
+
+  it.each([
+    [
+      "an unmatched API route (ROUTE_NOT_FOUND)",
+      new SkillplaneApiError(404, {
+        code: "ROUTE_NOT_FOUND",
+        message: "The requested API route does not exist",
+        requestId: "req_test",
+      }),
+      "The requested API route does not exist",
+    ],
+    [
+      "a 404 without an API error body",
+      new SkillplaneApiError(404),
+      "Skillplane could not complete the request",
+    ],
+  ])(
+    "restores the row for %s, because the grant may still work",
+    async (_, error, message) => {
+      const { apps, calls } = await loaded([
+        connection("a", "Claude"),
+        connection("b"),
+      ]);
+      const revoking = apps.revoke("ocn_a");
+      calls[1]?.settle.reject(error);
+      await expect(revoking).resolves.toBe("failed");
+      expect(ids(apps)).toEqual(["ocn_a", "ocn_b"]);
+      expect(apps.revokeError).toBe(`Claude is still connected. ${message}`);
+      expect(apps.announcement).toBe("");
+    },
+  );
 
   it("sends one request for a repeated revoke and ignores unknown IDs", async () => {
     const { apps, calls } = await loaded([connection("a")]);
@@ -219,6 +251,40 @@ describe("apiRequest", () => {
     ).resolves.toBeUndefined();
     const headers = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
     expect(headers.get("x-authfn-csrf")).toBe("csrf/value");
+  });
+
+  it.each([
+    [
+      "the API's unmatched-route envelope",
+      () =>
+        new Response(
+          JSON.stringify({
+            ok: false,
+            error: {
+              code: "ROUTE_NOT_FOUND",
+              message: "The requested API route does not exist",
+              requestId: "req_test",
+            },
+          }),
+          { status: 404, headers: { "content-type": "application/json" } },
+        ),
+    ],
+    ["an HTML 404 page", () => new Response("<h1>Not Found</h1>", { status: 404 })],
+  ])("keeps a connection listed when a revoke gets %s", async (_, response) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(() => Promise.resolve(response())),
+    );
+    vi.stubGlobal("document", { cookie: "" });
+    const apps = new ConnectedApps(<T>(path: string, init?: RequestInit) =>
+      path === OAUTH_CONNECTIONS_PATH
+        ? Promise.resolve({ connections: [connection("a")] } as T)
+        : apiRequest<T>(path, init),
+    );
+    await apps.load();
+    await expect(apps.revoke("ocn_a")).resolves.toBe("failed");
+    expect(ids(apps)).toEqual(["ocn_a"]);
+    expect(apps.revokeError).toMatch(/^Client a is still connected\./);
   });
 
   it("still rejects a non-JSON error body", async () => {

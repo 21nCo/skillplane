@@ -28,6 +28,19 @@ function failureMessage(error: unknown, fallback: string): string {
 }
 
 /**
+ * Only the revoke route's own "no such connection" answer means the grant is
+ * gone. A 404 for an unmatched route (ROUTE_NOT_FOUND) or without an API body
+ * (a proxy or static host) says nothing about the grant, which may still work.
+ */
+function isAlreadyRevoked(error: unknown): boolean {
+  return (
+    error instanceof SkillplaneApiError &&
+    error.status === 404 &&
+    error.code === "NOT_FOUND"
+  );
+}
+
+/**
  * State for Account → Connected apps. A revoke hides the row at once and only
  * drops it from the list after the API confirms. A failed revoke shows the row
  * again in its original position, because hiding never reorders the list.
@@ -91,9 +104,9 @@ export class ConnectedApps {
         { method: "DELETE" },
       );
     } catch (error) {
-      // 404 means this user has no such connection any more, which is the
-      // state the revoke asked for.
-      if (!(error instanceof SkillplaneApiError && error.status === 404)) {
+      // NOT_FOUND means this user has no such connection any more, which is
+      // the state the revoke asked for.
+      if (!isAlreadyRevoked(error)) {
         this.#removing.delete(consentId);
         this.revokeError = `${connection.clientName} is still connected. ${failureMessage(
           error,

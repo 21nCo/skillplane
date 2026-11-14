@@ -323,10 +323,17 @@ test("@connected-apps shows load failures and restores a revoke the API refuses"
       page.getByRole("button", { name: "Revoke spclient_fixture_docs" }),
     ).toBeFocused();
     await expect(page.getByRole("alert")).toHaveCount(0);
-    expect(deleted).toEqual([
-      `${CONNECTIONS}/ocn_fixture_review`,
-      `${CONNECTIONS}/ocn_fixture_review`,
-    ]);
+    // The row hides before the DELETE is sent, so wait for the request itself
+    // and for the announcement that only follows the API's confirmation.
+    await expect
+      .poll(() => deleted)
+      .toEqual([
+        `${CONNECTIONS}/ocn_fixture_review`,
+        `${CONNECTIONS}/ocn_fixture_review`,
+      ]);
+    await expect(page.getByRole("status")).toHaveText(
+      "Revoked access for Review agent.",
+    );
   } finally {
     await harness.close();
   }

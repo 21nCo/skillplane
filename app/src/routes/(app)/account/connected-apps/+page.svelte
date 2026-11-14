@@ -121,7 +121,7 @@
           {@const resourceId = `${titleId}-resource`}
           <li>
             <div class="client-icon" aria-hidden="true">
-              {connection.clientName.slice(0, 1).toLocaleUpperCase()}
+              {Array.from(connection.clientName)[0]?.toLocaleUpperCase() ?? ""}
             </div>
             <div class="details">
               <h3 id={titleId}>{connection.clientName}</h3>
