@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { goto } from "$app/navigation";
+  import { resolve } from "$app/paths";
   import { CommandIcon, ListIcon, MoonIcon, SunIcon } from "phosphor-svelte";
   import { Button, Dropdown, IconButton, type DropdownItem } from "@skillplane/ui";
   import type { BrowserSession } from "$lib/auth/client.js";
@@ -28,6 +30,11 @@
       label: session.subject.email ?? "Signed-in user",
       description: "Current account",
       disabled: true,
+    },
+    {
+      id: "connected-apps",
+      label: "Connected apps",
+      description: "Review and revoke MCP clients",
     },
     {
       id: "sign-out",
@@ -72,6 +79,7 @@
       items={accountItems}
       align="end"
       onSelect={(item) => {
+        if (item.id === "connected-apps") void goto(resolve("/account/connected-apps"));
         if (item.id === "sign-out") onSignOut();
       }}
     />

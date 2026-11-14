@@ -130,8 +130,14 @@ jobs:
       - name: Shell and sign-out browser e2e
         run: pnpm test:e2e shell.spec.ts
 
+      - name: Connected apps browser e2e
+        run: pnpm test:e2e connected-apps.spec.ts
+
       - name: Skill and instructions page accessibility
         run: pnpm test:a11y --filter skill-pages
+
+      - name: Connected apps accessibility
+        run: pnpm test:a11y --filter connected-apps
 
       - name: Upload Playwright traces
         if: failure()

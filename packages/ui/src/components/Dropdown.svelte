@@ -32,9 +32,17 @@
   let root = $state<HTMLDivElement>();
   let menu = $state<HTMLDivElement>();
 
+  // Disabled items cannot take focus, so keyboard movement skips them.
+  function enabledItems(): HTMLButtonElement[] {
+    return [
+      ...(menu?.querySelectorAll<HTMLButtonElement>("[role=menuitem]:not(:disabled)") ??
+        []),
+    ];
+  }
+
   function focusItem(index: number) {
-    const entries = menu?.querySelectorAll<HTMLButtonElement>("[role=menuitem]");
-    entries?.[Math.max(0, Math.min(index, entries.length - 1))]?.focus();
+    const entries = enabledItems();
+    entries[Math.max(0, Math.min(index, entries.length - 1))]?.focus();
   }
 
   async function toggle() {
@@ -48,7 +56,7 @@
 
   function keydown(event: KeyboardEvent) {
     if (!menu) return;
-    const entries = [...menu.querySelectorAll<HTMLButtonElement>("[role=menuitem]")];
+    const entries = enabledItems();
     const current = entries.indexOf(document.activeElement as HTMLButtonElement);
     if (event.key === "ArrowDown") {
       event.preventDefault();

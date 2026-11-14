@@ -335,8 +335,13 @@
       </div>
 
       <p class="footnote">
-        Skillplane never shares your session or email OTP. You can revoke this
-        connection at any time.
+        Skillplane never shares your session or email OTP. You can
+        <a href={resolve("/account/connected-apps")} target="_blank" rel="noopener"
+          >revoke this connection<span class="visually-hidden">
+            (opens in a new tab)</span
+          ></a
+        >
+        at any time.
       </p>
     {/if}
   </section>
@@ -709,6 +714,19 @@
     font-size: 0.66rem;
     line-height: 1.5;
     text-align: center;
+  }
+
+  .footnote a {
+    color: var(--sp-color-accent-text);
+  }
+
+  .visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
   }
 
   .spinner {

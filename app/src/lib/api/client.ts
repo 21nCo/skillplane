@@ -64,6 +64,8 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}): Promi
       requestId: "",
     });
   }
+  // 204 has no body to parse; callers of a 204 endpoint expect no data.
+  if (response.status === 204) return undefined as T;
   let envelope: SuccessEnvelope<T> | ErrorEnvelope;
   try {
     envelope = (await response.json()) as SuccessEnvelope<T> | ErrorEnvelope;
@@ -80,8 +82,7 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}): Promi
 }
 
 export function apiErrorField(error: unknown): string | undefined {
-  const field =
-    error instanceof SkillplaneApiError ? error.details?.field : undefined;
+  const field = error instanceof SkillplaneApiError ? error.details?.field : undefined;
   return typeof field === "string" ? field : undefined;
 }
 

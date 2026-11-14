@@ -12,6 +12,7 @@ import { rollupUtcDay, writeAuditEvent } from "@skillplane/observability";
 import { createServer as createViteServer, type ViteDevServer } from "vite";
 import { buildApiServices, createApiApp } from "../../../api/src/index.js";
 import { HarnessDiagnostics } from "./harness-diagnostics.js";
+import { createHarnessMcpApp, type McpFetch } from "./mcp-app.js";
 
 const projectRoot = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -100,7 +101,18 @@ function closeHttpServer(server: Server): Promise<void> {
   });
 }
 
-export async function startWorkspaceBrowserHarness(): Promise<WorkspaceBrowserHarness> {
+export interface WorkspaceBrowserHarnessOptions {
+  /** Serve the real MCP app at `/mcp`, which is the OAuth resource. */
+  readonly mcp?: boolean;
+}
+
+function isMcpPath(url: string | undefined): boolean {
+  return url === "/mcp" || url?.startsWith("/mcp?") === true;
+}
+
+export async function startWorkspaceBrowserHarness(
+  options: WorkspaceBrowserHarnessOptions = {},
+): Promise<WorkspaceBrowserHarness> {
   const databaseUrl = await resolveTestDatabaseUrl();
   const suffix = `workspace-browser-${crypto.randomUUID().replaceAll("-", "").slice(0, 12)}`;
   const invitedSuffix = `${suffix}-invited`;
@@ -173,8 +185,18 @@ export async function startWorkspaceBrowserHarness(): Promise<WorkspaceBrowserHa
   }
 
   const apiState: { value?: ReturnType<typeof createApiApp> } = {};
+  const mcpState: { value?: McpFetch } = {};
   const server = createHttpServer((incoming, outgoing) => {
     void (async () => {
+      if (options.mcp && isMcpPath(incoming.url)) {
+        if (!mcpState.value) {
+          outgoing.statusCode = 503;
+          outgoing.end("The workspace test MCP server is starting");
+          return;
+        }
+        await writeResponse(await mcpState.value(await toRequest(incoming)), outgoing);
+        return;
+      }
       if (
         incoming.url?.startsWith("/api/") ||
         incoming.url?.startsWith("/auth/") ||
@@ -259,6 +281,22 @@ export async function startWorkspaceBrowserHarness(): Promise<WorkspaceBrowserHa
       });
     }
   })();
+  if (options.mcp) {
+    try {
+      mcpState.value = await createHarnessMcpApp(() => Promise.resolve(services));
+    } catch (error) {
+      await closeHttpServer(server).catch(() => undefined);
+      await vite.close().catch(() => undefined);
+      await services.datafn.close().catch(() => undefined);
+      await services.email?.close().catch(() => undefined);
+      await services.database.close().catch(() => undefined);
+      await purgeTenantFixture(databaseUrl, suffix).catch(() => undefined);
+      await purgeTenantFixture(databaseUrl, invitedSuffix).catch(() => undefined);
+      throw new Error("Workspace browser harness could not load the MCP app", {
+        cause: error,
+      });
+    }
+  }
   let observabilitySeeded = false;
 
   return {
