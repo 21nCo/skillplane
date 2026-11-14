@@ -1,0 +1,21 @@
+packages/local-runtime/src/instruction-projections.test.ts
+  s_f505f133a3cc08::t_b3e56e720bf6a6 521-591
+packages/local-runtime/src/projections.ts
+  s_f505f133a3cc08::t_838e9a9aff5f7e 52,909-911,922-924,958-965
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b8efe3724eb27edb9696634b9258f6a85c0c9ce7",
+  "prompts": {},
+  "sessions": {
+    "s_f505f133a3cc08": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_f505f133a3cc08",
+        "model": "unknown"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
