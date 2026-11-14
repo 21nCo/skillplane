@@ -1,5 +1,5 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { execFileSync, spawnSync } from "node:child_process";
+import { afterAll, beforeAll, describe, expect, it, onTestFinished } from "vitest";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import {
   mkdtempSync,
   rmSync,
@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { createHash } from "node:crypto";
 
 const packageRoot = resolve(import.meta.dirname, "..");
 const roots: string[] = [];
@@ -78,6 +79,143 @@ describe("packaged global CLI", () => {
     ]);
     expect(overwrite.status).not.toBe(0);
     // This packaged-CLI flow launches multiple Node processes under concurrent CI.
+  }, 30_000);
+  it("syncs instruction files across concurrent processes and exits non-zero on a collision", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "skillplane-cli-instr-")));
+    roots.push(root);
+    const home = join(root, "home");
+    const project = join(root, "project");
+    mkdirSync(home);
+    mkdirSync(project);
+    const env = { ...process.env, HOME: home };
+    const args = (...rest: string[]) => [
+      cli,
+      ...rest,
+      "--home",
+      join(root, "state"),
+      "--project",
+      project,
+    ];
+    const run = (...rest: string[]) =>
+      JSON.parse(
+        execFileSync(process.execPath, args(...rest), { encoding: "utf8", env }),
+      );
+    const context = run("init", "Offline");
+    const config = join(root, "config.json");
+    writeFileSync(
+      config,
+      JSON.stringify({
+        ...context,
+        instructions: [
+          { adapter: "claude", artifact: "global" },
+          { adapter: "codex", artifact: "global" },
+        ],
+      }),
+    );
+    run("configure", config);
+    // Large enough that a non-atomic write would be observable mid-copy.
+    const body = `# Global\n\n${"Use the composio CLI when no connector exists.\n".repeat(10_000)}`;
+    const request = join(root, "create.json");
+    writeFileSync(
+      request,
+      JSON.stringify({
+        kind: "instructions",
+        slug: "global",
+        name: "Global",
+        instructions: body,
+        idempotencyKey: "create",
+      }),
+    );
+    run("create", request);
+
+    const claude = join(home, ".claude", "CLAUDE.md");
+    mkdirSync(join(home, ".claude"));
+    // A reader polls the target for the whole race and counts reads whose
+    // bytes are not exactly the published document. It reports ready only
+    // after a completed poll, so the syncs start while it is already polling,
+    // and it stops only on the done marker: its safeguard deadline outlasts
+    // the test. How many polls overlap a live sync is up to the scheduler, so
+    // no count of them is asserted. What holds regardless: no read ever saw
+    // torn or foreign bytes, and exact reads prove the digest oracle matches.
+    // Atomic replacement of an existing file rests on the same-directory
+    // rename, covered in-process by the v1/v2 test.
+    const reader = spawn(process.execPath, [
+      "-e",
+      `const fs=require("node:fs");const {createHash}=require("node:crypto");
+         const [file,digest]=process.argv.slice(1);let bad=0,exact=0;
+         const read=()=>{try{const b=fs.readFileSync(file);
+           if(createHash("sha256").update(b).digest("hex")!==digest)bad++;else exact++;}
+           catch(e){if(e.code!=="ENOENT")bad++;}};
+         read();process.stdout.write("ready\\n");
+         const stop=Date.now()+120000;
+         while(!fs.existsSync(file+".done")&&Date.now()<stop)read();
+         read();process.stdout.write(JSON.stringify({bad,exact}));`,
+      claude,
+      createHash("sha256").update(body).digest("hex"),
+    ]);
+    // Stops a reader the test abandoned before the done marker.
+    onTestFinished(() => void reader.kill());
+    let readerOutput = "";
+    const readerClosed = new Promise((done) => reader.on("close", done));
+    await new Promise<void>((ready) =>
+      reader.stdout.on("data", (chunk: Buffer) => {
+        readerOutput += chunk.toString();
+        if (readerOutput.includes("ready\n")) ready();
+      }),
+    );
+    const syncs = await Promise.all(
+      [0, 1].map(
+        () =>
+          new Promise<{ status: number | null; stdout: string; stderr: string }>(
+            (done) => {
+              const child = spawn(process.execPath, args("sync"), { env });
+              let stdout = "";
+              let stderr = "";
+              child.stdout.on("data", (c: Buffer) => (stdout += c.toString()));
+              child.stderr.on("data", (c: Buffer) => (stderr += c.toString()));
+              child.on("close", (status) => done({ status, stdout, stderr }));
+            },
+          ),
+      ),
+    );
+    writeFileSync(`${claude}.done`, "");
+    await readerClosed;
+    const observed = JSON.parse(readerOutput.slice(readerOutput.indexOf("\n") + 1)) as {
+      bad: number;
+      exact: number;
+    };
+    expect(observed.bad).toBe(0);
+    expect(observed.exact).toBeGreaterThan(0);
+    // Both runs succeed: one writes the file, the other finds that identical
+    // result under the projection lock.
+    for (const result of syncs) {
+      expect(result.stderr).not.toContain('"error"');
+      expect(result.status).toBe(0);
+    }
+    const [first, second] = syncs.map(
+      (result) => JSON.parse(result.stdout) as { path: string; eventId: string }[],
+    );
+    expect(first?.map((row) => row.eventId)).toEqual(second?.map((row) => row.eventId));
+    run("sync");
+    expect(readFileSync(claude, "utf8")).toBe(body);
+    expect(readFileSync(join(home, ".codex", "AGENTS.md"), "utf8")).toBe(body);
+    const doctor = run("doctor");
+    expect(doctor.instructions.map((row: { state: string }) => row.state)).toEqual([
+      "in-sync",
+      "in-sync",
+    ]);
+
+    // An unmanaged file in a fresh home is refused, byte for byte, with a failing exit.
+    const other = join(root, "other-home");
+    mkdirSync(join(other, ".codex"), { recursive: true });
+    writeFileSync(join(other, ".codex", "AGENTS.md"), "mine\n");
+    const refused = spawnSync(process.execPath, args("sync"), {
+      encoding: "utf8",
+      env: { ...env, HOME: other },
+    });
+    expect(refused.status).not.toBe(0);
+    expect(refused.stderr).toContain("projection_collision");
+    expect(readFileSync(join(other, ".codex", "AGENTS.md"), "utf8")).toBe("mine\n");
   }, 30_000);
   it("help and validation errors work without service dependencies or secret output", () => {
     expect(

@@ -1,37 +1,72 @@
 import { requireValue } from "./contracts.js";
 import { existsSync } from "node:fs";
-import { join, resolve } from "node:path";
-import { randomUUID } from "node:crypto";
+import { join, resolve, sep } from "node:path";
+import { createHash, randomUUID } from "node:crypto";
 import { bundleEntrypoint, bundleKind, canonicalizeBundle } from "@skillplane/storage";
 import { type LocalStore } from "./store.js";
 import { Profiles } from "./profiles.js";
 import { LocalWorkspaceProvider } from "./local-provider.js";
 import { CloudWorkspaceProvider } from "./cloud-provider.js";
-import { targetDirectory } from "./adapters.js";
+import { instructionPath, targetDirectory } from "./adapters.js";
 import {
+  InstructionProjections,
   Projections,
   assertProjectionSupported,
+  type ArtifactIdentity,
+  type InstructionRecord,
+  type InstructionResolution,
+  type InstructionStatusScope,
   type ProjectionRecord,
 } from "./projections.js";
 import { UsageQueue } from "./analytics.js";
 import { readSafe, writeAtomic, safeDirectory } from "./files.js";
 import { trustEnvelope, trustExpands } from "./trust.js";
 import {
+  catalogName,
+  policySchema,
   projectSchema,
   selectVersion,
   workspaceKey,
   RuntimeError,
   declaredCaller,
   type ProjectContext,
+  type SkillInfo,
   type WorkspaceRef,
   type WorkspaceProvider,
   type Snapshot,
   type CreateRequest,
   type AmendRequest,
+  type InstructionTarget,
 } from "./contracts.js";
 type CachedSnapshot = Omit<Snapshot, "bundle"> & {
   digest: string;
 };
+type CatalogEntry = Awaited<ReturnType<Runtime["catalog"]>>[number];
+/**
+ * The artifact each instructions target resolved to at the project's last
+ * sync, so an offline doctor can apply sync's ownership rule to a cloud
+ * catalog. It holds only while the catalog configuration is unchanged.
+ */
+interface InstructionClaims {
+  catalog: string;
+  targets: Record<string, { artifact: string } & ArtifactIdentity>;
+}
+/** The project's catalog sources in precedence order. */
+function sources(context: ProjectContext): ProjectContext["mounts"][number][] {
+  return [{ workspace: context.primary }, ...context.mounts];
+}
+const claimsKey = (project: string) => `instruction-claims:${resolve(project)}`;
+/** Whether one destination is the other or contains it; writing one breaks the other. */
+function overlaps(a: string, b: string): boolean {
+  return a === b || a.startsWith(b + sep) || b.startsWith(a + sep);
+}
+/** Fingerprint of the configuration that decides what a catalog name resolves to. */
+function catalogFingerprint(context: ProjectContext): string {
+  const { primary, mounts, aliases, collisions } = context;
+  return createHash("sha256")
+    .update(JSON.stringify({ primary, mounts, aliases, collisions }))
+    .digest("hex");
+}
 export interface Resolution {
   source: "live-cli" | "cached-cli";
   freshness: "verified" | "unverified" | "pinned";
@@ -90,7 +125,14 @@ export class Runtime {
     );
     return config;
   }
-  async catalog(context: ProjectContext): Promise<
+  /**
+   * The ordered visible names of one artifact kind. Skills and instructions
+   * documents have separate namespaces; only skills are projected as skills.
+   */
+  async catalog(
+    context: ProjectContext,
+    kind: SkillInfo["kind"] = "skill",
+  ): Promise<
     {
       name: string;
       provider: WorkspaceProvider;
@@ -98,10 +140,14 @@ export class Runtime {
     }[]
   > {
     context = projectSchema.parse(context);
-    const sources = [
-      { workspace: context.primary, namespace: undefined },
-      ...context.mounts,
-    ];
+    return this.names(context, sources(context), kind);
+  }
+  /** The catalog of the given sources, in order, under the project's naming rules. */
+  private async names(
+    context: ProjectContext,
+    sources: readonly ProjectContext["mounts"][number][],
+    kind: SkillInfo["kind"],
+  ): Promise<CatalogEntry[]> {
     const names = new Map<
       string,
       {
@@ -112,13 +158,9 @@ export class Runtime {
     >();
     for (const source of sources) {
       const provider = this.provider(source.workspace);
-      for (const skill of await provider.list()) {
-        // Only skills are projected; instructions documents are a separate kind.
-        if (skill.kind !== "skill") continue;
-        const qualified = `${workspaceKey(source.workspace)}/${skill.id}`;
-        const name =
-          context.aliases[qualified] ??
-          (source.namespace ? `${source.namespace}-${skill.slug}` : skill.slug);
+      for (const skill of await provider.list(kind)) {
+        if (skill.kind !== kind) continue;
+        const name = catalogName(context, source, skill);
         const old = names.get(name);
         if (old) {
           if (
@@ -157,6 +199,187 @@ export class Runtime {
     );
   }
   async sync(project: string): Promise<ProjectionRecord[]> {
+    return (await this.syncTargets(project)).projections;
+  }
+  /**
+   * The checks sync applies to the instructions configuration alone, before
+   * any catalog: the error for each target, in configuration order. Every
+   * doctor resolution applies them first, whatever stands in for the catalog.
+   */
+  private instructionConfigErrors(
+    targets: readonly InstructionTarget[],
+  ): (RuntimeError | undefined)[] {
+    const paths: string[] = [];
+    return targets.map((target) => {
+      const path = instructionPath(target);
+      // Generations live under .skillplane-projections next to their target,
+      // so no target may sit there.
+      if (path.split(sep).includes(".skillplane-projections"))
+        return new RuntimeError(
+          "PROJECTION_COLLISION",
+          `Instructions destination ${path} is inside a projection store`,
+        );
+      const other = paths.find((earlier) => overlaps(earlier, path));
+      paths.push(path);
+      if (other === undefined) return undefined;
+      return new RuntimeError(
+        "PROJECTION_COLLISION",
+        other === path
+          ? `Duplicate instructions destination: ${path}`
+          : `Instructions destinations overlap: ${other} and ${path}`,
+      );
+    });
+  }
+  /**
+   * Resolves each configured instructions target's name through the catalog,
+   * in configuration order. A target sync must refuse carries its error.
+   */
+  private instructionTargets(
+    targets: readonly InstructionTarget[],
+    catalog: readonly CatalogEntry[],
+  ): { target: InstructionTarget; item?: CatalogEntry; error?: RuntimeError }[] {
+    const errors = this.instructionConfigErrors(targets);
+    return targets.map((target, index) => {
+      const error = errors[index];
+      if (error) return { target, error };
+      const item = catalog.find((entry) => entry.name === target.artifact);
+      if (!item)
+        return {
+          target,
+          error: new RuntimeError(
+            "INSTRUCTIONS_NOT_FOUND",
+            `No instructions document named ${target.artifact} in this project's workspaces`,
+          ),
+        };
+      return { target, item };
+    });
+  }
+  /** Resolves every configured instructions target's latest published version. */
+  private async instructionPlans(context: ProjectContext) {
+    const targets = context.instructions ?? [];
+    if (targets.length === 0) return [];
+    const resolved = this.instructionTargets(
+      targets,
+      await this.catalog(context, "instructions"),
+    );
+    const plans = [];
+    for (const { target, item, error } of resolved) {
+      if (error || !item) throw error ?? new RuntimeError("INSTRUCTIONS_NOT_FOUND");
+      const selected = selectVersion(
+        await item.provider.versions(item.skillId),
+        policySchema.parse({}),
+      );
+      plans.push({
+        target,
+        snapshot: await item.provider.retrieve(item.skillId, selected.id),
+      });
+    }
+    return plans;
+  }
+  /**
+   * How sync would resolve each configured instructions target, for doctor.
+   * Local catalogs are read offline; a cloud catalog is read when online,
+   * otherwise the identity recorded at the last sync stands in for it while
+   * the catalog configuration is unchanged, and anything else is unverified.
+   */
+  private async instructionResolutions(
+    project: string,
+    context: ProjectContext,
+    online: boolean,
+  ): Promise<InstructionStatusScope["targets"]> {
+    const targets = context.instructions ?? [];
+    if (targets.length === 0) return [];
+    const all = sources(context);
+    const firstCloud = all.findIndex((s) => s.workspace.provider === "cloud");
+    if (firstCloud >= 0 && !online) {
+      const claims = this.store.get<InstructionClaims>(claimsKey(project));
+      const current = claims?.catalog === catalogFingerprint(context);
+      const errors = this.instructionConfigErrors(targets);
+      // Local workspaces are read offline. A name the local sources ahead of
+      // every cloud source give under precedence is decided by them alone;
+      // otherwise a recorded identity stands in only while it agrees with
+      // what the local sources hold, since cloud contents can change the rest.
+      let decided: CatalogEntry[];
+      let local: CatalogEntry[];
+      try {
+        decided =
+          context.collisions === "precedence"
+            ? await this.names(context, all.slice(0, firstCloud), "instructions")
+            : [];
+        local = await this.names(
+          context,
+          all.filter((s) => s.workspace.provider !== "cloud"),
+          "instructions",
+        );
+      } catch (error) {
+        const code = error instanceof RuntimeError ? error.code : "CATALOG_UNAVAILABLE";
+        return targets.map((target, index) => ({
+          target,
+          resolution: { code: errors[index]?.code ?? code },
+        }));
+      }
+      const identity = (item: CatalogEntry): ArtifactIdentity => ({
+        workspace: item.provider.workspace,
+        skill: { id: item.skillId },
+      });
+      return targets.map((target, index) => {
+        const error = errors[index];
+        if (error) return { target, resolution: { code: error.code } };
+        const item = decided.find((entry) => entry.name === target.artifact);
+        if (item) return { target, resolution: { identity: identity(item) } };
+        const held = local.find((entry) => entry.name === target.artifact);
+        const claim = current
+          ? claims.targets[InstructionProjections.id(instructionPath(target))]
+          : undefined;
+        // Under precedence a cloud source ahead of the first local holder
+        // still wins over it. A workspace mounted more than once counts at its
+        // last mount, since offline the name's mount is unknown.
+        const positions = (workspace: ArtifactIdentity["workspace"]) =>
+          all.flatMap((s, i) =>
+            workspaceKey(s.workspace) === workspaceKey(workspace) ? [i] : [],
+          );
+        const agrees =
+          claim?.artifact === target.artifact &&
+          (held
+            ? (workspaceKey(claim.workspace) ===
+                workspaceKey(held.provider.workspace) &&
+                claim.skill.id === held.skillId) ||
+              (context.collisions === "precedence" &&
+                claim.workspace.provider === "cloud" &&
+                Math.max(...positions(claim.workspace)) <
+                  Math.min(...positions(held.provider.workspace)))
+            : claim.workspace.provider === "cloud");
+        const resolution: InstructionResolution =
+          claim && agrees
+            ? { identity: { workspace: claim.workspace, skill: claim.skill } }
+            : { unverified: true };
+        return { target, resolution };
+      });
+    }
+    let catalog: CatalogEntry[];
+    try {
+      catalog = await this.catalog(context, "instructions");
+    } catch (error) {
+      const code = error instanceof RuntimeError ? error.code : "CATALOG_UNAVAILABLE";
+      return targets.map((target) => ({ target, resolution: { code } }));
+    }
+    return this.instructionTargets(targets, catalog).map(({ target, item, error }) => ({
+      target,
+      resolution: item
+        ? {
+            identity: {
+              workspace: item.provider.workspace,
+              skill: { id: item.skillId },
+            },
+          }
+        : { code: error?.code ?? "INSTRUCTIONS_NOT_FOUND" },
+    }));
+  }
+  /** Syncs skill projections and instruction files configured by the project. */
+  async syncTargets(project: string): Promise<{
+    projections: ProjectionRecord[];
+    instructions: InstructionRecord[];
+  }> {
     this.projections.recover();
     const context = this.project(project);
     const catalog = await this.catalog(context);
@@ -184,6 +407,21 @@ export class Runtime {
         );
       desired.add(path);
     }
+    const instructionPlans = await this.instructionPlans(context);
+    // Writing one destination inside another would fail midway; refuse first.
+    for (const { target } of instructionPlans) {
+      const path = instructionPath(target);
+      const skill = [...desired].find((destination) => overlaps(destination, path));
+      if (skill !== undefined)
+        throw new RuntimeError(
+          "PROJECTION_COLLISION",
+          `Instructions destination ${path} overlaps skill destination ${skill}`,
+        );
+    }
+    // An unmanaged or hand-edited instructions file, or an unsafe directory
+    // above one, stops the sync before any write.
+    for (const { snapshot, target } of instructionPlans)
+      this.projections.instructions.check(snapshot, target, project);
     const previous = this.projections.projectIds(project);
     const records = [];
     for (const { target, item, snapshot } of plans) {
@@ -195,7 +433,29 @@ export class Runtime {
       if (!installed.has(id) && this.store.get(`projection:${id}`))
         this.projections.uninstall(id, project);
     }
-    return records;
+    const instructions = [];
+    const claims: InstructionClaims = {
+      catalog: catalogFingerprint(context),
+      targets: {},
+    };
+    for (const { snapshot, target } of instructionPlans) {
+      this.cache(snapshot);
+      const record = this.projections.instructions.sync(snapshot, target, project);
+      instructions.push(record);
+      claims.targets[record.id] = {
+        artifact: target.artifact,
+        workspace: snapshot.workspace,
+        skill: { id: snapshot.skill.id },
+      };
+    }
+    this.store.set(claimsKey(project), claims);
+    // A target dropped from this project's configuration keeps its file and
+    // record; only the project's claim on it is released.
+    this.projections.instructions.release(
+      project,
+      new Set(instructions.map((record) => record.id)),
+    );
+    return { projections: records, instructions };
   }
   async resolve(
     id: string,
@@ -422,9 +682,24 @@ export class Runtime {
         refreshPending: Boolean(this.store.get(`refresh:${record.id}`)),
       });
     }
+    let context: ProjectContext | undefined;
+    if (project)
+      try {
+        context = this.project(project);
+      } catch {
+        // projectStatus reports an unreadable project configuration.
+      }
     return {
       recovery,
       projections,
+      instructions: this.projections.instructions.status(
+        project && context
+          ? {
+              project,
+              targets: await this.instructionResolutions(project, context, checkCloud),
+            }
+          : undefined,
+      ),
       pendingTrust: this.store.entries("pending-trust:"),
       usage: this.usage.report(),
       cloudChecked: checkCloud,

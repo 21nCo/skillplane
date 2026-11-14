@@ -76,12 +76,13 @@ export class LocalWorkspaceProvider implements WorkspaceProvider {
     });
     return new LocalWorkspaceProvider(store, id);
   }
-  async list(): Promise<SkillInfo[]> {
-    return this.store.db
+  async list(kind?: SkillInfo["kind"]): Promise<SkillInfo[]> {
+    const all = this.store.db
       .prepare(
         "SELECT id,slug,name,description,'skill' AS kind FROM skill WHERE workspace=? UNION ALL SELECT id,slug,name,description,'instructions' AS kind FROM instructions WHERE workspace=? ORDER BY slug,kind",
       )
       .all(this.workspace.id, this.workspace.id) as unknown as SkillInfo[];
+    return kind ? all.filter((item) => item.kind === kind) : all;
   }
   // Local workspaces have no sharing settings or archive state, so every skill
   // whose current version is published exports as private.

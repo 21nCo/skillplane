@@ -1,6 +1,13 @@
 import { requireValue } from "./contracts.js";
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtempSync, realpathSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
@@ -16,6 +23,7 @@ import {
   type AmendRequest,
   type CreateRequest,
   type CloudTransport,
+  workspaceKey,
 } from "./index.js";
 const stores: LocalStore[] = [];
 afterEach(() => {
@@ -317,6 +325,7 @@ function fixture() {
   };
   return {
     local,
+    store,
     workspace,
     transport,
     calls,
@@ -324,6 +333,37 @@ function fixture() {
     cloud: new CloudWorkspaceProvider(workspace, transport),
   };
 }
+// McpTransport's error for a base server whose strict skills_list input
+// schema rejects the kind argument (MCPFN_INVALID_ARGUMENTS in text content).
+const rejection = (property: string) =>
+  new RuntimeError(
+    "CLOUD_REQUEST_REJECTED",
+    JSON.stringify([
+      {
+        type: "text",
+        text: JSON.stringify({
+          ok: false,
+          error: {
+            code: "MCPFN_INVALID_ARGUMENTS",
+            message: "Invalid arguments",
+            details: {
+              lifecycleStage: "input-validation",
+              issues: [
+                {
+                  path: "/",
+                  instancePath: "/",
+                  schemaPath: "#/additionalProperties",
+                  keyword: "additionalProperties",
+                  message: `must not have unknown property "${property}"`,
+                  rejectedProperty: property,
+                },
+              ],
+            },
+          },
+        }),
+      },
+    ]),
+  );
 describe("cloud provider transport contract", () => {
   it("rebuilds an instructions document from its AGENTS.md entrypoint", async () => {
     const { local, cloud, calls, listArgs } = fixture();
@@ -339,9 +379,13 @@ describe("cloud provider transport contract", () => {
       (await local.retrieve(created.skillId)).bundle.digest,
     );
     expect(calls.filter((name) => name === "skill_asset_retrieve")).toHaveLength(1);
-    // Local projection lists skills only; SKI-24 owns instructions projection.
+    // The default listing stays skills-only and sends no kind argument.
     expect(await cloud.list()).toEqual([]);
     expect(listArgs.every((args) => args.kind === undefined)).toBe(true);
+    expect((await cloud.list("instructions")).map((item) => item.id)).toEqual([
+      created.skillId,
+    ]);
+    expect(listArgs.at(-1)?.kind).toBe("instructions");
   });
   it("reviews instructions documents through ID-only lifecycle operations", async () => {
     const { cloud, listArgs, workspace } = fixture();
@@ -424,40 +468,359 @@ describe("cloud provider transport contract", () => {
       }),
     ).rejects.toThrow("SKILL_NOT_FOUND");
   });
+  it("syncs a published cloud instructions document read as primary or mount", async () => {
+    const { local, cloud, store, workspace } = fixture();
+    const document = "# Agents\n\nRun the tests.\n";
+    const created = await local.create({
+      ...request,
+      slug: "agents",
+      kind: "instructions",
+      assets: [],
+      instructions: document,
+    });
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "cloud-instructions-")));
+    const runtime = new Runtime(store, (ref) =>
+      ref.provider === "cloud" ? cloud : new LocalWorkspaceProvider(store, ref.id),
+    );
+    const primary = join(root, "primary");
+    const mounted = join(root, "mounted");
+    mkdirSync(primary);
+    mkdirSync(mounted);
+    runtime.configure(primary, {
+      formatVersion: 1,
+      primary: workspace,
+      instructions: [
+        {
+          adapter: "generic",
+          path: join(root, "out", "AGENTS.md"),
+          artifact: "agents",
+        },
+      ],
+    });
+    const synced = await runtime.syncTargets(primary);
+    expect(synced.instructions.map((r) => [r.skill.id, r.workspace])).toEqual([
+      [created.skillId, workspace],
+    ]);
+    expect(readFileSync(join(root, "out", "AGENTS.md"), "utf8")).toBe(document);
+    // Offline, doctor resolves the cloud name from the identity sync recorded,
+    // and only while the catalog configuration is unchanged.
+    const doctor = async (online: boolean) =>
+      (
+        (await runtime.doctor(online, primary)) as {
+          instructions: { state: string; fileState?: string }[];
+        }
+      ).instructions;
+    expect(await doctor(false)).toEqual([
+      expect.objectContaining({ state: "in-sync" }),
+    ]);
+    // A configuration-only refusal holds offline too, whatever was recorded.
+    const synced1 = runtime.project(primary);
+    runtime.configure(primary, {
+      ...synced1,
+      instructions: [...(synced1.instructions ?? []), ...(synced1.instructions ?? [])],
+    });
+    const duplicate = expect.objectContaining({
+      state: "PROJECTION_COLLISION",
+      fileState: "in-sync",
+    });
+    expect(await doctor(false)).toEqual([duplicate]);
+    expect(await doctor(true)).toEqual([duplicate]);
+    await expect(runtime.syncTargets(primary)).rejects.toMatchObject({
+      code: "PROJECTION_COLLISION",
+    });
+    runtime.configure(primary, synced1);
+    expect(await doctor(false)).toEqual([
+      expect.objectContaining({ state: "in-sync" }),
+    ]);
+    runtime.configure(primary, {
+      ...runtime.project(primary),
+      aliases: { [`${workspaceKey(workspace)}/${created.skillId}`]: "agents" },
+    });
+    expect(await doctor(false)).toEqual([
+      expect.objectContaining({ state: "unverified", fileState: "in-sync" }),
+    ]);
+    expect(await doctor(true)).toEqual([expect.objectContaining({ state: "in-sync" })]);
+    // A namespaced mount and a qualified alias name the same document.
+    const own = LocalWorkspaceProvider.create(store, "Own");
+    runtime.configure(mounted, {
+      formatVersion: 1,
+      primary: own.workspace,
+      mounts: [{ workspace, namespace: "work" }],
+      aliases: { [`${workspaceKey(workspace)}/${created.skillId}`]: "team-agents" },
+      instructions: [
+        {
+          adapter: "generic",
+          path: join(root, "out", "AGENTS.md"),
+          artifact: "team-agents",
+        },
+        {
+          adapter: "generic",
+          path: join(root, "copy", "AGENTS.md"),
+          artifact: "team-agents",
+        },
+      ],
+    });
+    await runtime.syncTargets(mounted);
+    expect(readFileSync(join(root, "copy", "AGENTS.md"), "utf8")).toBe(document);
+    runtime.configure(mounted, {
+      ...runtime.project(mounted),
+      aliases: {},
+      instructions: [
+        {
+          adapter: "generic",
+          path: join(root, "copy", "AGENTS.md"),
+          artifact: "work-agents",
+        },
+      ],
+    });
+    await runtime.syncTargets(mounted);
+    expect(readFileSync(join(root, "copy", "AGENTS.md"), "utf8")).toBe(document);
+    rmSync(root, { recursive: true, force: true });
+  });
+  it("decides a local name offline and trusts a recorded name only while local workspaces agree", async () => {
+    const { cloud, store, workspace } = fixture();
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "cloud-offline-")));
+    const own = LocalWorkspaceProvider.create(store, "Own");
+    // Hiding a document from its local workspace stands in for deleting it.
+    const hidden = new Set<string>();
+    const runtime = new Runtime(store, (ref) => {
+      if (ref.provider === "cloud") return cloud;
+      const provider = new LocalWorkspaceProvider(store, ref.id);
+      const list = provider.list.bind(provider);
+      provider.list = async (kind) =>
+        (await list(kind)).filter((skill) => !hidden.has(skill.id));
+      return provider;
+    });
+    const created = await own.create({
+      ...request,
+      slug: "agents",
+      kind: "instructions",
+      assets: [],
+      instructions: "# Agents\n",
+    });
+    const project = join(root, "project");
+    mkdirSync(project);
+    runtime.configure(project, {
+      formatVersion: 1,
+      primary: own.workspace,
+      mounts: [{ workspace }],
+      collisions: "precedence",
+      instructions: [
+        {
+          adapter: "generic",
+          path: join(root, "out", "AGENTS.md"),
+          artifact: "agents",
+        },
+      ],
+    });
+    await runtime.syncTargets(project);
+    const doctor = async (online: boolean) =>
+      (
+        (await runtime.doctor(online, project)) as {
+          instructions: { state: string; fileState?: string }[];
+        }
+      ).instructions;
+    const unverified = [
+      expect.objectContaining({ state: "unverified", fileState: "in-sync" }),
+    ];
+    // The local primary decides the name under precedence, recorded or not.
+    store.delete(`instruction-claims:${project}`);
+    expect(await doctor(false)).toEqual([
+      expect.objectContaining({ state: "in-sync" }),
+    ]);
+    // Under the error policy a cloud document could still collide with it.
+    runtime.configure(project, { ...runtime.project(project), collisions: "error" });
+    expect(await doctor(false)).toEqual(unverified);
+    await runtime.syncTargets(project);
+    expect(await doctor(false)).toEqual([
+      expect.objectContaining({ state: "in-sync" }),
+    ]);
+    // A recorded local document the workspace no longer holds is not trusted.
+    hidden.add(created.skillId);
+    expect(await doctor(false)).toEqual(unverified);
+    const missing = [
+      expect.objectContaining({
+        state: "INSTRUCTIONS_NOT_FOUND",
+        fileState: "in-sync",
+      }),
+    ];
+    expect(await doctor(true)).toEqual(missing);
+    await expect(runtime.syncTargets(project)).rejects.toMatchObject({
+      code: "INSTRUCTIONS_NOT_FOUND",
+    });
+    runtime.configure(project, {
+      ...runtime.project(project),
+      collisions: "precedence",
+    });
+    expect(await doctor(false)).toEqual(unverified);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("trusts a recorded cloud name offline that shadows a later local one under precedence", async () => {
+    const { local, cloud, store, workspace } = fixture();
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "cloud-shadow-")));
+    const runtime = new Runtime(store, (ref) =>
+      ref.provider === "cloud" ? cloud : new LocalWorkspaceProvider(store, ref.id),
+    );
+    const document = { ...request, slug: "agents", kind: "instructions" as const };
+    await local.create({ ...document, assets: [], instructions: "# Cloud\n" });
+    const later = LocalWorkspaceProvider.create(store, "Later");
+    await later.create({ ...document, assets: [], instructions: "# Local\n" });
+    const project = join(root, "project");
+    mkdirSync(project);
+    const path = join(root, "out", "AGENTS.md");
+    runtime.configure(project, {
+      formatVersion: 1,
+      primary: workspace,
+      mounts: [{ workspace: later.workspace }],
+      collisions: "precedence",
+      instructions: [{ adapter: "generic", path, artifact: "agents" }],
+    });
+    await runtime.syncTargets(project);
+    expect(readFileSync(path, "utf8")).toBe("# Cloud\n");
+    const states = async () =>
+      (
+        (await runtime.doctor(false, project)) as {
+          instructions: { state: string }[];
+        }
+      ).instructions.map((row) => row.state);
+    expect(await states()).toEqual(["in-sync"]);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("does not trust a recorded cloud name offline when its mount may follow a local holder", async () => {
+    const { local, cloud, store, workspace } = fixture();
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "cloud-repeat-")));
+    const runtime = new Runtime(store, (ref) =>
+      ref.provider === "cloud" ? cloud : new LocalWorkspaceProvider(store, ref.id),
+    );
+    const document = { ...request, kind: "instructions" as const, assets: [] };
+    await local.create({ ...document, slug: "agents", instructions: "# Cloud\n" });
+    const later = LocalWorkspaceProvider.create(store, "Later");
+    const project = join(root, "project");
+    mkdirSync(project);
+    runtime.configure(project, {
+      formatVersion: 1,
+      primary: workspace,
+      mounts: [{ workspace: later.workspace }, { workspace, namespace: "work" }],
+      collisions: "precedence",
+      instructions: [
+        {
+          adapter: "generic",
+          path: join(root, "out", "AGENTS.md"),
+          artifact: "work-agents",
+        },
+      ],
+    });
+    await runtime.syncTargets(project);
+    // The local workspace now holds the name ahead of the namespaced mount.
+    await later.create({ ...document, slug: "work-agents", instructions: "# Local\n" });
+    const doctor = async (online: boolean) =>
+      (
+        (await runtime.doctor(online, project)) as {
+          instructions: { state: string }[];
+        }
+      ).instructions.map((row) => row.state);
+    expect(await doctor(false)).toEqual(["unverified"]);
+    expect(await doctor(true)).toEqual(["not-synced"]);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("reports an unrecorded cloud target offline as unverified with its file state", async () => {
+    const { local, cloud, store, workspace } = fixture();
+    await local.create({
+      ...request,
+      slug: "agents",
+      kind: "instructions",
+      assets: [],
+      instructions: "# Agents\n",
+    });
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "cloud-unrecorded-")));
+    const runtime = new Runtime(store, (ref) =>
+      ref.provider === "cloud" ? cloud : new LocalWorkspaceProvider(store, ref.id),
+    );
+    const project = join(root, "project");
+    mkdirSync(project);
+    mkdirSync(join(root, "mine"));
+    writeFileSync(join(root, "mine", "AGENTS.md"), "mine\n");
+    runtime.configure(project, {
+      formatVersion: 1,
+      primary: workspace,
+      instructions: [
+        {
+          adapter: "generic",
+          path: join(root, "absent", "AGENTS.md"),
+          artifact: "agents",
+        },
+        {
+          adapter: "generic",
+          path: join(root, "mine", "AGENTS.md"),
+          artifact: "agents",
+        },
+      ],
+    });
+    const doctor = async (online: boolean) =>
+      (
+        (await runtime.doctor(online, project)) as {
+          instructions: { state: string; fileState?: string }[];
+        }
+      ).instructions.map(({ state, fileState }) => ({ state, fileState }));
+    expect(await doctor(false)).toEqual([
+      { state: "unverified", fileState: "not-synced" },
+      { state: "unverified", fileState: "collision" },
+    ]);
+    expect(await doctor(true)).toEqual([
+      { state: "not-synced", fileState: undefined },
+      { state: "collision", fileState: undefined },
+    ]);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("finds no cloud instructions on a server that predates artifact kinds", async () => {
+    const { local, store, workspace, transport } = fixture();
+    await local.create({ ...request, assets: [] });
+    let probes = 0;
+    const preKind = new CloudWorkspaceProvider(workspace, {
+      ...transport,
+      async call(name, args) {
+        if (name === "skills_list" && "kind" in args) {
+          probes += 1;
+          throw rejection("kind");
+        }
+        return transport.call(name, args);
+      },
+    });
+    expect(await preKind.list("instructions")).toEqual([]);
+    expect(await preKind.list("instructions")).toEqual([]);
+    expect(probes).toBe(1);
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "cloud-instructions-")));
+    const runtime = new Runtime(store, () => preKind);
+    runtime.configure(root, {
+      formatVersion: 1,
+      primary: workspace,
+      instructions: [
+        { adapter: "generic", path: join(root, "AGENTS.md"), artifact: "example" },
+      ],
+    });
+    // The skill named example is not an instructions document.
+    await expect(runtime.syncTargets(root)).rejects.toMatchObject({
+      code: "INSTRUCTIONS_NOT_FOUND",
+    });
+    // Other listing failures are not mistaken for a pre-kind server.
+    const failing = new CloudWorkspaceProvider(workspace, {
+      ...transport,
+      async call(name, args) {
+        if (name === "skills_list" && "kind" in args)
+          throw new RuntimeError("CLOUD_UNAVAILABLE");
+        return transport.call(name, args);
+      },
+    });
+    await expect(failing.list("instructions")).rejects.toThrow("CLOUD_UNAVAILABLE");
+    rmSync(root, { recursive: true, force: true });
+  });
   it("keeps membership errors for servers that predate artifact kinds", async () => {
     const { local, workspace, transport } = fixture();
     const created = await local.create({ ...request, assets: [] });
-    // McpTransport's error for a base server whose strict skills_list input
-    // schema rejects the kind argument (MCPFN_INVALID_ARGUMENTS in text content).
-    const rejection = (property: string) =>
-      new RuntimeError(
-        "CLOUD_REQUEST_REJECTED",
-        JSON.stringify([
-          {
-            type: "text",
-            text: JSON.stringify({
-              ok: false,
-              error: {
-                code: "MCPFN_INVALID_ARGUMENTS",
-                message: "Invalid arguments",
-                details: {
-                  lifecycleStage: "input-validation",
-                  issues: [
-                    {
-                      path: "/",
-                      instancePath: "/",
-                      schemaPath: "#/additionalProperties",
-                      keyword: "additionalProperties",
-                      message: `must not have unknown property "${property}"`,
-                      rejectedProperty: property,
-                    },
-                  ],
-                },
-              },
-            }),
-          },
-        ]),
-      );
     let probes = 0;
     const preKind = new CloudWorkspaceProvider(workspace, {
       ...transport,

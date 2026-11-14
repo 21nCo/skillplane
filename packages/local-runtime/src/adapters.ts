@@ -2,7 +2,12 @@ import { stringify } from "yaml";
 import { skillFrontmatter } from "./frontmatter.js";
 import { join, resolve } from "node:path";
 import { homedir } from "node:os";
-import { RuntimeError, safeName, type Target } from "./contracts.js";
+import {
+  RuntimeError,
+  safeName,
+  type InstructionTarget,
+  type Target,
+} from "./contracts.js";
 
 export const adapters = {
   claude: {
@@ -36,6 +41,23 @@ export function targetDirectory(
   const directory = adapters[target.adapter].directory;
   if (!directory) throw new RuntimeError("TARGET_DIRECTORY_REQUIRED");
   return join(target.scope === "user" ? userHome : project, directory);
+}
+/** User-level instructions files each agent loads, relative to the home directory. */
+export const instructionAdapters = {
+  claude: ".claude/CLAUDE.md",
+  codex: ".codex/AGENTS.md",
+  generic: null,
+} as const;
+/** The absolute file an instructions target writes. */
+export function instructionPath(
+  target: InstructionTarget,
+  userHome = homedir(),
+): string {
+  const path = target.path ?? instructionAdapters[target.adapter];
+  if (!path) throw new RuntimeError("TARGET_PATH_REQUIRED");
+  return path.startsWith("~/")
+    ? resolve(userHome, path.slice(2))
+    : resolve(userHome, path);
 }
 export function projectionName(value: string, target: Target): string {
   safeName.parse(value);

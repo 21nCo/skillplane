@@ -18,23 +18,32 @@ import { RuntimeError } from "./contracts.js";
 
 export const hash = (bytes: string | Uint8Array): string =>
   createHash("sha256").update(bytes).digest("hex");
-/** Resolve a directory path while rejecting unsafe ownership and symlink traversal. */
-export function safeDirectory(path: string): string {
+/**
+ * Resolve a directory path while rejecting unsafe ownership and symlink
+ * traversal. Without `create` it only checks the ancestors that exist and
+ * changes nothing; the rest would be created by this user with mode 0700.
+ */
+export function safeDirectory(path: string, create = true): string {
   path = resolve(path);
   const root = parse(path).root;
   let current = root;
   for (const part of path.slice(root.length).split(/[\\/]/).filter(Boolean)) {
     current = join(current, part);
-    if (!existsSync(current)) {
-      // lstat detects dangling symlinks which existsSync follows.
+    if (!create)
       try {
         lstatSync(current);
-        throw new RuntimeError("SYMLINK_FORBIDDEN");
       } catch (e) {
-        if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+        if ((e as NodeJS.ErrnoException).code === "ENOENT") return path;
+        throw e;
       }
-      mkdirSync(current, { mode: 0o700 });
-    }
+    else if (!existsSync(current))
+      try {
+        mkdirSync(current, { mode: 0o700 });
+      } catch (e) {
+        // A concurrent writer created it, or it is a dangling symlink that
+        // existsSync followed; the lstat checks below decide either way.
+        if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+      }
     const stat = lstatSync(current);
     if (!stat.isDirectory() || stat.isSymbolicLink())
       throw new RuntimeError("SYMLINK_FORBIDDEN");
