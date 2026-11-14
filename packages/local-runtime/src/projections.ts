@@ -1155,10 +1155,31 @@ export class InstructionProjections {
         rows.push(
           "code" in resolution
             ? { ...row, state: resolution.code, fileState: row.state }
-            : "unverified" in resolution
-              ? { ...row, state: "unverified", fileState: row.state }
-              : row,
+            : this.recoveryPending(id)
+              ? { ...row, state: "RECOVERY_PENDING", fileState: row.state }
+              : "unverified" in resolution
+                ? { ...row, state: "unverified", fileState: row.state }
+                : row,
         );
+      }
+      // An interrupted first write that recovery could not finish yet.
+      for (const [, journal] of this.store.entries<InstructionJournal>(
+        "instruction-journal:",
+      )) {
+        const { record } = journal;
+        if (writerAlive(journal) || rows.some((row) => row.id === record.id)) continue;
+        rows.push({
+          id: record.id,
+          adapter: record.adapter,
+          artifact: record.artifact,
+          path: record.path,
+          version: record.version.semanticVersion ?? record.version.id,
+          configured: false,
+          state: "RECOVERY_PENDING",
+          fileState: inspect(() =>
+            observe(record.path).kind === "absent" ? "not-synced" : "collision",
+          ),
+        });
       }
       return rows;
     });

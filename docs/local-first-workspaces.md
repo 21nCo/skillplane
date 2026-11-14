@@ -191,9 +191,11 @@ If the directory cannot be synced, that write stays unfinished: its file keeps
 the previous record, `sync` and `doctor` report it as `RECOVERY_PENDING`, and
 the next run retries it.
 `sync` checks every destination before it writes any: two instruction files, or an
-instruction file and a skill, where one path is or contains the other are a
+instruction file and a skill, where one path is or contains the other, and an
+instruction file inside a `.skillplane-projections` directory are a
 `PROJECTION_COLLISION`, and an unsafe directory above an instruction file stops it
-too. Removing a target from the configuration leaves its file in place. `doctor`
+too. `doctor` reports the instruction-file cases; the skill overlap and the unsafe
+directory show only when `sync` runs. Removing a target from the configuration leaves its file in place. `doctor`
 lists each instruction file as `in-sync`, `diverged`, `missing`, `collision`,
 `not-synced` or `unverified`. A collision with a file another project's document
 holds names that document, the one configured and the projects that claim it; a

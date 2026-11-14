@@ -376,6 +376,54 @@ describe("instruction file projection", () => {
     expect(await states(f.runtime, f.project)).toEqual({ [f.claude]: "in-sync" });
   });
 
+  it("reports an interrupted first write it cannot recover as pending, configured or not", async () => {
+    const f = fixture([{ adapter: "claude", artifact: "global-agents" }]);
+    const created = await f.provider.create(request);
+    const crashing = new Projections(f.store, (point) => {
+      if (point === "after-rename") throw new Error("crash");
+    });
+    const target = instructionTargetSchema.parse({
+      adapter: "claude",
+      artifact: "global-agents",
+    });
+    const snapshot = await f.provider.retrieve(created.skillId);
+    expect(() => crashing.instructions.sync(snapshot, target, f.project)).toThrow(
+      "crash",
+    );
+    expect(record(f.store, f.claude)).toBeUndefined();
+    // Root ignores the missing read permission, so this needs a user.
+    if (process.getuid?.() === 0) return;
+    chmodSync(dirname(f.claude), 0o300);
+    try {
+      expect(await states(f.runtime, f.project)).toEqual({
+        [f.claude]: "RECOVERY_PENDING",
+      });
+      await expect(f.runtime.syncTargets(f.project)).rejects.toMatchObject({
+        code: "RECOVERY_PENDING",
+      });
+      f.runtime.configure(f.project, {
+        ...f.runtime.project(f.project),
+        instructions: [],
+      });
+      const rows = ((await f.runtime.doctor(false, f.project)) as Doctor).instructions;
+      expect(rows).toEqual([
+        expect.objectContaining({
+          path: f.claude,
+          configured: false,
+          state: "RECOVERY_PENDING",
+          fileState: "collision",
+        }),
+      ]);
+    } finally {
+      chmodSync(dirname(f.claude), 0o700);
+    }
+    expect(f.store.entries("instruction-journal:")).toHaveLength(1);
+    expect(new Projections(f.store).recover()).toEqual([
+      InstructionProjections.id(f.claude),
+    ]);
+    expect(record(f.store, f.claude)?.digest).toBe(sha(v1));
+  });
+
   it("completes a write interrupted after the rename instead of reporting it as a hand edit", async () => {
     const f = fixture([{ adapter: "claude", artifact: "global-agents" }]);
     const created = await f.provider.create(request);
@@ -1077,6 +1125,31 @@ describe("instruction file projection", () => {
           { adapter: "generic", path, artifact: "global-agents" },
         ]);
         await f.refused("PROJECTION_COLLISION");
+      }
+    });
+
+    it("refuses an instructions file inside a projection store, in either order", async () => {
+      const store = {
+        adapter: "generic",
+        path: "~/rules/.skillplane-projections/instructions",
+        artifact: "global-agents",
+      };
+      const rules = {
+        adapter: "generic",
+        path: "~/rules/RULES.md",
+        artifact: "global-agents",
+      };
+      for (const order of [
+        [store, rules],
+        [rules, store],
+      ]) {
+        const f = await prepared(order);
+        await f.refused("PROJECTION_COLLISION");
+        expect(existsSync(join(f.home, "rules"))).toBe(false);
+        expect(await states(f.runtime, f.project)).toMatchObject({
+          [join(f.home, "rules", ".skillplane-projections", "instructions")]:
+            "PROJECTION_COLLISION",
+        });
       }
     });
 

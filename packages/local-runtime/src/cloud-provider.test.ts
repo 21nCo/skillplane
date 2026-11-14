@@ -688,6 +688,44 @@ describe("cloud provider transport contract", () => {
     rmSync(root, { recursive: true, force: true });
   });
 
+  it("does not trust a recorded cloud name offline when its mount may follow a local holder", async () => {
+    const { local, cloud, store, workspace } = fixture();
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "cloud-repeat-")));
+    const runtime = new Runtime(store, (ref) =>
+      ref.provider === "cloud" ? cloud : new LocalWorkspaceProvider(store, ref.id),
+    );
+    const document = { ...request, kind: "instructions" as const, assets: [] };
+    await local.create({ ...document, slug: "agents", instructions: "# Cloud\n" });
+    const later = LocalWorkspaceProvider.create(store, "Later");
+    const project = join(root, "project");
+    mkdirSync(project);
+    runtime.configure(project, {
+      formatVersion: 1,
+      primary: workspace,
+      mounts: [{ workspace: later.workspace }, { workspace, namespace: "work" }],
+      collisions: "precedence",
+      instructions: [
+        {
+          adapter: "generic",
+          path: join(root, "out", "AGENTS.md"),
+          artifact: "work-agents",
+        },
+      ],
+    });
+    await runtime.syncTargets(project);
+    // The local workspace now holds the name ahead of the namespaced mount.
+    await later.create({ ...document, slug: "work-agents", instructions: "# Local\n" });
+    const doctor = async (online: boolean) =>
+      (
+        (await runtime.doctor(online, project)) as {
+          instructions: { state: string }[];
+        }
+      ).instructions.map((row) => row.state);
+    expect(await doctor(false)).toEqual(["unverified"]);
+    expect(await doctor(true)).toEqual(["not-synced"]);
+    rmSync(root, { recursive: true, force: true });
+  });
+
   it("reports an unrecorded cloud target offline as unverified with its file state", async () => {
     const { local, cloud, store, workspace } = fixture();
     await local.create({

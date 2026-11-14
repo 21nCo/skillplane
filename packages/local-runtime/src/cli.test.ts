@@ -132,7 +132,8 @@ describe("packaged global CLI", () => {
     mkdirSync(join(home, ".claude"));
     // A reader polls the target for the whole race and counts reads whose
     // bytes are not exactly the published document. Exact reads made before
-    // the syncs end are counted apart, so the race itself must be observed.
+    // the done marker are counted apart, so the target must be seen from the
+    // polling loop, not only by the read after it.
     const reader = spawn(process.execPath, [
       "-e",
       `const fs=require("node:fs");const {createHash}=require("node:crypto");

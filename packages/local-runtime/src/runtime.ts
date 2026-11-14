@@ -212,6 +212,13 @@ export class Runtime {
     const paths: string[] = [];
     return targets.map((target) => {
       const path = instructionPath(target);
+      // Generations live under .skillplane-projections next to their target,
+      // so no target may sit there.
+      if (path.split(sep).includes(".skillplane-projections"))
+        return new RuntimeError(
+          "PROJECTION_COLLISION",
+          `Instructions destination ${path} is inside a projection store`,
+        );
       const other = paths.find((earlier) => overlaps(earlier, path));
       paths.push(path);
       if (other === undefined) return undefined;
@@ -325,9 +332,12 @@ export class Runtime {
           ? claims.targets[InstructionProjections.id(instructionPath(target))]
           : undefined;
         // Under precedence a cloud source ahead of the first local holder
-        // still wins over it.
-        const position = (workspace: ArtifactIdentity["workspace"]) =>
-          all.findIndex((s) => workspaceKey(s.workspace) === workspaceKey(workspace));
+        // still wins over it. A workspace mounted more than once counts at its
+        // last mount, since offline the name's mount is unknown.
+        const positions = (workspace: ArtifactIdentity["workspace"]) =>
+          all.flatMap((s, i) =>
+            workspaceKey(s.workspace) === workspaceKey(workspace) ? [i] : [],
+          );
         const agrees =
           claim?.artifact === target.artifact &&
           (held
@@ -336,7 +346,8 @@ export class Runtime {
                 claim.skill.id === held.skillId) ||
               (context.collisions === "precedence" &&
                 claim.workspace.provider === "cloud" &&
-                position(claim.workspace) < position(held.provider.workspace))
+                Math.max(...positions(claim.workspace)) <
+                  Math.min(...positions(held.provider.workspace)))
             : claim.workspace.provider === "cloud");
         const resolution: InstructionResolution =
           claim && agrees
