@@ -1,21 +1,56 @@
 import { requireValue } from "./contracts.js";
 import {
+  closeSync,
+  constants,
   existsSync,
+  fchmodSync,
+  fsyncSync,
   lstatSync,
+  openSync,
   readlinkSync,
+  rmSync,
   symlinkSync,
   renameSync,
   unlinkSync,
+  writeFileSync,
 } from "node:fs";
+import { homedir } from "node:os";
 import { join, relative, resolve, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
-import { bundleKind, stableJson, type CanonicalBundle } from "@skillplane/storage";
+import {
+  bundleEntrypoint,
+  bundleKind,
+  stableJson,
+  type CanonicalBundle,
+} from "@skillplane/storage";
 import { type LocalStore } from "./store.js";
-import { hash, inventory, safeDirectory, syncDirectory, writeAtomic } from "./files.js";
-import { RuntimeError, workspaceKey, type Snapshot, type Target } from "./contracts.js";
+import {
+  hash,
+  inventory,
+  readSafe,
+  safeDirectory,
+  syncDirectory,
+  writeAtomic,
+} from "./files.js";
+import {
+  RuntimeError,
+  workspaceKey,
+  type InstructionTarget,
+  type Snapshot,
+  type Target,
+} from "./contracts.js";
 import { trustEnvelope, trustExpands, type TrustEnvelope } from "./trust.js";
-import { projectionName, renderLauncher, targetDirectory } from "./adapters.js";
+import {
+  instructionPath,
+  projectionName,
+  renderLauncher,
+  targetDirectory,
+} from "./adapters.js";
 import { UsageQueue } from "./analytics.js";
+export type ProjectionFault =
+  "before-write" | "before-swap" | "after-swap" | "before-unlink";
+/** Instruction target IDs share the owner ledger with skill projection IDs. */
+export const INSTRUCTIONS_ID_PREFIX = "instructions-";
 export interface ProjectionRecord {
   project?: string;
   replacesId?: string;
@@ -47,13 +82,25 @@ export function assertProjectionSupported(bundle: CanonicalBundle): void {
       "Use native MCP skill_resolve for composed skills; local projections cannot materialize dependency closures",
     );
 }
+function validateVersion(snapshot: Snapshot): void {
+  if (
+    !/^[A-Za-z0-9:_-]{1,160}$/.test(snapshot.version.id) ||
+    (snapshot.version.semanticVersion !== null &&
+      !/^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$/.test(snapshot.version.semanticVersion))
+  )
+    throw new RuntimeError("VERSION_ID_INVALID");
+  if (snapshot.bundle.digest !== snapshot.version.digest)
+    throw new RuntimeError("DIGEST_MISMATCH");
+  if (snapshot.version.state !== "published")
+    throw new RuntimeError("VERSION_NOT_PUBLISHED");
+}
 export class Projections {
+  readonly instructions: InstructionProjections;
   constructor(
     readonly store: LocalStore,
-    readonly fault?: (
-      point: "before-write" | "before-swap" | "after-swap" | "before-unlink",
-    ) => void,
+    readonly fault?: (point: ProjectionFault) => void,
   ) {
+    this.instructions = new InstructionProjections(store, fault);
     this.store.transaction(() => {
       if (this.store.get("projection-owners:migrated")) return;
       const indexed = new Set<string>();
@@ -93,7 +140,7 @@ export class Projections {
   projectIds(project: string): string[] {
     return this.store.db
       .prepare(
-        "SELECT projection_id FROM projection_owner WHERE project=? ORDER BY projection_id",
+        `SELECT projection_id FROM projection_owner WHERE project=? AND projection_id NOT LIKE '${INSTRUCTIONS_ID_PREFIX}%' ORDER BY projection_id`,
       )
       .all(resolve(project))
       .map((row) => String(row.projection_id));
@@ -187,22 +234,11 @@ export class Projections {
         this.store.delete(key);
       }
     });
-    return recovered;
+    return [...recovered, ...this.instructions.recover()];
   }
   private validateSnapshot(snapshot: Snapshot): void {
     assertProjectionSupported(snapshot.bundle);
-    if (
-      !/^[A-Za-z0-9:_-]{1,160}$/.test(snapshot.version.id) ||
-      (snapshot.version.semanticVersion !== null &&
-        !/^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$/.test(
-          snapshot.version.semanticVersion,
-        ))
-    )
-      throw new RuntimeError("VERSION_ID_INVALID");
-    if (snapshot.bundle.digest !== snapshot.version.digest)
-      throw new RuntimeError("DIGEST_MISMATCH");
-    if (snapshot.version.state !== "published")
-      throw new RuntimeError("VERSION_NOT_PUBLISHED");
+    validateVersion(snapshot);
   }
   private approvedTrust(
     snapshot: Snapshot,
@@ -481,5 +517,434 @@ export class Projections {
       return current;
     });
     if (record) this.finishUninstall(record);
+  }
+}
+
+/** What Skillplane wrote to one user-level agent instructions file. */
+export interface InstructionRecord {
+  formatVersion: 1;
+  kind: "instructions";
+  id: string;
+  eventId: string;
+  installationId: string;
+  /** The project whose sync wrote this generation. */
+  project: string;
+  adapter: InstructionTarget["adapter"];
+  /** The configured artifact name in the project's instructions catalog. */
+  artifact: string;
+  path: string;
+  /** Immutable copy of the bytes, kept beside the target for recovery. */
+  generation: string;
+  workspace: Snapshot["workspace"];
+  skill: Snapshot["skill"];
+  version: Snapshot["version"];
+  bundleDigest: string;
+  /** SHA-256 of the exact bytes written to path. */
+  digest: string;
+  synchronizedAt: string;
+}
+interface InstructionJournal {
+  record: InstructionRecord;
+  /** The eventId of the record this write replaces, or null for a first write. */
+  basis: string | null;
+  temp: string;
+  pid: number;
+  startedAt: string;
+}
+export type InstructionState =
+  "in-sync" | "diverged" | "missing" | "collision" | "not-synced";
+export interface InstructionStatus {
+  id: string;
+  adapter: InstructionTarget["adapter"];
+  artifact: string | null;
+  path: string;
+  version: string | null;
+  configured: boolean;
+  /** An InstructionState, or the error code when the file cannot be inspected. */
+  state: string;
+}
+type Observed =
+  | { kind: "absent" }
+  | { kind: "other" }
+  | { kind: "file"; digest: string | null; mode: number };
+const MAX_INSTRUCTIONS_BYTES = 30 * 1024 * 1024;
+// A journal older than any lock-bounded write belongs to a dead writer even
+// when its process ID has been reused.
+const JOURNAL_LEASE_MS = 10 * 60 * 1000;
+function observe(path: string): Observed {
+  let stat;
+  try {
+    stat = lstatSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { kind: "absent" };
+    throw error;
+  }
+  if (!stat.isFile()) return { kind: "other" };
+  return {
+    kind: "file",
+    digest:
+      stat.size > MAX_INSTRUCTIONS_BYTES
+        ? null
+        : `sha256:${hash(readSafe(path, MAX_INSTRUCTIONS_BYTES))}`,
+    mode: stat.mode & 0o777,
+  };
+}
+function stateOf(record: InstructionRecord, observed: Observed): InstructionState {
+  if (observed.kind === "absent") return "missing";
+  if (observed.kind === "other" || observed.digest !== record.digest) return "diverged";
+  return "in-sync";
+}
+function sameArtifact(record: InstructionRecord, snapshot: Snapshot): boolean {
+  return (
+    workspaceKey(record.workspace) === workspaceKey(snapshot.workspace) &&
+    record.skill.id === snapshot.skill.id
+  );
+}
+function writerAlive(journal: InstructionJournal): boolean {
+  // Instruction writes are synchronous, so this process has none in flight
+  // while it recovers.
+  if (journal.pid === process.pid) return false;
+  if (Date.now() - Date.parse(journal.startedAt) > JOURNAL_LEASE_MS) return false;
+  try {
+    process.kill(journal.pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+function writeFileDurably(path: string, bytes: Uint8Array, mode: number): void {
+  const fd = openSync(
+    path,
+    constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+    0o600,
+  );
+  try {
+    if (mode !== 0o600) fchmodSync(fd, mode);
+    writeFileSync(fd, bytes);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+/**
+ * Projects one published instructions artifact into a single user-level file.
+ * Targets are regular files replaced by same-directory rename; ownership is
+ * the SHA-256 of the bytes last written, so an unmanaged or hand-edited file is
+ * never overwritten. The store's write transaction is the projection lock.
+ */
+export class InstructionProjections {
+  constructor(
+    readonly store: LocalStore,
+    readonly fault?: (point: ProjectionFault) => void,
+  ) {}
+  static id(path: string): string {
+    return `${INSTRUCTIONS_ID_PREFIX}${hash(`instructions\0${resolve(path)}`).slice(0, 32)}`;
+  }
+  records(): InstructionRecord[] {
+    return this.store
+      .entries<InstructionRecord>("instruction:")
+      .map(([, record]) => record);
+  }
+  owners(id: string): string[] {
+    return this.store.db
+      .prepare(
+        "SELECT project FROM projection_owner WHERE projection_id=? ORDER BY project",
+      )
+      .all(id)
+      .map((row) => String(row.project));
+  }
+  /** Instruction targets the project currently claims. */
+  projectIds(project: string): string[] {
+    return this.store.db
+      .prepare(
+        `SELECT projection_id FROM projection_owner WHERE project=? AND projection_id LIKE '${INSTRUCTIONS_ID_PREFIX}%' ORDER BY projection_id`,
+      )
+      .all(resolve(project))
+      .map((row) => String(row.projection_id));
+  }
+  private addOwner(id: string, project: string): void {
+    this.store.db
+      .prepare("INSERT OR IGNORE INTO projection_owner VALUES (?,?)")
+      .run(id, resolve(project));
+  }
+  /** Drops the project's claim on targets it no longer configures; files stay. */
+  release(project: string, keep: ReadonlySet<string>): void {
+    this.store.transaction(() => {
+      for (const id of this.projectIds(project))
+        if (!keep.has(id))
+          this.store.db
+            .prepare("DELETE FROM projection_owner WHERE projection_id=? AND project=?")
+            .run(id, resolve(project));
+    });
+  }
+  private content(snapshot: Snapshot): Uint8Array {
+    if (bundleKind(snapshot.bundle.skill) !== "instructions")
+      throw new RuntimeError(
+        "PROJECTION_KIND_UNSUPPORTED",
+        "Only instructions documents are projected to instruction files",
+      );
+    validateVersion(snapshot);
+    const bytes = snapshot.bundle.files.get(bundleEntrypoint(snapshot.bundle.skill));
+    if (!bytes) throw new RuntimeError("BUNDLE_INVALID");
+    return bytes;
+  }
+  private assertWritable(
+    record: InstructionRecord | undefined,
+    observed: Observed,
+    path: string,
+  ): void {
+    if (!record) {
+      if (observed.kind !== "absent")
+        throw new RuntimeError(
+          "PROJECTION_COLLISION",
+          `Unmanaged instructions file exists: ${path}`,
+        );
+      return;
+    }
+    if (stateOf(record, observed) === "diverged")
+      throw new RuntimeError(
+        "PROJECTION_DIVERGED",
+        `${path} changed after Skillplane wrote it; it was not overwritten`,
+      );
+  }
+  private assertReplacementOwner(
+    record: InstructionRecord,
+    snapshot: Snapshot,
+    project: string,
+  ): void {
+    // Projects that configure the same artifact may advance it; a different
+    // artifact needs every other project to have released the target first.
+    if (sameArtifact(record, snapshot)) return;
+    if (this.owners(record.id).some((owner) => owner !== resolve(project)))
+      throw new RuntimeError(
+        "PROJECTION_COLLISION",
+        `${record.path} is owned by another project's instructions`,
+      );
+  }
+  private prepare(
+    snapshot: Snapshot,
+    target: InstructionTarget,
+    project: string,
+    userHome: string,
+  ) {
+    const bytes = this.content(snapshot);
+    const path = instructionPath(target, userHome);
+    const id = InstructionProjections.id(path);
+    const old = this.store.get<InstructionRecord>(`instruction:${id}`);
+    const digest = `sha256:${hash(bytes)}`;
+    const observed = observe(path);
+    this.assertWritable(old, observed, path);
+    const same =
+      old !== undefined &&
+      observed.kind === "file" &&
+      sameArtifact(old, snapshot) &&
+      old.version.id === snapshot.version.id &&
+      old.digest === digest;
+    if (old && !same) this.assertReplacementOwner(old, snapshot, project);
+    return { bytes, path, id, old, digest, same };
+  }
+  /** Raises the error sync would raise, without writing anything. */
+  check(
+    snapshot: Snapshot,
+    target: InstructionTarget,
+    project: string,
+    userHome = homedir(),
+  ): void {
+    // Under the lock, a concurrent writer's renamed but uncommitted file is
+    // never mistaken for an unmanaged one.
+    this.store.transaction(() => this.prepare(snapshot, target, project, userHome));
+  }
+  sync(
+    snapshot: Snapshot,
+    target: InstructionTarget,
+    project: string,
+    userHome = homedir(),
+  ): InstructionRecord {
+    const { bytes, path, id, old, digest, same } = this.store.transaction(() =>
+      this.prepare(snapshot, target, project, userHome),
+    );
+    const parent = safeDirectory(dirname(path));
+    const matches = (record: InstructionRecord): boolean =>
+      sameArtifact(record, snapshot) &&
+      record.version.id === snapshot.version.id &&
+      record.digest === digest &&
+      stateOf(record, observe(path)) === "in-sync";
+    if (old && same)
+      return this.store.transaction(() => {
+        const current = this.store.get<InstructionRecord>(`instruction:${id}`);
+        if (current?.eventId === old.eventId)
+          this.assertWritable(current, observe(path), path);
+        if (current?.eventId !== old.eventId || !matches(current))
+          throw new RuntimeError(
+            "PROJECTION_CHANGED",
+            "Projection changed; run sync again",
+          );
+        this.addOwner(id, project);
+        return current;
+      });
+    this.fault?.("before-write");
+    const generation = join(
+      safeDirectory(
+        join(
+          parent,
+          ".skillplane-projections",
+          "instructions",
+          id,
+          encodeURIComponent(snapshot.version.id),
+        ),
+      ),
+      bundleEntrypoint(snapshot.bundle.skill),
+    );
+    const staged = observe(generation);
+    if (staged.kind !== "file" || staged.digest !== digest)
+      writeAtomic(generation, bytes);
+    const record: InstructionRecord = {
+      formatVersion: 1,
+      kind: "instructions",
+      id,
+      eventId: randomUUID(),
+      installationId: requireValue(this.store.get<string>("installation")),
+      project: resolve(project),
+      adapter: target.adapter,
+      artifact: target.artifact,
+      path,
+      generation,
+      workspace: snapshot.workspace,
+      skill: snapshot.skill,
+      version: snapshot.version,
+      bundleDigest: snapshot.bundle.digest,
+      digest,
+      synchronizedAt: new Date().toISOString(),
+    };
+    const journalKey = `instruction-journal:${id}:${record.eventId}`;
+    const temp = join(parent, `.skillplane-instructions-${record.eventId}`);
+    // Committed before the lock so a crash between rename and commit can be
+    // completed by recover(); it is deleted in the same commit as the record.
+    const journal: InstructionJournal = {
+      record,
+      basis: old?.eventId ?? null,
+      temp,
+      pid: process.pid,
+      startedAt: record.synchronizedAt,
+    };
+    this.store.set(journalKey, journal);
+    try {
+      return this.store.transaction(() => {
+        const current = this.store.get<InstructionRecord>(`instruction:${id}`);
+        if ((current?.eventId ?? null) !== journal.basis) {
+          // Another lock holder committed first. Its result stands when it is
+          // the same version; anything else needs a fresh plan.
+          if (!current || !matches(current))
+            throw new RuntimeError(
+              "PROJECTION_CHANGED",
+              "Projection changed; run sync again",
+            );
+          this.addOwner(id, project);
+          this.store.delete(journalKey);
+          return current;
+        }
+        const observed = observe(path);
+        this.assertWritable(current, observed, path);
+        if (current) this.assertReplacementOwner(current, snapshot, project);
+        writeFileDurably(temp, bytes, observed.kind === "file" ? observed.mode : 0o600);
+        this.fault?.("before-swap");
+        renameSync(temp, path);
+        syncDirectory(parent);
+        this.fault?.("after-swap");
+        if (current)
+          this.store.set(`instruction-history:${id}:${current.eventId}`, current);
+        this.store.set(`instruction:${id}`, record);
+        this.addOwner(id, project);
+        this.store.delete(journalKey);
+        return record;
+      });
+    } finally {
+      rmSync(temp, { force: true });
+    }
+  }
+  /**
+   * Finishes or rolls back writes whose process stopped between the journal
+   * and the record commit. A target that already holds the journaled bytes is
+   * committed; otherwise the staged temp file is removed and the previous file
+   * stands. Running it again is a no-op.
+   */
+  recover(): string[] {
+    const recovered: string[] = [];
+    for (const [key, journal] of this.store.entries<InstructionJournal>(
+      "instruction-journal:",
+    )) {
+      if (writerAlive(journal)) continue;
+      const { record } = journal;
+      const completed = this.store.transaction(() => {
+        if (!this.store.get(key)) return false;
+        const current = this.store.get<InstructionRecord>(`instruction:${record.id}`);
+        let done = false;
+        if (
+          (current?.eventId ?? null) === journal.basis &&
+          stateOf(record, observe(record.path)) === "in-sync"
+        ) {
+          if (current)
+            this.store.set(
+              `instruction-history:${record.id}:${current.eventId}`,
+              current,
+            );
+          this.store.set(`instruction:${record.id}`, record);
+          this.addOwner(record.id, record.project);
+          done = true;
+        }
+        rmSync(journal.temp, { force: true });
+        this.store.delete(key);
+        return done;
+      });
+      if (completed) recovered.push(record.id);
+    }
+    return recovered;
+  }
+  /** Every recorded target plus configured targets that have no record yet. */
+  status(
+    targets: readonly InstructionTarget[],
+    userHome = homedir(),
+  ): InstructionStatus[] {
+    const inspect = (fn: () => InstructionState): string => {
+      try {
+        return fn();
+      } catch (error) {
+        return error instanceof RuntimeError ? error.code : "UNREADABLE";
+      }
+    };
+    const configured = new Map<string, InstructionTarget>();
+    for (const target of targets)
+      configured.set(
+        InstructionProjections.id(instructionPath(target, userHome)),
+        target,
+      );
+    // Read under the lock so an in-flight write is never reported as a hand edit.
+    return this.store.transaction(() => {
+      const rows: InstructionStatus[] = this.records().map((record) => ({
+        id: record.id,
+        adapter: record.adapter,
+        artifact: record.artifact,
+        path: record.path,
+        version: record.version.semanticVersion ?? record.version.id,
+        configured: configured.has(record.id),
+        state: inspect(() => stateOf(record, observe(record.path))),
+      }));
+      for (const [id, target] of configured) {
+        if (rows.some((row) => row.id === id)) continue;
+        const path = instructionPath(target, userHome);
+        rows.push({
+          id,
+          adapter: target.adapter,
+          artifact: target.artifact,
+          path,
+          version: null,
+          configured: true,
+          state: inspect(() =>
+            observe(path).kind === "absent" ? "not-synced" : "collision",
+          ),
+        });
+      }
+      return rows;
+    });
   }
 }

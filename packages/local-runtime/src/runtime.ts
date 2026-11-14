@@ -7,22 +7,25 @@ import { type LocalStore } from "./store.js";
 import { Profiles } from "./profiles.js";
 import { LocalWorkspaceProvider } from "./local-provider.js";
 import { CloudWorkspaceProvider } from "./cloud-provider.js";
-import { targetDirectory } from "./adapters.js";
+import { instructionPath, targetDirectory } from "./adapters.js";
 import {
   Projections,
   assertProjectionSupported,
+  type InstructionRecord,
   type ProjectionRecord,
 } from "./projections.js";
 import { UsageQueue } from "./analytics.js";
 import { readSafe, writeAtomic, safeDirectory } from "./files.js";
 import { trustEnvelope, trustExpands } from "./trust.js";
 import {
+  policySchema,
   projectSchema,
   selectVersion,
   workspaceKey,
   RuntimeError,
   declaredCaller,
   type ProjectContext,
+  type SkillInfo,
   type WorkspaceRef,
   type WorkspaceProvider,
   type Snapshot,
@@ -90,7 +93,14 @@ export class Runtime {
     );
     return config;
   }
-  async catalog(context: ProjectContext): Promise<
+  /**
+   * The ordered visible names of one artifact kind. Skills and instructions
+   * documents have separate namespaces; only skills are projected as skills.
+   */
+  async catalog(
+    context: ProjectContext,
+    kind: SkillInfo["kind"] = "skill",
+  ): Promise<
     {
       name: string;
       provider: WorkspaceProvider;
@@ -113,8 +123,7 @@ export class Runtime {
     for (const source of sources) {
       const provider = this.provider(source.workspace);
       for (const skill of await provider.list()) {
-        // Only skills are projected; instructions documents are a separate kind.
-        if (skill.kind !== "skill") continue;
+        if (skill.kind !== kind) continue;
         const qualified = `${workspaceKey(source.workspace)}/${skill.id}`;
         const name =
           context.aliases[qualified] ??
@@ -157,6 +166,45 @@ export class Runtime {
     );
   }
   async sync(project: string): Promise<ProjectionRecord[]> {
+    return (await this.syncTargets(project)).projections;
+  }
+  /** Resolves every configured instructions target's latest published version. */
+  private async instructionPlans(context: ProjectContext) {
+    const targets = context.instructions ?? [];
+    if (targets.length === 0) return [];
+    const catalog = await this.catalog(context, "instructions");
+    const plans = [];
+    const paths = new Set<string>();
+    for (const target of targets) {
+      const path = instructionPath(target);
+      if (paths.has(path))
+        throw new RuntimeError(
+          "PROJECTION_COLLISION",
+          `Duplicate instructions destination: ${path}`,
+        );
+      paths.add(path);
+      const item = catalog.find((entry) => entry.name === target.artifact);
+      if (!item)
+        throw new RuntimeError(
+          "INSTRUCTIONS_NOT_FOUND",
+          `No instructions document named ${target.artifact} in this project's workspaces`,
+        );
+      const selected = selectVersion(
+        await item.provider.versions(item.skillId),
+        policySchema.parse({}),
+      );
+      plans.push({
+        target,
+        snapshot: await item.provider.retrieve(item.skillId, selected.id),
+      });
+    }
+    return plans;
+  }
+  /** Syncs skill projections and instruction files configured by the project. */
+  async syncTargets(project: string): Promise<{
+    projections: ProjectionRecord[];
+    instructions: InstructionRecord[];
+  }> {
     this.projections.recover();
     const context = this.project(project);
     const catalog = await this.catalog(context);
@@ -184,6 +232,10 @@ export class Runtime {
         );
       desired.add(path);
     }
+    const instructionPlans = await this.instructionPlans(context);
+    // An unmanaged or hand-edited instructions file stops the sync before any write.
+    for (const { snapshot, target } of instructionPlans)
+      this.projections.instructions.check(snapshot, target, project);
     const previous = this.projections.projectIds(project);
     const records = [];
     for (const { target, item, snapshot } of plans) {
@@ -195,7 +247,18 @@ export class Runtime {
       if (!installed.has(id) && this.store.get(`projection:${id}`))
         this.projections.uninstall(id, project);
     }
-    return records;
+    const instructions = [];
+    for (const { snapshot, target } of instructionPlans) {
+      this.cache(snapshot);
+      instructions.push(this.projections.instructions.sync(snapshot, target, project));
+    }
+    // A target dropped from this project's configuration keeps its file and
+    // record; only the project's claim on it is released.
+    this.projections.instructions.release(
+      project,
+      new Set(instructions.map((record) => record.id)),
+    );
+    return { projections: records, instructions };
   }
   async resolve(
     id: string,
@@ -422,9 +485,17 @@ export class Runtime {
         refreshPending: Boolean(this.store.get(`refresh:${record.id}`)),
       });
     }
+    let configured: NonNullable<ProjectContext["instructions"]> = [];
+    if (project)
+      try {
+        configured = this.project(project).instructions ?? [];
+      } catch {
+        // projectStatus reports an unreadable project configuration.
+      }
     return {
       recovery,
       projections,
+      instructions: this.projections.instructions.status(configured),
       pendingTrust: this.store.entries("pending-trust:"),
       usage: this.usage.report(),
       cloudChecked: checkCloud,

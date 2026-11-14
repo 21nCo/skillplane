@@ -150,6 +150,40 @@ makes no promise of native slash commands. Capability references:
 [Claude skills](https://code.claude.com/docs/en/skills) and
 [Codex skills](https://learn.chatgpt.com/docs/build-skills).
 
+## Instruction files
+
+An `instructions` document (a single `AGENTS.md`) can be written to a user-level
+agent instructions file. Add `instructions` to the project configuration:
+
+```json
+"instructions": [
+  { "adapter": "claude", "artifact": "global-agents" },
+  { "adapter": "codex", "artifact": "global-agents" },
+  { "adapter": "generic", "path": "~/.config/agent/RULES.md", "artifact": "global-agents" }
+]
+```
+
+| Adapter | Default file          |
+| ------- | --------------------- |
+| Claude  | `~/.claude/CLAUDE.md` |
+| Codex   | `~/.codex/AGENTS.md`  |
+| Generic | Explicit `path`       |
+
+`artifact` is the instructions document's visible name: its slug, the
+`namespace-slug` of a mounted workspace, or an alias. `path` is absolute or starts
+with `~/`; `scope` is `user`. `sync` writes the latest published version's exact
+bytes, with no wrapper, by a temporary file in the same directory, `fsync` and
+rename. It keeps each version under `.skillplane-projections/instructions/` beside
+the file and records the path, version and SHA-256 of the bytes it wrote.
+
+`sync` never overwrites a file it did not write: an existing file with no record
+fails with `PROJECTION_COLLISION`, and a file whose bytes no longer match the
+recorded digest fails with `PROJECTION_DIVERGED`. Both leave the file untouched and
+exit non-zero. A deleted file is written again. An interrupted write is finished or
+rolled back by the next `sync` or `doctor`. Removing a target from the configuration
+leaves its file in place. `doctor` lists each instruction file as `in-sync`,
+`diverged`, `missing`, `collision` or `not-synced`.
+
 ## Freshness and trust
 
 Each entry points to a self-contained generation with `SKILL.md`, `projection.json`,

@@ -33,7 +33,12 @@ export function safeDirectory(path: string): string {
       } catch (e) {
         if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
       }
-      mkdirSync(current, { mode: 0o700 });
+      try {
+        mkdirSync(current, { mode: 0o700 });
+      } catch (e) {
+        // A concurrent writer created it; the checks below still apply.
+        if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+      }
     }
     const stat = lstatSync(current);
     if (!stat.isDirectory() || stat.isSymbolicLink())

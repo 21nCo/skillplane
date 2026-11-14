@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isAbsolute } from "node:path";
 import type { CanonicalBundle } from "@skillplane/storage";
 import type {
   SkillCreateInput,
@@ -85,6 +86,36 @@ export const targetSchema = z
     "Generic export requires an explicit directory",
   );
 export type Target = z.infer<typeof targetSchema>;
+/**
+ * A user-level agent instructions file that receives one published
+ * instructions artifact. Paths are absolute or start with `~/` (the user's
+ * home); the claude and codex adapters have default paths.
+ */
+export const instructionTargetSchema = z
+  .object({
+    adapter: z.enum(["claude", "codex", "generic"]),
+    scope: z.literal("user").default("user"),
+    path: z
+      .string()
+      .min(1)
+      .max(4096)
+      .refine(
+        (path) =>
+          !path.includes("\0") &&
+          (path.startsWith("~/") || isAbsolute(path)) &&
+          !/[\\/]$/.test(path) &&
+          !/(^|[\\/])\.\.?$/.test(path),
+        "Instruction target path must be an absolute file path or start with ~/",
+      )
+      .optional(),
+    artifact: safeName,
+  })
+  .strict()
+  .refine(
+    (t) => t.adapter !== "generic" || Boolean(t.path),
+    "Generic instructions require an explicit path",
+  );
+export type InstructionTarget = z.infer<typeof instructionTargetSchema>;
 export const projectSchema = z
   .object({
     formatVersion: z.literal(1),
@@ -100,6 +131,9 @@ export const projectSchema = z
     aliases: z.record(z.string(), safeName).default({}),
     collisions: z.enum(["error", "precedence"]).default("error"),
     targets: z.array(targetSchema).max(20).default([]),
+    // Optional rather than defaulted, so a context saved without instruction
+    // targets stays readable by published runtimes that reject unknown keys.
+    instructions: z.array(instructionTargetSchema).max(20).optional(),
   })
   .strict();
 export type ProjectContext = z.infer<typeof projectSchema>;
