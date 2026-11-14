@@ -1,0 +1,27 @@
+docs/local-first-workspaces.md
+  s_80409648f80bca::t_b65a9748e290da 185-188
+packages/local-runtime/src/cloud-provider.test.ts
+  s_80409648f80bca::t_66460f7454c122 509-527
+packages/local-runtime/src/instruction-projections.test.ts
+  s_80409648f80bca::t_2529d06f8d128f 460-541
+packages/local-runtime/src/projections.ts
+  s_80409648f80bca::t_018978d5d32ee1 7,552-556,560-563,651,660-661,666-697,903-907,909-921,938-940,953-956,959-960,964-967,982,997-999
+packages/local-runtime/src/runtime.ts
+  s_80409648f80bca::t_3eff62a569f22d 193-195,197,199,204-207,209-223,277-280
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ae9d4f043b1a209ff6dcebac614f4069d41f144f",
+  "prompts": {},
+  "sessions": {
+    "s_80409648f80bca": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_80409648f80bca",
+        "model": "unknown"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
