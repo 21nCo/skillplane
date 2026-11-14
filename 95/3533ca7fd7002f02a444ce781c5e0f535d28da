@@ -1,0 +1,49 @@
+docs/local-first-workspaces.md
+  s_1f60b92055e65a::t_d4ba28b13c32be 182-190
+packages/local-runtime/src/cloud-provider.test.ts
+  s_60c30e0e8c0772::t_3e80a107ef56cc 3,19,321,329-359,375,378-381,464-576
+packages/local-runtime/src/cloud-provider.ts
+  s_60c30e0e8c0772::t_2a2f0bbcfb67d5 210-225,284
+packages/local-runtime/src/contracts.ts
+  s_60c30e0e8c0772::t_65257990b11e80 140-160,194-198
+packages/local-runtime/src/files.test.ts
+  s_60c30e0e8c0772::t_2141187663c6ef 1-60
+packages/local-runtime/src/files.ts
+  s_60c30e0e8c0772::t_3ccc1a75dcdef4 28,32-33
+packages/local-runtime/src/instruction-projections.test.ts
+  s_60c30e0e8c0772::t_ec7ed7af38d752 428-429,435-458,516-534,541
+packages/local-runtime/src/local-provider.ts
+  s_60c30e0e8c0772::t_afa8434fbea6d3 79-80,85
+packages/local-runtime/src/projections.ts
+  s_60c30e0e8c0772::t_3a4c1f2477f844 563-566,570-574,840-842,861,874-876,923,940-966
+packages/local-runtime/src/runtime.ts
+  s_60c30e0e8c0772::t_9d32e92f982411 21-22,127,129,487,490,497-508
+packages/local-runtime/src/store.test.ts
+  s_60c30e0e8c0772::t_cd69252641488a 1-41
+packages/local-runtime/src/store.ts
+  s_60c30e0e8c0772::t_51f5ff0bcc363d 30-31,33
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "953533ca7fd7002f02a444ce781c5e0f535d28da",
+  "prompts": {},
+  "sessions": {
+    "s_1f60b92055e65a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1d86f-93fe-70a1-ac4e-a974ff6a6272",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    },
+    "s_60c30e0e8c0772": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_60c30e0e8c0772",
+        "model": "unknown"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
