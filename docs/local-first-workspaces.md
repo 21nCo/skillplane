@@ -186,6 +186,7 @@ interrupted write is finished or rolled back by the next `sync` or `doctor`: it 
 finished only when the file is the one that write renamed into place, unchanged;
 otherwise the previous record stands and the file is left as it is, so a file a
 user wrote by hand is never adopted even when it holds the published bytes.
+A temporary file left by an interrupted or abandoned write is removed then too.
 Removing a target from the configuration leaves its file in place. `doctor` lists
 each instruction file as `in-sync`, `diverged`, `missing`, `collision` or
 `not-synced`; a collision row names the document in the file, the one configured

@@ -589,6 +589,129 @@ describe("instruction file projection", () => {
       expect(readFileSync(f.claude, "utf8")).toBe(`${v1}\nmine\n`);
     });
 
+    describe("a temp file stays named by durable state until it is unlinked", () => {
+      const cleanups = (f: ReturnType<typeof fixture>) =>
+        f.store.entries("instruction-cleanup:");
+      /** Stops at the unlink of a retired temp file, as a kill there would. */
+      const killedAtDiscard = (f: ReturnType<typeof fixture>) =>
+        new Projections(f.store, (point) => {
+          if (point === "before-discard") throw new Error("killed");
+        });
+
+      it("removes the temp file of a write that lost the lock to the same version", async () => {
+        const f = fixture([{ adapter: "claude", artifact: "global-agents" }]);
+        const created = await f.provider.create(request);
+        const snapshot = await f.provider.retrieve(created.skillId);
+        const other = new Projections(f.reopen());
+        let competing: InstructionRecord | undefined;
+        const loser = new Projections(f.store, (point) => {
+          if (point === "before-write" && !competing)
+            competing = other.instructions.sync(snapshot, target, f.project);
+          if (point === "before-discard") throw new Error("killed");
+        });
+        expect(() => loser.instructions.sync(snapshot, target, f.project)).toThrow(
+          "killed",
+        );
+        const winner = requireValue(competing);
+        expect(f.store.entries("instruction-journal:")).toHaveLength(0);
+        expect(cleanups(f)).toHaveLength(1);
+        expect(temps(f)).toHaveLength(1);
+
+        const projections = new Projections(f.store);
+        expect(projections.recover()).toEqual([]);
+        expect(temps(f)).toEqual([]);
+        expect(cleanups(f)).toHaveLength(0);
+        expect(f.store.entries("instruction-journal:")).toHaveLength(0);
+        expect(record(f.store, f.claude)?.eventId).toBe(winner.eventId);
+        expect(projections.instructions.owners(winner.id)).toEqual([
+          realpathSync(f.project),
+        ]);
+        expect(readFileSync(f.claude, "utf8")).toBe(v1);
+      });
+
+      it("removes the temp file of a failed write killed after its journal was retired", async () => {
+        const f = fixture([{ adapter: "claude", artifact: "global-agents" }]);
+        const created = await f.provider.create(request);
+        await f.runtime.sync(f.project);
+        await publish(f.provider, created.skillId, v2);
+        const snapshot = await f.provider.retrieve(created.skillId);
+        const editing = new Projections(f.store, (point) => {
+          if (point === "before-write") writeFileSync(f.claude, `${v1}\nmine\n`);
+          if (point === "before-discard") throw new Error("killed");
+        });
+        // The failed cleanup never replaces the hand-edit error.
+        expect(() => editing.instructions.sync(snapshot, target, f.project)).toThrow(
+          "it was not overwritten",
+        );
+        expect(f.store.entries("instruction-journal:")).toHaveLength(0);
+        expect(cleanups(f)).toHaveLength(1);
+        expect(temps(f)).toHaveLength(1);
+
+        expect(new Projections(f.store).recover()).toEqual([]);
+        expect(temps(f)).toEqual([]);
+        expect(cleanups(f)).toHaveLength(0);
+        expect(record(f.store, f.claude)?.digest).toBe(sha(v1));
+        expect(readFileSync(f.claude, "utf8")).toBe(`${v1}\nmine\n`);
+      });
+
+      it("finishes a rollback whose recovery was killed before the unlink", async () => {
+        const f = fixture([{ adapter: "claude", artifact: "global-agents" }]);
+        const created = await f.provider.create(request);
+        await f.runtime.sync(f.project);
+        await publish(f.provider, created.skillId, v2);
+        const snapshot = await f.provider.retrieve(created.skillId);
+        expect(() =>
+          crashBeforeSwap(f).instructions.sync(snapshot, target, f.project),
+        ).toThrow("crash");
+        expect(() => killedAtDiscard(f).recover()).toThrow("killed");
+        expect(f.store.entries("instruction-journal:")).toHaveLength(0);
+        expect(cleanups(f)).toHaveLength(1);
+        expect(temps(f)).toHaveLength(1);
+
+        expect(new Projections(f.store).recover()).toEqual([]);
+        expect(temps(f)).toEqual([]);
+        expect(cleanups(f)).toHaveLength(0);
+        expect(record(f.store, f.claude)?.digest).toBe(sha(v1));
+        expect(readFileSync(f.claude, "utf8")).toBe(v1);
+        expect(await states(f.runtime, f.project)).toEqual({ [f.claude]: "in-sync" });
+      });
+
+      it("never commits a cleanup entry, even for the renamed file with the planned bytes", async () => {
+        const f = fixture([{ adapter: "claude", artifact: "global-agents" }]);
+        const created = await f.provider.create(request);
+        await f.runtime.sync(f.project);
+        await publish(f.provider, created.skillId, v2);
+        const snapshot = await f.provider.retrieve(created.skillId);
+        const crashing = new Projections(f.store, (point) => {
+          if (point === "after-swap") throw new Error("crash");
+        });
+        expect(() => crashing.instructions.sync(snapshot, target, f.project)).toThrow(
+          "crash",
+        );
+        // The target is the journaled inode holding the planned bytes; only
+        // the kind of entry naming it differs from a completable journal.
+        const [key, journal] = requireValue(
+          f.store.entries<{ temp: string }>("instruction-journal:")[0],
+        );
+        f.store.transaction(() => {
+          f.store.delete(key);
+          f.store.set(key.replace("instruction-journal:", "instruction-cleanup:"), {
+            temp: journal.temp,
+          });
+        });
+
+        const projections = new Projections(f.store);
+        expect(projections.recover()).toEqual([]);
+        expect(cleanups(f)).toHaveLength(0);
+        expect(record(f.store, f.claude)?.digest).toBe(sha(v1));
+        expect(
+          projections.instructions.owners(InstructionProjections.id(f.claude)),
+        ).toEqual([realpathSync(f.project)]);
+        expect(readFileSync(f.claude, "utf8")).toBe(v2);
+        expect(await states(f.runtime, f.project)).toEqual({ [f.claude]: "diverged" });
+      });
+    });
+
     it("rolls back a renamed file the user edited before recovery", async () => {
       const f = fixture([{ adapter: "claude", artifact: "global-agents" }]);
       const created = await f.provider.create(request);

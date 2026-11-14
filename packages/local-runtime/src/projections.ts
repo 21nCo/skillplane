@@ -49,7 +49,12 @@ import {
 } from "./adapters.js";
 import { UsageQueue } from "./analytics.js";
 export type ProjectionFault =
-  "before-write" | "after-stage" | "before-swap" | "after-swap" | "before-unlink";
+  | "before-write"
+  | "after-stage"
+  | "before-swap"
+  | "after-swap"
+  | "before-unlink"
+  | "before-discard";
 /** Instruction target IDs share the owner ledger with skill projection IDs. */
 export const INSTRUCTIONS_ID_PREFIX = "instructions-";
 export interface ProjectionRecord {
@@ -544,6 +549,11 @@ export interface InstructionRecord {
   digest: string;
   synchronizedAt: string;
 }
+/** A temp file of a write that will never commit, kept until it is unlinked. */
+interface InstructionCleanup {
+  temp: string;
+}
+const CLEANUP_PREFIX = "instruction-cleanup:";
 interface InstructionJournal {
   record: InstructionRecord;
   /** The eventId of the record this write replaces, or null for a first write. */
@@ -899,6 +909,7 @@ export class InstructionProjections {
       synchronizedAt: new Date().toISOString(),
     };
     const journalKey = `instruction-journal:${id}:${record.eventId}`;
+    const cleanupKey = `${CLEANUP_PREFIX}${id}:${record.eventId}`;
     const temp = join(parent, `.skillplane-instructions-${record.eventId}`);
     // Set once the target may be replaced. Until then nothing reached the
     // target, so the journal and temp file go; after it they stay for
@@ -933,7 +944,7 @@ export class InstructionProjections {
               "Projection changed; run sync again",
             );
           this.addOwner(id, project);
-          this.store.delete(journalKey);
+          this.retire(journalKey, cleanupKey, temp);
           return current;
         }
         const observed = observe(path);
@@ -955,19 +966,41 @@ export class InstructionProjections {
       });
     } catch (error) {
       if (!progress.renaming) {
+        // Cleanup failures never replace the original error. A journal left
+        // behind is rolled back by recover(), as is a cleanup entry.
         try {
-          this.store.delete(journalKey);
+          this.store.transaction(() => this.retire(journalKey, cleanupKey, temp));
         } catch {
-          // A journal left behind is rolled back by recover(); the original
-          // error is the one to report.
-        } finally {
-          rmSync(temp, { force: true });
+          // The journal stays; the temp file is still removed below.
+        }
+        try {
+          this.discard(cleanupKey, temp);
+        } catch {
+          // recover() removes the temp file its cleanup entry names.
         }
       }
       throw error;
     }
-    rmSync(temp, { force: true });
+    // A renamed temp file is already gone and left no cleanup entry; a write
+    // that lost the lock to the same version left both.
+    this.discard(cleanupKey, temp);
     return result;
+  }
+  /**
+   * Replaces a journal whose write will not be committed with a cleanup entry
+   * naming its temp file, inside the caller's transaction. The temp file is
+   * then always named by durable state until it is unlinked, and a cleanup
+   * entry can never establish ownership.
+   */
+  private retire(journalKey: string, cleanupKey: string, temp: string): void {
+    this.store.set(cleanupKey, { temp } satisfies InstructionCleanup);
+    this.store.delete(journalKey);
+  }
+  /** Unlinks a retired temp file, then forgets it. */
+  private discard(cleanupKey: string, temp: string): void {
+    this.fault?.("before-discard");
+    rmSync(temp, { force: true });
+    this.store.delete(cleanupKey);
   }
   /**
    * Finishes or rolls back writes whose process stopped between the journal
@@ -983,10 +1016,11 @@ export class InstructionProjections {
     )) {
       if (writerAlive(journal)) continue;
       const { record } = journal;
-      const completed = this.store.transaction(() => {
-        if (!this.store.get(key)) return false;
+      const cleanupKey = `${CLEANUP_PREFIX}${key.slice("instruction-journal:".length)}`;
+      const outcome = this.store.transaction(() => {
+        // Another recovery handled it first.
+        if (!this.store.get(key)) return "gone";
         const current = this.store.get<InstructionRecord>(`instruction:${record.id}`);
-        let done = false;
         if (
           (current?.eventId ?? null) === journal.basis &&
           installed(journal) &&
@@ -999,15 +1033,24 @@ export class InstructionProjections {
             );
           this.store.set(`instruction:${record.id}`, record);
           this.addOwner(record.id, record.project);
-          done = true;
+          this.store.delete(key);
+          return "committed";
         }
-        this.store.delete(key);
-        return done;
+        this.retire(key, cleanupKey, journal.temp);
+        return "retired";
       });
+      if (outcome === "committed") recovered.push(record.id);
       // Removed only once the journal is gone, so the temp file's inode cannot
       // be reused by another file while a journal still names it.
-      rmSync(journal.temp, { force: true });
-      if (completed) recovered.push(record.id);
+      if (outcome === "retired") this.discard(cleanupKey, journal.temp);
+    }
+    // Temp files of writes that will never commit, whose process stopped
+    // before unlinking them. Removal is by path and never touches ownership.
+    for (const [key, { temp }] of this.store.entries<InstructionCleanup>(
+      CLEANUP_PREFIX,
+    )) {
+      rmSync(temp, { force: true });
+      this.store.delete(key);
     }
     return recovered;
   }
