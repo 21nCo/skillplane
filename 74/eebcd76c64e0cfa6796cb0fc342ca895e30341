@@ -1,0 +1,45 @@
+app/src/lib/api/client.ts
+  s_9fe97737db095c::t_7eb6c1e7869deb 67-68,85
+app/src/lib/layout/AppShell.svelte
+  s_9fe97737db095c::t_3fb61b88d94b98 14-19,67-74
+app/src/lib/layout/Topbar.svelte
+  s_9fe97737db095c::t_20d6b37efdbd40 2-3,34-38,82
+app/src/lib/oauth-connections/connections.svelte.ts
+  s_9fe97737db095c::t_9e1617971d4c06 1-112
+app/src/routes/(app)/account/connected-apps/+page.svelte
+  s_9fe97737db095c::t_d8466577d11a6d 1-437
+app/src/routes/oauth/consent/+page.svelte
+  s_9fe97737db095c::t_f1e3918aebdfb8 338-344,719-731
+app/tests/unit/connected-apps.test.ts
+  s_9fe97737db095c::t_c34955a7073e8d 1-236
+packages/testing/e2e/connected-apps.a11y.spec.ts
+  s_9fe97737db095c::t_ce8d61ca131dc8 1-226
+packages/testing/e2e/connected-apps.spec.ts
+  s_9fe97737db095c::t_3291dfdb763c06 1-333
+packages/testing/e2e/support/mcp-app.ts
+  s_9fe97737db095c::t_737c7213306e99 1-38
+packages/testing/e2e/support/workspace-browser-harness.ts
+  s_9fe97737db095c::t_3feb4d932a624e 15,104-115,188,191-199,284-299
+packages/ui/src/components/Dropdown.svelte
+  s_9fe97737db095c::t_ad901bdb12501a 35-42,44-45,59
+scripts/run-a11y-tests.mjs
+  s_9fe97737db095c::t_d0201b8b35b4f3 16,48
+tests/accessibility/matrix-contract.test.ts
+  s_9fe97737db095c::t_49dd9c0362bf77 10
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "74eebcd76c64e0cfa6796cb0fc342ca895e30341",
+  "prompts": {},
+  "sessions": {
+    "s_9fe97737db095c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_9fe97737db095c",
+        "model": "unknown"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
