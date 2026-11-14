@@ -1,0 +1,35 @@
+docs/local-first-workspaces.md
+  s_139097caf7b4ba::t_7cde111be1d057 153-186
+packages/local-runtime/src/adapters.ts
+  s_139097caf7b4ba::t_5aae9743845d55 5-10,45-61
+packages/local-runtime/src/cli.test.ts
+  s_139097caf7b4ba::t_ba594ef7082e2b 2,82-192
+packages/local-runtime/src/cli.ts
+  s_139097caf7b4ba::t_ed178df151c04f 39-40,46,230-233,235
+packages/local-runtime/src/contracts.ts
+  s_139097caf7b4ba::t_f08516a349464f 2,89-118,134-136
+packages/local-runtime/src/files.ts
+  s_139097caf7b4ba::t_7e36f668a5dddb 36-41
+packages/local-runtime/src/instruction-projections.test.ts
+  s_139097caf7b4ba::t_6d8e111d08eeea 1-545
+packages/local-runtime/src/projections.ts
+  s_139097caf7b4ba::t_f6933f7bc77d8d 3-4,6-7,9,11,15,17,20-25,27-41,43-48,50-53,85-96,98,101,103,143,237,241,522-950
+packages/local-runtime/src/runtime.ts
+  s_139097caf7b4ba::t_ef62da271e0002 10,14,21,28,96-103,126,169-207,235-238,250-261,488-494,498
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c1316855be6978b47598ffbd480f81f31c7c421f",
+  "prompts": {},
+  "sessions": {
+    "s_139097caf7b4ba": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_139097caf7b4ba",
+        "model": "unknown"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
