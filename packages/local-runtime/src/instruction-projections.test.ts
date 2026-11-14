@@ -1,4 +1,5 @@
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -321,6 +322,44 @@ describe("instruction file projection", () => {
     // Re-running reuses the staged generation and completes.
     await f.runtime.sync(f.project);
     expect(readFileSync(f.claude, "utf8")).toBe(v2);
+  });
+
+  it("makes the rename durable before recovery commits it, and retries when it cannot", async () => {
+    const f = fixture([{ adapter: "claude", artifact: "global-agents" }]);
+    const created = await f.provider.create(request);
+    await f.runtime.sync(f.project);
+    await publish(f.provider, created.skillId, v2);
+    const crashing = new Projections(f.store, (point) => {
+      if (point === "after-rename") throw new Error("crash");
+    });
+    const target = instructionTargetSchema.parse({
+      adapter: "claude",
+      artifact: "global-agents",
+    });
+    const snapshot = await f.provider.retrieve(created.skillId);
+    // The writer stopped between the rename and the directory sync.
+    expect(() => crashing.instructions.sync(snapshot, target, f.project)).toThrow(
+      "crash",
+    );
+    expect(readFileSync(f.claude, "utf8")).toBe(v2);
+    expect(record(f.store, f.claude)?.digest).toBe(sha(v1));
+    const id = InstructionProjections.id(f.claude);
+    // A directory that cannot be synced keeps the journal and the old record.
+    // Root ignores the missing read permission, so this part needs a user.
+    if (process.getuid?.() !== 0) {
+      chmodSync(dirname(f.claude), 0o300);
+      try {
+        expect(() => new Projections(f.store).recover()).toThrow();
+      } finally {
+        chmodSync(dirname(f.claude), 0o700);
+      }
+      expect(f.store.entries("instruction-journal:")).toHaveLength(1);
+      expect(record(f.store, f.claude)?.digest).toBe(sha(v1));
+    }
+    expect(new Projections(f.store).recover()).toEqual([id]);
+    expect(record(f.store, f.claude)?.digest).toBe(sha(v2));
+    expect(f.store.entries("instruction-journal:")).toHaveLength(0);
+    expect(await states(f.runtime, f.project)).toEqual({ [f.claude]: "in-sync" });
   });
 
   it("completes a write interrupted after the rename instead of reporting it as a hand edit", async () => {
@@ -965,5 +1004,76 @@ describe("instruction file projection", () => {
       "Duplicate instructions destination",
     );
     expect(existsSync(f.claude)).toBe(false);
+  });
+
+  describe("sync checks every destination before it writes any", () => {
+    // A synced v1 instructions file, then v2 published, a skill to project and
+    // the instructions targets under test.
+    const prepared = async (instructions: unknown[]) => {
+      const f = fixture([{ adapter: "claude", artifact: "global-agents" }]);
+      const created = await f.provider.create(request);
+      await f.runtime.sync(f.project);
+      await publish(f.provider, created.skillId, v2);
+      await f.provider.create({
+        ...request,
+        kind: "skill",
+        slug: "review",
+        instructions: "Review carefully.",
+        idempotencyKey: "skill",
+      });
+      f.runtime.configure(f.project, {
+        ...f.runtime.project(f.project),
+        targets: [targetSchema.parse({ adapter: "claude", scope: "user" })],
+        instructions: [
+          { adapter: "claude", artifact: "global-agents" },
+          ...instructions,
+        ],
+      });
+      const refused = async (code: string) => {
+        await expect(f.runtime.syncTargets(f.project)).rejects.toMatchObject({ code });
+        expect(readFileSync(f.claude, "utf8")).toBe(v1);
+        expect(record(f.store, f.claude)?.digest).toBe(sha(v1));
+        expect(f.store.entries("instruction:")).toHaveLength(1);
+        expect(f.store.entries("projection:")).toHaveLength(0);
+        expect(existsSync(join(f.home, ".claude", "skills"))).toBe(false);
+      };
+      return { ...f, refused };
+    };
+
+    it("refuses an instructions file inside another one", async () => {
+      const f = await prepared([
+        { adapter: "generic", path: "~/rules/RULES", artifact: "global-agents" },
+        {
+          adapter: "generic",
+          path: "~/rules/RULES/AGENTS.md",
+          artifact: "global-agents",
+        },
+      ]);
+      await f.refused("PROJECTION_COLLISION");
+      expect(existsSync(join(f.home, "rules"))).toBe(false);
+      // doctor names the same refusal for the nested target.
+      expect(await states(f.runtime, f.project)).toMatchObject({
+        [join(f.home, "rules", "RULES", "AGENTS.md")]: "PROJECTION_COLLISION",
+      });
+    });
+
+    it("refuses an instructions file that is or contains a skill destination", async () => {
+      for (const path of ["~/.claude/skills/review", "~/.claude/skills"]) {
+        const f = await prepared([
+          { adapter: "generic", path, artifact: "global-agents" },
+        ]);
+        await f.refused("PROJECTION_COLLISION");
+      }
+    });
+
+    it("refuses an unsafe directory above an instructions file", async () => {
+      const f = await prepared([
+        { adapter: "generic", path: "~/shared/AGENTS.md", artifact: "global-agents" },
+      ]);
+      mkdirSync(join(f.home, "shared"));
+      chmodSync(join(f.home, "shared"), 0o777);
+      await f.refused("UNSAFE_DIRECTORY");
+      expect(readdirSync(join(f.home, "shared"))).toEqual([]);
+    });
   });
 });

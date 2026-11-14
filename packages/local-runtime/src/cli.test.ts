@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { createHash } from "node:crypto";
 
 const packageRoot = resolve(import.meta.dirname, "..");
 const roots: string[] = [];
@@ -129,18 +130,31 @@ describe("packaged global CLI", () => {
 
     const claude = join(home, ".claude", "CLAUDE.md");
     mkdirSync(join(home, ".claude"));
-    // A reader polls the target for the whole race and reports any other content.
+    // A reader polls the target for the whole race and counts reads whose
+    // bytes are not exactly the published document. It reads once more after
+    // the syncs end, so at least one observation is always made.
     const reader = spawn(process.execPath, [
       "-e",
-      `const fs=require("node:fs");const [file,size]=process.argv.slice(1);let bad=0;
+      `const fs=require("node:fs");const {createHash}=require("node:crypto");
+         const [file,digest]=process.argv.slice(1);let bad=0,good=0;
+         const read=()=>{try{const b=fs.readFileSync(file);
+           if(createHash("sha256").update(b).digest("hex")===digest)good++;else bad++;}
+           catch(e){if(e.code!=="ENOENT")bad++;}};
+         process.stdout.write("ready\\n");
          const stop=Date.now()+15000;
-         while(!fs.existsSync(file+".done")&&Date.now()<stop){try{const b=fs.readFileSync(file);if(b.length!==Number(size))bad++;}catch(e){if(e.code!=="ENOENT")bad++;}}
-         process.stdout.write(String(bad));`,
+         while(!fs.existsSync(file+".done")&&Date.now()<stop)read();
+         read();process.stdout.write(JSON.stringify({bad,good}));`,
       claude,
-      String(Buffer.byteLength(body)),
+      createHash("sha256").update(body).digest("hex"),
     ]);
-    let badReads = "";
-    reader.stdout.on("data", (chunk: Buffer) => (badReads += chunk.toString()));
+    let readerOutput = "";
+    const readerClosed = new Promise((done) => reader.on("close", done));
+    await new Promise<void>((ready) =>
+      reader.stdout.on("data", (chunk: Buffer) => {
+        readerOutput += chunk.toString();
+        if (readerOutput.includes("ready\n")) ready();
+      }),
+    );
     const syncs = await Promise.all(
       [0, 1].map(
         () =>
@@ -157,8 +171,13 @@ describe("packaged global CLI", () => {
       ),
     );
     writeFileSync(`${claude}.done`, "");
-    await new Promise((done) => reader.on("close", done));
-    expect(badReads).toBe("0");
+    await readerClosed;
+    const observed = JSON.parse(readerOutput.slice(readerOutput.indexOf("\n") + 1)) as {
+      bad: number;
+      good: number;
+    };
+    expect(observed.bad).toBe(0);
+    expect(observed.good).toBeGreaterThan(0);
     // Both runs succeed: one writes the file, the other finds that identical
     // result under the projection lock.
     for (const result of syncs) {

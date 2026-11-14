@@ -1,6 +1,6 @@
 import { requireValue } from "./contracts.js";
 import { existsSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join, resolve, sep } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { bundleEntrypoint, bundleKind, canonicalizeBundle } from "@skillplane/storage";
 import { type LocalStore } from "./store.js";
@@ -51,7 +51,15 @@ interface InstructionClaims {
   catalog: string;
   targets: Record<string, { artifact: string } & ArtifactIdentity>;
 }
+/** The project's catalog sources in precedence order. */
+function sources(context: ProjectContext): ProjectContext["mounts"][number][] {
+  return [{ workspace: context.primary }, ...context.mounts];
+}
 const claimsKey = (project: string) => `instruction-claims:${resolve(project)}`;
+/** Whether one destination is the other or contains it; writing one breaks the other. */
+function overlaps(a: string, b: string): boolean {
+  return a === b || a.startsWith(b + sep) || b.startsWith(a + sep);
+}
 /** Fingerprint of the configuration that decides what a catalog name resolves to. */
 function catalogFingerprint(context: ProjectContext): string {
   const { primary, mounts, aliases, collisions } = context;
@@ -132,10 +140,14 @@ export class Runtime {
     }[]
   > {
     context = projectSchema.parse(context);
-    const sources = [
-      { workspace: context.primary, namespace: undefined },
-      ...context.mounts,
-    ];
+    return this.names(context, sources(context), kind);
+  }
+  /** The catalog of the given sources, in order, under the project's naming rules. */
+  private async names(
+    context: ProjectContext,
+    sources: readonly ProjectContext["mounts"][number][],
+    kind: SkillInfo["kind"],
+  ): Promise<CatalogEntry[]> {
     const names = new Map<
       string,
       {
@@ -197,16 +209,18 @@ export class Runtime {
   private instructionConfigErrors(
     targets: readonly InstructionTarget[],
   ): (RuntimeError | undefined)[] {
-    const paths = new Set<string>();
+    const paths: string[] = [];
     return targets.map((target) => {
       const path = instructionPath(target);
-      if (paths.has(path))
-        return new RuntimeError(
-          "PROJECTION_COLLISION",
-          `Duplicate instructions destination: ${path}`,
-        );
-      paths.add(path);
-      return undefined;
+      const other = paths.find((earlier) => overlaps(earlier, path));
+      paths.push(path);
+      if (other === undefined) return undefined;
+      return new RuntimeError(
+        "PROJECTION_COLLISION",
+        other === path
+          ? `Duplicate instructions destination: ${path}`
+          : `Instructions destinations overlap: ${other} and ${path}`,
+      );
     });
   }
   /**
@@ -268,21 +282,56 @@ export class Runtime {
   ): Promise<InstructionStatusScope["targets"]> {
     const targets = context.instructions ?? [];
     if (targets.length === 0) return [];
-    const cloud = [context.primary, ...context.mounts.map((m) => m.workspace)].some(
-      (w) => w.provider === "cloud",
-    );
-    if (cloud && !online) {
+    const all = sources(context);
+    const firstCloud = all.findIndex((s) => s.workspace.provider === "cloud");
+    if (firstCloud >= 0 && !online) {
       const claims = this.store.get<InstructionClaims>(claimsKey(project));
       const current = claims?.catalog === catalogFingerprint(context);
       const errors = this.instructionConfigErrors(targets);
+      // Local workspaces are read offline. A name the local sources ahead of
+      // every cloud source give under precedence is decided by them alone;
+      // otherwise a recorded identity stands in only while it agrees with
+      // what the local sources hold, since cloud contents can change the rest.
+      let decided: CatalogEntry[];
+      let local: CatalogEntry[];
+      try {
+        decided =
+          context.collisions === "precedence"
+            ? await this.names(context, all.slice(0, firstCloud), "instructions")
+            : [];
+        local = await this.names(
+          context,
+          all.filter((s) => s.workspace.provider !== "cloud"),
+          "instructions",
+        );
+      } catch (error) {
+        const code = error instanceof RuntimeError ? error.code : "CATALOG_UNAVAILABLE";
+        return targets.map((target, index) => ({
+          target,
+          resolution: { code: errors[index]?.code ?? code },
+        }));
+      }
+      const identity = (item: CatalogEntry): ArtifactIdentity => ({
+        workspace: item.provider.workspace,
+        skill: { id: item.skillId },
+      });
       return targets.map((target, index) => {
         const error = errors[index];
         if (error) return { target, resolution: { code: error.code } };
+        const item = decided.find((entry) => entry.name === target.artifact);
+        if (item) return { target, resolution: { identity: identity(item) } };
+        const held = local.find((entry) => entry.name === target.artifact);
         const claim = current
           ? claims.targets[InstructionProjections.id(instructionPath(target))]
           : undefined;
+        const agrees =
+          claim?.artifact === target.artifact &&
+          (held
+            ? workspaceKey(claim.workspace) === workspaceKey(held.provider.workspace) &&
+              claim.skill.id === held.skillId
+            : claim.workspace.provider === "cloud");
         const resolution: InstructionResolution =
-          claim?.artifact === target.artifact
+          claim && agrees
             ? { identity: { workspace: claim.workspace, skill: claim.skill } }
             : { unverified: true };
         return { target, resolution };
@@ -340,7 +389,18 @@ export class Runtime {
       desired.add(path);
     }
     const instructionPlans = await this.instructionPlans(context);
-    // An unmanaged or hand-edited instructions file stops the sync before any write.
+    // Writing one destination inside another would fail midway; refuse first.
+    for (const { target } of instructionPlans) {
+      const path = instructionPath(target);
+      const skill = [...desired].find((destination) => overlaps(destination, path));
+      if (skill !== undefined)
+        throw new RuntimeError(
+          "PROJECTION_COLLISION",
+          `Instructions destination ${path} overlaps skill destination ${skill}`,
+        );
+    }
+    // An unmanaged or hand-edited instructions file, or an unsafe directory
+    // above one, stops the sync before any write.
     for (const { snapshot, target } of instructionPlans)
       this.projections.instructions.check(snapshot, target, project);
     const previous = this.projections.projectIds(project);

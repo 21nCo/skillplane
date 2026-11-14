@@ -52,6 +52,7 @@ export type ProjectionFault =
   | "before-write"
   | "after-stage"
   | "before-swap"
+  | "after-rename"
   | "after-swap"
   | "before-unlink"
   | "before-discard";
@@ -842,6 +843,7 @@ export class InstructionProjections {
     project: string,
     userHome = homedir(),
   ): void {
+    safeDirectory(dirname(instructionPath(target, userHome)), false);
     // Under the lock, a concurrent writer's renamed but uncommitted file is
     // never mistaken for an unmanaged one.
     this.store.transaction(() => this.prepare(snapshot, target, project, userHome));
@@ -955,6 +957,7 @@ export class InstructionProjections {
         progress.renaming = true;
         this.fault?.("before-swap");
         renameSync(temp, path);
+        this.fault?.("after-rename");
         syncDirectory(parent);
         this.fault?.("after-swap");
         if (current)
@@ -1026,6 +1029,9 @@ export class InstructionProjections {
           installed(journal) &&
           stateOf(record, observe(record.path)) === "in-sync"
         ) {
+          // The writer may have stopped before making its rename durable. A
+          // failed sync throws here and leaves the journal for the next run.
+          syncDirectory(dirname(record.path));
           if (current)
             this.store.set(
               `instruction-history:${record.id}:${current.eventId}`,
@@ -1127,7 +1133,9 @@ export class InstructionProjections {
         rows.push(
           "code" in resolution
             ? { ...row, state: resolution.code, fileState: row.state }
-            : row,
+            : "unverified" in resolution
+              ? { ...row, state: "unverified", fileState: row.state }
+              : row,
         );
       }
       return rows;

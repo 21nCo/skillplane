@@ -187,15 +187,23 @@ finished only when the file is the one that write renamed into place, unchanged;
 otherwise the previous record stands and the file is left as it is, so a file a
 user wrote by hand is never adopted even when it holds the published bytes.
 A temporary file left by an interrupted or abandoned write is removed then too.
-Removing a target from the configuration leaves its file in place. `doctor` lists
-each instruction file as `in-sync`, `diverged`, `missing`, `collision` or
-`not-synced`; a collision row names the document in the file, the one configured
-and the projects that claim it. For a configured file, `doctor` resolves the
+`sync` checks every destination before it writes any: two instruction files, or an
+instruction file and a skill, where one path is or contains the other are a
+`PROJECTION_COLLISION`, and an unsafe directory above an instruction file stops it
+too. Removing a target from the configuration leaves its file in place. `doctor`
+lists each instruction file as `in-sync`, `diverged`, `missing`, `collision`,
+`not-synced` or `unverified`. A collision with a file another project's document
+holds names that document, the one configured and the projects that claim it; a
+collision with an unmanaged file has no record, so it names only the configured
+document. For a configured file, `doctor` resolves the
 configured name through the catalog (source order, aliases and the collision
 policy) exactly as `sync` does, and reports the error `sync` would raise, such as
-`SKILL_NAME_COLLISION`, with the file's own state in `fileState`. Offline, a cloud
-name is checked against the document it resolved to at the project's last `sync`;
-after the catalog configuration changes it is `unverified` until
+`SKILL_NAME_COLLISION`, with the file's own state in `fileState`. Offline, local
+workspaces are still read: a name that local workspaces ahead of every cloud source
+resolve under the `precedence` policy is decided by them. Any other name is checked
+against the document it resolved to at the project's last `sync`, which must still
+agree with the local workspaces; otherwise, or after the catalog configuration
+changes, it is `unverified`, with the file's own state in `fileState`, until
 `doctor --online` or the next `sync`. Cloud workspaces list instructions documents only
 when the server supports artifact kinds; an older server has none.
 

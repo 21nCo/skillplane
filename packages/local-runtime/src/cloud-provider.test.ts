@@ -1,6 +1,13 @@
 import { requireValue } from "./contracts.js";
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
@@ -570,6 +577,135 @@ describe("cloud provider transport contract", () => {
     expect(readFileSync(join(root, "copy", "AGENTS.md"), "utf8")).toBe(document);
     rmSync(root, { recursive: true, force: true });
   });
+  it("decides a local name offline and trusts a recorded name only while local workspaces agree", async () => {
+    const { cloud, store, workspace } = fixture();
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "cloud-offline-")));
+    const own = LocalWorkspaceProvider.create(store, "Own");
+    // Hiding a document from its local workspace stands in for deleting it.
+    const hidden = new Set<string>();
+    const runtime = new Runtime(store, (ref) => {
+      if (ref.provider === "cloud") return cloud;
+      const provider = new LocalWorkspaceProvider(store, ref.id);
+      const list = provider.list.bind(provider);
+      provider.list = async (kind) =>
+        (await list(kind)).filter((skill) => !hidden.has(skill.id));
+      return provider;
+    });
+    const created = await own.create({
+      ...request,
+      slug: "agents",
+      kind: "instructions",
+      assets: [],
+      instructions: "# Agents\n",
+    });
+    const project = join(root, "project");
+    mkdirSync(project);
+    runtime.configure(project, {
+      formatVersion: 1,
+      primary: own.workspace,
+      mounts: [{ workspace }],
+      collisions: "precedence",
+      instructions: [
+        {
+          adapter: "generic",
+          path: join(root, "out", "AGENTS.md"),
+          artifact: "agents",
+        },
+      ],
+    });
+    await runtime.syncTargets(project);
+    const doctor = async (online: boolean) =>
+      (
+        (await runtime.doctor(online, project)) as {
+          instructions: { state: string; fileState?: string }[];
+        }
+      ).instructions;
+    const unverified = [
+      expect.objectContaining({ state: "unverified", fileState: "in-sync" }),
+    ];
+    // The local primary decides the name under precedence, recorded or not.
+    store.delete(`instruction-claims:${project}`);
+    expect(await doctor(false)).toEqual([
+      expect.objectContaining({ state: "in-sync" }),
+    ]);
+    // Under the error policy a cloud document could still collide with it.
+    runtime.configure(project, { ...runtime.project(project), collisions: "error" });
+    expect(await doctor(false)).toEqual(unverified);
+    await runtime.syncTargets(project);
+    expect(await doctor(false)).toEqual([
+      expect.objectContaining({ state: "in-sync" }),
+    ]);
+    // A recorded local document the workspace no longer holds is not trusted.
+    hidden.add(created.skillId);
+    expect(await doctor(false)).toEqual(unverified);
+    const missing = [
+      expect.objectContaining({
+        state: "INSTRUCTIONS_NOT_FOUND",
+        fileState: "in-sync",
+      }),
+    ];
+    expect(await doctor(true)).toEqual(missing);
+    await expect(runtime.syncTargets(project)).rejects.toMatchObject({
+      code: "INSTRUCTIONS_NOT_FOUND",
+    });
+    runtime.configure(project, {
+      ...runtime.project(project),
+      collisions: "precedence",
+    });
+    expect(await doctor(false)).toEqual(unverified);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("reports an unrecorded cloud target offline as unverified with its file state", async () => {
+    const { local, cloud, store, workspace } = fixture();
+    await local.create({
+      ...request,
+      slug: "agents",
+      kind: "instructions",
+      assets: [],
+      instructions: "# Agents\n",
+    });
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "cloud-unrecorded-")));
+    const runtime = new Runtime(store, (ref) =>
+      ref.provider === "cloud" ? cloud : new LocalWorkspaceProvider(store, ref.id),
+    );
+    const project = join(root, "project");
+    mkdirSync(project);
+    mkdirSync(join(root, "mine"));
+    writeFileSync(join(root, "mine", "AGENTS.md"), "mine\n");
+    runtime.configure(project, {
+      formatVersion: 1,
+      primary: workspace,
+      instructions: [
+        {
+          adapter: "generic",
+          path: join(root, "absent", "AGENTS.md"),
+          artifact: "agents",
+        },
+        {
+          adapter: "generic",
+          path: join(root, "mine", "AGENTS.md"),
+          artifact: "agents",
+        },
+      ],
+    });
+    const doctor = async (online: boolean) =>
+      (
+        (await runtime.doctor(online, project)) as {
+          instructions: { state: string; fileState?: string }[];
+        }
+      ).instructions.map(({ state, fileState }) => ({ state, fileState }));
+    expect(await doctor(false)).toEqual([
+      { state: "unverified", fileState: "not-synced" },
+      { state: "unverified", fileState: "collision" },
+    ]);
+    expect(await doctor(true)).toEqual([
+      { state: "not-synced", fileState: undefined },
+      { state: "collision", fileState: undefined },
+    ]);
+    rmSync(root, { recursive: true, force: true });
+  });
+
   it("finds no cloud instructions on a server that predates artifact kinds", async () => {
     const { local, store, workspace, transport } = fixture();
     await local.create({ ...request, assets: [] });
