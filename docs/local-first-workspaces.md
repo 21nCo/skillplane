@@ -179,10 +179,15 @@ the file and records the path, version and SHA-256 of the bytes it wrote.
 `sync` never overwrites a file it did not write: an existing file with no record
 fails with `PROJECTION_COLLISION`, and a file whose bytes no longer match the
 recorded digest fails with `PROJECTION_DIVERGED`. Both leave the file untouched and
-exit non-zero. A deleted file is written again. An interrupted write is finished or
-rolled back by the next `sync` or `doctor`. Removing a target from the configuration
-leaves its file in place. `doctor` lists each instruction file as `in-sync`,
-`diverged`, `missing`, `collision` or `not-synced`.
+exit non-zero. Projects that configure the same document may share a file; a
+file that holds another project's document is a `PROJECTION_COLLISION` until every
+project claiming it removes the target. A deleted file is written again. An
+interrupted write is finished or rolled back by the next `sync` or `doctor`.
+Removing a target from the configuration leaves its file in place. `doctor` lists
+each instruction file as `in-sync`, `diverged`, `missing`, `collision` or
+`not-synced`; a collision row names the document in the file, the one configured
+and the projects that claim it. Cloud workspaces list instructions documents only
+when the server supports artifact kinds; an older server has none.
 
 ## Freshness and trust
 

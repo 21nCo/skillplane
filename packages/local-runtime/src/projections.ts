@@ -560,8 +560,17 @@ export interface InstructionStatus {
   path: string;
   version: string | null;
   configured: boolean;
+  /** The artifact this project configures here when it differs from the file's. */
+  configuredArtifact?: string;
+  /** Projects claiming the target, shown when the file belongs to another one. */
+  owners?: string[];
   /** An InstructionState, or the error code when the file cannot be inspected. */
   state: string;
+}
+/** The project doctor runs for, and its catalog names for a recorded artifact. */
+export interface InstructionStatusScope {
+  project: string;
+  names: (record: InstructionRecord) => readonly string[];
 }
 type Observed =
   | { kind: "absent" }
@@ -828,6 +837,9 @@ export class InstructionProjections {
       startedAt: record.synchronizedAt,
     };
     this.store.set(journalKey, journal);
+    // Set once the target may be replaced; a failure before then wrote nothing
+    // to the target, so its journal must not let recover() claim the file.
+    const progress = { writing: false };
     try {
       return this.store.transaction(() => {
         const current = this.store.get<InstructionRecord>(`instruction:${id}`);
@@ -846,6 +858,7 @@ export class InstructionProjections {
         const observed = observe(path);
         this.assertWritable(current, observed, path);
         if (current) this.assertReplacementOwner(current, snapshot, project);
+        progress.writing = true;
         writeFileDurably(temp, bytes, observed.kind === "file" ? observed.mode : 0o600);
         this.fault?.("before-swap");
         renameSync(temp, path);
@@ -858,6 +871,9 @@ export class InstructionProjections {
         this.store.delete(journalKey);
         return record;
       });
+    } catch (error) {
+      if (!progress.writing) this.store.delete(journalKey);
+      throw error;
     } finally {
       rmSync(temp, { force: true });
     }
@@ -904,6 +920,7 @@ export class InstructionProjections {
   status(
     targets: readonly InstructionTarget[],
     userHome = homedir(),
+    scope?: InstructionStatusScope,
   ): InstructionStatus[] {
     const inspect = (fn: () => InstructionState): string => {
       try {
@@ -920,15 +937,33 @@ export class InstructionProjections {
       );
     // Read under the lock so an in-flight write is never reported as a hand edit.
     return this.store.transaction(() => {
-      const rows: InstructionStatus[] = this.records().map((record) => ({
-        id: record.id,
-        adapter: record.adapter,
-        artifact: record.artifact,
-        path: record.path,
-        version: record.version.semanticVersion ?? record.version.id,
-        configured: configured.has(record.id),
-        state: inspect(() => stateOf(record, observe(record.path))),
-      }));
+      const rows: InstructionStatus[] = this.records().map((record) => {
+        const row: InstructionStatus = {
+          id: record.id,
+          adapter: record.adapter,
+          artifact: record.artifact,
+          path: record.path,
+          version: record.version.semanticVersion ?? record.version.id,
+          configured: configured.has(record.id),
+          state: inspect(() => stateOf(record, observe(record.path))),
+        };
+        const target = configured.get(record.id);
+        // sync reports a hand edit or an unreadable file before ownership.
+        if (!target || !scope || (row.state !== "in-sync" && row.state !== "missing"))
+          return row;
+        if (scope.names(record).includes(target.artifact)) return row;
+        // The rule sync applies: another artifact may not take a target that
+        // another project still claims; an unclaimed one is replaced.
+        const owners = this.owners(record.id);
+        return {
+          ...row,
+          configuredArtifact: target.artifact,
+          owners,
+          state: owners.some((owner) => owner !== resolve(scope.project))
+            ? "collision"
+            : "not-synced",
+        };
+      });
       for (const [id, target] of configured) {
         if (rows.some((row) => row.id === id)) continue;
         const path = instructionPath(target, userHome);

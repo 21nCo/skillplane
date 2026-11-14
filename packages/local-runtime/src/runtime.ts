@@ -18,6 +18,8 @@ import { UsageQueue } from "./analytics.js";
 import { readSafe, writeAtomic, safeDirectory } from "./files.js";
 import { trustEnvelope, trustExpands } from "./trust.js";
 import {
+  catalogName,
+  catalogNames,
   policySchema,
   projectSchema,
   selectVersion,
@@ -122,12 +124,9 @@ export class Runtime {
     >();
     for (const source of sources) {
       const provider = this.provider(source.workspace);
-      for (const skill of await provider.list()) {
+      for (const skill of await provider.list(kind)) {
         if (skill.kind !== kind) continue;
-        const qualified = `${workspaceKey(source.workspace)}/${skill.id}`;
-        const name =
-          context.aliases[qualified] ??
-          (source.namespace ? `${source.namespace}-${skill.slug}` : skill.slug);
+        const name = catalogName(context, source, skill);
         const old = names.get(name);
         if (old) {
           if (
@@ -485,17 +484,28 @@ export class Runtime {
         refreshPending: Boolean(this.store.get(`refresh:${record.id}`)),
       });
     }
-    let configured: NonNullable<ProjectContext["instructions"]> = [];
+    let context: ProjectContext | undefined;
     if (project)
       try {
-        configured = this.project(project).instructions ?? [];
+        context = this.project(project);
       } catch {
         // projectStatus reports an unreadable project configuration.
       }
     return {
       recovery,
       projections,
-      instructions: this.projections.instructions.status(configured),
+      instructions: this.projections.instructions.status(
+        context?.instructions ?? [],
+        undefined,
+        project && context
+          ? {
+              project,
+              // The names this project's catalog gives the artifact in a file,
+              // read offline from its sources and aliases.
+              names: (record) => catalogNames(context, record.workspace, record.skill),
+            }
+          : undefined,
+      ),
       pendingTrust: this.store.entries("pending-trust:"),
       usage: this.usage.report(),
       cloudChecked: checkCloud,

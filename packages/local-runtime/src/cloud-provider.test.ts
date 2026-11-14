@@ -1,6 +1,6 @@
 import { requireValue } from "./contracts.js";
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtempSync, realpathSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
@@ -16,6 +16,7 @@ import {
   type AmendRequest,
   type CreateRequest,
   type CloudTransport,
+  workspaceKey,
 } from "./index.js";
 const stores: LocalStore[] = [];
 afterEach(() => {
@@ -317,6 +318,7 @@ function fixture() {
   };
   return {
     local,
+    store,
     workspace,
     transport,
     calls,
@@ -324,6 +326,37 @@ function fixture() {
     cloud: new CloudWorkspaceProvider(workspace, transport),
   };
 }
+// McpTransport's error for a base server whose strict skills_list input
+// schema rejects the kind argument (MCPFN_INVALID_ARGUMENTS in text content).
+const rejection = (property: string) =>
+  new RuntimeError(
+    "CLOUD_REQUEST_REJECTED",
+    JSON.stringify([
+      {
+        type: "text",
+        text: JSON.stringify({
+          ok: false,
+          error: {
+            code: "MCPFN_INVALID_ARGUMENTS",
+            message: "Invalid arguments",
+            details: {
+              lifecycleStage: "input-validation",
+              issues: [
+                {
+                  path: "/",
+                  instancePath: "/",
+                  schemaPath: "#/additionalProperties",
+                  keyword: "additionalProperties",
+                  message: `must not have unknown property "${property}"`,
+                  rejectedProperty: property,
+                },
+              ],
+            },
+          },
+        }),
+      },
+    ]),
+  );
 describe("cloud provider transport contract", () => {
   it("rebuilds an instructions document from its AGENTS.md entrypoint", async () => {
     const { local, cloud, calls, listArgs } = fixture();
@@ -339,9 +372,13 @@ describe("cloud provider transport contract", () => {
       (await local.retrieve(created.skillId)).bundle.digest,
     );
     expect(calls.filter((name) => name === "skill_asset_retrieve")).toHaveLength(1);
-    // Local projection lists skills only; SKI-24 owns instructions projection.
+    // The default listing stays skills-only and sends no kind argument.
     expect(await cloud.list()).toEqual([]);
     expect(listArgs.every((args) => args.kind === undefined)).toBe(true);
+    expect((await cloud.list("instructions")).map((item) => item.id)).toEqual([
+      created.skillId,
+    ]);
+    expect(listArgs.at(-1)?.kind).toBe("instructions");
   });
   it("reviews instructions documents through ID-only lifecycle operations", async () => {
     const { cloud, listArgs, workspace } = fixture();
@@ -424,40 +461,122 @@ describe("cloud provider transport contract", () => {
       }),
     ).rejects.toThrow("SKILL_NOT_FOUND");
   });
+  it("syncs a published cloud instructions document read as primary or mount", async () => {
+    const { local, cloud, store, workspace } = fixture();
+    const document = "# Agents\n\nRun the tests.\n";
+    const created = await local.create({
+      ...request,
+      slug: "agents",
+      kind: "instructions",
+      assets: [],
+      instructions: document,
+    });
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "cloud-instructions-")));
+    const runtime = new Runtime(store, (ref) =>
+      ref.provider === "cloud" ? cloud : new LocalWorkspaceProvider(store, ref.id),
+    );
+    const primary = join(root, "primary");
+    const mounted = join(root, "mounted");
+    mkdirSync(primary);
+    mkdirSync(mounted);
+    runtime.configure(primary, {
+      formatVersion: 1,
+      primary: workspace,
+      instructions: [
+        {
+          adapter: "generic",
+          path: join(root, "out", "AGENTS.md"),
+          artifact: "agents",
+        },
+      ],
+    });
+    const synced = await runtime.syncTargets(primary);
+    expect(synced.instructions.map((r) => [r.skill.id, r.workspace])).toEqual([
+      [created.skillId, workspace],
+    ]);
+    expect(readFileSync(join(root, "out", "AGENTS.md"), "utf8")).toBe(document);
+    // A namespaced mount and a qualified alias name the same document.
+    const own = LocalWorkspaceProvider.create(store, "Own");
+    runtime.configure(mounted, {
+      formatVersion: 1,
+      primary: own.workspace,
+      mounts: [{ workspace, namespace: "work" }],
+      aliases: { [`${workspaceKey(workspace)}/${created.skillId}`]: "team-agents" },
+      instructions: [
+        {
+          adapter: "generic",
+          path: join(root, "out", "AGENTS.md"),
+          artifact: "team-agents",
+        },
+        {
+          adapter: "generic",
+          path: join(root, "copy", "AGENTS.md"),
+          artifact: "team-agents",
+        },
+      ],
+    });
+    await runtime.syncTargets(mounted);
+    expect(readFileSync(join(root, "copy", "AGENTS.md"), "utf8")).toBe(document);
+    runtime.configure(mounted, {
+      ...runtime.project(mounted),
+      aliases: {},
+      instructions: [
+        {
+          adapter: "generic",
+          path: join(root, "copy", "AGENTS.md"),
+          artifact: "work-agents",
+        },
+      ],
+    });
+    await runtime.syncTargets(mounted);
+    expect(readFileSync(join(root, "copy", "AGENTS.md"), "utf8")).toBe(document);
+    rmSync(root, { recursive: true, force: true });
+  });
+  it("finds no cloud instructions on a server that predates artifact kinds", async () => {
+    const { local, store, workspace, transport } = fixture();
+    await local.create({ ...request, assets: [] });
+    let probes = 0;
+    const preKind = new CloudWorkspaceProvider(workspace, {
+      ...transport,
+      async call(name, args) {
+        if (name === "skills_list" && "kind" in args) {
+          probes += 1;
+          throw rejection("kind");
+        }
+        return transport.call(name, args);
+      },
+    });
+    expect(await preKind.list("instructions")).toEqual([]);
+    expect(await preKind.list("instructions")).toEqual([]);
+    expect(probes).toBe(1);
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "cloud-instructions-")));
+    const runtime = new Runtime(store, () => preKind);
+    runtime.configure(root, {
+      formatVersion: 1,
+      primary: workspace,
+      instructions: [
+        { adapter: "generic", path: join(root, "AGENTS.md"), artifact: "example" },
+      ],
+    });
+    // The skill named example is not an instructions document.
+    await expect(runtime.syncTargets(root)).rejects.toMatchObject({
+      code: "INSTRUCTIONS_NOT_FOUND",
+    });
+    // Other listing failures are not mistaken for a pre-kind server.
+    const failing = new CloudWorkspaceProvider(workspace, {
+      ...transport,
+      async call(name, args) {
+        if (name === "skills_list" && "kind" in args)
+          throw new RuntimeError("CLOUD_UNAVAILABLE");
+        return transport.call(name, args);
+      },
+    });
+    await expect(failing.list("instructions")).rejects.toThrow("CLOUD_UNAVAILABLE");
+    rmSync(root, { recursive: true, force: true });
+  });
   it("keeps membership errors for servers that predate artifact kinds", async () => {
     const { local, workspace, transport } = fixture();
     const created = await local.create({ ...request, assets: [] });
-    // McpTransport's error for a base server whose strict skills_list input
-    // schema rejects the kind argument (MCPFN_INVALID_ARGUMENTS in text content).
-    const rejection = (property: string) =>
-      new RuntimeError(
-        "CLOUD_REQUEST_REJECTED",
-        JSON.stringify([
-          {
-            type: "text",
-            text: JSON.stringify({
-              ok: false,
-              error: {
-                code: "MCPFN_INVALID_ARGUMENTS",
-                message: "Invalid arguments",
-                details: {
-                  lifecycleStage: "input-validation",
-                  issues: [
-                    {
-                      path: "/",
-                      instancePath: "/",
-                      schemaPath: "#/additionalProperties",
-                      keyword: "additionalProperties",
-                      message: `must not have unknown property "${property}"`,
-                      rejectedProperty: property,
-                    },
-                  ],
-                },
-              },
-            }),
-          },
-        ]),
-      );
     let probes = 0;
     const preKind = new CloudWorkspaceProvider(workspace, {
       ...transport,

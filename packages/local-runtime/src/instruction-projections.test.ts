@@ -425,10 +425,35 @@ describe("instruction file projection", () => {
       "Projection changed",
     );
     expect(readFileSync(f.claude, "utf8")).toBe(v3);
-    expect(f.store.entries("instruction-journal:")).toHaveLength(1);
+    // Nothing was written, so no journal is left for recover() to act on.
+    expect(f.store.entries("instruction-journal:")).toHaveLength(0);
     expect(new Projections(f.store).recover()).toEqual([]);
     expect(record(f.store, f.claude)?.digest).toBe(sha(v3));
     expect(readFileSync(f.claude, "utf8")).toBe(v3);
+  });
+
+  it("never claims a file a user edited to the planned bytes while a sync waited", async () => {
+    const f = fixture([{ adapter: "claude", artifact: "global-agents" }]);
+    const created = await f.provider.create(request);
+    await f.runtime.sync(f.project);
+    await publish(f.provider, created.skillId, v2);
+    const target = instructionTargetSchema.parse({
+      adapter: "claude",
+      artifact: "global-agents",
+    });
+    const snapshot = await f.provider.retrieve(created.skillId);
+    const editing = new Projections(f.store, (point) => {
+      // The user pastes the new text by hand between the plan and the lock.
+      if (point === "before-write") writeFileSync(f.claude, v2);
+    });
+    expect(() => editing.instructions.sync(snapshot, target, f.project)).toThrow(
+      "it was not overwritten",
+    );
+    expect(f.store.entries("instruction-journal:")).toHaveLength(0);
+    // A later recovery does not record Skillplane as the writer of those bytes.
+    expect(new Projections(f.store).recover()).toEqual([]);
+    expect(record(f.store, f.claude)?.digest).toBe(sha(v1));
+    expect(await states(f.runtime, f.project)).toEqual({ [f.claude]: "diverged" });
   });
 
   it("never reads a writer's renamed but uncommitted file as unmanaged", async () => {
@@ -488,12 +513,32 @@ describe("instruction file projection", () => {
       code: "PROJECTION_COLLISION",
     });
     expect(readFileSync(f.claude, "utf8")).toBe(v2);
+    // doctor applies the same rule and names the artifact in the file.
+    const doctor = async (project: string) =>
+      ((await f.runtime.doctor(false, project)) as Doctor).instructions;
+    expect(await doctor(rival)).toEqual([
+      expect.objectContaining({
+        path: f.claude,
+        artifact: "global-agents",
+        configuredArtifact: "work-agents",
+        owners: [f.project, shared].sort(),
+        state: "collision",
+      }),
+    ]);
+    rmSync(f.claude);
+    expect(await states(f.runtime, rival)).toEqual({ [f.claude]: "collision" });
+    await f.runtime.sync(shared);
+    expect(await doctor(shared)).toEqual([
+      expect.not.objectContaining({ configuredArtifact: expect.anything() }),
+    ]);
+    expect(await states(f.runtime, shared)).toEqual({ [f.claude]: "in-sync" });
     // Once both projects drop the target, its file stays and another artifact may take it.
     for (const project of [f.project, shared]) {
       f.runtime.configure(project, { ...base, instructions: [] });
       await f.runtime.sync(project);
     }
     expect(readFileSync(f.claude, "utf8")).toBe(v2);
+    expect(await states(f.runtime, rival)).toEqual({ [f.claude]: "not-synced" });
     await f.runtime.sync(rival);
     expect(readFileSync(f.claude, "utf8")).toBe("# Work\n");
   });

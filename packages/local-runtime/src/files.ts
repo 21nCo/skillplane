@@ -25,21 +25,14 @@ export function safeDirectory(path: string): string {
   let current = root;
   for (const part of path.slice(root.length).split(/[\\/]/).filter(Boolean)) {
     current = join(current, part);
-    if (!existsSync(current)) {
-      // lstat detects dangling symlinks which existsSync follows.
-      try {
-        lstatSync(current);
-        throw new RuntimeError("SYMLINK_FORBIDDEN");
-      } catch (e) {
-        if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
-      }
+    if (!existsSync(current))
       try {
         mkdirSync(current, { mode: 0o700 });
       } catch (e) {
-        // A concurrent writer created it; the checks below still apply.
+        // A concurrent writer created it, or it is a dangling symlink that
+        // existsSync followed; the lstat checks below decide either way.
         if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
       }
-    }
     const stat = lstatSync(current);
     if (!stat.isDirectory() || stat.isSymbolicLink())
       throw new RuntimeError("SYMLINK_FORBIDDEN");

@@ -137,6 +137,27 @@ export const projectSchema = z
   })
   .strict();
 export type ProjectContext = z.infer<typeof projectSchema>;
+/** The visible catalog name of one artifact read through one project source. */
+export function catalogName(
+  context: Pick<ProjectContext, "aliases">,
+  source: { workspace: WorkspaceRef; namespace?: string | undefined },
+  skill: Pick<SkillInfo, "id" | "slug">,
+): string {
+  return (
+    context.aliases[`${workspaceKey(source.workspace)}/${skill.id}`] ??
+    (source.namespace ? `${source.namespace}-${skill.slug}` : skill.slug)
+  );
+}
+/** Every name the project's catalog may give an artifact from this workspace. */
+export function catalogNames(
+  context: ProjectContext,
+  workspace: WorkspaceRef,
+  skill: Pick<SkillInfo, "id" | "slug">,
+): string[] {
+  return [{ workspace: context.primary }, ...context.mounts]
+    .filter((source) => workspaceKey(source.workspace) === workspaceKey(workspace))
+    .map((source) => catalogName(context, source, skill));
+}
 export interface VersionInfo {
   id: string;
   semanticVersion: string | null;
@@ -170,7 +191,11 @@ export type CreateRequest = Omit<SkillCreateInput, "workspace" | "caller" | "kin
 export type AmendRequest = Omit<SkillAmendInput, "caller">;
 export interface WorkspaceProvider {
   readonly workspace: WorkspaceRef;
-  list(): Promise<SkillInfo[]>;
+  /**
+   * Skills and instructions documents in this workspace. With a kind, only that
+   * kind; a server that predates artifact kinds has no instructions documents.
+   */
+  list(kind?: SkillInfo["kind"]): Promise<SkillInfo[]>;
   /** Non-archived skills (never instructions) that have a published version. */
   publishedSkills(): Promise<PublishedSkill[]>;
   versions(skillId: string): Promise<VersionInfo[]>;
