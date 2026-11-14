@@ -344,17 +344,31 @@ describe("instruction file projection", () => {
     expect(readFileSync(f.claude, "utf8")).toBe(v2);
     expect(record(f.store, f.claude)?.digest).toBe(sha(v1));
     const id = InstructionProjections.id(f.claude);
-    // A directory that cannot be synced keeps the journal and the old record.
-    // Root ignores the missing read permission, so this part needs a user.
+    // A directory that cannot be synced keeps the journal and the old record
+    // for that target alone: recovery goes on with everything else, and sync
+    // and doctor report it as pending. Root ignores the missing read
+    // permission, so this part needs a user.
     if (process.getuid?.() !== 0) {
+      const stray = join(f.home, ".skillplane-instructions-stray");
+      writeFileSync(stray, "partial");
+      f.store.set("instruction-cleanup:stray:stray", { temp: stray });
       chmodSync(dirname(f.claude), 0o300);
       try {
-        expect(() => new Projections(f.store).recover()).toThrow();
+        expect(new Projections(f.store).recover()).toEqual([]);
+        expect(existsSync(stray)).toBe(false);
+        expect(f.store.entries("instruction-cleanup:")).toHaveLength(0);
+        expect(await states(f.runtime, f.project)).toEqual({
+          [f.claude]: "RECOVERY_PENDING",
+        });
+        await expect(f.runtime.syncTargets(f.project)).rejects.toMatchObject({
+          code: "RECOVERY_PENDING",
+        });
       } finally {
         chmodSync(dirname(f.claude), 0o700);
       }
       expect(f.store.entries("instruction-journal:")).toHaveLength(1);
       expect(record(f.store, f.claude)?.digest).toBe(sha(v1));
+      expect(readFileSync(f.claude, "utf8")).toBe(v2);
     }
     expect(new Projections(f.store).recover()).toEqual([id]);
     expect(record(f.store, f.claude)?.digest).toBe(sha(v2));

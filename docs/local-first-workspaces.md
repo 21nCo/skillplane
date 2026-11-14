@@ -187,6 +187,9 @@ finished only when the file is the one that write renamed into place, unchanged;
 otherwise the previous record stands and the file is left as it is, so a file a
 user wrote by hand is never adopted even when it holds the published bytes.
 A temporary file left by an interrupted or abandoned write is removed then too.
+If the directory cannot be synced, that write stays unfinished: its file keeps
+the previous record, `sync` and `doctor` report it as `RECOVERY_PENDING`, and
+the next run retries it.
 `sync` checks every destination before it writes any: two instruction files, or an
 instruction file and a skill, where one path is or contains the other are a
 `PROJECTION_COLLISION`, and an unsafe directory above an instruction file stops it

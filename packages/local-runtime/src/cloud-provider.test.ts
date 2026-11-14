@@ -656,6 +656,38 @@ describe("cloud provider transport contract", () => {
     rmSync(root, { recursive: true, force: true });
   });
 
+  it("trusts a recorded cloud name offline that shadows a later local one under precedence", async () => {
+    const { local, cloud, store, workspace } = fixture();
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "cloud-shadow-")));
+    const runtime = new Runtime(store, (ref) =>
+      ref.provider === "cloud" ? cloud : new LocalWorkspaceProvider(store, ref.id),
+    );
+    const document = { ...request, slug: "agents", kind: "instructions" as const };
+    await local.create({ ...document, assets: [], instructions: "# Cloud\n" });
+    const later = LocalWorkspaceProvider.create(store, "Later");
+    await later.create({ ...document, assets: [], instructions: "# Local\n" });
+    const project = join(root, "project");
+    mkdirSync(project);
+    const path = join(root, "out", "AGENTS.md");
+    runtime.configure(project, {
+      formatVersion: 1,
+      primary: workspace,
+      mounts: [{ workspace: later.workspace }],
+      collisions: "precedence",
+      instructions: [{ adapter: "generic", path, artifact: "agents" }],
+    });
+    await runtime.syncTargets(project);
+    expect(readFileSync(path, "utf8")).toBe("# Cloud\n");
+    const states = async () =>
+      (
+        (await runtime.doctor(false, project)) as {
+          instructions: { state: string }[];
+        }
+      ).instructions.map((row) => row.state);
+    expect(await states()).toEqual(["in-sync"]);
+    rmSync(root, { recursive: true, force: true });
+  });
+
   it("reports an unrecorded cloud target offline as unverified with its file state", async () => {
     const { local, cloud, store, workspace } = fixture();
     await local.create({

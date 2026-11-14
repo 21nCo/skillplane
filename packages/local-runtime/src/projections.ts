@@ -823,6 +823,11 @@ export class InstructionProjections {
     const bytes = this.content(snapshot);
     const path = instructionPath(target, userHome);
     const id = InstructionProjections.id(path);
+    if (this.recoveryPending(id))
+      throw new RuntimeError(
+        "RECOVERY_PENDING",
+        `An interrupted write to ${path} could not be recovered yet; the next run retries it`,
+      );
     const old = this.store.get<InstructionRecord>(`instruction:${id}`);
     const digest = `sha256:${hash(bytes)}`;
     const observed = observe(path);
@@ -835,6 +840,12 @@ export class InstructionProjections {
       old.digest === digest;
     if (old && !same) this.assertReplacementOwner(old, snapshot, project);
     return { bytes, path, id, old, digest, same };
+  }
+  /** Whether a dead writer's journal for this target is still unrecovered. */
+  private recoveryPending(id: string): boolean {
+    return this.store
+      .entries<InstructionJournal>(`instruction-journal:${id}:`)
+      .some(([, journal]) => !writerAlive(journal));
   }
   /** Raises the error sync would raise, without writing anything. */
   check(
@@ -1020,31 +1031,38 @@ export class InstructionProjections {
       if (writerAlive(journal)) continue;
       const { record } = journal;
       const cleanupKey = `${CLEANUP_PREFIX}${key.slice("instruction-journal:".length)}`;
-      const outcome = this.store.transaction(() => {
-        // Another recovery handled it first.
-        if (!this.store.get(key)) return "gone";
-        const current = this.store.get<InstructionRecord>(`instruction:${record.id}`);
-        if (
-          (current?.eventId ?? null) === journal.basis &&
-          installed(journal) &&
-          stateOf(record, observe(record.path)) === "in-sync"
-        ) {
-          // The writer may have stopped before making its rename durable. A
-          // failed sync throws here and leaves the journal for the next run.
-          syncDirectory(dirname(record.path));
-          if (current)
-            this.store.set(
-              `instruction-history:${record.id}:${current.eventId}`,
-              current,
-            );
-          this.store.set(`instruction:${record.id}`, record);
-          this.addOwner(record.id, record.project);
-          this.store.delete(key);
-          return "committed";
-        }
-        this.retire(key, cleanupKey, journal.temp);
-        return "retired";
-      });
+      let outcome: "gone" | "committed" | "retired";
+      try {
+        outcome = this.store.transaction(() => {
+          // Another recovery handled it first.
+          if (!this.store.get(key)) return "gone";
+          const current = this.store.get<InstructionRecord>(`instruction:${record.id}`);
+          if (
+            (current?.eventId ?? null) === journal.basis &&
+            installed(journal) &&
+            stateOf(record, observe(record.path)) === "in-sync"
+          ) {
+            // The writer may have stopped before making its rename durable. A
+            // failed sync throws here and leaves the journal for the next run.
+            syncDirectory(dirname(record.path));
+            if (current)
+              this.store.set(
+                `instruction-history:${record.id}:${current.eventId}`,
+                current,
+              );
+            this.store.set(`instruction:${record.id}`, record);
+            this.addOwner(record.id, record.project);
+            this.store.delete(key);
+            return "committed";
+          }
+          this.retire(key, cleanupKey, journal.temp);
+          return "retired";
+        });
+      } catch {
+        // The journal and the prior record stay; the next run retries, and
+        // until then sync and doctor report this target as RECOVERY_PENDING.
+        continue;
+      }
       if (outcome === "committed") recovered.push(record.id);
       // Removed only once the journal is gone, so the temp file's inode cannot
       // be reused by another file while a journal still names it.
@@ -1096,11 +1114,15 @@ export class InstructionProjections {
           state: inspect(() => stateOf(record, observe(record.path))),
         };
         const entry = configured.get(record.id);
-        if (!entry || !scope) return row;
+        const pending = this.recoveryPending(record.id)
+          ? { ...row, state: "RECOVERY_PENDING", fileState: row.state }
+          : row;
+        if (!entry || !scope) return pending;
         // sync resolves every name before it looks at any file.
         const { resolution } = entry;
         if ("code" in resolution)
           return { ...row, state: resolution.code, fileState: row.state };
+        if (pending !== row) return pending;
         // sync reports a hand edit or an unreadable file before ownership.
         if (row.state !== "in-sync" && row.state !== "missing") return row;
         if ("unverified" in resolution)

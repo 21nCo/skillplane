@@ -324,11 +324,19 @@ export class Runtime {
         const claim = current
           ? claims.targets[InstructionProjections.id(instructionPath(target))]
           : undefined;
+        // Under precedence a cloud source ahead of the first local holder
+        // still wins over it.
+        const position = (workspace: ArtifactIdentity["workspace"]) =>
+          all.findIndex((s) => workspaceKey(s.workspace) === workspaceKey(workspace));
         const agrees =
           claim?.artifact === target.artifact &&
           (held
-            ? workspaceKey(claim.workspace) === workspaceKey(held.provider.workspace) &&
-              claim.skill.id === held.skillId
+            ? (workspaceKey(claim.workspace) ===
+                workspaceKey(held.provider.workspace) &&
+                claim.skill.id === held.skillId) ||
+              (context.collisions === "precedence" &&
+                claim.workspace.provider === "cloud" &&
+                position(claim.workspace) < position(held.provider.workspace))
             : claim.workspace.provider === "cloud");
         const resolution: InstructionResolution =
           claim && agrees
