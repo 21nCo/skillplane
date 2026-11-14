@@ -1,0 +1,31 @@
+docs/local-first-workspaces.md
+  s_4df61dd4177e46::t_d5d4627262869c 190-198,201-206
+packages/local-runtime/src/cli.test.ts
+  s_4df61dd4177e46::t_2015d473976e78 13,133-135,138-143,145-146,148,150-157,174-180
+packages/local-runtime/src/cloud-provider.test.ts
+  s_4df61dd4177e46::t_6145d8d6d8b043 3-10,580-708
+packages/local-runtime/src/files.ts
+  s_4df61dd4177e46::t_a4274ab377a508 21-26,32-39
+packages/local-runtime/src/instruction-projections.test.ts
+  s_4df61dd4177e46::t_225885e37218e7 2,327-364,1008-1078
+packages/local-runtime/src/projections.ts
+  s_4df61dd4177e46::t_6c38aeb5cc9cef 55,846,960,1032-1034,1136-1138
+packages/local-runtime/src/runtime.ts
+  s_4df61dd4177e46::t_8e28940090f403 3,54-57,59-62,143-150,212,215-223,285-287,291-317,321-323,327-332,334,392-403
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "176b85b9c12cef05e0c79d9732abd79df4f03e20",
+  "prompts": {},
+  "sessions": {
+    "s_4df61dd4177e46": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_4df61dd4177e46",
+        "model": "unknown"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
