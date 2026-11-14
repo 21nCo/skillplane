@@ -23,6 +23,7 @@ import {
   projectSchema,
   requireValue,
   targetSchema,
+  workspaceKey,
   type CreateRequest,
   type InstructionRecord,
   type InstructionStatus,
@@ -541,6 +542,108 @@ describe("instruction file projection", () => {
     expect(await states(f.runtime, rival)).toEqual({ [f.claude]: "not-synced" });
     await f.runtime.sync(rival);
     expect(readFileSync(f.claude, "utf8")).toBe("# Work\n");
+  });
+
+  describe("doctor resolves a configured name to the artifact sync would write", () => {
+    // Another project holds the target with the team workspace's agents
+    // document; this project's primary has its own agents and work documents.
+    async function shadowed() {
+      const f = fixture([{ adapter: "claude", artifact: "agents" }]);
+      const team = LocalWorkspaceProvider.create(f.store, "Team");
+      await team.create({
+        ...request,
+        slug: "agents",
+        idempotencyKey: "team",
+        instructions: "# Team\n",
+      });
+      const own = await f.provider.create({ ...request, slug: "agents" });
+      const work = await f.provider.create({
+        ...request,
+        slug: "work",
+        idempotencyKey: "work",
+        instructions: "# Work\n",
+      });
+      const owner = join(f.root, "owner");
+      mkdirSync(owner);
+      f.runtime.configure(owner, {
+        formatVersion: 1,
+        primary: team.workspace,
+        instructions: [{ adapter: "claude", artifact: "agents" }],
+      });
+      await f.runtime.sync(owner);
+      const base = f.runtime.project(f.project);
+      const qualified = (skillId: string) => `${workspaceKey(base.primary)}/${skillId}`;
+      return {
+        ...f,
+        owner,
+        qualified,
+        own: own.skillId,
+        work: work.skillId,
+        /** Configures this project to mount the team workspace without a namespace. */
+        mount: (context: object) =>
+          f.runtime.configure(f.project, {
+            ...base,
+            mounts: [{ workspace: team.workspace }],
+            ...context,
+          }),
+        doctor: async () =>
+          ((await f.runtime.doctor(false, f.project)) as Doctor).instructions,
+      };
+    }
+    async function expectCollision(s: Awaited<ReturnType<typeof shadowed>>) {
+      await expect(s.runtime.sync(s.project)).rejects.toMatchObject({
+        code: "PROJECTION_COLLISION",
+      });
+      expect(readFileSync(s.claude, "utf8")).toBe("# Team\n");
+      expect(await s.doctor()).toEqual([
+        expect.objectContaining({
+          path: s.claude,
+          artifact: "agents",
+          configuredArtifact: "agents",
+          owners: [s.owner],
+          state: "collision",
+        }),
+      ]);
+    }
+    it("reports a collision when the primary shadows the mount's same-name document", async () => {
+      const s = await shadowed();
+      s.mount({ collisions: "precedence" });
+      await expectCollision(s);
+    });
+    it("reports a collision when a qualified alias takes the mount's name", async () => {
+      const s = await shadowed();
+      s.mount({
+        collisions: "precedence",
+        aliases: { [s.qualified(s.own)]: "personal", [s.qualified(s.work)]: "agents" },
+      });
+      await expectCollision(s);
+    });
+    it("reports sync's catalog error for an ambiguous name", async () => {
+      const s = await shadowed();
+      s.mount({ collisions: "error" });
+      await expect(s.runtime.sync(s.project)).rejects.toMatchObject({
+        code: "SKILL_NAME_COLLISION",
+      });
+      expect(await s.doctor()).toEqual([
+        expect.objectContaining({
+          state: "SKILL_NAME_COLLISION",
+          fileState: "in-sync",
+        }),
+      ]);
+    });
+    it("shares the target when the name resolves to the document in the file", async () => {
+      const s = await shadowed();
+      s.mount({ aliases: { [s.qualified(s.own)]: "personal" } });
+      expect(await s.doctor()).toEqual([
+        expect.not.objectContaining({ configuredArtifact: expect.anything() }),
+      ]);
+      expect(await states(s.runtime, s.project)).toEqual({ [s.claude]: "in-sync" });
+      await s.runtime.sync(s.project);
+      expect(readFileSync(s.claude, "utf8")).toBe("# Team\n");
+      expect(
+        s.runtime.projections.instructions.owners(InstructionProjections.id(s.claude)),
+      ).toEqual([s.owner, s.project].sort());
+    });
   });
 
   it("projects a generic target and keeps skills and instructions in their own destinations", async () => {

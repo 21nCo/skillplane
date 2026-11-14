@@ -552,7 +552,7 @@ interface InstructionJournal {
   startedAt: string;
 }
 export type InstructionState =
-  "in-sync" | "diverged" | "missing" | "collision" | "not-synced";
+  "in-sync" | "diverged" | "missing" | "collision" | "not-synced" | "unverified";
 export interface InstructionStatus {
   id: string;
   adapter: InstructionTarget["adapter"];
@@ -560,17 +560,34 @@ export interface InstructionStatus {
   path: string;
   version: string | null;
   configured: boolean;
-  /** The artifact this project configures here when it differs from the file's. */
+  /** The artifact this project configures here when it is not the file's. */
   configuredArtifact?: string;
   /** Projects claiming the target, shown when the file belongs to another one. */
   owners?: string[];
-  /** An InstructionState, or the error code when the file cannot be inspected. */
+  /**
+   * An InstructionState, or the error code sync would raise first: a catalog
+   * error such as SKILL_NAME_COLLISION, or the file's inspection error.
+   */
   state: string;
+  /** The file's own state when state is a catalog error or unverified. */
+  fileState?: string;
 }
-/** The project doctor runs for, and its catalog names for a recorded artifact. */
+/** The workspace and artifact ID of an instructions document. */
+export interface ArtifactIdentity {
+  workspace: Snapshot["workspace"];
+  skill: { id: string };
+}
+/**
+ * How sync would resolve a configured target's artifact name: the identity
+ * from the project's catalog, the error sync would raise, or unverified when
+ * the catalog cannot be read offline and no current identity was recorded.
+ */
+export type InstructionResolution =
+  { identity: ArtifactIdentity } | { code: string } | { unverified: true };
+/** The project doctor runs for and how sync would resolve each of its targets. */
 export interface InstructionStatusScope {
   project: string;
-  names: (record: InstructionRecord) => readonly string[];
+  targets: readonly { target: InstructionTarget; resolution: InstructionResolution }[];
 }
 type Observed =
   | { kind: "absent" }
@@ -603,10 +620,10 @@ function stateOf(record: InstructionRecord, observed: Observed): InstructionStat
   if (observed.kind === "other" || observed.digest !== record.digest) return "diverged";
   return "in-sync";
 }
-function sameArtifact(record: InstructionRecord, snapshot: Snapshot): boolean {
+function sameArtifact(record: InstructionRecord, artifact: ArtifactIdentity): boolean {
   return (
-    workspaceKey(record.workspace) === workspaceKey(snapshot.workspace) &&
-    record.skill.id === snapshot.skill.id
+    workspaceKey(record.workspace) === workspaceKey(artifact.workspace) &&
+    record.skill.id === artifact.skill.id
   );
 }
 function writerAlive(journal: InstructionJournal): boolean {
@@ -716,15 +733,28 @@ export class InstructionProjections {
         `${path} changed after Skillplane wrote it; it was not overwritten`,
       );
   }
+  /**
+   * The ownership rule for putting an artifact into a recorded target, shared
+   * by sync and doctor. Projects that configure the same artifact may advance
+   * it; a different artifact needs every other project to have released the
+   * target first.
+   */
+  private ownership(
+    record: InstructionRecord,
+    artifact: ArtifactIdentity,
+    project: string,
+  ): "owned" | "replaceable" | "collision" {
+    if (sameArtifact(record, artifact)) return "owned";
+    return this.owners(record.id).some((owner) => owner !== resolve(project))
+      ? "collision"
+      : "replaceable";
+  }
   private assertReplacementOwner(
     record: InstructionRecord,
     snapshot: Snapshot,
     project: string,
   ): void {
-    // Projects that configure the same artifact may advance it; a different
-    // artifact needs every other project to have released the target first.
-    if (sameArtifact(record, snapshot)) return;
-    if (this.owners(record.id).some((owner) => owner !== resolve(project)))
+    if (this.ownership(record, snapshot, project) === "collision")
       throw new RuntimeError(
         "PROJECTION_COLLISION",
         `${record.path} is owned by another project's instructions`,
@@ -916,12 +946,13 @@ export class InstructionProjections {
     }
     return recovered;
   }
-  /** Every recorded target plus configured targets that have no record yet. */
-  status(
-    targets: readonly InstructionTarget[],
-    userHome = homedir(),
-    scope?: InstructionStatusScope,
-  ): InstructionStatus[] {
+  /**
+   * Every recorded target plus configured targets that have no record yet. A
+   * configured target reports the decision sync would make for it: the
+   * catalog error, then a hand edit, then the ownership rule for the
+   * artifact its name resolves to.
+   */
+  status(scope?: InstructionStatusScope, userHome = homedir()): InstructionStatus[] {
     const inspect = (fn: () => InstructionState): string => {
       try {
         return fn();
@@ -929,11 +960,14 @@ export class InstructionProjections {
         return error instanceof RuntimeError ? error.code : "UNREADABLE";
       }
     };
-    const configured = new Map<string, InstructionTarget>();
-    for (const target of targets)
+    const configured = new Map<
+      string,
+      { target: InstructionTarget; resolution: InstructionResolution }
+    >();
+    for (const entry of scope?.targets ?? [])
       configured.set(
-        InstructionProjections.id(instructionPath(target, userHome)),
-        target,
+        InstructionProjections.id(instructionPath(entry.target, userHome)),
+        entry,
       );
     // Read under the lock so an in-flight write is never reported as a hand edit.
     return this.store.transaction(() => {
@@ -947,37 +981,46 @@ export class InstructionProjections {
           configured: configured.has(record.id),
           state: inspect(() => stateOf(record, observe(record.path))),
         };
-        const target = configured.get(record.id);
+        const entry = configured.get(record.id);
+        if (!entry || !scope) return row;
+        // sync resolves every name before it looks at any file.
+        const { resolution } = entry;
+        if ("code" in resolution)
+          return { ...row, state: resolution.code, fileState: row.state };
         // sync reports a hand edit or an unreadable file before ownership.
-        if (!target || !scope || (row.state !== "in-sync" && row.state !== "missing"))
-          return row;
-        if (scope.names(record).includes(target.artifact)) return row;
-        // The rule sync applies: another artifact may not take a target that
-        // another project still claims; an unclaimed one is replaced.
-        const owners = this.owners(record.id);
+        if (row.state !== "in-sync" && row.state !== "missing") return row;
+        if ("unverified" in resolution)
+          return { ...row, state: "unverified", fileState: row.state };
+        const decision = this.ownership(record, resolution.identity, scope.project);
+        if (decision === "owned") return row;
         return {
           ...row,
-          configuredArtifact: target.artifact,
-          owners,
-          state: owners.some((owner) => owner !== resolve(scope.project))
-            ? "collision"
-            : "not-synced",
+          configuredArtifact: entry.target.artifact,
+          owners: this.owners(record.id),
+          state: decision === "collision" ? "collision" : "not-synced",
         };
       });
-      for (const [id, target] of configured) {
+      for (const [id, { target, resolution }] of configured) {
         if (rows.some((row) => row.id === id)) continue;
         const path = instructionPath(target, userHome);
-        rows.push({
+        const row: InstructionStatus = {
           id,
           adapter: target.adapter,
           artifact: target.artifact,
           path,
           version: null,
           configured: true,
+          // Without a record any existing file is unmanaged, whatever the
+          // configured name resolves to.
           state: inspect(() =>
             observe(path).kind === "absent" ? "not-synced" : "collision",
           ),
-        });
+        };
+        rows.push(
+          "code" in resolution
+            ? { ...row, state: resolution.code, fileState: row.state }
+            : row,
+        );
       }
       return rows;
     });

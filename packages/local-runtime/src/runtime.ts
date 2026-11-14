@@ -1,7 +1,7 @@
 import { requireValue } from "./contracts.js";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { bundleEntrypoint, bundleKind, canonicalizeBundle } from "@skillplane/storage";
 import { type LocalStore } from "./store.js";
 import { Profiles } from "./profiles.js";
@@ -9,9 +9,13 @@ import { LocalWorkspaceProvider } from "./local-provider.js";
 import { CloudWorkspaceProvider } from "./cloud-provider.js";
 import { instructionPath, targetDirectory } from "./adapters.js";
 import {
+  InstructionProjections,
   Projections,
   assertProjectionSupported,
+  type ArtifactIdentity,
   type InstructionRecord,
+  type InstructionResolution,
+  type InstructionStatusScope,
   type ProjectionRecord,
 } from "./projections.js";
 import { UsageQueue } from "./analytics.js";
@@ -19,7 +23,6 @@ import { readSafe, writeAtomic, safeDirectory } from "./files.js";
 import { trustEnvelope, trustExpands } from "./trust.js";
 import {
   catalogName,
-  catalogNames,
   policySchema,
   projectSchema,
   selectVersion,
@@ -33,10 +36,29 @@ import {
   type Snapshot,
   type CreateRequest,
   type AmendRequest,
+  type InstructionTarget,
 } from "./contracts.js";
 type CachedSnapshot = Omit<Snapshot, "bundle"> & {
   digest: string;
 };
+type CatalogEntry = Awaited<ReturnType<Runtime["catalog"]>>[number];
+/**
+ * The artifact each instructions target resolved to at the project's last
+ * sync, so an offline doctor can apply sync's ownership rule to a cloud
+ * catalog. It holds only while the catalog configuration is unchanged.
+ */
+interface InstructionClaims {
+  catalog: string;
+  targets: Record<string, { artifact: string } & ArtifactIdentity>;
+}
+const claimsKey = (project: string) => `instruction-claims:${resolve(project)}`;
+/** Fingerprint of the configuration that decides what a catalog name resolves to. */
+function catalogFingerprint(context: ProjectContext): string {
+  const { primary, mounts, aliases, collisions } = context;
+  return createHash("sha256")
+    .update(JSON.stringify({ primary, mounts, aliases, collisions }))
+    .digest("hex");
+}
 export interface Resolution {
   source: "live-cli" | "cached-cli";
   freshness: "verified" | "unverified" | "pinned";
@@ -167,27 +189,49 @@ export class Runtime {
   async sync(project: string): Promise<ProjectionRecord[]> {
     return (await this.syncTargets(project)).projections;
   }
+  /**
+   * Resolves each configured instructions target's name through the catalog,
+   * in configuration order. A target sync must refuse carries its error.
+   */
+  private instructionTargets(
+    targets: readonly InstructionTarget[],
+    catalog: readonly CatalogEntry[],
+  ): { target: InstructionTarget; item?: CatalogEntry; error?: RuntimeError }[] {
+    const paths = new Set<string>();
+    return targets.map((target) => {
+      const path = instructionPath(target);
+      if (paths.has(path))
+        return {
+          target,
+          error: new RuntimeError(
+            "PROJECTION_COLLISION",
+            `Duplicate instructions destination: ${path}`,
+          ),
+        };
+      paths.add(path);
+      const item = catalog.find((entry) => entry.name === target.artifact);
+      if (!item)
+        return {
+          target,
+          error: new RuntimeError(
+            "INSTRUCTIONS_NOT_FOUND",
+            `No instructions document named ${target.artifact} in this project's workspaces`,
+          ),
+        };
+      return { target, item };
+    });
+  }
   /** Resolves every configured instructions target's latest published version. */
   private async instructionPlans(context: ProjectContext) {
     const targets = context.instructions ?? [];
     if (targets.length === 0) return [];
-    const catalog = await this.catalog(context, "instructions");
+    const resolved = this.instructionTargets(
+      targets,
+      await this.catalog(context, "instructions"),
+    );
     const plans = [];
-    const paths = new Set<string>();
-    for (const target of targets) {
-      const path = instructionPath(target);
-      if (paths.has(path))
-        throw new RuntimeError(
-          "PROJECTION_COLLISION",
-          `Duplicate instructions destination: ${path}`,
-        );
-      paths.add(path);
-      const item = catalog.find((entry) => entry.name === target.artifact);
-      if (!item)
-        throw new RuntimeError(
-          "INSTRUCTIONS_NOT_FOUND",
-          `No instructions document named ${target.artifact} in this project's workspaces`,
-        );
+    for (const { target, item, error } of resolved) {
+      if (error || !item) throw error ?? new RuntimeError("INSTRUCTIONS_NOT_FOUND");
       const selected = selectVersion(
         await item.provider.versions(item.skillId),
         policySchema.parse({}),
@@ -198,6 +242,55 @@ export class Runtime {
       });
     }
     return plans;
+  }
+  /**
+   * How sync would resolve each configured instructions target, for doctor.
+   * Local catalogs are read offline; a cloud catalog is read when online,
+   * otherwise the identity recorded at the last sync stands in for it while
+   * the catalog configuration is unchanged, and anything else is unverified.
+   */
+  private async instructionResolutions(
+    project: string,
+    context: ProjectContext,
+    online: boolean,
+  ): Promise<InstructionStatusScope["targets"]> {
+    const targets = context.instructions ?? [];
+    if (targets.length === 0) return [];
+    const cloud = [context.primary, ...context.mounts.map((m) => m.workspace)].some(
+      (w) => w.provider === "cloud",
+    );
+    if (cloud && !online) {
+      const claims = this.store.get<InstructionClaims>(claimsKey(project));
+      const current = claims?.catalog === catalogFingerprint(context);
+      return targets.map((target) => {
+        const claim = current
+          ? claims.targets[InstructionProjections.id(instructionPath(target))]
+          : undefined;
+        const resolution: InstructionResolution =
+          claim?.artifact === target.artifact
+            ? { identity: { workspace: claim.workspace, skill: claim.skill } }
+            : { unverified: true };
+        return { target, resolution };
+      });
+    }
+    let catalog: CatalogEntry[];
+    try {
+      catalog = await this.catalog(context, "instructions");
+    } catch (error) {
+      const code = error instanceof RuntimeError ? error.code : "CATALOG_UNAVAILABLE";
+      return targets.map((target) => ({ target, resolution: { code } }));
+    }
+    return this.instructionTargets(targets, catalog).map(({ target, item, error }) => ({
+      target,
+      resolution: item
+        ? {
+            identity: {
+              workspace: item.provider.workspace,
+              skill: { id: item.skillId },
+            },
+          }
+        : { code: error?.code ?? "INSTRUCTIONS_NOT_FOUND" },
+    }));
   }
   /** Syncs skill projections and instruction files configured by the project. */
   async syncTargets(project: string): Promise<{
@@ -247,10 +340,21 @@ export class Runtime {
         this.projections.uninstall(id, project);
     }
     const instructions = [];
+    const claims: InstructionClaims = {
+      catalog: catalogFingerprint(context),
+      targets: {},
+    };
     for (const { snapshot, target } of instructionPlans) {
       this.cache(snapshot);
-      instructions.push(this.projections.instructions.sync(snapshot, target, project));
+      const record = this.projections.instructions.sync(snapshot, target, project);
+      instructions.push(record);
+      claims.targets[record.id] = {
+        artifact: target.artifact,
+        workspace: snapshot.workspace,
+        skill: { id: snapshot.skill.id },
+      };
     }
+    this.store.set(claimsKey(project), claims);
     // A target dropped from this project's configuration keeps its file and
     // record; only the project's claim on it is released.
     this.projections.instructions.release(
@@ -495,14 +599,10 @@ export class Runtime {
       recovery,
       projections,
       instructions: this.projections.instructions.status(
-        context?.instructions ?? [],
-        undefined,
         project && context
           ? {
               project,
-              // The names this project's catalog gives the artifact in a file,
-              // read offline from its sources and aliases.
-              names: (record) => catalogNames(context, record.workspace, record.skill),
+              targets: await this.instructionResolutions(project, context, checkCloud),
             }
           : undefined,
       ),

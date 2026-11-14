@@ -186,7 +186,13 @@ interrupted write is finished or rolled back by the next `sync` or `doctor`.
 Removing a target from the configuration leaves its file in place. `doctor` lists
 each instruction file as `in-sync`, `diverged`, `missing`, `collision` or
 `not-synced`; a collision row names the document in the file, the one configured
-and the projects that claim it. Cloud workspaces list instructions documents only
+and the projects that claim it. For a configured file, `doctor` resolves the
+configured name through the catalog (source order, aliases and the collision
+policy) exactly as `sync` does, and reports the error `sync` would raise, such as
+`SKILL_NAME_COLLISION`, with the file's own state in `fileState`. Offline, a cloud
+name is checked against the document it resolved to at the project's last `sync`;
+after the catalog configuration changes it is `unverified` until
+`doctor --online` or the next `sync`. Cloud workspaces list instructions documents only
 when the server supports artifact kinds; an older server has none.
 
 ## Freshness and trust

@@ -495,6 +495,25 @@ describe("cloud provider transport contract", () => {
       [created.skillId, workspace],
     ]);
     expect(readFileSync(join(root, "out", "AGENTS.md"), "utf8")).toBe(document);
+    // Offline, doctor resolves the cloud name from the identity sync recorded,
+    // and only while the catalog configuration is unchanged.
+    const doctor = async (online: boolean) =>
+      (
+        (await runtime.doctor(online, primary)) as {
+          instructions: { state: string; fileState?: string }[];
+        }
+      ).instructions;
+    expect(await doctor(false)).toEqual([
+      expect.objectContaining({ state: "in-sync" }),
+    ]);
+    runtime.configure(primary, {
+      ...runtime.project(primary),
+      aliases: { [`${workspaceKey(workspace)}/${created.skillId}`]: "agents" },
+    });
+    expect(await doctor(false)).toEqual([
+      expect.objectContaining({ state: "unverified", fileState: "in-sync" }),
+    ]);
+    expect(await doctor(true)).toEqual([expect.objectContaining({ state: "in-sync" })]);
     // A namespaced mount and a qualified alias name the same document.
     const own = LocalWorkspaceProvider.create(store, "Own");
     runtime.configure(mounted, {

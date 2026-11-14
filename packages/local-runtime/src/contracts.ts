@@ -148,16 +148,6 @@ export function catalogName(
     (source.namespace ? `${source.namespace}-${skill.slug}` : skill.slug)
   );
 }
-/** Every name the project's catalog may give an artifact from this workspace. */
-export function catalogNames(
-  context: ProjectContext,
-  workspace: WorkspaceRef,
-  skill: Pick<SkillInfo, "id" | "slug">,
-): string[] {
-  return [{ workspace: context.primary }, ...context.mounts]
-    .filter((source) => workspaceKey(source.workspace) === workspaceKey(workspace))
-    .map((source) => catalogName(context, source, skill));
-}
 export interface VersionInfo {
   id: string;
   semanticVersion: string | null;
