@@ -1,0 +1,19 @@
+.github/workflows/pull-request.yml
+  s_6d8bda422e3e69::t_1748844a57151c 133-135,139-141
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f8522dbba444686bccb2d289c0202306a42b54c7",
+  "prompts": {},
+  "sessions": {
+    "s_6d8bda422e3e69": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_6d8bda422e3e69",
+        "model": "unknown"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
