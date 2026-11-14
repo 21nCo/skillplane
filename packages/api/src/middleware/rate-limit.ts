@@ -9,6 +9,10 @@ export function rateLimitRouteKey(path: string): string {
       ? "/api/v1/invitations/:token/accept"
       : "/api/v1/invitations/:token";
   }
+  if (path.startsWith("/api/v1/me/oauth-connections/")) {
+    // One bucket per caller, so guessing consent IDs cannot mint fresh buckets.
+    return "/api/v1/me/oauth-connections/:consentId";
+  }
   return path;
 }
 

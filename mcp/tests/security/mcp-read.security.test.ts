@@ -14,6 +14,7 @@ import type {
   SkillVersionsListOutput,
   WorkspacesListOutput,
 } from "@skillplane/mcp-schema";
+import { AUTH_CSRF_HEADER } from "@skillplane/auth";
 import type { UserPrincipal } from "@skillplane/domain";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createMcpApp } from "../../src/index.js";
@@ -177,6 +178,68 @@ describe("MCP authentication and protocol security", () => {
     );
     expect(queryBearer.status).toBe(401);
     expect(await queryBearer.text()).not.toContain(environment.serviceToken);
+  });
+
+  it("returns 401 for an OAuth token after its user revokes the connection", async () => {
+    const token = await environment.issueOAuthToken("skills:read");
+    const initialize = (name: string) =>
+      environment.rawMcp(token, {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-11-25",
+          capabilities: {},
+          clientInfo: { name, version: "1.0.0" },
+        },
+      });
+    expect((await initialize("before-revocation")).status).toBe(200);
+
+    const listed = await environment.api.fetch(
+      new Request("https://app.skillplane.dev/api/v1/me/oauth-connections", {
+        headers: { cookie: environment.ownerCookie },
+      }),
+    );
+    expect(listed.status).toBe(200);
+    const connections = (
+      (await listed.json()) as {
+        readonly data: {
+          readonly connections: readonly { consentId: string; clientId: string }[];
+        };
+      }
+    ).data.connections;
+    const issued = await environment.services.database.pool.query<{
+      client_id: string;
+    }>(
+      `SELECT client_id
+         FROM authfn_oauth_access_tokens
+        WHERE user_id = $1
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1`,
+      [environment.owner.userId],
+    );
+    const connection = connections.find(
+      (entry) => entry.clientId === issued.rows[0]?.client_id,
+    );
+    if (!connection) throw new Error("The OAuth connection is not listed");
+    const revoked = await environment.api.fetch(
+      new Request(
+        `https://app.skillplane.dev/api/v1/me/oauth-connections/${connection.consentId}`,
+        {
+          method: "DELETE",
+          headers: {
+            cookie: environment.ownerCookie,
+            [AUTH_CSRF_HEADER]: environment.owner.csrfToken,
+          },
+        },
+      ),
+    );
+    expect(revoked.status).toBe(204);
+
+    const after = await initialize("after-revocation");
+    expect(after.status).toBe(401);
+    expect(after.headers.get("www-authenticate")).toContain("Bearer");
+    expect(await after.text()).not.toContain(token);
   });
 
   it("rejects stale stateful session headers on the stateless endpoint", async () => {

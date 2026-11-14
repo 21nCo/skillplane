@@ -35,6 +35,20 @@ export interface OAuthGrant {
   readonly verifier: string;
 }
 
+export interface OAuthTestUser {
+  readonly cookie: string;
+  readonly csrfToken: string;
+}
+
+export function sessionCookie(fixture: {
+  readonly sessionToken: string;
+  readonly csrfToken: string;
+}): string {
+  return `${AUTH_SESSION_COOKIE}=${encodeURIComponent(
+    fixture.sessionToken,
+  )}; ${AUTH_CSRF_COOKIE}=${encodeURIComponent(fixture.csrfToken)}`;
+}
+
 export interface OAuthTestEnvironment {
   readonly app: ReturnType<typeof createApiApp>;
   readonly databaseUrl: string;
@@ -46,7 +60,11 @@ export interface OAuthTestEnvironment {
     readonly name?: string;
     readonly redirectUri?: string;
   }): Promise<RegisteredTestClient>;
-  authorize(client: RegisteredTestClient, scopes?: string): Promise<OAuthGrant>;
+  authorize(
+    client: RegisteredTestClient,
+    scopes?: string,
+    as?: OAuthTestUser,
+  ): Promise<OAuthGrant>;
   exchangeCode(
     grant: OAuthGrant,
     overrides?: Partial<Record<string, string>>,
@@ -76,9 +94,7 @@ export async function startOAuthTestEnvironment(
     getServices: async () => services,
     requestId: () => `req_oauth_${crypto.randomUUID()}`,
   });
-  const cookie = `${AUTH_SESSION_COOKIE}=${encodeURIComponent(
-    fixture.sessionToken,
-  )}; ${AUTH_CSRF_COOKIE}=${encodeURIComponent(fixture.csrfToken)}`;
+  const cookie = sessionCookie(fixture);
   const clientIds = new Set<string>();
 
   const environment: OAuthTestEnvironment = {
@@ -124,7 +140,11 @@ export async function startOAuthTestEnvironment(
         redirectUri,
       };
     },
-    async authorize(client, scopes = "skills:read contexts:read") {
+    async authorize(
+      client,
+      scopes = "skills:read contexts:read",
+      as = { cookie, csrfToken: fixture.csrfToken },
+    ) {
       const verifier = `oauth-verifier-${"a".repeat(50)}`;
       const challenge = createHash("sha256").update(verifier).digest("base64url");
       const authorization = new URL(`${OAUTH_ISSUER}/auth/oauth/authorize`);
@@ -140,7 +160,7 @@ export async function startOAuthTestEnvironment(
       }).toString();
       const start = await app.fetch(
         new Request(authorization, {
-          headers: { cookie, "cf-connecting-ip": network },
+          headers: { cookie: as.cookie, "cf-connecting-ip": network },
         }),
       );
       if (start.status !== 302) {
@@ -154,7 +174,7 @@ export async function startOAuthTestEnvironment(
       const details = await app.fetch(
         new Request(
           `${OAUTH_ISSUER}/auth/oauth/consent?request=${encodeURIComponent(requestToken)}`,
-          { headers: { cookie } },
+          { headers: { cookie: as.cookie } },
         ),
       );
       if (details.status !== 200) {
@@ -164,8 +184,8 @@ export async function startOAuthTestEnvironment(
         new Request(`${OAUTH_ISSUER}/auth/oauth/consent`, {
           method: "POST",
           headers: {
-            cookie,
-            [AUTH_CSRF_HEADER]: fixture.csrfToken,
+            cookie: as.cookie,
+            [AUTH_CSRF_HEADER]: as.csrfToken,
             "content-type": "application/json",
           },
           body: JSON.stringify({ request: requestToken, approved: true }),

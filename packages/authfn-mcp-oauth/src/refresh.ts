@@ -1,6 +1,7 @@
 import { consumeRateLimit } from "@skillplane/db";
 import { writeOAuthAudit, oauthRequestId } from "./audit.js";
 import { isOAuthScope, type OAuthRuntime } from "./config.js";
+import { lockConsentForIssuance } from "./consents.js";
 import { OAuthError } from "./errors.js";
 import { issueTokenPair, keyedHash, type TokenResponse } from "./tokens.js";
 
@@ -70,13 +71,34 @@ async function performRefresh(
   let committed = false;
   try {
     await database.query("BEGIN");
+    const hash = keyedHash(input.refreshToken, runtime.tokenPepper);
+    // The subject columns never change, so read them unlocked and take the
+    // consent share lock before the token row lock (see lockConsentForIssuance).
+    const subject = await database.query<{
+      readonly user_id: string;
+      readonly client_id: string;
+      readonly resource: string;
+    }>(
+      `SELECT user_id, client_id, resource
+         FROM authfn_oauth_refresh_tokens
+        WHERE token_hash = $1`,
+      [hash],
+    );
+    const owner = subject.rows[0];
+    const consentActive = owner
+      ? await lockConsentForIssuance(database, {
+          userId: owner.user_id,
+          clientId: owner.client_id,
+          resource: owner.resource,
+        })
+      : false;
     const result = await database.query<RefreshTokenRow>(
       `SELECT id, parent_id, family_id, user_id, client_id, resource, scopes, expires_at,
               consumed_at, revoked_at
          FROM authfn_oauth_refresh_tokens
         WHERE token_hash = $1
         FOR UPDATE`,
-      [keyedHash(input.refreshToken, runtime.tokenPepper)],
+      [hash],
     );
     const token = result.rows[0];
     if (!token) {
@@ -122,14 +144,16 @@ async function performRefresh(
     } else {
       const rejection = token.revoked_at
         ? "revoked_grant"
-        : token.expires_at.getTime() <= runtime.now().getTime()
-          ? "expired_grant"
-          : token.client_id !== input.clientId
-            ? "client_mismatch"
-            : token.resource !== runtime.resource ||
-                (input.resource !== undefined && token.resource !== input.resource)
-              ? "resource_mismatch"
-              : undefined;
+        : !consentActive
+          ? "revoked_consent"
+          : token.expires_at.getTime() <= runtime.now().getTime()
+            ? "expired_grant"
+            : token.client_id !== input.clientId
+              ? "client_mismatch"
+              : token.resource !== runtime.resource ||
+                  (input.resource !== undefined && token.resource !== input.resource)
+                ? "resource_mismatch"
+                : undefined;
       if (rejection) {
         diagnostic.reason = rejection;
         throw new OAuthError("invalid_grant", "The refresh token is invalid");
