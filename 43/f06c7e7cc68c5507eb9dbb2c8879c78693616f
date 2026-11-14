@@ -1,0 +1,25 @@
+docs/local-first-workspaces.md
+  s_a7cf51d58752c1::t_d7aef86828158e 187-194
+packages/local-runtime/src/cli.test.ts
+  s_a7cf51d58752c1::t_5ae4363736cdf3 1,134-141,145-147,149-152,156-157,185,188
+packages/local-runtime/src/instruction-projections.test.ts
+  s_a7cf51d58752c1::t_d4179e04f9d05b 34-35,37,817-939
+packages/local-runtime/src/projections.ts
+  s_a7cf51d58752c1::t_4787cd9bb9c5b4 999-1000,1014-1019,1022-1026,1082-1083,1086-1087
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "43f06c7e7cc68c5507eb9dbb2c8879c78693616f",
+  "prompts": {},
+  "sessions": {
+    "s_a7cf51d58752c1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_a7cf51d58752c1",
+        "model": "unknown"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
