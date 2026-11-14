@@ -31,7 +31,10 @@ import {
 } from "./index.js";
 
 const resources: { root: string; stores: LocalStore[] }[] = [];
+/** Undoes permission changes before the temporary roots are removed. */
+const restores: (() => void)[] = [];
 afterEach(() => {
+  for (const restore of restores.splice(0)) restore();
   vi.unstubAllEnvs();
   for (const { root, stores } of resources.splice(0)) {
     for (const store of stores) store.close();
@@ -810,6 +813,129 @@ describe("instruction file projection", () => {
         ).toEqual([realpathSync(f.project)]);
         expect(readFileSync(f.claude, "utf8")).toBe(v2);
         expect(await states(f.runtime, f.project)).toEqual({ [f.claude]: "diverged" });
+      });
+
+      // Root ignores directory permissions, so the unlink could not be denied.
+      describe.skipIf(process.getuid?.() === 0)("an unlink that fails", () => {
+        /** A skill-only project sharing the store, as every caller of recover() is. */
+        async function bystander(f: ReturnType<typeof fixture>) {
+          const project = join(f.root, "bystander");
+          mkdirSync(project);
+          const context = f.runtime.setup(project, "Other", [
+            targetSchema.parse({ adapter: "codex", scope: "user" }),
+          ]);
+          await new LocalWorkspaceProvider(f.store, context.primary.id).create({
+            ...request,
+            kind: "skill",
+            slug: "review",
+            instructions: "Review carefully.",
+            idempotencyKey: "bystander-skill",
+          });
+          const [skill] = (await f.runtime.syncTargets(project)).projections;
+          return { project, id: requireValue(skill).id };
+        }
+        /** Denies unlinking in the target directory until the returned undo runs. */
+        const denyUnlink = (f: ReturnType<typeof fixture>) => {
+          chmodSync(dirname(f.claude), 0o500);
+          const undo = () => chmodSync(dirname(f.claude), 0o700);
+          restores.push(undo);
+          return undo;
+        };
+        async function expectOthersServed(
+          f: ReturnType<typeof fixture>,
+          other: Awaited<ReturnType<typeof bystander>>,
+        ) {
+          expect((await f.runtime.resolve(other.id)).version.id).toBeTruthy();
+          await expect(f.runtime.syncTargets(other.project)).resolves.toBeTruthy();
+          await expect(f.runtime.doctor(false, other.project)).resolves.toBeTruthy();
+          expect(await states(f.runtime, f.project)).toEqual({ [f.claude]: "in-sync" });
+        }
+
+        it("keeps the cleanup entry of a rollback for a later recovery", async () => {
+          const f = fixture([{ adapter: "claude", artifact: "global-agents" }]);
+          const created = await f.provider.create(request);
+          await f.runtime.sync(f.project);
+          const other = await bystander(f);
+          await publish(f.provider, created.skillId, v2);
+          const snapshot = await f.provider.retrieve(created.skillId);
+          expect(() =>
+            crashBeforeSwap(f).instructions.sync(snapshot, target, f.project),
+          ).toThrow("crash");
+          const undo = denyUnlink(f);
+
+          expect(new Projections(f.store).recover()).toEqual([]);
+          expect(f.store.entries("instruction-journal:")).toHaveLength(0);
+          expect(cleanups(f)).toHaveLength(1);
+          expect(temps(f)).toHaveLength(1);
+          await expectOthersServed(f, other);
+          expect(cleanups(f)).toHaveLength(1);
+
+          undo();
+          expect(new Projections(f.store).recover()).toEqual([]);
+          expect(temps(f)).toEqual([]);
+          expect(cleanups(f)).toHaveLength(0);
+          expect(record(f.store, f.claude)?.digest).toBe(sha(v1));
+          expect(readFileSync(f.claude, "utf8")).toBe(v1);
+        });
+
+        it("keeps a swept cleanup entry for a later recovery", async () => {
+          const f = fixture([{ adapter: "claude", artifact: "global-agents" }]);
+          const created = await f.provider.create(request);
+          await f.runtime.sync(f.project);
+          const other = await bystander(f);
+          await publish(f.provider, created.skillId, v2);
+          const snapshot = await f.provider.retrieve(created.skillId);
+          // A failed write killed after its journal was retired.
+          const editing = new Projections(f.store, (point) => {
+            if (point === "before-write") writeFileSync(f.claude, `${v1}\nmine\n`);
+            if (point === "before-discard") throw new Error("killed");
+          });
+          expect(() => editing.instructions.sync(snapshot, target, f.project)).toThrow(
+            "it was not overwritten",
+          );
+          writeFileSync(f.claude, v1);
+          expect(cleanups(f)).toHaveLength(1);
+          const undo = denyUnlink(f);
+
+          expect(new Projections(f.store).recover()).toEqual([]);
+          expect(cleanups(f)).toHaveLength(1);
+          expect(temps(f)).toHaveLength(1);
+          await expectOthersServed(f, other);
+          expect(cleanups(f)).toHaveLength(1);
+
+          undo();
+          expect(new Projections(f.store).recover()).toEqual([]);
+          expect(temps(f)).toEqual([]);
+          expect(cleanups(f)).toHaveLength(0);
+        });
+
+        it("reports a committed write as done and leaves its temp file to recovery", async () => {
+          const f = fixture([{ adapter: "claude", artifact: "global-agents" }]);
+          const created = await f.provider.create(request);
+          const snapshot = await f.provider.retrieve(created.skillId);
+          const other = new Projections(f.reopen());
+          let competing: InstructionRecord | undefined;
+          let undo: (() => void) | undefined;
+          const loser = new Projections(f.store, (point) => {
+            if (point === "before-write" && !competing)
+              competing = other.instructions.sync(snapshot, target, f.project);
+            if (point === "before-discard") undo = denyUnlink(f);
+          });
+          const result = loser.instructions.sync(snapshot, target, f.project);
+          const winner = requireValue(competing);
+          expect(result.eventId).toBe(winner.eventId);
+          expect(record(f.store, f.claude)?.eventId).toBe(winner.eventId);
+          expect(cleanups(f)).toHaveLength(1);
+          expect(temps(f)).toHaveLength(1);
+          expect(new Projections(f.store).recover()).toEqual([]);
+          expect(cleanups(f)).toHaveLength(1);
+
+          requireValue(undo)();
+          expect(new Projections(f.store).recover()).toEqual([]);
+          expect(temps(f)).toEqual([]);
+          expect(cleanups(f)).toHaveLength(0);
+          expect(readFileSync(f.claude, "utf8")).toBe(v1);
+        });
       });
     });
 

@@ -996,7 +996,8 @@ export class InstructionProjections {
       throw error;
     }
     // A renamed temp file is already gone and left no cleanup entry; a write
-    // that lost the lock to the same version left both.
+    // that lost the lock to the same version left both. The record is
+    // committed either way, so a failed unlink is left to recover().
     this.discard(cleanupKey, temp);
     return result;
   }
@@ -1010,10 +1011,19 @@ export class InstructionProjections {
     this.store.set(cleanupKey, { temp } satisfies InstructionCleanup);
     this.store.delete(journalKey);
   }
-  /** Unlinks a retired temp file, then forgets it. */
+  /**
+   * Unlinks a retired temp file, then forgets it. An unlink that fails keeps
+   * the cleanup entry for the next recover() and never fails the caller: the
+   * entry is not project-scoped, so throwing would stop every sync, resolve
+   * and doctor that shares the store.
+   */
   private discard(cleanupKey: string, temp: string): void {
     this.fault?.("before-discard");
-    rmSync(temp, { force: true });
+    try {
+      rmSync(temp, { force: true });
+    } catch {
+      return;
+    }
     this.store.delete(cleanupKey);
   }
   /**
@@ -1069,13 +1079,12 @@ export class InstructionProjections {
       if (outcome === "retired") this.discard(cleanupKey, journal.temp);
     }
     // Temp files of writes that will never commit, whose process stopped
-    // before unlinking them. Removal is by path and never touches ownership.
+    // before unlinking them, or whose unlink failed. Removal is by path and
+    // never touches ownership; an entry that still cannot be removed stays.
     for (const [key, { temp }] of this.store.entries<InstructionCleanup>(
       CLEANUP_PREFIX,
-    )) {
-      rmSync(temp, { force: true });
-      this.store.delete(key);
-    }
+    ))
+      this.discard(key, temp);
     return recovered;
   }
   /**
