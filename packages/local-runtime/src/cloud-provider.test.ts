@@ -506,6 +506,25 @@ describe("cloud provider transport contract", () => {
     expect(await doctor(false)).toEqual([
       expect.objectContaining({ state: "in-sync" }),
     ]);
+    // A configuration-only refusal holds offline too, whatever was recorded.
+    const synced1 = runtime.project(primary);
+    runtime.configure(primary, {
+      ...synced1,
+      instructions: [...(synced1.instructions ?? []), ...(synced1.instructions ?? [])],
+    });
+    const duplicate = expect.objectContaining({
+      state: "PROJECTION_COLLISION",
+      fileState: "in-sync",
+    });
+    expect(await doctor(false)).toEqual([duplicate]);
+    expect(await doctor(true)).toEqual([duplicate]);
+    await expect(runtime.syncTargets(primary)).rejects.toMatchObject({
+      code: "PROJECTION_COLLISION",
+    });
+    runtime.configure(primary, synced1);
+    expect(await doctor(false)).toEqual([
+      expect.objectContaining({ state: "in-sync" }),
+    ]);
     runtime.configure(primary, {
       ...runtime.project(primary),
       aliases: { [`${workspaceKey(workspace)}/${created.skillId}`]: "agents" },

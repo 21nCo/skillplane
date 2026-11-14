@@ -182,7 +182,10 @@ recorded digest fails with `PROJECTION_DIVERGED`. Both leave the file untouched 
 exit non-zero. Projects that configure the same document may share a file; a
 file that holds another project's document is a `PROJECTION_COLLISION` until every
 project claiming it removes the target. A deleted file is written again. An
-interrupted write is finished or rolled back by the next `sync` or `doctor`.
+interrupted write is finished or rolled back by the next `sync` or `doctor`: it is
+finished only when the file is the one that write renamed into place, unchanged;
+otherwise the previous record stands and the file is left as it is, so a file a
+user wrote by hand is never adopted even when it holds the published bytes.
 Removing a target from the configuration leaves its file in place. `doctor` lists
 each instruction file as `in-sync`, `diverged`, `missing`, `collision` or
 `not-synced`; a collision row names the document in the file, the one configured

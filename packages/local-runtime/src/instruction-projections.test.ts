@@ -457,6 +457,88 @@ describe("instruction file projection", () => {
     expect(await states(f.runtime, f.project)).toEqual({ [f.claude]: "diverged" });
   });
 
+  describe("recovery commits only the file the interrupted write renamed", () => {
+    const target = instructionTargetSchema.parse({
+      adapter: "claude",
+      artifact: "global-agents",
+    });
+    const crashBeforeSwap = (f: ReturnType<typeof fixture>) =>
+      new Projections(f.store, (point) => {
+        if (point === "before-swap") throw new Error("crash");
+      });
+    const temps = (f: ReturnType<typeof fixture>) =>
+      readdirSync(dirname(f.claude)).filter((n) =>
+        n.startsWith(".skillplane-instructions-"),
+      );
+
+    it("never adopts a fresh target the user filled with the planned bytes", async () => {
+      const f = fixture([{ adapter: "claude", artifact: "global-agents" }]);
+      const created = await f.provider.create(request);
+      const snapshot = await f.provider.retrieve(created.skillId);
+      expect(() =>
+        crashBeforeSwap(f).instructions.sync(snapshot, target, f.project),
+      ).toThrow("crash");
+      expect(existsSync(f.claude)).toBe(false);
+      writeFileSync(f.claude, v1);
+
+      const projections = new Projections(f.store);
+      expect(projections.recover()).toEqual([]);
+      expect(f.store.entries("instruction-journal:")).toHaveLength(0);
+      expect(temps(f)).toEqual([]);
+      expect(record(f.store, f.claude)).toBeUndefined();
+      expect(
+        projections.instructions.owners(InstructionProjections.id(f.claude)),
+      ).toEqual([]);
+      expect(readFileSync(f.claude, "utf8")).toBe(v1);
+      await expect(f.runtime.sync(f.project)).rejects.toMatchObject({
+        code: "PROJECTION_COLLISION",
+      });
+      expect(readFileSync(f.claude, "utf8")).toBe(v1);
+    });
+
+    it("keeps the previous record when the user pastes the interrupted version", async () => {
+      const f = fixture([{ adapter: "claude", artifact: "global-agents" }]);
+      const created = await f.provider.create(request);
+      await f.runtime.sync(f.project);
+      await publish(f.provider, created.skillId, v2);
+      const snapshot = await f.provider.retrieve(created.skillId);
+      expect(() =>
+        crashBeforeSwap(f).instructions.sync(snapshot, target, f.project),
+      ).toThrow("crash");
+      writeFileSync(f.claude, v2);
+
+      expect(new Projections(f.store).recover()).toEqual([]);
+      expect(f.store.entries("instruction-journal:")).toHaveLength(0);
+      expect(temps(f)).toEqual([]);
+      expect(record(f.store, f.claude)?.digest).toBe(sha(v1));
+      await expect(f.runtime.sync(f.project)).rejects.toMatchObject({
+        code: "PROJECTION_DIVERGED",
+      });
+      expect(readFileSync(f.claude, "utf8")).toBe(v2);
+      expect(await states(f.runtime, f.project)).toEqual({ [f.claude]: "diverged" });
+    });
+
+    it("rolls back a renamed file the user edited before recovery", async () => {
+      const f = fixture([{ adapter: "claude", artifact: "global-agents" }]);
+      const created = await f.provider.create(request);
+      await f.runtime.sync(f.project);
+      await publish(f.provider, created.skillId, v2);
+      const snapshot = await f.provider.retrieve(created.skillId);
+      const crashing = new Projections(f.store, (point) => {
+        if (point === "after-swap") throw new Error("crash");
+      });
+      expect(() => crashing.instructions.sync(snapshot, target, f.project)).toThrow(
+        "crash",
+      );
+      // The renamed file keeps its inode but no longer holds the written bytes.
+      writeFileSync(f.claude, `${v2}\nmy local rule\n`);
+      expect(new Projections(f.store).recover()).toEqual([]);
+      expect(record(f.store, f.claude)?.digest).toBe(sha(v1));
+      expect(readFileSync(f.claude, "utf8")).toBe(`${v2}\nmy local rule\n`);
+      expect(await states(f.runtime, f.project)).toEqual({ [f.claude]: "diverged" });
+    });
+  });
+
   it("never reads a writer's renamed but uncommitted file as unmanaged", async () => {
     const f = fixture([{ adapter: "claude", artifact: "global-agents" }]);
     const created = await f.provider.create(request);

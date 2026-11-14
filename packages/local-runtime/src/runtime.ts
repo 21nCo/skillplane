@@ -190,6 +190,26 @@ export class Runtime {
     return (await this.syncTargets(project)).projections;
   }
   /**
+   * The checks sync applies to the instructions configuration alone, before
+   * any catalog: the error for each target, in configuration order. Every
+   * doctor resolution applies them first, whatever stands in for the catalog.
+   */
+  private instructionConfigErrors(
+    targets: readonly InstructionTarget[],
+  ): (RuntimeError | undefined)[] {
+    const paths = new Set<string>();
+    return targets.map((target) => {
+      const path = instructionPath(target);
+      if (paths.has(path))
+        return new RuntimeError(
+          "PROJECTION_COLLISION",
+          `Duplicate instructions destination: ${path}`,
+        );
+      paths.add(path);
+      return undefined;
+    });
+  }
+  /**
    * Resolves each configured instructions target's name through the catalog,
    * in configuration order. A target sync must refuse carries its error.
    */
@@ -197,18 +217,10 @@ export class Runtime {
     targets: readonly InstructionTarget[],
     catalog: readonly CatalogEntry[],
   ): { target: InstructionTarget; item?: CatalogEntry; error?: RuntimeError }[] {
-    const paths = new Set<string>();
-    return targets.map((target) => {
-      const path = instructionPath(target);
-      if (paths.has(path))
-        return {
-          target,
-          error: new RuntimeError(
-            "PROJECTION_COLLISION",
-            `Duplicate instructions destination: ${path}`,
-          ),
-        };
-      paths.add(path);
+    const errors = this.instructionConfigErrors(targets);
+    return targets.map((target, index) => {
+      const error = errors[index];
+      if (error) return { target, error };
       const item = catalog.find((entry) => entry.name === target.artifact);
       if (!item)
         return {
@@ -262,7 +274,10 @@ export class Runtime {
     if (cloud && !online) {
       const claims = this.store.get<InstructionClaims>(claimsKey(project));
       const current = claims?.catalog === catalogFingerprint(context);
-      return targets.map((target) => {
+      const errors = this.instructionConfigErrors(targets);
+      return targets.map((target, index) => {
+        const error = errors[index];
+        if (error) return { target, resolution: { code: error.code } };
         const claim = current
           ? claims.targets[InstructionProjections.id(instructionPath(target))]
           : undefined;

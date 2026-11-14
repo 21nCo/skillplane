@@ -4,6 +4,7 @@ import {
   constants,
   existsSync,
   fchmodSync,
+  fstatSync,
   fsyncSync,
   lstatSync,
   openSync,
@@ -548,8 +549,17 @@ interface InstructionJournal {
   /** The eventId of the record this write replaces, or null for a first write. */
   basis: string | null;
   temp: string;
+  /**
+   * The device and inode of the staged temp file, which a rename keeps. Only a
+   * target that is this file was installed by the write.
+   */
+  file?: FileIdentity;
   pid: number;
   startedAt: string;
+}
+interface FileIdentity {
+  dev: string;
+  ino: string;
 }
 export type InstructionState =
   "in-sync" | "diverged" | "missing" | "collision" | "not-synced" | "unverified";
@@ -638,18 +648,51 @@ function writerAlive(journal: InstructionJournal): boolean {
     return (error as NodeJS.ErrnoException).code === "EPERM";
   }
 }
-function writeFileDurably(path: string, bytes: Uint8Array, mode: number): void {
+function writeFileDurably(path: string, bytes: Uint8Array): FileIdentity {
   const fd = openSync(
     path,
     constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
     0o600,
   );
   try {
-    if (mode !== 0o600) fchmodSync(fd, mode);
     writeFileSync(fd, bytes);
+    fsyncSync(fd);
+    const stat = fstatSync(fd, { bigint: true });
+    return { dev: String(stat.dev), ino: String(stat.ino) };
+  } finally {
+    closeSync(fd);
+  }
+}
+function setMode(path: string, mode: number): void {
+  const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    fchmodSync(fd, mode);
     fsyncSync(fd);
   } finally {
     closeSync(fd);
+  }
+}
+/**
+ * Whether the journaled write's rename landed: its staged temp file is gone
+ * and the target is that file. Matching bytes alone are not proof, since a
+ * user may have written the planned content themselves.
+ */
+function installed(journal: InstructionJournal): boolean {
+  const { file } = journal;
+  if (!file) return false;
+  try {
+    lstatSync(journal.temp);
+    return false;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") return false;
+  }
+  try {
+    const stat = lstatSync(journal.record.path, { bigint: true });
+    return (
+      stat.isFile() && String(stat.dev) === file.dev && String(stat.ino) === file.ino
+    );
+  } catch {
+    return false;
   }
 }
 /**
@@ -857,21 +900,25 @@ export class InstructionProjections {
     };
     const journalKey = `instruction-journal:${id}:${record.eventId}`;
     const temp = join(parent, `.skillplane-instructions-${record.eventId}`);
-    // Committed before the lock so a crash between rename and commit can be
-    // completed by recover(); it is deleted in the same commit as the record.
-    const journal: InstructionJournal = {
-      record,
-      basis: old?.eventId ?? null,
-      temp,
-      pid: process.pid,
-      startedAt: record.synchronizedAt,
-    };
-    this.store.set(journalKey, journal);
-    // Set once the target may be replaced; a failure before then wrote nothing
-    // to the target, so its journal must not let recover() claim the file.
-    const progress = { writing: false };
+    // Set once the target may be replaced. Until then nothing reached the
+    // target, so the journal and temp file go; after it they stay for
+    // recover(), which needs the temp file's absence as proof of the rename.
+    const progress = { renaming: false };
+    let result: InstructionRecord;
     try {
-      return this.store.transaction(() => {
+      // The temp file is staged and the journal naming its inode is committed
+      // before the lock, so a crash between rename and commit can be completed
+      // by recover(); the journal is deleted in the same commit as the record.
+      const journal: InstructionJournal = {
+        record,
+        basis: old?.eventId ?? null,
+        temp,
+        file: writeFileDurably(temp, bytes),
+        pid: process.pid,
+        startedAt: record.synchronizedAt,
+      };
+      this.store.set(journalKey, journal);
+      result = this.store.transaction(() => {
         const current = this.store.get<InstructionRecord>(`instruction:${id}`);
         if ((current?.eventId ?? null) !== journal.basis) {
           // Another lock holder committed first. Its result stands when it is
@@ -888,8 +935,9 @@ export class InstructionProjections {
         const observed = observe(path);
         this.assertWritable(current, observed, path);
         if (current) this.assertReplacementOwner(current, snapshot, project);
-        progress.writing = true;
-        writeFileDurably(temp, bytes, observed.kind === "file" ? observed.mode : 0o600);
+        if (observed.kind === "file" && observed.mode !== 0o600)
+          setMode(temp, observed.mode);
+        progress.renaming = true;
         this.fault?.("before-swap");
         renameSync(temp, path);
         syncDirectory(parent);
@@ -902,17 +950,21 @@ export class InstructionProjections {
         return record;
       });
     } catch (error) {
-      if (!progress.writing) this.store.delete(journalKey);
+      if (!progress.renaming) {
+        this.store.delete(journalKey);
+        rmSync(temp, { force: true });
+      }
       throw error;
-    } finally {
-      rmSync(temp, { force: true });
     }
+    rmSync(temp, { force: true });
+    return result;
   }
   /**
    * Finishes or rolls back writes whose process stopped between the journal
-   * and the record commit. A target that already holds the journaled bytes is
-   * committed; otherwise the staged temp file is removed and the previous file
-   * stands. Running it again is a no-op.
+   * and the record commit. A target that is the journaled temp file, renamed
+   * and unchanged, is committed; otherwise the record and owners stay as they
+   * were, the staged temp file is removed and the target is left untouched.
+   * Running it again is a no-op.
    */
   recover(): string[] {
     const recovered: string[] = [];
@@ -927,6 +979,7 @@ export class InstructionProjections {
         let done = false;
         if (
           (current?.eventId ?? null) === journal.basis &&
+          installed(journal) &&
           stateOf(record, observe(record.path)) === "in-sync"
         ) {
           if (current)
@@ -938,10 +991,12 @@ export class InstructionProjections {
           this.addOwner(record.id, record.project);
           done = true;
         }
-        rmSync(journal.temp, { force: true });
         this.store.delete(key);
         return done;
       });
+      // Removed only once the journal is gone, so the temp file's inode cannot
+      // be reused by another file while a journal still names it.
+      rmSync(journal.temp, { force: true });
       if (completed) recovered.push(record.id);
     }
     return recovered;
