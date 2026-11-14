@@ -1,0 +1,25 @@
+app/src/lib/oauth-connections/connections.svelte.ts
+  s_eea6bdbc25304f::t_20df4c93b65269 30-42,107-109
+app/src/routes/(app)/account/connected-apps/+page.svelte
+  s_eea6bdbc25304f::t_016739408b4f8b 124
+app/tests/unit/connected-apps.test.ts
+  s_eea6bdbc25304f::t_5bca7c4a992c8e 161-162,168,171-201,256-289
+packages/testing/e2e/connected-apps.spec.ts
+  s_eea6bdbc25304f::t_740d99db2c2b7a 326-336
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5904f606d4a10ab7cd36ea59e3fcd8d0f2360688",
+  "prompts": {},
+  "sessions": {
+    "s_eea6bdbc25304f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_eea6bdbc25304f",
+        "model": "unknown"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
