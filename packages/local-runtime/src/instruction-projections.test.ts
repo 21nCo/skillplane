@@ -518,6 +518,77 @@ describe("instruction file projection", () => {
       expect(await states(f.runtime, f.project)).toEqual({ [f.claude]: "diverged" });
     });
 
+    it("removes a temp file staged before its inode reached the journal", async () => {
+      const f = fixture([{ adapter: "claude", artifact: "global-agents" }]);
+      const created = await f.provider.create(request);
+      await f.runtime.sync(f.project);
+      await publish(f.provider, created.skillId, v2);
+      const snapshot = await f.provider.retrieve(created.skillId);
+      // The process is killed after creating the temp file but before the
+      // journal names its inode. A thrown fault would run the write's own
+      // cleanup, so the state at that moment is captured and put back.
+      let killed: { journals: [string, unknown][]; temp: Buffer } | undefined;
+      const crashing = new Projections(f.store, (point) => {
+        if (point !== "after-stage") return;
+        const [name] = temps(f);
+        killed = {
+          journals: f.store.entries("instruction-journal:"),
+          temp: readFileSync(join(dirname(f.claude), requireValue(name))),
+        };
+        throw new Error("killed");
+      });
+      expect(() => crashing.instructions.sync(snapshot, target, f.project)).toThrow(
+        "killed",
+      );
+      const state = requireValue(killed);
+      expect(state.journals).toHaveLength(1);
+      const [key, journal] = requireValue(state.journals[0]) as [
+        string,
+        { temp: string; file?: unknown },
+      ];
+      expect(journal.file).toBeUndefined();
+      expect(dirname(journal.temp)).toBe(dirname(f.claude));
+      f.store.set(key, journal);
+      writeFileSync(journal.temp, state.temp);
+      expect(temps(f)).toHaveLength(1);
+
+      expect(new Projections(f.store).recover()).toEqual([]);
+      expect(f.store.entries("instruction-journal:")).toHaveLength(0);
+      expect(temps(f)).toEqual([]);
+      expect(readFileSync(f.claude, "utf8")).toBe(v1);
+      expect(record(f.store, f.claude)?.digest).toBe(sha(v1));
+      expect(await states(f.runtime, f.project)).toEqual({ [f.claude]: "in-sync" });
+    });
+
+    it("removes the temp file of a failed write even when the journal delete throws", async () => {
+      const f = fixture([{ adapter: "claude", artifact: "global-agents" }]);
+      const created = await f.provider.create(request);
+      await f.runtime.sync(f.project);
+      await publish(f.provider, created.skillId, v2);
+      const snapshot = await f.provider.retrieve(created.skillId);
+      const editing = new Projections(f.store, (point) => {
+        if (point === "before-write") writeFileSync(f.claude, `${v1}\nmine\n`);
+      });
+      const remove = f.store.delete.bind(f.store);
+      const deleting = vi.spyOn(f.store, "delete").mockImplementation((key) => {
+        if (key.startsWith("instruction-journal:")) throw new Error("disk I/O error");
+        remove(key);
+      });
+      // The hand edit is reported, not the failed cleanup.
+      expect(() => editing.instructions.sync(snapshot, target, f.project)).toThrow(
+        "it was not overwritten",
+      );
+      deleting.mockRestore();
+      expect(temps(f)).toEqual([]);
+      expect(f.store.entries("instruction-journal:")).toHaveLength(1);
+
+      // The journal left behind names a temp file that never reached the target.
+      expect(new Projections(f.store).recover()).toEqual([]);
+      expect(f.store.entries("instruction-journal:")).toHaveLength(0);
+      expect(record(f.store, f.claude)?.digest).toBe(sha(v1));
+      expect(readFileSync(f.claude, "utf8")).toBe(`${v1}\nmine\n`);
+    });
+
     it("rolls back a renamed file the user edited before recovery", async () => {
       const f = fixture([{ adapter: "claude", artifact: "global-agents" }]);
       const created = await f.provider.create(request);

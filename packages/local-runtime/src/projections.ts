@@ -49,7 +49,7 @@ import {
 } from "./adapters.js";
 import { UsageQueue } from "./analytics.js";
 export type ProjectionFault =
-  "before-write" | "before-swap" | "after-swap" | "before-unlink";
+  "before-write" | "after-stage" | "before-swap" | "after-swap" | "before-unlink";
 /** Instruction target IDs share the owner ledger with skill projection IDs. */
 export const INSTRUCTIONS_ID_PREFIX = "instructions-";
 export interface ProjectionRecord {
@@ -906,17 +906,21 @@ export class InstructionProjections {
     const progress = { renaming: false };
     let result: InstructionRecord;
     try {
-      // The temp file is staged and the journal naming its inode is committed
+      // The journal is committed before the temp file exists, so recover()
+      // can always find and remove a temp file a crash left behind. It names
+      // the temp file's inode only once that file is staged and durable,
       // before the lock, so a crash between rename and commit can be completed
       // by recover(); the journal is deleted in the same commit as the record.
       const journal: InstructionJournal = {
         record,
         basis: old?.eventId ?? null,
         temp,
-        file: writeFileDurably(temp, bytes),
         pid: process.pid,
         startedAt: record.synchronizedAt,
       };
+      this.store.set(journalKey, journal);
+      journal.file = writeFileDurably(temp, bytes);
+      this.fault?.("after-stage");
       this.store.set(journalKey, journal);
       result = this.store.transaction(() => {
         const current = this.store.get<InstructionRecord>(`instruction:${id}`);
@@ -951,8 +955,14 @@ export class InstructionProjections {
       });
     } catch (error) {
       if (!progress.renaming) {
-        this.store.delete(journalKey);
-        rmSync(temp, { force: true });
+        try {
+          this.store.delete(journalKey);
+        } catch {
+          // A journal left behind is rolled back by recover(); the original
+          // error is the one to report.
+        } finally {
+          rmSync(temp, { force: true });
+        }
       }
       throw error;
     }
