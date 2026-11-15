@@ -567,6 +567,13 @@ interface InstructionJournal {
    * target that is this file was installed by the write.
    */
   file?: FileIdentity;
+  /**
+   * The project a committed write claims, or null for a write that claims
+   * none (a rollback), so recovery commits the same owner set as the writer
+   * would have. Absent in journals written before rollback existed, which
+   * only a sync wrote and which claim their record's project.
+   */
+  owner?: string | null;
   pid: number;
   startedAt: string;
 }
@@ -1158,6 +1165,7 @@ export class InstructionProjections {
         record,
         basis: input.basis?.eventId ?? null,
         temp,
+        owner: owner ? resolve(owner.project) : null,
         pid: process.pid,
         startedAt: record.synchronizedAt,
       };
@@ -1726,7 +1734,11 @@ export class InstructionProjections {
                 current,
               );
             this.store.set(`instruction:${record.id}`, record);
-            this.addOwner(record.id, record.project);
+            // Only the claim the writer would have made: its guard checked
+            // that claim under the lock that held the rename, and an
+            // uninstall waits for this journal. A rollback claims nothing.
+            const owner = journal.owner === undefined ? record.project : journal.owner;
+            if (owner) this.addOwner(record.id, owner);
             this.store.delete(key);
             return "committed";
           }

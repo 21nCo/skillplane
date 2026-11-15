@@ -906,6 +906,43 @@ describe("ownership is checked in the commit that changes the target", () => {
     expect(existsSync(f.claude)).toBe(false);
     expect(instructionsProjections.owners(f.id)).toEqual([]);
   });
+  it("recovers an interrupted rollback without claiming a target its writer no longer configures", async () => {
+    const f = fixture();
+    rmSync(f.claude);
+    const created = await f.provider.create(instructions("global-agents", v2));
+    await f.runtime.sync(f.project);
+    await publish(f, created.skillId, v3);
+    await f.runtime.sync(f.project);
+    const snapshot = await f.provider.retrieve(created.skillId);
+    const other = join(f.root, "other");
+    const instructionsProjections = f.runtime.projections.instructions;
+    // The other project syncs the same version: a no-op that only claims it.
+    instructionsProjections.sync(
+      snapshot,
+      { adapter: "claude", artifact: "global-agents" },
+      other,
+      { releases: instructionsProjections.releases() },
+    );
+    f.runtime.configure(f.project, {
+      ...f.runtime.project(f.project),
+      instructions: [],
+    });
+    await f.runtime.sync(f.project);
+    expect(instructionsProjections.owners(f.id)).toEqual([other]);
+    expect(record(f)?.project).toBe(f.project);
+
+    const crashing = new Projections(f.store, (point) => {
+      if (point === "after-rename") throw new Error("process stopped");
+    });
+    expect(() => crashing.instructions.rollback(f.id)).toThrow("process stopped");
+    expect(readFileSync(f.claude, "utf8")).toBe(v2);
+    expect(f.runtime.projections.recover()).toEqual([f.id]);
+    expect(record(f)?.digest).toBe(sha(v2));
+    expect(instructionsProjections.owners(f.id)).toEqual([other]);
+    expect(instructionsProjections.uninstall(f.id).restored).toBeNull();
+    expect(existsSync(f.claude)).toBe(false);
+    expect(instructionsProjections.owners(f.id)).toEqual([]);
+  });
 });
 
 describe("an interrupted uninstall is recovered only once it is durable", () => {

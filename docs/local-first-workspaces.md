@@ -248,6 +248,10 @@ review, or imports a new one when the published version has moved on.
 
 `skillplane rollback TARGET` restores an instruction file's previous version by the
 same journaled rename; the next `sync` applies the latest published version again.
+The previous version is the latest earlier generation whose bytes differ from the
+current file, the same rule as skill rollback. A rollback claims the file for no
+project, and a rollback interrupted after its rename is finished by the next `sync`
+or `doctor` with the same owners it had.
 `skillplane uninstall TARGET` restores the adopted original, or removes a file
 Skillplane created, and clears the file's projection state; the original's backup
 goes with it. The target also leaves the `instructions` of the project that adopted
