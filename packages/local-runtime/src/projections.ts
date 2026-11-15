@@ -574,6 +574,12 @@ interface InstructionJournal {
    * only a sync wrote and which claim their record's project.
    */
   owner?: string | null;
+  /**
+   * The target's uninstall mark when the writer read its state, or null
+   * before any uninstall. Recovery commits nothing for a target released
+   * since. Absent in journals written before release marks existed.
+   */
+  release?: string | null;
   pid: number;
   startedAt: string;
 }
@@ -1024,13 +1030,35 @@ export class InstructionProjections {
       old.version.id === snapshot.version.id &&
       old.digest === digest;
     if (old && !same) this.assertReplacementOwner(old, snapshot, project);
-    return { bytes, path, id, old, digest, same };
+    return { bytes, path, id, old, digest, same, release: this.releaseMark(id) };
+  }
+  /** The target's current uninstall mark, or null if it was never released. */
+  private releaseMark(id: string): string | null {
+    return this.store.get<string>(`${RELEASE_PREFIX}${id}`) ?? null;
   }
   /** Whether a dead writer's journal for this target is still unrecovered. */
   private recoveryPending(id: string): boolean {
     return this.store
       .entries<InstructionJournal>(`instruction-journal:${id}:`)
       .some(([, journal]) => !writerAlive(journal));
+  }
+  /**
+   * Refuses while any write to the target may still land: a live writer's
+   * journal, including one whose commit failed after its rename, or a dead
+   * writer's unrecovered one. An uninstall that went ahead would release a
+   * target such a write could then establish again.
+   */
+  private assertUnwritten(id: string, path: string): void {
+    if (this.recoveryPending(id))
+      throw new RuntimeError(
+        "RECOVERY_PENDING",
+        `An interrupted write to ${path} could not be recovered yet; the next run retries it`,
+      );
+    if (this.store.entries(`instruction-journal:${id}:`).length > 0)
+      throw new RuntimeError(
+        "PROJECTION_BUSY",
+        `A write to ${path} is in progress or awaits recovery once its process stops; try again then`,
+      );
   }
   /** Raises the error sync would raise, without writing anything. */
   check(
@@ -1050,7 +1078,7 @@ export class InstructionProjections {
     project: string,
     plan: InstructionPlan = {},
   ): InstructionRecord {
-    const { bytes, path, id, old, digest, same } = this.store.transaction(() =>
+    const { bytes, path, id, old, digest, same, release } = this.store.transaction(() =>
       this.prepare(snapshot, target, project, plan),
     );
     const parent = safeDirectory(dirname(path));
@@ -1117,6 +1145,7 @@ export class InstructionProjections {
       record,
       bytes,
       basis: old,
+      release,
       owner,
       // Another lock holder committed first. Its result stands when it is the
       // same version; anything else needs a fresh plan.
@@ -1140,6 +1169,8 @@ export class InstructionProjections {
     record: InstructionRecord;
     bytes: Uint8Array;
     basis: InstructionRecord | undefined;
+    /** The target's uninstall mark when the basis was read. */
+    release: string | null;
     owner?: InstructionClaim;
     concurrent: (current: InstructionRecord) => boolean;
     guard: (current: InstructionRecord | undefined, observed: Observed) => void;
@@ -1166,6 +1197,7 @@ export class InstructionProjections {
         basis: input.basis?.eventId ?? null,
         temp,
         owner: owner ? resolve(owner.project) : null,
+        release: input.release,
         pid: process.pid,
         startedAt: record.synchronizedAt,
       };
@@ -1408,7 +1440,7 @@ export class InstructionProjections {
     id: string,
     force = false,
   ): { record: InstructionRecord; backup: InstructionBackup | null } {
-    const { current, previous, bytes } = this.store.transaction(() => {
+    const { current, previous, bytes, release } = this.store.transaction(() => {
       const current = this.store.get<InstructionRecord>(`instruction:${id}`);
       if (!current) throw new RuntimeError("PROJECTION_NOT_FOUND");
       this.assertIdle(id, current.path);
@@ -1429,7 +1461,7 @@ export class InstructionProjections {
       if (`sha256:${hash(bytes)}` !== previous.digest)
         throw new RuntimeError("PROJECTION_DIVERGED");
       this.assertEdit(current, observe(current.path), force);
-      return { current, previous, bytes };
+      return { current, previous, bytes, release: this.releaseMark(id) };
     });
     let backup: InstructionBackup | null = null;
     const record = this.write({
@@ -1442,6 +1474,7 @@ export class InstructionProjections {
       },
       bytes,
       basis: current,
+      release,
       concurrent: () => false,
       guard: (latest, observed) => {
         // A project may have claimed the target since the plan.
@@ -1510,7 +1543,8 @@ export class InstructionProjections {
       const adoption = this.adoption(id);
       if (!record && !adoption) throw new RuntimeError("PROJECTION_NOT_FOUND");
       const path = record?.path ?? requireValue(adoption).path;
-      this.assertIdle(id, path);
+      this.assertUninstalling(id, path);
+      this.assertUnwritten(id, path);
       this.assertUnshared(id);
       const marker: InstructionUninstall = {
         id,
@@ -1542,9 +1576,10 @@ export class InstructionProjections {
           (adoption?.original.digest ?? null) !== marker.restore
         )
           throw new RuntimeError("PROJECTION_CHANGED", "Projection changed; try again");
-        // Checked again in the commit that changes the target.
-        this.assertUnshared(id);
         const { path } = marker;
+        // Checked again in the commit that changes the target.
+        this.assertUnwritten(id, path);
+        this.assertUnshared(id);
         // Only a restore needs the directory; a removal never creates it.
         const parent = safeDirectory(dirname(path), adoption !== undefined);
         const observed = observe(path);
@@ -1687,7 +1722,16 @@ export class InstructionProjections {
             // record and the owners stay for the next run.
             this.fault?.("before-recover-sync");
             syncParent(marker.path);
+            const adoption = this.adoption(marker.id);
             this.forget(marker.id);
+            // As uninstall does: the target holds the original bytes, so its
+            // copy goes, under the lock. Edited files backed up by force stay.
+            if (adoption)
+              try {
+                rmSync(adoption.original.path, { force: true });
+              } catch {
+                // A leftover copy is harmless; the next adopt reuses it.
+              }
           } else this.store.delete(key);
           return done;
         });
@@ -1722,6 +1766,10 @@ export class InstructionProjections {
           const current = this.store.get<InstructionRecord>(`instruction:${record.id}`);
           if (
             (current?.eventId ?? null) === journal.basis &&
+            // A target released since the writer read it is never claimed or
+            // recorded again; uninstall also waits for every journal.
+            (journal.release === undefined ||
+              journal.release === this.releaseMark(record.id)) &&
             installed(journal) &&
             stateOf(record, observe(record.path)) === "in-sync"
           ) {
@@ -1735,8 +1783,8 @@ export class InstructionProjections {
               );
             this.store.set(`instruction:${record.id}`, record);
             // Only the claim the writer would have made: its guard checked
-            // that claim under the lock that held the rename, and an
-            // uninstall waits for this journal. A rollback claims nothing.
+            // that claim under the lock that held the rename, and no release
+            // happened since. A rollback claims nothing.
             const owner = journal.owner === undefined ? record.project : journal.owner;
             if (owner) this.addOwner(record.id, owner);
             this.store.delete(key);

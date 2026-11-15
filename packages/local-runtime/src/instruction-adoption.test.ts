@@ -942,13 +942,9 @@ describe("ownership is checked in the commit that changes the target", () => {
     const instructionsProjections = f.runtime.projections.instructions;
     let paused = false;
     const planned = new Projections(f.store, (point) => {
-      if (point !== "after-stage" || paused) return;
+      if (point !== "before-write" || paused) return;
       paused = true;
-      // This sync's process is still running while the others go ahead.
-      for (const [key, journal] of f.store.entries<{ pid: number }>(
-        `instruction-journal:${f.id}:`,
-      ))
-        f.store.set(key, { ...journal, pid: process.ppid });
+      // This sync planned the write; the others go ahead before it stages.
       instructionsProjections.uninstall(f.id);
       instructionsProjections.sync(snapshot, target, other, {
         releases: instructionsProjections.releases(),
@@ -1005,6 +1001,79 @@ describe("ownership is checked in the commit that changes the target", () => {
   });
 });
 
+describe("an uninstall never races a write that may still land", () => {
+  const setWriter = (f: Fixture, pid: number) => {
+    for (const [key, journal] of f.store.entries<{ pid: number }>(
+      `instruction-journal:${f.id}:`,
+    ))
+      f.store.set(key, { ...journal, pid });
+  };
+  /** Adopts the file, publishes the draft and crashes the first sync after its rename. */
+  async function crashFirstSync(f: Fixture) {
+    const adopted = await f.runtime.adoptInstructions(f.project, f.claude);
+    const draft = requireValue(adopted.draft);
+    await approve(f, draft.skill.id, requireValue(draft.versionId));
+    const snapshot = await f.provider.retrieve(draft.skill.id);
+    const target = { adapter: "claude", artifact: "global-agents" } as const;
+    const crashing = new Projections(f.store, (point) => {
+      if (point === "after-rename") throw new Error("commit failed");
+    });
+    expect(() =>
+      crashing.instructions.sync(snapshot, target, f.project, {
+        releases: crashing.instructions.releases(),
+      }),
+    ).toThrow("commit failed");
+    // The writer's process is still running elsewhere, so its journal stays.
+    setWriter(f, process.ppid);
+    expect(f.store.entries(`instruction-journal:${f.id}:`)).toHaveLength(1);
+    expect(record(f)).toBeUndefined();
+    expect(readFileSync(f.claude)).toEqual(Buffer.from(original));
+  }
+  // This process has no write in flight, so its own pid marks a stopped writer.
+  const stopWriter = (f: Fixture) => setWriter(f, process.pid);
+
+  it("refuses an uninstall while a renamed but uncommitted write's process is alive", async () => {
+    const f = fixture();
+    await crashFirstSync(f);
+    const [backup] = backups(f);
+    expect(() => f.runtime.projections.instructions.uninstall(f.id)).toThrow(
+      expect.objectContaining({ code: "PROJECTION_BUSY" }),
+    );
+    expect(adoption(f)).toBeDefined();
+    expect(backups(f)).toEqual([backup]);
+    expect(f.store.entries("instruction-uninstall:")).toEqual([]);
+
+    // Once the writer stops, recovery commits its write and uninstall restores
+    // the original, which stays in place.
+    stopWriter(f);
+    expect(() => f.runtime.projections.instructions.uninstall(f.id)).toThrow(
+      expect.objectContaining({ code: "RECOVERY_PENDING" }),
+    );
+    expect(f.runtime.projections.recover()).toEqual([f.id]);
+    expect(f.runtime.projections.instructions.owners(f.id)).toEqual([f.project]);
+    expect(f.runtime.projections.instructions.uninstall(f.id).restored).not.toBeNull();
+    expect(readFileSync(f.claude)).toEqual(Buffer.from(original));
+    expect(record(f)).toBeUndefined();
+    expect(f.runtime.projections.instructions.owners(f.id)).toEqual([]);
+    expect(f.runtime.projections.recover()).toEqual([]);
+    expect(record(f)).toBeUndefined();
+    expect(readFileSync(f.claude)).toEqual(Buffer.from(original));
+  });
+
+  it("recovers no record or claim for a write whose target was released since", async () => {
+    const f = fixture();
+    await crashFirstSync(f);
+    stopWriter(f);
+    // A release the journal did not see, as an uninstall would leave.
+    f.store.set(`instruction-release:${f.id}`, "released-since");
+    expect(f.runtime.projections.recover()).toEqual([]);
+    expect(f.store.entries(`instruction-journal:${f.id}:`)).toEqual([]);
+    expect(record(f)).toBeUndefined();
+    expect(f.runtime.projections.instructions.owners(f.id)).toEqual([]);
+    expect(readFileSync(f.claude)).toEqual(Buffer.from(original));
+  });
+});
+
 describe("an interrupted uninstall is recovered only once it is durable", () => {
   const failingSync = (f: Fixture) =>
     new Projections(f.store, (point) => {
@@ -1033,6 +1102,9 @@ describe("an interrupted uninstall is recovered only once it is durable", () => 
     expect(f.store.entries("instruction-uninstall:")).toEqual([]);
     expect(record(f)).toBeUndefined();
     expect(f.runtime.projections.instructions.owners(f.id)).toEqual([]);
+    // The original's copy goes with the adoption, as after an uninstall.
+    expect(backups(f)).toEqual([]);
+    expect(readFileSync(f.claude)).toEqual(Buffer.from(original));
   });
 
   it("keeps the marker and ownership of a removal when its directory cannot be synced", async () => {

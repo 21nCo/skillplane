@@ -261,7 +261,11 @@ removed one again; add it back, or adopt the file again, to resume. `TARGET` is 
 hand-edited file with `PROJECTION_DIVERGED`; `--force` first copies the edited file
 into the backup directory, where it stays. An uninstall interrupted after it
 replaced the file is finished by the next `sync` or `doctor`, which first makes the
-replacement or removal durable and otherwise keeps the target managed for a retry. Uninstall, and a
+replacement or removal durable and otherwise keeps the target managed for a retry; it
+also removes the original's backup. Uninstall waits for every write to the file that
+may still land: it is refused with `PROJECTION_BUSY` while another process's write is
+in flight, and with `RECOVERY_PENDING` until an interrupted one is recovered. A write
+recovered after an uninstall released the file records and claims nothing. Uninstall, and a
 rollback to another document, refuse with `PROJECTION_SHARED` when another project
 claims the file, checked again in the same commit that replaces or removes it, and a `sync` that reaches a file being
 uninstalled is refused with `PROJECTION_BUSY`. A `sync` that read the configuration
