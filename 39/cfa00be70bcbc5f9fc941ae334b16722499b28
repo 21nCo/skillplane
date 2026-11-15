@@ -1,0 +1,29 @@
+docs/local-first-workspaces.md
+  s_7af19cc174cead::t_a962d2f8465c05 226-242,248-250,253-256
+packages/local-runtime/src/cli.ts
+  s_7af19cc174cead::t_87d4b0fbeaeb6f 248-251
+packages/local-runtime/src/instruction-adoption.test.ts
+  s_7af19cc174cead::t_82115b0f388b82 29,97-102,112,151-166,203-213,262-266,396-402,405,427-430,440-441,491-492,495-497,540-718
+packages/local-runtime/src/local-provider.ts
+  s_7af19cc174cead::t_733e13081fb707 146-148,150-153,157,162,183,197-216
+packages/local-runtime/src/projections.ts
+  s_7af19cc174cead::t_275aa769fa382a 58-59,604-605,607-617,621,863-868,871,879,934,983,1086-1087,1193-1194,1229,1237,1241,1244-1264,1268,1274,1287-1290,1314,1340-1341,1348-1372,1407,1422,1438-1439,1509-1514,1516-1529,1537-1552
+packages/local-runtime/src/runtime.ts
+  s_7af19cc174cead::t_1fb347bbed24d7 96-104,292-300,302,308,310-327,329-354,461-462,471,476-478,498,516-525,531-543,546-547,550,552-565,569-618,635-637,639-664,666-684,686-705,710,736-744,747-748,753,773-775,781-782,785,812-813,815,826-839,873,1071-1072
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "39cfa00be70bcbc5f9fc941ae334b16722499b28",
+  "prompts": {},
+  "sessions": {
+    "s_7af19cc174cead": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_7af19cc174cead",
+        "model": "unknown"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
