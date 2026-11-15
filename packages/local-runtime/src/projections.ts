@@ -1475,12 +1475,19 @@ export class InstructionProjections {
       const current = this.store.get<InstructionRecord>(`instruction:${id}`);
       if (!current) throw new RuntimeError("PROJECTION_NOT_FOUND");
       this.assertIdle(id, current.path);
-      // The generation the current one replaced: the latest by commit order,
-      // its bytes the same or not; entries kept before the order was recorded
-      // come after, by time.
+      // The latest generation by commit order that the current one differs
+      // from: another artifact or version counts even with the same bytes,
+      // while a rewrite of the current one, as after its file was deleted,
+      // does not. Entries kept before the order was recorded come after, by time.
       const latest = this.store
         .entries<InstructionHistory>(`instruction-history:${id}:`)
         .map(([, value]) => value)
+        .filter(
+          (value) =>
+            !sameArtifact(value, current) ||
+            value.version.id !== current.version.id ||
+            value.digest !== current.digest,
+        )
         .sort(
           (a, b) =>
             (b.sequence ?? -1) - (a.sequence ?? -1) ||
@@ -1576,78 +1583,86 @@ export class InstructionProjections {
     id: string,
     force = false,
   ): { restored: InstructionBackup | null; backup: InstructionBackup | null } {
-    const temp = { path: "" };
-    let backup: InstructionBackup | null = null;
-    let restored: InstructionBackup | null = null;
-    let marker: InstructionUninstall;
-    try {
-      // Checked, backed up and staged before the marker commits, so a marker
-      // names the file only an uninstall that passed its checks installs.
-      marker = this.store.transaction(() => {
-        const record = this.store.get<InstructionRecord>(`instruction:${id}`);
-        const adoption = this.adoption(id);
-        if (!record && !adoption) throw new RuntimeError("PROJECTION_NOT_FOUND");
-        const path = record?.path ?? requireValue(adoption).path;
-        this.assertUninstalling(id, path);
-        this.assertUnwritten(id, path);
-        this.assertUnshared(id);
-        // Only a restore needs the directory; a removal never creates it.
-        safeDirectory(dirname(path), adoption !== undefined);
-        const observed = observe(path);
-        // Divergence is decided by what Skillplane last wrote, or for a target
-        // never synced by the adopted bytes, never by whether the file already
-        // holds the original: a managed file hand-edited back to it is edited.
-        const holdsOriginal =
-          adoption !== undefined &&
-          observed.kind === "file" &&
-          observed.digest === adoption.original.digest;
-        const edited = record
-          ? stateOf(record, observed) === "diverged"
-          : observed.kind !== "absent" && !holdsOriginal;
-        if (edited && (!force || observed.kind !== "file"))
+    // Checked and backed up before the marker commits, so the file a marker
+    // names is installed only by an uninstall that passed its checks.
+    const planned = this.store.transaction(() => {
+      const record = this.store.get<InstructionRecord>(`instruction:${id}`);
+      const adoption = this.adoption(id);
+      if (!record && !adoption) throw new RuntimeError("PROJECTION_NOT_FOUND");
+      const path = record?.path ?? requireValue(adoption).path;
+      this.assertUninstalling(id, path);
+      this.assertUnwritten(id, path);
+      this.assertUnshared(id);
+      // Only a restore needs the directory; a removal never creates it.
+      safeDirectory(dirname(path), adoption !== undefined);
+      const observed = observe(path);
+      // Divergence is decided by what Skillplane last wrote, or for a target
+      // never synced by the adopted bytes, never by whether the file already
+      // holds the original: a managed file hand-edited back to it is edited.
+      const holdsOriginal =
+        adoption !== undefined &&
+        observed.kind === "file" &&
+        observed.digest === adoption.original.digest;
+      const edited = record
+        ? stateOf(record, observed) === "diverged"
+        : observed.kind !== "absent" && !holdsOriginal;
+      if (edited && (!force || observed.kind !== "file"))
+        throw new RuntimeError(
+          "PROJECTION_DIVERGED",
+          `${path} changed after Skillplane ${record ? "wrote" : "adopted"} it${force ? " and is not a regular file" : "; --force backs it up first"}`,
+        );
+      const backup = edited ? this.backup(path, id, readTarget(path)) : null;
+      let original: Buffer | null = null;
+      if (adoption && !holdsOriginal) {
+        original = readSafe(adoption.original.path, MAX_INSTRUCTIONS_BYTES);
+        if (`sha256:${hash(original)}` !== adoption.original.digest)
           throw new RuntimeError(
-            "PROJECTION_DIVERGED",
-            `${path} changed after Skillplane ${record ? "wrote" : "adopted"} it${force ? " and is not a regular file" : "; --force backs it up first"}`,
+            "BACKUP_INVALID",
+            `The backup of ${path} at ${adoption.original.path} changed; nothing was restored`,
           );
-        backup = edited ? this.backup(path, id, readTarget(path)) : null;
-        restored = adoption?.original ?? null;
-        temp.path = join(dirname(path), `.skillplane-instructions-${randomUUID()}`);
-        let file: FileIdentity | null = null;
-        if (adoption && holdsOriginal) file = identity(path);
-        else if (adoption) {
-          const original = readSafe(adoption.original.path, MAX_INSTRUCTIONS_BYTES);
-          if (`sha256:${hash(original)}` !== adoption.original.digest)
-            throw new RuntimeError(
-              "BACKUP_INVALID",
-              `The backup of ${path} at ${adoption.original.path} changed; nothing was restored`,
-            );
-          file = writeFileDurably(temp.path, original);
-          setMode(temp.path, adoption.original.mode);
-        }
-        const marker: InstructionUninstall = {
-          id,
-          path,
-          eventId: record?.eventId ?? null,
-          restore: adoption?.original.digest ?? null,
-          temp: temp.path,
-          pid: process.pid,
-          startedAt: new Date().toISOString(),
-          observed: observed.kind === "file" ? observed.digest : null,
-          file,
-          keep: backup?.path === adoption?.original.path,
-        };
-        // Committed before the target changes, so recover() can finish an
-        // uninstall whose rename or unlink landed before its commit.
-        this.store.set(`${UNINSTALL_PREFIX}${id}`, marker);
-        return marker;
-      });
-    } catch (error) {
-      if (temp.path) rmSync(temp.path, { force: true });
-      throw error;
-    }
+      }
+      const marker: InstructionUninstall = {
+        id,
+        path,
+        eventId: record?.eventId ?? null,
+        restore: adoption?.original.digest ?? null,
+        temp: join(dirname(path), `.skillplane-instructions-${randomUUID()}`),
+        pid: process.pid,
+        startedAt: new Date().toISOString(),
+        observed: observed.kind === "file" ? observed.digest : null,
+        // A restore in place keeps the target; a staged one is named once
+        // its temp file exists.
+        file: holdsOriginal ? identity(path) : null,
+        keep: backup?.path === adoption?.original.path,
+      };
+      // Committed before the temp file exists and the target changes, so
+      // recover() removes the one and finishes an uninstall whose rename or
+      // unlink landed before its commit.
+      this.store.set(`${UNINSTALL_PREFIX}${id}`, marker);
+      return { marker, backup, original, restored: adoption?.original ?? null };
+    });
+    const { backup, original, restored } = planned;
+    let { marker } = planned;
     this.fault?.("after-mark");
     const progress = { replacing: false };
     try {
+      if (original && restored) {
+        const file = writeFileDurably(marker.temp, original);
+        setMode(marker.temp, restored.mode);
+        marker = this.store.transaction(() => {
+          const current = this.store.get<InstructionUninstall>(
+            `${UNINSTALL_PREFIX}${id}`,
+          );
+          if (current?.temp !== marker.temp)
+            throw new RuntimeError(
+              "PROJECTION_CHANGED",
+              "Projection changed; try again",
+            );
+          const staged = { ...current, file };
+          this.store.set(`${UNINSTALL_PREFIX}${id}`, staged);
+          return staged;
+        });
+      }
       this.store.transaction(() => {
         const record = this.store.get<InstructionRecord>(`instruction:${id}`);
         const adoption = this.adoption(id);

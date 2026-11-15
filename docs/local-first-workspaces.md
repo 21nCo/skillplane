@@ -257,9 +257,10 @@ a skill destination overlapping it is refused with `PROJECTION_COLLISION`.
 
 `skillplane rollback TARGET` restores an instruction file's previous version by the
 same journaled rename; the next `sync` applies the latest published version again.
-The previous version is the generation the current one replaced, latest by the order
-the generations were replaced, with its own artifact and version even when its bytes
-are the same. A rollback claims the file for no
+The previous version is the latest generation, by the order the generations were
+replaced, that differs from the current one: another artifact or version counts even
+with the same bytes, while a rewrite of the current version, as after its file was
+deleted, does not. A rollback claims the file for no
 project, and a rollback interrupted after its rename is finished by the next `sync`
 or `doctor` with the same owners it had.
 `skillplane uninstall TARGET` restores the adopted original, or removes a file

@@ -1247,6 +1247,29 @@ describe("uninstall decides divergence apart from restoration", () => {
     ).toEqual([]);
   });
 
+  it("removes the temp file of an uninstall stopped while staging the original", async () => {
+    const f = fixture();
+    const skillId = await adoptAndSync(f);
+    await publish(f, skillId, v2);
+    await f.runtime.sync(f.project);
+    const stopped = new Projections(f.store, (point) => {
+      if (point === "after-mark") throw new Error("process stopped");
+    });
+    expect(() => stopped.instructions.uninstall(f.id)).toThrow("process stopped");
+    // It stopped after writing the temp file the marker names, before naming
+    // the file itself.
+    const [[, marker]] = f.store.entries<{ temp: string; file: unknown }>(
+      "instruction-uninstall:",
+    );
+    expect(marker.file).toBeNull();
+    writeFileSync(marker.temp, original);
+    expect(f.runtime.projections.recover()).toEqual([]);
+    expect(existsSync(marker.temp)).toBe(false);
+    expect(f.store.entries("instruction-uninstall:")).toEqual([]);
+    expect(record(f)?.digest).toBe(sha(v2));
+    expect(readFileSync(f.claude, "utf8")).toBe(v2);
+  });
+
   it("keeps a forced backup sharing the original's copy when recovery finishes the uninstall", async () => {
     const f = fixture();
     const skillId = await adoptAndSync(f);
@@ -1282,6 +1305,23 @@ describe("PR review round 1 adoption and rollback checks", () => {
     expect(restored.skill.id).toBe(skillId);
     expect(restored.digest).toBe(sha(v2));
     expect(readFileSync(f.claude, "utf8")).toBe(v2);
+  });
+
+  it("skips a rewrite of the current generation, as after its file was deleted", async () => {
+    const f = fixture();
+    await adoptAndSync(f);
+    const skillId = requireValue(record(f)).skill.id;
+    await publish(f, skillId, v2);
+    await f.runtime.sync(f.project);
+    rmSync(f.claude);
+    await f.runtime.sync(f.project);
+    expect(readFileSync(f.claude, "utf8")).toBe(v2);
+    const first = f.runtime.rollbackInstructions(f.id).record;
+    expect(first.digest).toBe(sha(original));
+    expect(readFileSync(f.claude)).toEqual(Buffer.from(original));
+    // Repeated rollbacks alternate and never stick on the rewritten version.
+    expect(f.runtime.rollbackInstructions(f.id).record.digest).toBe(sha(v2));
+    expect(f.runtime.rollbackInstructions(f.id).record.digest).toBe(sha(original));
   });
 
   it("rolls back to the latest replaced generation by commit order, not timestamp", async () => {
