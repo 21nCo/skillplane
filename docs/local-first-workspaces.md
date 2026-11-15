@@ -242,7 +242,8 @@ of that slug. A configuration `sync` refuses, such as duplicate or overlapping
 destinations, is refused with `PROJECTION_COLLISION`. A target the project configuration
 cannot hold, such as a 21st instructions target, is refused with
 `PROJECT_CONFIG_INVALID`. Each refusal leaves no backup or adoption behind. An interrupted adopt can be run again: it reuses the backup, and a draft that
-already holds the file's bytes. A draft that can no longer be published, because a
+already holds the file's bytes, including its own import that a review approved
+meanwhile, which sync then takes over with no further review. A draft that can no longer be published, because a
 review rejected it or another version was published over its base, is replaced by a
 fresh one against the current version when adopt runs again; a draft imported for an
 adoption that was uninstalled meanwhile is never recorded for a later one.
