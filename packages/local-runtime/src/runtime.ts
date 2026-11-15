@@ -77,15 +77,20 @@ function catalogFingerprint(context: ProjectContext): string {
 /**
  * The instructions target an argument names: its ID, or a file path that is
  * absolute, relative to the working directory or starts with `~/`. A bare
- * name is a skill projection ID and yields undefined.
+ * name is a file in the working directory when known names an instructions
+ * target there, else a skill projection ID, which yields undefined.
  */
-export function instructionTargetId(argument: string): string | undefined {
+export function instructionTargetId(
+  argument: string,
+  known: (id: string) => boolean = () => false,
+): string | undefined {
   if (argument.startsWith(INSTRUCTIONS_ID_PREFIX)) return argument;
   if (argument.startsWith("~/"))
     return InstructionProjections.id(resolve(homedir(), argument.slice(2)));
   if (/[\\/]/.test(argument) || argument.startsWith("."))
     return InstructionProjections.id(resolve(argument));
-  return undefined;
+  const id = InstructionProjections.id(resolve(argument));
+  return known(id) ? id : undefined;
 }
 /**
  * The create request that imports bytes unchanged, refusing bytes that are

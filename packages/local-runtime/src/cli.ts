@@ -271,7 +271,9 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
         result = await runtime.adoptInstructions(project, required(1), artifact);
         break;
       case "rollback": {
-        const id = instructionTargetId(required(0));
+        const id = instructionTargetId(required(0), (target) =>
+          runtime.projections.instructions.known(target),
+        );
         if (id) {
           result = runtime.rollbackInstructions(id, flags.has("--force"));
           break;
@@ -285,7 +287,9 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
         break;
       }
       case "uninstall": {
-        const id = instructionTargetId(required(0));
+        const id = instructionTargetId(required(0), (target) =>
+          runtime.projections.instructions.known(target),
+        );
         if (id) {
           result = runtime.uninstallInstructions(id, flags.has("--force"));
           break;

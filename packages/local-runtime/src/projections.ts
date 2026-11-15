@@ -56,7 +56,8 @@ export type ProjectionFault =
   | "after-swap"
   | "before-unlink"
   | "before-discard"
-  | "after-mark";
+  | "after-mark"
+  | "before-recover-sync";
 /** Instruction target IDs share the owner ledger with skill projection IDs. */
 export const INSTRUCTIONS_ID_PREFIX = "instructions-";
 export interface ProjectionRecord {
@@ -616,6 +617,11 @@ export interface InstructionUnconfigure {
   path: string;
   project: string;
 }
+/** A project's claim on a target and the check that must pass to add it. */
+interface InstructionClaim {
+  project: string;
+  assert: () => void;
+}
 /** What sync knew when it planned an instructions target. */
 export interface InstructionPlan {
   /** The published version IDs of the snapshot's artifact. */
@@ -750,6 +756,17 @@ function readTarget(path: string): { bytes: Buffer; digest: string; mode: number
 function backupDirectory(path: string, id: string): string {
   return join(dirname(path), ".skillplane-projections", "instructions", id, "backup");
 }
+/**
+ * Makes a rename or unlink in path's directory durable. A directory that no
+ * longer exists holds nothing to lose.
+ */
+function syncParent(path: string): void {
+  try {
+    syncDirectory(dirname(path));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+}
 function setMode(path: string, mode: number): void {
   const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
@@ -823,6 +840,11 @@ export class InstructionProjections {
       .prepare("INSERT OR IGNORE INTO projection_owner VALUES (?,?)")
       .run(id, resolve(project));
   }
+  /** Adds the project's claim once its assert passes, inside the caller's transaction. */
+  private claim(id: string, owner: InstructionClaim): void {
+    owner.assert();
+    this.addOwner(id, owner.project);
+  }
   /** Drops the project's claim on targets it no longer configures; files stay. */
   release(project: string, keep: ReadonlySet<string>): void {
     this.store.transaction(() => {
@@ -843,6 +865,13 @@ export class InstructionProjections {
     const bytes = snapshot.bundle.files.get(bundleEntrypoint(snapshot.bundle.skill));
     if (!bytes) throw new RuntimeError("BUNDLE_INVALID");
     return bytes;
+  }
+  /** Whether the target has a record or an adoption, for rollback and uninstall. */
+  known(id: string): boolean {
+    return (
+      this.store.get(`instruction:${id}`) !== undefined ||
+      this.adoption(id) !== undefined
+    );
   }
   adoption(id: string): InstructionAdoption | undefined {
     return this.store.get<InstructionAdoption>(`${ADOPTION_PREFIX}${id}`);
@@ -1018,6 +1047,12 @@ export class InstructionProjections {
       this.prepare(snapshot, target, project, plan),
     );
     const parent = safeDirectory(dirname(path));
+    // Every commit that claims the target for this plan checks its release
+    // fence first, so an uninstall since the plan is never undone by a claim.
+    const owner: InstructionClaim = {
+      project,
+      assert: () => this.assertPlanned(id, path, project, plan),
+    };
     const matches = (record: InstructionRecord): boolean =>
       sameArtifact(record, snapshot) &&
       record.version.id === snapshot.version.id &&
@@ -1034,7 +1069,7 @@ export class InstructionProjections {
             "PROJECTION_CHANGED",
             "Projection changed; run sync again",
           );
-        this.addOwner(id, project);
+        this.claim(id, owner);
         return current;
       });
     this.fault?.("before-write");
@@ -1075,12 +1110,12 @@ export class InstructionProjections {
       record,
       bytes,
       basis: old,
-      owner: project,
+      owner,
       // Another lock holder committed first. Its result stands when it is the
       // same version; anything else needs a fresh plan.
       concurrent: matches,
       guard: (current, observed) => {
-        this.assertPlanned(id, path, project, plan);
+        owner.assert();
         this.assertWritable(current, observed, path, snapshot, plan.published);
         if (current) this.assertReplacementOwner(current, snapshot, project);
       },
@@ -1091,12 +1126,14 @@ export class InstructionProjections {
    * commits record in the same lock hold. guard runs under the lock before the
    * rename and throws to refuse it; a write whose basis is no longer current
    * returns the concurrent record when concurrent accepts it, else fails.
+   * Either way owner, when given, is claimed only if its assert passes in
+   * that commit.
    */
   private write(input: {
     record: InstructionRecord;
     bytes: Uint8Array;
     basis: InstructionRecord | undefined;
-    owner?: string;
+    owner?: InstructionClaim;
     concurrent: (current: InstructionRecord) => boolean;
     guard: (current: InstructionRecord | undefined, observed: Observed) => void;
   }): InstructionRecord {
@@ -1138,7 +1175,7 @@ export class InstructionProjections {
               "PROJECTION_CHANGED",
               "Projection changed; run sync again",
             );
-          if (owner) this.addOwner(id, owner);
+          if (owner) this.claim(id, owner);
           this.retire(journalKey, cleanupKey, temp);
           return current;
         }
@@ -1155,7 +1192,7 @@ export class InstructionProjections {
         if (current)
           this.store.set(`instruction-history:${id}:${current.eventId}`, current);
         this.store.set(`instruction:${id}`, record);
-        if (owner) this.addOwner(id, owner);
+        if (owner) this.claim(id, owner);
         this.store.delete(journalKey);
         return record;
       });
@@ -1636,8 +1673,14 @@ export class InstructionProjections {
             (marker.restore === null
               ? observed.kind === "absent"
               : observed.kind === "file" && observed.digest === marker.restore);
-          if (done) this.forget(marker.id);
-          else this.store.delete(key);
+          if (done) {
+            // The uninstall may have stopped before making its rename or
+            // unlink durable. A failed sync throws here, so the marker, the
+            // record and the owners stay for the next run.
+            this.fault?.("before-recover-sync");
+            syncParent(marker.path);
+            this.forget(marker.id);
+          } else this.store.delete(key);
           return done;
         });
         if (finished) recovered.push(marker.id);
@@ -1711,8 +1754,8 @@ export class InstructionProjections {
   }
   /**
    * What sync would find in a target that has no record: nothing, an
-   * unmanaged file, or an adopted file that still holds its original bytes
-   * unless edited since, or that the configured name resolves elsewhere.
+   * unmanaged file, or an adopted target, absent or still holding its original
+   * bytes, unless edited since or the configured name resolves elsewhere.
    */
   private unrecordedState(
     id: string,
@@ -1720,10 +1763,13 @@ export class InstructionProjections {
     resolution?: InstructionResolution,
   ): InstructionState {
     const observed = observe(path);
-    if (observed.kind === "absent") return "not-synced";
     const adoption = this.adoption(id);
-    if (!adoption) return "collision";
-    if (observed.kind !== "file" || observed.digest !== adoption.original.digest)
+    if (!adoption) return observed.kind === "absent" ? "not-synced" : "collision";
+    // An absent adopted target stays adopted, as sync reports it.
+    if (
+      observed.kind !== "absent" &&
+      (observed.kind !== "file" || observed.digest !== adoption.original.digest)
+    )
       return "diverged";
     // An adoption without its draft yet is still adopted, as sync reports it.
     return resolution &&

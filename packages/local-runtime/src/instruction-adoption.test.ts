@@ -760,6 +760,8 @@ describe("one adoption lifecycle at a time", () => {
     expect((await f.runtime.syncTargets(f.project)).pending).toMatchObject([
       { id: f.id, code: "ADOPTION_PENDING_REVIEW" },
     ]);
+    // doctor reports the absent adopted target as sync does.
+    expect(await states(f)).toEqual({ [f.claude]: "adopted" });
     expect(existsSync(f.claude)).toBe(false);
     expect(record(f)).toBeUndefined();
     await approve(f, created.skillId, draft.versionId);
@@ -867,6 +869,99 @@ describe("ownership is checked in the commit that changes the target", () => {
     expect(readFileSync(f.claude, "utf8")).toBe(v3);
     expect(record(f)?.digest).toBe(sha(v3));
   });
+
+  it("does not claim a target uninstalled and synced by another project after the sync planned it", async () => {
+    const f = fixture();
+    rmSync(f.claude);
+    const created = await f.provider.create(instructions("global-agents", v2));
+    await f.runtime.sync(f.project);
+    await publish(f, created.skillId, v3);
+    const snapshot = await f.provider.retrieve(created.skillId);
+    const target = { adapter: "claude", artifact: "global-agents" } as const;
+    const other = join(f.root, "other");
+    const instructionsProjections = f.runtime.projections.instructions;
+    let paused = false;
+    const planned = new Projections(f.store, (point) => {
+      if (point !== "after-stage" || paused) return;
+      paused = true;
+      // This sync's process is still running while the others go ahead.
+      for (const [key, journal] of f.store.entries<{ pid: number }>(
+        `instruction-journal:${f.id}:`,
+      ))
+        f.store.set(key, { ...journal, pid: process.ppid });
+      instructionsProjections.uninstall(f.id);
+      instructionsProjections.sync(snapshot, target, other, {
+        releases: instructionsProjections.releases(),
+      });
+    });
+    const plan = { releases: planned.instructions.releases() };
+    expect(() => planned.instructions.sync(snapshot, target, f.project, plan)).toThrow(
+      expect.objectContaining({ code: "PROJECTION_CHANGED" }),
+    );
+    expect(paused).toBe(true);
+    expect(instructionsProjections.owners(f.id)).toEqual([other]);
+    expect(readFileSync(f.claude, "utf8")).toBe(v3);
+    // The other project's uninstall is not blocked by a claim from the stale plan.
+    expect(instructionsProjections.uninstall(f.id).restored).toBeNull();
+    expect(existsSync(f.claude)).toBe(false);
+    expect(instructionsProjections.owners(f.id)).toEqual([]);
+  });
+});
+
+describe("an interrupted uninstall is recovered only once it is durable", () => {
+  const failingSync = (f: Fixture) =>
+    new Projections(f.store, (point) => {
+      if (point === "before-recover-sync") throw new Error("fsync failed");
+    });
+
+  it("keeps the marker and ownership of a restore when its directory cannot be synced", async () => {
+    const f = fixture();
+    const skillId = await adoptAndSync(f);
+    await publish(f, skillId, v2);
+    await f.runtime.sync(f.project);
+    const crashing = new Projections(f.store, (point) => {
+      if (point === "after-rename") throw new Error("process stopped");
+    });
+    expect(() => crashing.instructions.uninstall(f.id)).toThrow("process stopped");
+    expect(readFileSync(f.claude)).toEqual(Buffer.from(original));
+
+    expect(failingSync(f).recover()).toEqual([]);
+    expect(f.store.entries("instruction-uninstall:")).toHaveLength(1);
+    expect(record(f)).toBeDefined();
+    expect(adoption(f)).toBeDefined();
+    expect(f.runtime.projections.instructions.owners(f.id)).toEqual([f.project]);
+    expect(f.store.entries("instruction-unconfigure:")).toEqual([]);
+
+    expect(f.runtime.projections.recover()).toEqual([f.id]);
+    expect(f.store.entries("instruction-uninstall:")).toEqual([]);
+    expect(record(f)).toBeUndefined();
+    expect(f.runtime.projections.instructions.owners(f.id)).toEqual([]);
+  });
+
+  it("keeps the marker and ownership of a removal when its directory cannot be synced", async () => {
+    const f = fixture();
+    rmSync(f.claude);
+    await f.provider.create(instructions("global-agents", v2));
+    await f.runtime.sync(f.project);
+    const crashing = new Projections(f.store, (point) => {
+      if (point !== "before-unlink") return;
+      rmSync(f.claude);
+      throw new Error("process stopped");
+    });
+    expect(() => crashing.instructions.uninstall(f.id)).toThrow("process stopped");
+    expect(existsSync(f.claude)).toBe(false);
+
+    expect(failingSync(f).recover()).toEqual([]);
+    expect(f.store.entries("instruction-uninstall:")).toHaveLength(1);
+    expect(record(f)?.digest).toBe(sha(v2));
+    expect(f.runtime.projections.instructions.owners(f.id)).toEqual([f.project]);
+
+    expect(f.runtime.projections.recover()).toEqual([f.id]);
+    expect(record(f)).toBeUndefined();
+    expect(f.runtime.projections.instructions.owners(f.id)).toEqual([]);
+    expect((await f.runtime.syncTargets(f.project)).instructions).toEqual([]);
+    expect(existsSync(f.claude)).toBe(false);
+  });
 });
 
 describe("instructions CLI", () => {
@@ -893,7 +988,9 @@ describe("instructions CLI", () => {
     await expect(run("rollback", "0123456789abcdef", "--force")).rejects.toMatchObject({
       code: "ARGUMENT_INVALID",
     });
-    expect(await run("uninstall", "~/.claude/CLAUDE.md")).toMatchObject({
+    // A bare file name in the working directory names the adopted target.
+    vi.spyOn(process, "cwd").mockReturnValue(dirname(f.claude));
+    expect(await run("uninstall", "CLAUDE.md")).toMatchObject({
       uninstalled: f.id,
     });
     expect(readFileSync(f.claude)).toEqual(Buffer.from(original));

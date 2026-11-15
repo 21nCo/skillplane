@@ -252,14 +252,16 @@ same journaled rename; the next `sync` applies the latest published version agai
 Skillplane created, and clears the file's projection state; the original's backup
 goes with it. The target also leaves the `instructions` of the project that adopted
 or synced it, so the next `sync` neither refuses the restored file nor writes the
-removed one again; add it back, or adopt the file again, to resume. `TARGET` is the ID `doctor` lists or the file's path. Both refuse a
+removed one again; add it back, or adopt the file again, to resume. `TARGET` is the ID `doctor` lists or the file's path; a bare file name such as `AGENTS.md` names a managed or adopted file in the working directory, else a skill projection. Both refuse a
 hand-edited file with `PROJECTION_DIVERGED`; `--force` first copies the edited file
 into the backup directory, where it stays. An uninstall interrupted after it
-replaced the file is finished by the next `sync` or `doctor`. Uninstall, and a
+replaced the file is finished by the next `sync` or `doctor`, which first makes the
+replacement or removal durable and otherwise keeps the target managed for a retry. Uninstall, and a
 rollback to another document, refuse with `PROJECTION_SHARED` when another project
 claims the file, checked again in the same commit that replaces or removes it, and a `sync` that reaches a file being
 uninstalled is refused with `PROJECTION_BUSY`. A `sync` that read the configuration
-before an uninstall committed never writes the released file again; it stops with
+before an uninstall committed never writes or claims the released file again, even
+when another project synced the same version there meanwhile; it stops with
 `PROJECTION_CHANGED`, and the next `sync` reads the configuration without it.
 
 ## Freshness and trust
