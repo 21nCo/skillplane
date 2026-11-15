@@ -27,8 +27,10 @@ export class LocalStore {
     // version row as a skill, so instructions documents live in their own
     // instructions and instructions_version tables with the same columns.
     // skill_kind came only from unreleased builds of this change and is dropped.
+    // busy_timeout comes first: opening the WAL database while another process
+    // holds its lock (closing, recovering or writing) must wait, not fail.
     this.db
-      .exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;
+      .exec(`PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;
       CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS projection_owner (projection_id TEXT NOT NULL, project TEXT NOT NULL, PRIMARY KEY(projection_id, project));
       CREATE INDEX IF NOT EXISTS projection_owner_project ON projection_owner(project, projection_id);

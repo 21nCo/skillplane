@@ -207,10 +207,22 @@ export class CloudWorkspaceProvider implements WorkspaceProvider {
   private call(name: string, args: Record<string, unknown>): Promise<unknown> {
     return this.transport.call(name, { ...args, caller: this.caller });
   }
-  // Projection, sync and usage membership list skills only (SKI-24 owns
-  // instructions projection), so skills_list keeps its default kind here.
-  list(): Promise<SkillInfo[]> {
-    return this.listKind("skill");
+  // Without a kind this lists skills only: skill projection, export and usage
+  // membership never consider instructions documents, and skills_list keeps
+  // its default kind so a pre-kind server accepts it.
+  list(kind: SkillInfo["kind"] = "skill"): Promise<SkillInfo[]> {
+    return kind === "skill" ? this.listKind("skill") : this.listInstructions();
+  }
+  private async listInstructions(): Promise<SkillInfo[]> {
+    if (!this.listsInstructions) return [];
+    try {
+      return await this.listKind("instructions");
+    } catch (error) {
+      // A pre-kind server rejects the kind argument and has no instructions.
+      if (!rejectsArgument(error, "kind")) throw error;
+      this.listsInstructions = false;
+      return [];
+    }
   }
   // Every active skill the credential can read, in any visibility; the listing
   // reports each skill's current published version.
@@ -269,14 +281,7 @@ export class CloudWorkspaceProvider implements WorkspaceProvider {
   // operations, which apply to skills and instructions documents alike.
   private async requireMember(skillId: string): Promise<void> {
     if ((await this.listKind("skill")).some((s) => s.id === skillId)) return;
-    if (this.listsInstructions)
-      try {
-        if ((await this.listKind("instructions")).some((s) => s.id === skillId)) return;
-      } catch (error) {
-        // A pre-kind server rejects the kind argument and has no instructions.
-        if (!rejectsArgument(error, "kind")) throw error;
-        this.listsInstructions = false;
-      }
+    if ((await this.listInstructions()).some((s) => s.id === skillId)) return;
     throw new RuntimeError("SKILL_NOT_FOUND");
   }
   async versions(skillId: string): Promise<VersionInfo[]> {

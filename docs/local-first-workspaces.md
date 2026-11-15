@@ -150,6 +150,70 @@ makes no promise of native slash commands. Capability references:
 [Claude skills](https://code.claude.com/docs/en/skills) and
 [Codex skills](https://learn.chatgpt.com/docs/build-skills).
 
+## Instruction files
+
+An `instructions` document (a single `AGENTS.md`) can be written to a user-level
+agent instructions file. Add `instructions` to the project configuration:
+
+```json
+"instructions": [
+  { "adapter": "claude", "artifact": "global-agents" },
+  { "adapter": "codex", "artifact": "global-agents" },
+  { "adapter": "generic", "path": "~/.config/agent/RULES.md", "artifact": "global-agents" }
+]
+```
+
+| Adapter | Default file          |
+| ------- | --------------------- |
+| Claude  | `~/.claude/CLAUDE.md` |
+| Codex   | `~/.codex/AGENTS.md`  |
+| Generic | Explicit `path`       |
+
+`artifact` is the instructions document's visible name: its slug, the
+`namespace-slug` of a mounted workspace, or an alias. `path` is absolute or starts
+with `~/`; `scope` is `user`. `sync` writes the latest published version's exact
+bytes, with no wrapper, by a temporary file in the same directory, `fsync` and
+rename. It keeps each version under `.skillplane-projections/instructions/` beside
+the file and records the path, version and SHA-256 of the bytes it wrote.
+
+`sync` never overwrites a file it did not write: an existing file with no record
+fails with `PROJECTION_COLLISION`, and a file whose bytes no longer match the
+recorded digest fails with `PROJECTION_DIVERGED`. Both leave the file untouched and
+exit non-zero. Projects that configure the same document may share a file; a
+file that holds another project's document is a `PROJECTION_COLLISION` until every
+project claiming it removes the target. A deleted file is written again. An
+interrupted write is finished or rolled back by the next `sync` or `doctor`: it is
+finished only when the file is the one that write renamed into place, unchanged;
+otherwise the file's existing record stays unchanged (a first write leaves no
+record) and the file is left as it is, so a file a user wrote by hand is never
+adopted even when it holds the published bytes.
+A temporary file left by an interrupted or abandoned write is removed then too;
+one that cannot be removed is retried on the next run without failing it.
+If the directory cannot be synced, that write stays unfinished: its file's
+existing record stays unchanged (a first write leaves no record), `sync` and
+`doctor` report it as `RECOVERY_PENDING`, and the next run retries it.
+`sync` checks every destination before it writes any: two instruction files, or an
+instruction file and a skill, where one path is or contains the other, and an
+instruction file inside a `.skillplane-projections` directory are a
+`PROJECTION_COLLISION`, and an unsafe directory above an instruction file stops it
+too. `doctor` reports the instruction-file cases; the skill overlap and the unsafe
+directory show only when `sync` runs. Removing a target from the configuration leaves its file in place. `doctor`
+lists each instruction file as `in-sync`, `diverged`, `missing`, `collision`,
+`not-synced` or `unverified`. A collision with a file another project's document
+holds names that document, the one configured and the projects that claim it; a
+collision with an unmanaged file has no record, so it names only the configured
+document. For a configured file, `doctor` resolves the
+configured name through the catalog (source order, aliases and the collision
+policy) exactly as `sync` does, and reports the error `sync` would raise, such as
+`SKILL_NAME_COLLISION`, with the file's own state in `fileState`. Offline, local
+workspaces are still read: a name that local workspaces ahead of every cloud source
+resolve under the `precedence` policy is decided by them. Any other name is checked
+against the document it resolved to at the project's last `sync`, which must still
+agree with the local workspaces; otherwise, or after the catalog configuration
+changes, it is `unverified`, with the file's own state in `fileState`, until
+`doctor --online` or the next `sync`. Cloud workspaces list instructions documents only
+when the server supports artifact kinds; an older server has none.
+
 ## Freshness and trust
 
 Each entry points to a self-contained generation with `SKILL.md`, `projection.json`,

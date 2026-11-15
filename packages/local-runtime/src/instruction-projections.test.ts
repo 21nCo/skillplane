@@ -1,0 +1,1292 @@
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { createHash, randomUUID } from "node:crypto";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  InstructionProjections,
+  LocalStore,
+  LocalWorkspaceProvider,
+  Projections,
+  Runtime,
+  instructionTargetSchema,
+  projectSchema,
+  requireValue,
+  targetSchema,
+  workspaceKey,
+  type CreateRequest,
+  type InstructionRecord,
+  type InstructionStatus,
+} from "./index.js";
+
+const resources: { root: string; stores: LocalStore[] }[] = [];
+/** Undoes permission changes before the temporary roots are removed. */
+const restores: (() => void)[] = [];
+afterEach(() => {
+  for (const restore of restores.splice(0)) restore();
+  vi.unstubAllEnvs();
+  for (const { root, stores } of resources.splice(0)) {
+    for (const store of stores) store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+const sha = (text: string | Uint8Array) =>
+  `sha256:${createHash("sha256").update(text).digest("hex")}`;
+const v1 = "# Global agents\n\nUse the composio CLI when no connector exists.\n";
+const v2 = `${v1}\nTry every ACTIVE account per provider.\n`;
+const request: CreateRequest = {
+  kind: "instructions",
+  slug: "global-agents",
+  name: "Global agents",
+  description: "User-level agent instructions",
+  tags: [],
+  visibility: "private",
+  instructions: v1,
+  assets: [],
+  idempotencyKey: "create-global-agents",
+};
+
+function fixture(
+  instructions: unknown[] = [
+    { adapter: "claude", artifact: "global-agents" },
+    { adapter: "codex", artifact: "global-agents" },
+  ],
+) {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "skillplane-instr-")));
+  const home = join(root, "home");
+  mkdirSync(home);
+  vi.stubEnv("HOME", home);
+  const state = join(root, "home", ".skillplane");
+  const store = new LocalStore(state);
+  const resource = { root, stores: [store] };
+  resources.push(resource);
+  const runtime = new Runtime(store);
+  const project = join(root, "project");
+  mkdirSync(project);
+  const context = runtime.setup(project, "Personal");
+  runtime.configure(project, { ...context, instructions });
+  const provider = new LocalWorkspaceProvider(store, context.primary.id);
+  const claude = join(home, ".claude", "CLAUDE.md");
+  const codex = join(home, ".codex", "AGENTS.md");
+  /** A second connection to the same state, as another Skillplane process has. */
+  const reopen = () => {
+    const other = new LocalStore(state);
+    resource.stores.push(other);
+    return other;
+  };
+  return { root, home, store, runtime, project, provider, claude, codex, reopen };
+}
+
+async function publish(
+  provider: LocalWorkspaceProvider,
+  skillId: string,
+  text: string,
+): Promise<void> {
+  const current = await provider.retrieve(skillId);
+  const amended = await provider.amend({
+    skillId,
+    baseVersionId: current.version.id,
+    proposedBump: "minor",
+    idempotencyKey: randomUUID(),
+    changes: [
+      {
+        operation: "replace",
+        path: "AGENTS.md",
+        expectedSha256: sha(requireValue(current.bundle.files.get("AGENTS.md"))).slice(
+          7,
+        ),
+        content: text,
+      },
+    ],
+    learning: {
+      summary: "Update global instructions",
+      observation: "Accounts were skipped",
+      rationale: "Try each active account",
+      confidence: "high",
+      evidence: [],
+      evidenceUnavailableReason: "Editorial update",
+      validation: [],
+      validationNotRunReason: "No executable change",
+    },
+  });
+  const rows = (await provider.candidates(skillId)) as {
+    reviewId: string;
+    expectedUpdatedAt: string;
+  }[];
+  const row = requireValue(rows.find((r) => r.reviewId === amended.versionId));
+  await provider.decide(
+    skillId,
+    amended.versionId,
+    row.expectedUpdatedAt,
+    true,
+    "Reviewed",
+    randomUUID(),
+  );
+}
+
+const record = (store: LocalStore, path: string) =>
+  store.get<InstructionRecord>(`instruction:${InstructionProjections.id(path)}`);
+interface Doctor {
+  instructions: InstructionStatus[];
+}
+const states = async (runtime: Runtime, project: string) =>
+  Object.fromEntries(
+    ((await runtime.doctor(false, project)) as Doctor).instructions.map((row) => [
+      row.path,
+      row.state,
+    ]),
+  );
+
+describe("instruction target configuration", () => {
+  it("validates adapters, scope and paths and stays readable by older runtimes", () => {
+    const parse = (value: unknown) => instructionTargetSchema.safeParse(value).success;
+    expect(parse({ adapter: "claude", artifact: "global" })).toBe(true);
+    expect(parse({ adapter: "generic", artifact: "global", path: "~/RULES.md" })).toBe(
+      true,
+    );
+    expect(parse({ adapter: "generic", artifact: "global" })).toBe(false);
+    expect(
+      parse({ adapter: "codex", artifact: "global", path: "relative/AGENTS.md" }),
+    ).toBe(false);
+    expect(parse({ adapter: "codex", artifact: "global", path: "/tmp/dir/" })).toBe(
+      false,
+    );
+    expect(parse({ adapter: "codex", artifact: "global", path: "/tmp/.." })).toBe(
+      false,
+    );
+    expect(parse({ adapter: "codex", artifact: "global", scope: "project" })).toBe(
+      false,
+    );
+    expect(parse({ adapter: "codex", artifact: "Global" })).toBe(false);
+    // Published runtimes parse skillplane.json strictly, so a context without
+    // instruction targets must not gain the key.
+    const context = projectSchema.parse({
+      formatVersion: 1,
+      primary: { provider: "local", id: randomUUID() },
+    });
+    expect(Object.keys(context)).not.toContain("instructions");
+  });
+});
+
+describe("instruction file projection", () => {
+  it("writes the exact published bytes to both default files and records their digests", async () => {
+    const f = fixture();
+    const created = await f.provider.create(request);
+    const synced = await f.runtime.syncTargets(f.project);
+    expect(synced.projections).toEqual([]);
+    expect(synced.instructions.map((r) => r.path)).toEqual([f.claude, f.codex]);
+    for (const path of [f.claude, f.codex]) {
+      expect(readFileSync(path, "utf8")).toBe(v1);
+      const saved = requireValue(record(f.store, path));
+      expect(saved).toMatchObject({
+        kind: "instructions",
+        path,
+        digest: sha(v1),
+        version: { id: created.versionId, semanticVersion: "1.0.0" },
+        skill: { id: created.skillId, kind: "instructions" },
+      });
+      expect(readFileSync(saved.generation, "utf8")).toBe(v1);
+      expect(saved.generation).toContain(
+        join(dirname(path), ".skillplane-projections", "instructions", saved.id),
+      );
+      // No launcher wrapper, temp files or skill directories beside the target.
+      expect(readdirSync(dirname(path)).sort()).toEqual(
+        [
+          ".skillplane-projections",
+          path.endsWith("CLAUDE.md") ? "CLAUDE.md" : "AGENTS.md",
+        ].sort(),
+      );
+    }
+    expect(await states(f.runtime, f.project)).toEqual({
+      [f.claude]: "in-sync",
+      [f.codex]: "in-sync",
+    });
+    // A re-sync of the same version is a no-op on the files.
+    const inode = statSync(f.claude).ino;
+    await f.runtime.sync(f.project);
+    expect(statSync(f.claude).ino).toBe(inode);
+  });
+
+  it("refuses an existing unmanaged file and leaves every target untouched", async () => {
+    const f = fixture();
+    await f.provider.create(request);
+    mkdirSync(dirname(f.codex));
+    writeFileSync(f.codex, "my own notes\n");
+    await expect(f.runtime.sync(f.project)).rejects.toMatchObject({
+      code: "PROJECTION_COLLISION",
+    });
+    expect(readFileSync(f.codex, "utf8")).toBe("my own notes\n");
+    expect(record(f.store, f.codex)).toBeUndefined();
+    // The collision is found before any write, so the Claude file is not created either.
+    expect(existsSync(f.claude)).toBe(false);
+    expect(await states(f.runtime, f.project)).toEqual({
+      [f.claude]: "not-synced",
+      [f.codex]: "collision",
+    });
+  });
+
+  it("replaces the file by rename on a new version without exposing partial content", async () => {
+    const f = fixture([{ adapter: "claude", artifact: "global-agents" }]);
+    const created = await f.provider.create(request);
+    await f.runtime.sync(f.project);
+    const before = statSync(f.claude).ino;
+    await publish(f.provider, created.skillId, v2);
+    const observed: string[] = [];
+    const projections = new Projections(f.store, (point) => {
+      if (point !== "before-swap") return;
+      // The complete next version is staged beside the target while readers
+      // still see the complete previous version.
+      observed.push(readFileSync(f.claude, "utf8"));
+      const staged = readdirSync(dirname(f.claude)).filter((name) =>
+        name.startsWith(".skillplane-instructions-"),
+      );
+      expect(staged).toHaveLength(1);
+      observed.push(
+        readFileSync(join(dirname(f.claude), requireValue(staged[0])), "utf8"),
+      );
+    });
+    const snapshot = await f.provider.retrieve(created.skillId);
+    const next = projections.instructions.sync(
+      snapshot,
+      instructionTargetSchema.parse({ adapter: "claude", artifact: "global-agents" }),
+      f.project,
+    );
+    expect(observed).toEqual([v1, v2]);
+    expect(readFileSync(f.claude, "utf8")).toBe(v2);
+    expect(statSync(f.claude).ino).not.toBe(before);
+    expect(next.digest).toBe(sha(v2));
+    expect(record(f.store, f.claude)?.version.semanticVersion).toBe("1.1.0");
+  });
+
+  it("detects a hand edit, never overwrites it and reports it in doctor", async () => {
+    const f = fixture([{ adapter: "claude", artifact: "global-agents" }]);
+    const created = await f.provider.create(request);
+    await f.runtime.sync(f.project);
+    writeFileSync(f.claude, `${v1}\nmy local rule\n`);
+    await publish(f.provider, created.skillId, v2);
+    await expect(f.runtime.sync(f.project)).rejects.toMatchObject({
+      code: "PROJECTION_DIVERGED",
+    });
+    expect(readFileSync(f.claude, "utf8")).toBe(`${v1}\nmy local rule\n`);
+    expect(record(f.store, f.claude)?.digest).toBe(sha(v1));
+    expect(await states(f.runtime, f.project)).toEqual({ [f.claude]: "diverged" });
+  });
+
+  it("writes a deleted owned file again and reports it missing until then", async () => {
+    const f = fixture([{ adapter: "codex", artifact: "global-agents" }]);
+    await f.provider.create(request);
+    await f.runtime.sync(f.project);
+    rmSync(f.codex);
+    expect(await states(f.runtime, f.project)).toEqual({ [f.codex]: "missing" });
+    await f.runtime.sync(f.project);
+    expect(readFileSync(f.codex, "utf8")).toBe(v1);
+  });
+
+  it("rolls back a write interrupted before the rename and keeps the previous file", async () => {
+    const f = fixture([{ adapter: "claude", artifact: "global-agents" }]);
+    const created = await f.provider.create(request);
+    await f.runtime.sync(f.project);
+    await publish(f.provider, created.skillId, v2);
+    const crashing = new Projections(f.store, (point) => {
+      if (point === "before-swap") throw new Error("crash");
+    });
+    const target = instructionTargetSchema.parse({
+      adapter: "claude",
+      artifact: "global-agents",
+    });
+    const snapshot = await f.provider.retrieve(created.skillId);
+    expect(() => crashing.instructions.sync(snapshot, target, f.project)).toThrow(
+      "crash",
+    );
+    expect(readFileSync(f.claude, "utf8")).toBe(v1);
+    expect(f.store.entries("instruction-journal:")).toHaveLength(1);
+
+    expect(new Projections(f.store).recover()).toEqual([]);
+    expect(f.store.entries("instruction-journal:")).toHaveLength(0);
+    expect(readFileSync(f.claude, "utf8")).toBe(v1);
+    expect(record(f.store, f.claude)?.digest).toBe(sha(v1));
+    expect(
+      readdirSync(dirname(f.claude)).filter((n) =>
+        n.startsWith(".skillplane-instructions-"),
+      ),
+    ).toEqual([]);
+    // Re-running reuses the staged generation and completes.
+    await f.runtime.sync(f.project);
+    expect(readFileSync(f.claude, "utf8")).toBe(v2);
+  });
+
+  it("makes the rename durable before recovery commits it, and retries when it cannot", async () => {
+    const f = fixture([{ adapter: "claude", artifact: "global-agents" }]);
+    const created = await f.provider.create(request);
+    await f.runtime.sync(f.project);
+    await publish(f.provider, created.skillId, v2);
+    const crashing = new Projections(f.store, (point) => {
+      if (point === "after-rename") throw new Error("crash");
+    });
+    const target = instructionTargetSchema.parse({
+      adapter: "claude",
+      artifact: "global-agents",
+    });
+    const snapshot = await f.provider.retrieve(created.skillId);
+    // The writer stopped between the rename and the directory sync.
+    expect(() => crashing.instructions.sync(snapshot, target, f.project)).toThrow(
+      "crash",
+    );
+    expect(readFileSync(f.claude, "utf8")).toBe(v2);
+    expect(record(f.store, f.claude)?.digest).toBe(sha(v1));
+    const id = InstructionProjections.id(f.claude);
+    // A directory that cannot be synced keeps the journal and the old record
+    // for that target alone: recovery goes on with everything else, and sync
+    // and doctor report it as pending. Root ignores the missing read
+    // permission, so this part needs a user.
+    if (process.getuid?.() !== 0) {
+      const stray = join(f.home, ".skillplane-instructions-stray");
+      writeFileSync(stray, "partial");
+      f.store.set("instruction-cleanup:stray:stray", { temp: stray });
+      chmodSync(dirname(f.claude), 0o300);
+      try {
+        expect(new Projections(f.store).recover()).toEqual([]);
+        expect(existsSync(stray)).toBe(false);
+        expect(f.store.entries("instruction-cleanup:")).toHaveLength(0);
+        expect(await states(f.runtime, f.project)).toEqual({
+          [f.claude]: "RECOVERY_PENDING",
+        });
+        await expect(f.runtime.syncTargets(f.project)).rejects.toMatchObject({
+          code: "RECOVERY_PENDING",
+        });
+      } finally {
+        chmodSync(dirname(f.claude), 0o700);
+      }
+      expect(f.store.entries("instruction-journal:")).toHaveLength(1);
+      expect(record(f.store, f.claude)?.digest).toBe(sha(v1));
+      expect(readFileSync(f.claude, "utf8")).toBe(v2);
+    }
+    expect(new Projections(f.store).recover()).toEqual([id]);
+    expect(record(f.store, f.claude)?.digest).toBe(sha(v2));
+    expect(f.store.entries("instruction-journal:")).toHaveLength(0);
+    expect(await states(f.runtime, f.project)).toEqual({ [f.claude]: "in-sync" });
+  });
+
+  it("reports an interrupted first write it cannot recover as pending, configured or not", async () => {
+    const f = fixture([{ adapter: "claude", artifact: "global-agents" }]);
+    const created = await f.provider.create(request);
+    const crashing = new Projections(f.store, (point) => {
+      if (point === "after-rename") throw new Error("crash");
+    });
+    const target = instructionTargetSchema.parse({
+      adapter: "claude",
+      artifact: "global-agents",
+    });
+    const snapshot = await f.provider.retrieve(created.skillId);
+    expect(() => crashing.instructions.sync(snapshot, target, f.project)).toThrow(
+      "crash",
+    );
+    expect(record(f.store, f.claude)).toBeUndefined();
+    // Root ignores the missing read permission, so this needs a user.
+    if (process.getuid?.() === 0) return;
+    chmodSync(dirname(f.claude), 0o300);
+    try {
+      expect(await states(f.runtime, f.project)).toEqual({
+        [f.claude]: "RECOVERY_PENDING",
+      });
+      await expect(f.runtime.syncTargets(f.project)).rejects.toMatchObject({
+        code: "RECOVERY_PENDING",
+      });
+      f.runtime.configure(f.project, {
+        ...f.runtime.project(f.project),
+        instructions: [],
+      });
+      const rows = ((await f.runtime.doctor(false, f.project)) as Doctor).instructions;
+      expect(rows).toEqual([
+        expect.objectContaining({
+          path: f.claude,
+          configured: false,
+          state: "RECOVERY_PENDING",
+          fileState: "collision",
+        }),
+      ]);
+    } finally {
+      chmodSync(dirname(f.claude), 0o700);
+    }
+    expect(f.store.entries("instruction-journal:")).toHaveLength(1);
+    expect(new Projections(f.store).recover()).toEqual([
+      InstructionProjections.id(f.claude),
+    ]);
+    expect(record(f.store, f.claude)?.digest).toBe(sha(v1));
+  });
+
+  it("completes a write interrupted after the rename instead of reporting it as a hand edit", async () => {
+    const f = fixture([{ adapter: "claude", artifact: "global-agents" }]);
+    const created = await f.provider.create(request);
+    await f.runtime.sync(f.project);
+    await publish(f.provider, created.skillId, v2);
+    const crashing = new Projections(f.store, (point) => {
+      if (point === "after-swap") throw new Error("crash");
+    });
+    const target = instructionTargetSchema.parse({
+      adapter: "claude",
+      artifact: "global-agents",
+    });
+    const snapshot = await f.provider.retrieve(created.skillId);
+    expect(() => crashing.instructions.sync(snapshot, target, f.project)).toThrow(
+      "crash",
+    );
+    // The rename landed but the record commit did not.
+    expect(readFileSync(f.claude, "utf8")).toBe(v2);
+    expect(record(f.store, f.claude)?.digest).toBe(sha(v1));
+
+    const id = InstructionProjections.id(f.claude);
+    expect(new Projections(f.store).recover()).toEqual([id]);
+    expect(record(f.store, f.claude)?.digest).toBe(sha(v2));
+    expect(new Projections(f.store).recover()).toEqual([]);
+    expect(await states(f.runtime, f.project)).toEqual({ [f.claude]: "in-sync" });
+    const inode = statSync(f.claude).ino;
+    await f.runtime.sync(f.project);
+    expect(statSync(f.claude).ino).toBe(inode);
+  });
+
+  it("leaves the journal of a live writer in another process alone", async () => {
+    const f = fixture([{ adapter: "claude", artifact: "global-agents" }]);
+    const created = await f.provider.create(request);
+    const crashing = new Projections(f.store, (point) => {
+      if (point === "before-swap") throw new Error("crash");
+    });
+    const target = instructionTargetSchema.parse({
+      adapter: "claude",
+      artifact: "global-agents",
+    });
+    const snapshot = await f.provider.retrieve(created.skillId);
+    expect(() => crashing.instructions.sync(snapshot, target, f.project)).toThrow(
+      "crash",
+    );
+    const [[key, journal]] = f.store.entries<{ pid: number; startedAt: string }>(
+      "instruction-journal:",
+    ) as [[string, { pid: number; startedAt: string }]];
+    // The parent process is alive and is not this process.
+    f.store.set(key, { ...journal, pid: process.ppid });
+    new Projections(f.store).recover();
+    expect(f.store.get(key)).toBeDefined();
+    // A journal older than any lock-bounded write is dead even if its PID was reused.
+    f.store.set(key, {
+      ...journal,
+      pid: process.ppid,
+      startedAt: new Date(0).toISOString(),
+    });
+    new Projections(f.store).recover();
+    expect(f.store.get(key)).toBeUndefined();
+  });
+
+  it("serializes a concurrent sync on the projection lock with one result", async () => {
+    const f = fixture([{ adapter: "claude", artifact: "global-agents" }]);
+    const created = await f.provider.create(request);
+    const target = instructionTargetSchema.parse({
+      adapter: "claude",
+      artifact: "global-agents",
+    });
+    const snapshot = await f.provider.retrieve(created.skillId);
+    const other = new Projections(f.reopen());
+    let competing: InstructionRecord | undefined;
+    const first = new Projections(f.store, (point) => {
+      // The other process wins the lock between this one's plan and its write.
+      if (point === "before-write" && !competing)
+        competing = other.instructions.sync(snapshot, target, f.project);
+    });
+    const result = first.instructions.sync(snapshot, target, f.project);
+    expect(result.eventId).toBe(requireValue(competing).eventId);
+    expect(readFileSync(f.claude, "utf8")).toBe(v1);
+    expect(f.store.entries("instruction-journal:")).toHaveLength(0);
+    expect(
+      readdirSync(dirname(f.claude)).filter((n) =>
+        n.startsWith(".skillplane-instructions-"),
+      ),
+    ).toEqual([]);
+
+    // A writer whose plan went stale under the lock fails without touching the file.
+    await publish(f.provider, created.skillId, v2);
+    const planned = await f.provider.retrieve(created.skillId);
+    const v3 = `${v2}\nKeep PRs small.\n`;
+    await publish(f.provider, created.skillId, v3);
+    const newest = await f.provider.retrieve(created.skillId);
+    let raced = false;
+    const stale = new Projections(f.store, (point) => {
+      if (point === "before-write" && !raced) {
+        raced = true;
+        other.instructions.sync(newest, target, f.project);
+      }
+    });
+    expect(() => stale.instructions.sync(planned, target, f.project)).toThrow(
+      "Projection changed",
+    );
+    expect(readFileSync(f.claude, "utf8")).toBe(v3);
+    // Nothing was written, so no journal is left for recover() to act on.
+    expect(f.store.entries("instruction-journal:")).toHaveLength(0);
+    expect(new Projections(f.store).recover()).toEqual([]);
+    expect(record(f.store, f.claude)?.digest).toBe(sha(v3));
+    expect(readFileSync(f.claude, "utf8")).toBe(v3);
+  });
+
+  it("never claims a file a user edited to the planned bytes while a sync waited", async () => {
+    const f = fixture([{ adapter: "claude", artifact: "global-agents" }]);
+    const created = await f.provider.create(request);
+    await f.runtime.sync(f.project);
+    await publish(f.provider, created.skillId, v2);
+    const target = instructionTargetSchema.parse({
+      adapter: "claude",
+      artifact: "global-agents",
+    });
+    const snapshot = await f.provider.retrieve(created.skillId);
+    const editing = new Projections(f.store, (point) => {
+      // The user pastes the new text by hand between the plan and the lock.
+      if (point === "before-write") writeFileSync(f.claude, v2);
+    });
+    expect(() => editing.instructions.sync(snapshot, target, f.project)).toThrow(
+      "it was not overwritten",
+    );
+    expect(f.store.entries("instruction-journal:")).toHaveLength(0);
+    // A later recovery does not record Skillplane as the writer of those bytes.
+    expect(new Projections(f.store).recover()).toEqual([]);
+    expect(record(f.store, f.claude)?.digest).toBe(sha(v1));
+    expect(await states(f.runtime, f.project)).toEqual({ [f.claude]: "diverged" });
+  });
+
+  describe("recovery commits only the file the interrupted write renamed", () => {
+    const target = instructionTargetSchema.parse({
+      adapter: "claude",
+      artifact: "global-agents",
+    });
+    const crashBeforeSwap = (f: ReturnType<typeof fixture>) =>
+      new Projections(f.store, (point) => {
+        if (point === "before-swap") throw new Error("crash");
+      });
+    const temps = (f: ReturnType<typeof fixture>) =>
+      readdirSync(dirname(f.claude)).filter((n) =>
+        n.startsWith(".skillplane-instructions-"),
+      );
+
+    it("never adopts a fresh target the user filled with the planned bytes", async () => {
+      const f = fixture([{ adapter: "claude", artifact: "global-agents" }]);
+      const created = await f.provider.create(request);
+      const snapshot = await f.provider.retrieve(created.skillId);
+      expect(() =>
+        crashBeforeSwap(f).instructions.sync(snapshot, target, f.project),
+      ).toThrow("crash");
+      expect(existsSync(f.claude)).toBe(false);
+      writeFileSync(f.claude, v1);
+
+      const projections = new Projections(f.store);
+      expect(projections.recover()).toEqual([]);
+      expect(f.store.entries("instruction-journal:")).toHaveLength(0);
+      expect(temps(f)).toEqual([]);
+      expect(record(f.store, f.claude)).toBeUndefined();
+      expect(
+        projections.instructions.owners(InstructionProjections.id(f.claude)),
+      ).toEqual([]);
+      expect(readFileSync(f.claude, "utf8")).toBe(v1);
+      await expect(f.runtime.sync(f.project)).rejects.toMatchObject({
+        code: "PROJECTION_COLLISION",
+      });
+      expect(readFileSync(f.claude, "utf8")).toBe(v1);
+    });
+
+    it("keeps the previous record when the user pastes the interrupted version", async () => {
+      const f = fixture([{ adapter: "claude", artifact: "global-agents" }]);
+      const created = await f.provider.create(request);
+      await f.runtime.sync(f.project);
+      await publish(f.provider, created.skillId, v2);
+      const snapshot = await f.provider.retrieve(created.skillId);
+      expect(() =>
+        crashBeforeSwap(f).instructions.sync(snapshot, target, f.project),
+      ).toThrow("crash");
+      writeFileSync(f.claude, v2);
+
+      expect(new Projections(f.store).recover()).toEqual([]);
+      expect(f.store.entries("instruction-journal:")).toHaveLength(0);
+      expect(temps(f)).toEqual([]);
+      expect(record(f.store, f.claude)?.digest).toBe(sha(v1));
+      await expect(f.runtime.sync(f.project)).rejects.toMatchObject({
+        code: "PROJECTION_DIVERGED",
+      });
+      expect(readFileSync(f.claude, "utf8")).toBe(v2);
+      expect(await states(f.runtime, f.project)).toEqual({ [f.claude]: "diverged" });
+    });
+
+    it("removes a temp file staged before its inode reached the journal", async () => {
+      const f = fixture([{ adapter: "claude", artifact: "global-agents" }]);
+      const created = await f.provider.create(request);
+      await f.runtime.sync(f.project);
+      await publish(f.provider, created.skillId, v2);
+      const snapshot = await f.provider.retrieve(created.skillId);
+      // The process is killed after creating the temp file but before the
+      // journal names its inode. A thrown fault would run the write's own
+      // cleanup, so the state at that moment is captured and put back.
+      let killed: { journals: [string, unknown][]; temp: Buffer } | undefined;
+      const crashing = new Projections(f.store, (point) => {
+        if (point !== "after-stage") return;
+        const [name] = temps(f);
+        killed = {
+          journals: f.store.entries("instruction-journal:"),
+          temp: readFileSync(join(dirname(f.claude), requireValue(name))),
+        };
+        throw new Error("killed");
+      });
+      expect(() => crashing.instructions.sync(snapshot, target, f.project)).toThrow(
+        "killed",
+      );
+      const state = requireValue(killed);
+      expect(state.journals).toHaveLength(1);
+      const [key, journal] = requireValue(state.journals[0]) as [
+        string,
+        { temp: string; file?: unknown },
+      ];
+      expect(journal.file).toBeUndefined();
+      expect(dirname(journal.temp)).toBe(dirname(f.claude));
+      f.store.set(key, journal);
+      writeFileSync(journal.temp, state.temp);
+      expect(temps(f)).toHaveLength(1);
+
+      expect(new Projections(f.store).recover()).toEqual([]);
+      expect(f.store.entries("instruction-journal:")).toHaveLength(0);
+      expect(temps(f)).toEqual([]);
+      expect(readFileSync(f.claude, "utf8")).toBe(v1);
+      expect(record(f.store, f.claude)?.digest).toBe(sha(v1));
+      expect(await states(f.runtime, f.project)).toEqual({ [f.claude]: "in-sync" });
+    });
+
+    it("removes the temp file of a failed write even when the journal delete throws", async () => {
+      const f = fixture([{ adapter: "claude", artifact: "global-agents" }]);
+      const created = await f.provider.create(request);
+      await f.runtime.sync(f.project);
+      await publish(f.provider, created.skillId, v2);
+      const snapshot = await f.provider.retrieve(created.skillId);
+      const editing = new Projections(f.store, (point) => {
+        if (point === "before-write") writeFileSync(f.claude, `${v1}\nmine\n`);
+      });
+      const remove = f.store.delete.bind(f.store);
+      const deleting = vi.spyOn(f.store, "delete").mockImplementation((key) => {
+        if (key.startsWith("instruction-journal:")) throw new Error("disk I/O error");
+        remove(key);
+      });
+      // The hand edit is reported, not the failed cleanup.
+      expect(() => editing.instructions.sync(snapshot, target, f.project)).toThrow(
+        "it was not overwritten",
+      );
+      deleting.mockRestore();
+      expect(temps(f)).toEqual([]);
+      expect(f.store.entries("instruction-journal:")).toHaveLength(1);
+
+      // The journal left behind names a temp file that never reached the target.
+      expect(new Projections(f.store).recover()).toEqual([]);
+      expect(f.store.entries("instruction-journal:")).toHaveLength(0);
+      expect(record(f.store, f.claude)?.digest).toBe(sha(v1));
+      expect(readFileSync(f.claude, "utf8")).toBe(`${v1}\nmine\n`);
+    });
+
+    describe("a temp file stays named by durable state until it is unlinked", () => {
+      const cleanups = (f: ReturnType<typeof fixture>) =>
+        f.store.entries("instruction-cleanup:");
+      /** Stops at the unlink of a retired temp file, as a kill there would. */
+      const killedAtDiscard = (f: ReturnType<typeof fixture>) =>
+        new Projections(f.store, (point) => {
+          if (point === "before-discard") throw new Error("killed");
+        });
+
+      it("removes the temp file of a write that lost the lock to the same version", async () => {
+        const f = fixture([{ adapter: "claude", artifact: "global-agents" }]);
+        const created = await f.provider.create(request);
+        const snapshot = await f.provider.retrieve(created.skillId);
+        const other = new Projections(f.reopen());
+        let competing: InstructionRecord | undefined;
+        const loser = new Projections(f.store, (point) => {
+          if (point === "before-write" && !competing)
+            competing = other.instructions.sync(snapshot, target, f.project);
+          if (point === "before-discard") throw new Error("killed");
+        });
+        expect(() => loser.instructions.sync(snapshot, target, f.project)).toThrow(
+          "killed",
+        );
+        const winner = requireValue(competing);
+        expect(f.store.entries("instruction-journal:")).toHaveLength(0);
+        expect(cleanups(f)).toHaveLength(1);
+        expect(temps(f)).toHaveLength(1);
+
+        const projections = new Projections(f.store);
+        expect(projections.recover()).toEqual([]);
+        expect(temps(f)).toEqual([]);
+        expect(cleanups(f)).toHaveLength(0);
+        expect(f.store.entries("instruction-journal:")).toHaveLength(0);
+        expect(record(f.store, f.claude)?.eventId).toBe(winner.eventId);
+        expect(projections.instructions.owners(winner.id)).toEqual([
+          realpathSync(f.project),
+        ]);
+        expect(readFileSync(f.claude, "utf8")).toBe(v1);
+      });
+
+      it("removes the temp file of a failed write killed after its journal was retired", async () => {
+        const f = fixture([{ adapter: "claude", artifact: "global-agents" }]);
+        const created = await f.provider.create(request);
+        await f.runtime.sync(f.project);
+        await publish(f.provider, created.skillId, v2);
+        const snapshot = await f.provider.retrieve(created.skillId);
+        const editing = new Projections(f.store, (point) => {
+          if (point === "before-write") writeFileSync(f.claude, `${v1}\nmine\n`);
+          if (point === "before-discard") throw new Error("killed");
+        });
+        // The failed cleanup never replaces the hand-edit error.
+        expect(() => editing.instructions.sync(snapshot, target, f.project)).toThrow(
+          "it was not overwritten",
+        );
+        expect(f.store.entries("instruction-journal:")).toHaveLength(0);
+        expect(cleanups(f)).toHaveLength(1);
+        expect(temps(f)).toHaveLength(1);
+
+        expect(new Projections(f.store).recover()).toEqual([]);
+        expect(temps(f)).toEqual([]);
+        expect(cleanups(f)).toHaveLength(0);
+        expect(record(f.store, f.claude)?.digest).toBe(sha(v1));
+        expect(readFileSync(f.claude, "utf8")).toBe(`${v1}\nmine\n`);
+      });
+
+      it("finishes a rollback whose recovery was killed before the unlink", async () => {
+        const f = fixture([{ adapter: "claude", artifact: "global-agents" }]);
+        const created = await f.provider.create(request);
+        await f.runtime.sync(f.project);
+        await publish(f.provider, created.skillId, v2);
+        const snapshot = await f.provider.retrieve(created.skillId);
+        expect(() =>
+          crashBeforeSwap(f).instructions.sync(snapshot, target, f.project),
+        ).toThrow("crash");
+        expect(() => killedAtDiscard(f).recover()).toThrow("killed");
+        expect(f.store.entries("instruction-journal:")).toHaveLength(0);
+        expect(cleanups(f)).toHaveLength(1);
+        expect(temps(f)).toHaveLength(1);
+
+        expect(new Projections(f.store).recover()).toEqual([]);
+        expect(temps(f)).toEqual([]);
+        expect(cleanups(f)).toHaveLength(0);
+        expect(record(f.store, f.claude)?.digest).toBe(sha(v1));
+        expect(readFileSync(f.claude, "utf8")).toBe(v1);
+        expect(await states(f.runtime, f.project)).toEqual({ [f.claude]: "in-sync" });
+      });
+
+      it("never commits a cleanup entry, even for the renamed file with the planned bytes", async () => {
+        const f = fixture([{ adapter: "claude", artifact: "global-agents" }]);
+        const created = await f.provider.create(request);
+        await f.runtime.sync(f.project);
+        await publish(f.provider, created.skillId, v2);
+        const snapshot = await f.provider.retrieve(created.skillId);
+        const crashing = new Projections(f.store, (point) => {
+          if (point === "after-swap") throw new Error("crash");
+        });
+        expect(() => crashing.instructions.sync(snapshot, target, f.project)).toThrow(
+          "crash",
+        );
+        // The target is the journaled inode holding the planned bytes; only
+        // the kind of entry naming it differs from a completable journal.
+        const [key, journal] = requireValue(
+          f.store.entries<{ temp: string }>("instruction-journal:")[0],
+        );
+        f.store.transaction(() => {
+          f.store.delete(key);
+          f.store.set(key.replace("instruction-journal:", "instruction-cleanup:"), {
+            temp: journal.temp,
+          });
+        });
+
+        const projections = new Projections(f.store);
+        expect(projections.recover()).toEqual([]);
+        expect(cleanups(f)).toHaveLength(0);
+        expect(record(f.store, f.claude)?.digest).toBe(sha(v1));
+        expect(
+          projections.instructions.owners(InstructionProjections.id(f.claude)),
+        ).toEqual([realpathSync(f.project)]);
+        expect(readFileSync(f.claude, "utf8")).toBe(v2);
+        expect(await states(f.runtime, f.project)).toEqual({ [f.claude]: "diverged" });
+      });
+
+      // Root ignores directory permissions, so the unlink could not be denied.
+      describe.skipIf(process.getuid?.() === 0)("an unlink that fails", () => {
+        /** A skill-only project sharing the store, as every caller of recover() is. */
+        async function bystander(f: ReturnType<typeof fixture>) {
+          const project = join(f.root, "bystander");
+          mkdirSync(project);
+          const context = f.runtime.setup(project, "Other", [
+            targetSchema.parse({ adapter: "codex", scope: "user" }),
+          ]);
+          await new LocalWorkspaceProvider(f.store, context.primary.id).create({
+            ...request,
+            kind: "skill",
+            slug: "review",
+            instructions: "Review carefully.",
+            idempotencyKey: "bystander-skill",
+          });
+          const [skill] = (await f.runtime.syncTargets(project)).projections;
+          return { project, id: requireValue(skill).id };
+        }
+        /** Denies unlinking in the target directory until the returned undo runs. */
+        const denyUnlink = (f: ReturnType<typeof fixture>) => {
+          chmodSync(dirname(f.claude), 0o500);
+          const undo = () => chmodSync(dirname(f.claude), 0o700);
+          restores.push(undo);
+          return undo;
+        };
+        async function expectOthersServed(
+          f: ReturnType<typeof fixture>,
+          other: Awaited<ReturnType<typeof bystander>>,
+        ) {
+          expect((await f.runtime.resolve(other.id)).version.id).toBeTruthy();
+          await expect(f.runtime.syncTargets(other.project)).resolves.toBeTruthy();
+          await expect(f.runtime.doctor(false, other.project)).resolves.toBeTruthy();
+          expect(await states(f.runtime, f.project)).toEqual({ [f.claude]: "in-sync" });
+        }
+
+        it("keeps the cleanup entry of a rollback for a later recovery", async () => {
+          const f = fixture([{ adapter: "claude", artifact: "global-agents" }]);
+          const created = await f.provider.create(request);
+          await f.runtime.sync(f.project);
+          const other = await bystander(f);
+          await publish(f.provider, created.skillId, v2);
+          const snapshot = await f.provider.retrieve(created.skillId);
+          expect(() =>
+            crashBeforeSwap(f).instructions.sync(snapshot, target, f.project),
+          ).toThrow("crash");
+          const undo = denyUnlink(f);
+
+          expect(new Projections(f.store).recover()).toEqual([]);
+          expect(f.store.entries("instruction-journal:")).toHaveLength(0);
+          expect(cleanups(f)).toHaveLength(1);
+          expect(temps(f)).toHaveLength(1);
+          await expectOthersServed(f, other);
+          expect(cleanups(f)).toHaveLength(1);
+
+          undo();
+          expect(new Projections(f.store).recover()).toEqual([]);
+          expect(temps(f)).toEqual([]);
+          expect(cleanups(f)).toHaveLength(0);
+          expect(record(f.store, f.claude)?.digest).toBe(sha(v1));
+          expect(readFileSync(f.claude, "utf8")).toBe(v1);
+        });
+
+        it("keeps a swept cleanup entry for a later recovery", async () => {
+          const f = fixture([{ adapter: "claude", artifact: "global-agents" }]);
+          const created = await f.provider.create(request);
+          await f.runtime.sync(f.project);
+          const other = await bystander(f);
+          await publish(f.provider, created.skillId, v2);
+          const snapshot = await f.provider.retrieve(created.skillId);
+          // A failed write killed after its journal was retired.
+          const editing = new Projections(f.store, (point) => {
+            if (point === "before-write") writeFileSync(f.claude, `${v1}\nmine\n`);
+            if (point === "before-discard") throw new Error("killed");
+          });
+          expect(() => editing.instructions.sync(snapshot, target, f.project)).toThrow(
+            "it was not overwritten",
+          );
+          writeFileSync(f.claude, v1);
+          expect(cleanups(f)).toHaveLength(1);
+          const undo = denyUnlink(f);
+
+          expect(new Projections(f.store).recover()).toEqual([]);
+          expect(cleanups(f)).toHaveLength(1);
+          expect(temps(f)).toHaveLength(1);
+          await expectOthersServed(f, other);
+          expect(cleanups(f)).toHaveLength(1);
+
+          undo();
+          expect(new Projections(f.store).recover()).toEqual([]);
+          expect(temps(f)).toEqual([]);
+          expect(cleanups(f)).toHaveLength(0);
+        });
+
+        it("reports a committed write as done and leaves its temp file to recovery", async () => {
+          const f = fixture([{ adapter: "claude", artifact: "global-agents" }]);
+          const created = await f.provider.create(request);
+          const snapshot = await f.provider.retrieve(created.skillId);
+          const other = new Projections(f.reopen());
+          let competing: InstructionRecord | undefined;
+          let undo: (() => void) | undefined;
+          const loser = new Projections(f.store, (point) => {
+            if (point === "before-write" && !competing)
+              competing = other.instructions.sync(snapshot, target, f.project);
+            if (point === "before-discard") undo = denyUnlink(f);
+          });
+          const result = loser.instructions.sync(snapshot, target, f.project);
+          const winner = requireValue(competing);
+          expect(result.eventId).toBe(winner.eventId);
+          expect(record(f.store, f.claude)?.eventId).toBe(winner.eventId);
+          expect(cleanups(f)).toHaveLength(1);
+          expect(temps(f)).toHaveLength(1);
+          expect(new Projections(f.store).recover()).toEqual([]);
+          expect(cleanups(f)).toHaveLength(1);
+
+          requireValue(undo)();
+          expect(new Projections(f.store).recover()).toEqual([]);
+          expect(temps(f)).toEqual([]);
+          expect(cleanups(f)).toHaveLength(0);
+          expect(readFileSync(f.claude, "utf8")).toBe(v1);
+        });
+      });
+    });
+
+    it("rolls back a renamed file the user edited before recovery", async () => {
+      const f = fixture([{ adapter: "claude", artifact: "global-agents" }]);
+      const created = await f.provider.create(request);
+      await f.runtime.sync(f.project);
+      await publish(f.provider, created.skillId, v2);
+      const snapshot = await f.provider.retrieve(created.skillId);
+      const crashing = new Projections(f.store, (point) => {
+        if (point === "after-swap") throw new Error("crash");
+      });
+      expect(() => crashing.instructions.sync(snapshot, target, f.project)).toThrow(
+        "crash",
+      );
+      // The renamed file keeps its inode but no longer holds the written bytes.
+      writeFileSync(f.claude, `${v2}\nmy local rule\n`);
+      expect(new Projections(f.store).recover()).toEqual([]);
+      expect(record(f.store, f.claude)?.digest).toBe(sha(v1));
+      expect(readFileSync(f.claude, "utf8")).toBe(`${v2}\nmy local rule\n`);
+      expect(await states(f.runtime, f.project)).toEqual({ [f.claude]: "diverged" });
+    });
+  });
+
+  it("never reads a writer's renamed but uncommitted file as unmanaged", async () => {
+    const f = fixture([{ adapter: "claude", artifact: "global-agents" }]);
+    const created = await f.provider.create(request);
+    const target = instructionTargetSchema.parse({
+      adapter: "claude",
+      artifact: "global-agents",
+    });
+    const snapshot = await f.provider.retrieve(created.skillId);
+    const otherStore = f.reopen();
+    otherStore.db.exec("PRAGMA busy_timeout=50");
+    const other = new Projections(otherStore);
+    let observed: unknown;
+    const writer = new Projections(f.store, (point) => {
+      if (point !== "after-swap") return;
+      // The file is in place but its record is not committed yet.
+      try {
+        other.instructions.check(snapshot, target, f.project);
+        observed = "checked";
+      } catch (error) {
+        observed = error;
+      }
+    });
+    writer.instructions.sync(snapshot, target, f.project);
+    // The other process waits for the projection lock instead of reporting a collision.
+    expect(observed).toMatchObject({ message: expect.stringMatching(/locked/) });
+    expect(() => other.instructions.check(snapshot, target, f.project)).not.toThrow();
+  });
+
+  it("lets projects share a target for one artifact but not take it for another", async () => {
+    const f = fixture([{ adapter: "claude", artifact: "global-agents" }]);
+    const created = await f.provider.create(request);
+    await f.provider.create({
+      ...request,
+      slug: "work-agents",
+      idempotencyKey: "work",
+      instructions: "# Work\n",
+    });
+    const shared = join(f.root, "shared");
+    const rival = join(f.root, "rival");
+    mkdirSync(shared);
+    mkdirSync(rival);
+    const base = f.runtime.project(f.project);
+    f.runtime.configure(shared, base);
+    f.runtime.configure(rival, {
+      ...base,
+      instructions: [{ adapter: "claude", artifact: "work-agents" }],
+    });
+    await f.runtime.sync(f.project);
+    await f.runtime.sync(shared);
+    // Either project configuring the same artifact may advance it.
+    await publish(f.provider, created.skillId, v2);
+    await f.runtime.sync(shared);
+    expect(readFileSync(f.claude, "utf8")).toBe(v2);
+    await expect(f.runtime.sync(rival)).rejects.toMatchObject({
+      code: "PROJECTION_COLLISION",
+    });
+    expect(readFileSync(f.claude, "utf8")).toBe(v2);
+    // doctor applies the same rule and names the artifact in the file.
+    const doctor = async (project: string) =>
+      ((await f.runtime.doctor(false, project)) as Doctor).instructions;
+    expect(await doctor(rival)).toEqual([
+      expect.objectContaining({
+        path: f.claude,
+        artifact: "global-agents",
+        configuredArtifact: "work-agents",
+        owners: [f.project, shared].sort(),
+        state: "collision",
+      }),
+    ]);
+    rmSync(f.claude);
+    expect(await states(f.runtime, rival)).toEqual({ [f.claude]: "collision" });
+    await f.runtime.sync(shared);
+    expect(await doctor(shared)).toEqual([
+      expect.not.objectContaining({ configuredArtifact: expect.anything() }),
+    ]);
+    expect(await states(f.runtime, shared)).toEqual({ [f.claude]: "in-sync" });
+    // Once both projects drop the target, its file stays and another artifact may take it.
+    for (const project of [f.project, shared]) {
+      f.runtime.configure(project, { ...base, instructions: [] });
+      await f.runtime.sync(project);
+    }
+    expect(readFileSync(f.claude, "utf8")).toBe(v2);
+    expect(await states(f.runtime, rival)).toEqual({ [f.claude]: "not-synced" });
+    await f.runtime.sync(rival);
+    expect(readFileSync(f.claude, "utf8")).toBe("# Work\n");
+  });
+
+  describe("doctor resolves a configured name to the artifact sync would write", () => {
+    // Another project holds the target with the team workspace's agents
+    // document; this project's primary has its own agents and work documents.
+    async function shadowed() {
+      const f = fixture([{ adapter: "claude", artifact: "agents" }]);
+      const team = LocalWorkspaceProvider.create(f.store, "Team");
+      await team.create({
+        ...request,
+        slug: "agents",
+        idempotencyKey: "team",
+        instructions: "# Team\n",
+      });
+      const own = await f.provider.create({ ...request, slug: "agents" });
+      const work = await f.provider.create({
+        ...request,
+        slug: "work",
+        idempotencyKey: "work",
+        instructions: "# Work\n",
+      });
+      const owner = join(f.root, "owner");
+      mkdirSync(owner);
+      f.runtime.configure(owner, {
+        formatVersion: 1,
+        primary: team.workspace,
+        instructions: [{ adapter: "claude", artifact: "agents" }],
+      });
+      await f.runtime.sync(owner);
+      const base = f.runtime.project(f.project);
+      const qualified = (skillId: string) => `${workspaceKey(base.primary)}/${skillId}`;
+      return {
+        ...f,
+        owner,
+        qualified,
+        own: own.skillId,
+        work: work.skillId,
+        /** Configures this project to mount the team workspace without a namespace. */
+        mount: (context: object) =>
+          f.runtime.configure(f.project, {
+            ...base,
+            mounts: [{ workspace: team.workspace }],
+            ...context,
+          }),
+        doctor: async () =>
+          ((await f.runtime.doctor(false, f.project)) as Doctor).instructions,
+      };
+    }
+    async function expectCollision(s: Awaited<ReturnType<typeof shadowed>>) {
+      await expect(s.runtime.sync(s.project)).rejects.toMatchObject({
+        code: "PROJECTION_COLLISION",
+      });
+      expect(readFileSync(s.claude, "utf8")).toBe("# Team\n");
+      expect(await s.doctor()).toEqual([
+        expect.objectContaining({
+          path: s.claude,
+          artifact: "agents",
+          configuredArtifact: "agents",
+          owners: [s.owner],
+          state: "collision",
+        }),
+      ]);
+    }
+    it("reports a collision when the primary shadows the mount's same-name document", async () => {
+      const s = await shadowed();
+      s.mount({ collisions: "precedence" });
+      await expectCollision(s);
+    });
+    it("reports a collision when a qualified alias takes the mount's name", async () => {
+      const s = await shadowed();
+      s.mount({
+        collisions: "precedence",
+        aliases: { [s.qualified(s.own)]: "personal", [s.qualified(s.work)]: "agents" },
+      });
+      await expectCollision(s);
+    });
+    it("reports sync's catalog error for an ambiguous name", async () => {
+      const s = await shadowed();
+      s.mount({ collisions: "error" });
+      await expect(s.runtime.sync(s.project)).rejects.toMatchObject({
+        code: "SKILL_NAME_COLLISION",
+      });
+      expect(await s.doctor()).toEqual([
+        expect.objectContaining({
+          state: "SKILL_NAME_COLLISION",
+          fileState: "in-sync",
+        }),
+      ]);
+    });
+    it("shares the target when the name resolves to the document in the file", async () => {
+      const s = await shadowed();
+      s.mount({ aliases: { [s.qualified(s.own)]: "personal" } });
+      expect(await s.doctor()).toEqual([
+        expect.not.objectContaining({ configuredArtifact: expect.anything() }),
+      ]);
+      expect(await states(s.runtime, s.project)).toEqual({ [s.claude]: "in-sync" });
+      await s.runtime.sync(s.project);
+      expect(readFileSync(s.claude, "utf8")).toBe("# Team\n");
+      expect(
+        s.runtime.projections.instructions.owners(InstructionProjections.id(s.claude)),
+      ).toEqual([s.owner, s.project].sort());
+    });
+  });
+
+  it("projects a generic target and keeps skills and instructions in their own destinations", async () => {
+    const f = fixture([
+      { adapter: "generic", path: "~/rules/RULES.md", artifact: "global-agents" },
+    ]);
+    f.runtime.configure(f.project, {
+      ...f.runtime.project(f.project),
+      targets: [targetSchema.parse({ adapter: "claude", scope: "user" })],
+    });
+    await f.provider.create(request);
+    await f.provider.create({
+      ...request,
+      kind: "skill",
+      slug: "review",
+      instructions: "Review carefully.",
+      idempotencyKey: "skill",
+    });
+    const synced = await f.runtime.syncTargets(f.project);
+    expect(synced.projections.map((r) => r.name)).toEqual(["review"]);
+    expect(synced.instructions.map((r) => r.path)).toEqual([
+      join(f.home, "rules", "RULES.md"),
+    ]);
+    expect(readFileSync(join(f.home, "rules", "RULES.md"), "utf8")).toBe(v1);
+    expect(readdirSync(join(f.home, ".claude", "skills"))).toEqual(["review"]);
+    expect(existsSync(f.claude)).toBe(false);
+  });
+
+  it("names the missing artifact and duplicate destinations before writing", async () => {
+    const f = fixture([{ adapter: "claude", artifact: "absent" }]);
+    await f.provider.create(request);
+    await expect(f.runtime.sync(f.project)).rejects.toMatchObject({
+      code: "INSTRUCTIONS_NOT_FOUND",
+    });
+    f.runtime.configure(f.project, {
+      ...f.runtime.project(f.project),
+      instructions: [
+        { adapter: "claude", artifact: "global-agents" },
+        { adapter: "generic", path: "~/.claude/CLAUDE.md", artifact: "global-agents" },
+      ],
+    });
+    await expect(f.runtime.sync(f.project)).rejects.toThrow(
+      "Duplicate instructions destination",
+    );
+    expect(existsSync(f.claude)).toBe(false);
+  });
+
+  describe("sync checks every destination before it writes any", () => {
+    // A synced v1 instructions file, then v2 published, a skill to project and
+    // the instructions targets under test.
+    const prepared = async (instructions: unknown[]) => {
+      const f = fixture([{ adapter: "claude", artifact: "global-agents" }]);
+      const created = await f.provider.create(request);
+      await f.runtime.sync(f.project);
+      await publish(f.provider, created.skillId, v2);
+      await f.provider.create({
+        ...request,
+        kind: "skill",
+        slug: "review",
+        instructions: "Review carefully.",
+        idempotencyKey: "skill",
+      });
+      f.runtime.configure(f.project, {
+        ...f.runtime.project(f.project),
+        targets: [targetSchema.parse({ adapter: "claude", scope: "user" })],
+        instructions: [
+          { adapter: "claude", artifact: "global-agents" },
+          ...instructions,
+        ],
+      });
+      const refused = async (code: string) => {
+        await expect(f.runtime.syncTargets(f.project)).rejects.toMatchObject({ code });
+        expect(readFileSync(f.claude, "utf8")).toBe(v1);
+        expect(record(f.store, f.claude)?.digest).toBe(sha(v1));
+        expect(f.store.entries("instruction:")).toHaveLength(1);
+        expect(f.store.entries("projection:")).toHaveLength(0);
+        expect(existsSync(join(f.home, ".claude", "skills"))).toBe(false);
+      };
+      return { ...f, refused };
+    };
+
+    it("refuses an instructions file inside another one", async () => {
+      const f = await prepared([
+        { adapter: "generic", path: "~/rules/RULES", artifact: "global-agents" },
+        {
+          adapter: "generic",
+          path: "~/rules/RULES/AGENTS.md",
+          artifact: "global-agents",
+        },
+      ]);
+      await f.refused("PROJECTION_COLLISION");
+      expect(existsSync(join(f.home, "rules"))).toBe(false);
+      // doctor names the same refusal for the nested target.
+      expect(await states(f.runtime, f.project)).toMatchObject({
+        [join(f.home, "rules", "RULES", "AGENTS.md")]: "PROJECTION_COLLISION",
+      });
+    });
+
+    it("refuses an instructions file that is or contains a skill destination", async () => {
+      for (const path of ["~/.claude/skills/review", "~/.claude/skills"]) {
+        const f = await prepared([
+          { adapter: "generic", path, artifact: "global-agents" },
+        ]);
+        await f.refused("PROJECTION_COLLISION");
+      }
+    });
+
+    it("refuses an instructions file inside a projection store, in either order", async () => {
+      const store = {
+        adapter: "generic",
+        path: "~/rules/.skillplane-projections/instructions",
+        artifact: "global-agents",
+      };
+      const rules = {
+        adapter: "generic",
+        path: "~/rules/RULES.md",
+        artifact: "global-agents",
+      };
+      for (const order of [
+        [store, rules],
+        [rules, store],
+      ]) {
+        const f = await prepared(order);
+        await f.refused("PROJECTION_COLLISION");
+        expect(existsSync(join(f.home, "rules"))).toBe(false);
+        expect(await states(f.runtime, f.project)).toMatchObject({
+          [join(f.home, "rules", ".skillplane-projections", "instructions")]:
+            "PROJECTION_COLLISION",
+        });
+      }
+    });
+
+    it("refuses an unsafe directory above an instructions file", async () => {
+      const f = await prepared([
+        { adapter: "generic", path: "~/shared/AGENTS.md", artifact: "global-agents" },
+      ]);
+      mkdirSync(join(f.home, "shared"));
+      chmodSync(join(f.home, "shared"), 0o777);
+      await f.refused("UNSAFE_DIRECTORY");
+      expect(readdirSync(join(f.home, "shared"))).toEqual([]);
+    });
+  });
+});

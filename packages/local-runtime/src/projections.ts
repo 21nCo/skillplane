@@ -1,21 +1,63 @@
 import { requireValue } from "./contracts.js";
 import {
+  closeSync,
+  constants,
   existsSync,
+  fchmodSync,
+  fstatSync,
+  fsyncSync,
   lstatSync,
+  openSync,
   readlinkSync,
+  rmSync,
   symlinkSync,
   renameSync,
   unlinkSync,
+  writeFileSync,
 } from "node:fs";
+import { homedir } from "node:os";
 import { join, relative, resolve, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
-import { bundleKind, stableJson, type CanonicalBundle } from "@skillplane/storage";
+import {
+  bundleEntrypoint,
+  bundleKind,
+  stableJson,
+  type CanonicalBundle,
+} from "@skillplane/storage";
 import { type LocalStore } from "./store.js";
-import { hash, inventory, safeDirectory, syncDirectory, writeAtomic } from "./files.js";
-import { RuntimeError, workspaceKey, type Snapshot, type Target } from "./contracts.js";
+import {
+  hash,
+  inventory,
+  readSafe,
+  safeDirectory,
+  syncDirectory,
+  writeAtomic,
+} from "./files.js";
+import {
+  RuntimeError,
+  workspaceKey,
+  type InstructionTarget,
+  type Snapshot,
+  type Target,
+} from "./contracts.js";
 import { trustEnvelope, trustExpands, type TrustEnvelope } from "./trust.js";
-import { projectionName, renderLauncher, targetDirectory } from "./adapters.js";
+import {
+  instructionPath,
+  projectionName,
+  renderLauncher,
+  targetDirectory,
+} from "./adapters.js";
 import { UsageQueue } from "./analytics.js";
+export type ProjectionFault =
+  | "before-write"
+  | "after-stage"
+  | "before-swap"
+  | "after-rename"
+  | "after-swap"
+  | "before-unlink"
+  | "before-discard";
+/** Instruction target IDs share the owner ledger with skill projection IDs. */
+export const INSTRUCTIONS_ID_PREFIX = "instructions-";
 export interface ProjectionRecord {
   project?: string;
   replacesId?: string;
@@ -47,13 +89,25 @@ export function assertProjectionSupported(bundle: CanonicalBundle): void {
       "Use native MCP skill_resolve for composed skills; local projections cannot materialize dependency closures",
     );
 }
+function validateVersion(snapshot: Snapshot): void {
+  if (
+    !/^[A-Za-z0-9:_-]{1,160}$/.test(snapshot.version.id) ||
+    (snapshot.version.semanticVersion !== null &&
+      !/^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$/.test(snapshot.version.semanticVersion))
+  )
+    throw new RuntimeError("VERSION_ID_INVALID");
+  if (snapshot.bundle.digest !== snapshot.version.digest)
+    throw new RuntimeError("DIGEST_MISMATCH");
+  if (snapshot.version.state !== "published")
+    throw new RuntimeError("VERSION_NOT_PUBLISHED");
+}
 export class Projections {
+  readonly instructions: InstructionProjections;
   constructor(
     readonly store: LocalStore,
-    readonly fault?: (
-      point: "before-write" | "before-swap" | "after-swap" | "before-unlink",
-    ) => void,
+    readonly fault?: (point: ProjectionFault) => void,
   ) {
+    this.instructions = new InstructionProjections(store, fault);
     this.store.transaction(() => {
       if (this.store.get("projection-owners:migrated")) return;
       const indexed = new Set<string>();
@@ -93,7 +147,7 @@ export class Projections {
   projectIds(project: string): string[] {
     return this.store.db
       .prepare(
-        "SELECT projection_id FROM projection_owner WHERE project=? ORDER BY projection_id",
+        `SELECT projection_id FROM projection_owner WHERE project=? AND projection_id NOT LIKE '${INSTRUCTIONS_ID_PREFIX}%' ORDER BY projection_id`,
       )
       .all(resolve(project))
       .map((row) => String(row.projection_id));
@@ -187,22 +241,11 @@ export class Projections {
         this.store.delete(key);
       }
     });
-    return recovered;
+    return [...recovered, ...this.instructions.recover()];
   }
   private validateSnapshot(snapshot: Snapshot): void {
     assertProjectionSupported(snapshot.bundle);
-    if (
-      !/^[A-Za-z0-9:_-]{1,160}$/.test(snapshot.version.id) ||
-      (snapshot.version.semanticVersion !== null &&
-        !/^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$/.test(
-          snapshot.version.semanticVersion,
-        ))
-    )
-      throw new RuntimeError("VERSION_ID_INVALID");
-    if (snapshot.bundle.digest !== snapshot.version.digest)
-      throw new RuntimeError("DIGEST_MISMATCH");
-    if (snapshot.version.state !== "published")
-      throw new RuntimeError("VERSION_NOT_PUBLISHED");
+    validateVersion(snapshot);
   }
   private approvedTrust(
     snapshot: Snapshot,
@@ -481,5 +524,673 @@ export class Projections {
       return current;
     });
     if (record) this.finishUninstall(record);
+  }
+}
+
+/** What Skillplane wrote to one user-level agent instructions file. */
+export interface InstructionRecord {
+  formatVersion: 1;
+  kind: "instructions";
+  id: string;
+  eventId: string;
+  installationId: string;
+  /** The project whose sync wrote this generation. */
+  project: string;
+  adapter: InstructionTarget["adapter"];
+  /** The configured artifact name in the project's instructions catalog. */
+  artifact: string;
+  path: string;
+  /** Immutable copy of the bytes, kept beside the target for recovery. */
+  generation: string;
+  workspace: Snapshot["workspace"];
+  skill: Snapshot["skill"];
+  version: Snapshot["version"];
+  bundleDigest: string;
+  /** SHA-256 of the exact bytes written to path. */
+  digest: string;
+  synchronizedAt: string;
+}
+/** A temp file of a write that will never commit, kept until it is unlinked. */
+interface InstructionCleanup {
+  temp: string;
+}
+const CLEANUP_PREFIX = "instruction-cleanup:";
+interface InstructionJournal {
+  record: InstructionRecord;
+  /** The eventId of the record this write replaces, or null for a first write. */
+  basis: string | null;
+  temp: string;
+  /**
+   * The device and inode of the staged temp file, which a rename keeps. Only a
+   * target that is this file was installed by the write.
+   */
+  file?: FileIdentity;
+  pid: number;
+  startedAt: string;
+}
+interface FileIdentity {
+  dev: string;
+  ino: string;
+}
+export type InstructionState =
+  "in-sync" | "diverged" | "missing" | "collision" | "not-synced" | "unverified";
+export interface InstructionStatus {
+  id: string;
+  adapter: InstructionTarget["adapter"];
+  artifact: string | null;
+  path: string;
+  version: string | null;
+  configured: boolean;
+  /** The artifact this project configures here when it is not the file's. */
+  configuredArtifact?: string;
+  /** Projects claiming the target, shown when the file belongs to another one. */
+  owners?: string[];
+  /**
+   * An InstructionState, or the error code sync would raise first: a catalog
+   * error such as SKILL_NAME_COLLISION, or the file's inspection error.
+   */
+  state: string;
+  /** The file's own state when state is a catalog error or unverified. */
+  fileState?: string;
+}
+/** The workspace and artifact ID of an instructions document. */
+export interface ArtifactIdentity {
+  workspace: Snapshot["workspace"];
+  skill: { id: string };
+}
+/**
+ * How sync would resolve a configured target's artifact name: the identity
+ * from the project's catalog, the error sync would raise, or unverified when
+ * the catalog cannot be read offline and no current identity was recorded.
+ */
+export type InstructionResolution =
+  { identity: ArtifactIdentity } | { code: string } | { unverified: true };
+/** The project doctor runs for and how sync would resolve each of its targets. */
+export interface InstructionStatusScope {
+  project: string;
+  targets: readonly { target: InstructionTarget; resolution: InstructionResolution }[];
+}
+type Observed =
+  | { kind: "absent" }
+  | { kind: "other" }
+  | { kind: "file"; digest: string | null; mode: number };
+const MAX_INSTRUCTIONS_BYTES = 30 * 1024 * 1024;
+// A journal older than any lock-bounded write belongs to a dead writer even
+// when its process ID has been reused.
+const JOURNAL_LEASE_MS = 10 * 60 * 1000;
+function observe(path: string): Observed {
+  let stat;
+  try {
+    stat = lstatSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { kind: "absent" };
+    throw error;
+  }
+  if (!stat.isFile()) return { kind: "other" };
+  return {
+    kind: "file",
+    digest:
+      stat.size > MAX_INSTRUCTIONS_BYTES
+        ? null
+        : `sha256:${hash(readSafe(path, MAX_INSTRUCTIONS_BYTES))}`,
+    mode: stat.mode & 0o777,
+  };
+}
+function stateOf(record: InstructionRecord, observed: Observed): InstructionState {
+  if (observed.kind === "absent") return "missing";
+  if (observed.kind === "other" || observed.digest !== record.digest) return "diverged";
+  return "in-sync";
+}
+function sameArtifact(record: InstructionRecord, artifact: ArtifactIdentity): boolean {
+  return (
+    workspaceKey(record.workspace) === workspaceKey(artifact.workspace) &&
+    record.skill.id === artifact.skill.id
+  );
+}
+function writerAlive(journal: InstructionJournal): boolean {
+  // Instruction writes are synchronous, so this process has none in flight
+  // while it recovers.
+  if (journal.pid === process.pid) return false;
+  if (Date.now() - Date.parse(journal.startedAt) > JOURNAL_LEASE_MS) return false;
+  try {
+    process.kill(journal.pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+function writeFileDurably(path: string, bytes: Uint8Array): FileIdentity {
+  const fd = openSync(
+    path,
+    constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+    0o600,
+  );
+  try {
+    writeFileSync(fd, bytes);
+    fsyncSync(fd);
+    const stat = fstatSync(fd, { bigint: true });
+    return { dev: String(stat.dev), ino: String(stat.ino) };
+  } finally {
+    closeSync(fd);
+  }
+}
+function setMode(path: string, mode: number): void {
+  const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    fchmodSync(fd, mode);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+/**
+ * Whether the journaled write's rename landed: its staged temp file is gone
+ * and the target is that file. Matching bytes alone are not proof, since a
+ * user may have written the planned content themselves.
+ */
+function installed(journal: InstructionJournal): boolean {
+  const { file } = journal;
+  if (!file) return false;
+  try {
+    lstatSync(journal.temp);
+    return false;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") return false;
+  }
+  try {
+    const stat = lstatSync(journal.record.path, { bigint: true });
+    return (
+      stat.isFile() && String(stat.dev) === file.dev && String(stat.ino) === file.ino
+    );
+  } catch {
+    return false;
+  }
+}
+/**
+ * Projects one published instructions artifact into a single user-level file.
+ * Targets are regular files replaced by same-directory rename; ownership is
+ * the SHA-256 of the bytes last written, so an unmanaged or hand-edited file is
+ * never overwritten. The store's write transaction is the projection lock.
+ */
+export class InstructionProjections {
+  constructor(
+    readonly store: LocalStore,
+    readonly fault?: (point: ProjectionFault) => void,
+  ) {}
+  static id(path: string): string {
+    return `${INSTRUCTIONS_ID_PREFIX}${hash(`instructions\0${resolve(path)}`).slice(0, 32)}`;
+  }
+  records(): InstructionRecord[] {
+    return this.store
+      .entries<InstructionRecord>("instruction:")
+      .map(([, record]) => record);
+  }
+  owners(id: string): string[] {
+    return this.store.db
+      .prepare(
+        "SELECT project FROM projection_owner WHERE projection_id=? ORDER BY project",
+      )
+      .all(id)
+      .map((row) => String(row.project));
+  }
+  /** Instruction targets the project currently claims. */
+  projectIds(project: string): string[] {
+    return this.store.db
+      .prepare(
+        `SELECT projection_id FROM projection_owner WHERE project=? AND projection_id LIKE '${INSTRUCTIONS_ID_PREFIX}%' ORDER BY projection_id`,
+      )
+      .all(resolve(project))
+      .map((row) => String(row.projection_id));
+  }
+  private addOwner(id: string, project: string): void {
+    this.store.db
+      .prepare("INSERT OR IGNORE INTO projection_owner VALUES (?,?)")
+      .run(id, resolve(project));
+  }
+  /** Drops the project's claim on targets it no longer configures; files stay. */
+  release(project: string, keep: ReadonlySet<string>): void {
+    this.store.transaction(() => {
+      for (const id of this.projectIds(project))
+        if (!keep.has(id))
+          this.store.db
+            .prepare("DELETE FROM projection_owner WHERE projection_id=? AND project=?")
+            .run(id, resolve(project));
+    });
+  }
+  private content(snapshot: Snapshot): Uint8Array {
+    if (bundleKind(snapshot.bundle.skill) !== "instructions")
+      throw new RuntimeError(
+        "PROJECTION_KIND_UNSUPPORTED",
+        "Only instructions documents are projected to instruction files",
+      );
+    validateVersion(snapshot);
+    const bytes = snapshot.bundle.files.get(bundleEntrypoint(snapshot.bundle.skill));
+    if (!bytes) throw new RuntimeError("BUNDLE_INVALID");
+    return bytes;
+  }
+  private assertWritable(
+    record: InstructionRecord | undefined,
+    observed: Observed,
+    path: string,
+  ): void {
+    if (!record) {
+      if (observed.kind !== "absent")
+        throw new RuntimeError(
+          "PROJECTION_COLLISION",
+          `Unmanaged instructions file exists: ${path}`,
+        );
+      return;
+    }
+    if (stateOf(record, observed) === "diverged")
+      throw new RuntimeError(
+        "PROJECTION_DIVERGED",
+        `${path} changed after Skillplane wrote it; it was not overwritten`,
+      );
+  }
+  /**
+   * The ownership rule for putting an artifact into a recorded target, shared
+   * by sync and doctor. Projects that configure the same artifact may advance
+   * it; a different artifact needs every other project to have released the
+   * target first.
+   */
+  private ownership(
+    record: InstructionRecord,
+    artifact: ArtifactIdentity,
+    project: string,
+  ): "owned" | "replaceable" | "collision" {
+    if (sameArtifact(record, artifact)) return "owned";
+    return this.owners(record.id).some((owner) => owner !== resolve(project))
+      ? "collision"
+      : "replaceable";
+  }
+  private assertReplacementOwner(
+    record: InstructionRecord,
+    snapshot: Snapshot,
+    project: string,
+  ): void {
+    if (this.ownership(record, snapshot, project) === "collision")
+      throw new RuntimeError(
+        "PROJECTION_COLLISION",
+        `${record.path} is owned by another project's instructions`,
+      );
+  }
+  private prepare(
+    snapshot: Snapshot,
+    target: InstructionTarget,
+    project: string,
+    userHome: string,
+  ) {
+    const bytes = this.content(snapshot);
+    const path = instructionPath(target, userHome);
+    const id = InstructionProjections.id(path);
+    if (this.recoveryPending(id))
+      throw new RuntimeError(
+        "RECOVERY_PENDING",
+        `An interrupted write to ${path} could not be recovered yet; the next run retries it`,
+      );
+    const old = this.store.get<InstructionRecord>(`instruction:${id}`);
+    const digest = `sha256:${hash(bytes)}`;
+    const observed = observe(path);
+    this.assertWritable(old, observed, path);
+    const same =
+      old !== undefined &&
+      observed.kind === "file" &&
+      sameArtifact(old, snapshot) &&
+      old.version.id === snapshot.version.id &&
+      old.digest === digest;
+    if (old && !same) this.assertReplacementOwner(old, snapshot, project);
+    return { bytes, path, id, old, digest, same };
+  }
+  /** Whether a dead writer's journal for this target is still unrecovered. */
+  private recoveryPending(id: string): boolean {
+    return this.store
+      .entries<InstructionJournal>(`instruction-journal:${id}:`)
+      .some(([, journal]) => !writerAlive(journal));
+  }
+  /** Raises the error sync would raise, without writing anything. */
+  check(
+    snapshot: Snapshot,
+    target: InstructionTarget,
+    project: string,
+    userHome = homedir(),
+  ): void {
+    safeDirectory(dirname(instructionPath(target, userHome)), false);
+    // Under the lock, a concurrent writer's renamed but uncommitted file is
+    // never mistaken for an unmanaged one.
+    this.store.transaction(() => this.prepare(snapshot, target, project, userHome));
+  }
+  sync(
+    snapshot: Snapshot,
+    target: InstructionTarget,
+    project: string,
+    userHome = homedir(),
+  ): InstructionRecord {
+    const { bytes, path, id, old, digest, same } = this.store.transaction(() =>
+      this.prepare(snapshot, target, project, userHome),
+    );
+    const parent = safeDirectory(dirname(path));
+    const matches = (record: InstructionRecord): boolean =>
+      sameArtifact(record, snapshot) &&
+      record.version.id === snapshot.version.id &&
+      record.digest === digest &&
+      stateOf(record, observe(path)) === "in-sync";
+    if (old && same)
+      return this.store.transaction(() => {
+        const current = this.store.get<InstructionRecord>(`instruction:${id}`);
+        if (current?.eventId === old.eventId)
+          this.assertWritable(current, observe(path), path);
+        if (current?.eventId !== old.eventId || !matches(current))
+          throw new RuntimeError(
+            "PROJECTION_CHANGED",
+            "Projection changed; run sync again",
+          );
+        this.addOwner(id, project);
+        return current;
+      });
+    this.fault?.("before-write");
+    const generation = join(
+      safeDirectory(
+        join(
+          parent,
+          ".skillplane-projections",
+          "instructions",
+          id,
+          encodeURIComponent(snapshot.version.id),
+        ),
+      ),
+      bundleEntrypoint(snapshot.bundle.skill),
+    );
+    const staged = observe(generation);
+    if (staged.kind !== "file" || staged.digest !== digest)
+      writeAtomic(generation, bytes);
+    const record: InstructionRecord = {
+      formatVersion: 1,
+      kind: "instructions",
+      id,
+      eventId: randomUUID(),
+      installationId: requireValue(this.store.get<string>("installation")),
+      project: resolve(project),
+      adapter: target.adapter,
+      artifact: target.artifact,
+      path,
+      generation,
+      workspace: snapshot.workspace,
+      skill: snapshot.skill,
+      version: snapshot.version,
+      bundleDigest: snapshot.bundle.digest,
+      digest,
+      synchronizedAt: new Date().toISOString(),
+    };
+    const journalKey = `instruction-journal:${id}:${record.eventId}`;
+    const cleanupKey = `${CLEANUP_PREFIX}${id}:${record.eventId}`;
+    const temp = join(parent, `.skillplane-instructions-${record.eventId}`);
+    // Set once the target may be replaced. Until then nothing reached the
+    // target, so the journal and temp file go; after it they stay for
+    // recover(), which needs the temp file's absence as proof of the rename.
+    const progress = { renaming: false };
+    let result: InstructionRecord;
+    try {
+      // The journal is committed before the temp file exists, so recover()
+      // can always find and remove a temp file a crash left behind. It names
+      // the temp file's inode only once that file is staged and durable,
+      // before the lock, so a crash between rename and commit can be completed
+      // by recover(); the journal is deleted in the same commit as the record.
+      const journal: InstructionJournal = {
+        record,
+        basis: old?.eventId ?? null,
+        temp,
+        pid: process.pid,
+        startedAt: record.synchronizedAt,
+      };
+      this.store.set(journalKey, journal);
+      journal.file = writeFileDurably(temp, bytes);
+      this.fault?.("after-stage");
+      this.store.set(journalKey, journal);
+      result = this.store.transaction(() => {
+        const current = this.store.get<InstructionRecord>(`instruction:${id}`);
+        if ((current?.eventId ?? null) !== journal.basis) {
+          // Another lock holder committed first. Its result stands when it is
+          // the same version; anything else needs a fresh plan.
+          if (!current || !matches(current))
+            throw new RuntimeError(
+              "PROJECTION_CHANGED",
+              "Projection changed; run sync again",
+            );
+          this.addOwner(id, project);
+          this.retire(journalKey, cleanupKey, temp);
+          return current;
+        }
+        const observed = observe(path);
+        this.assertWritable(current, observed, path);
+        if (current) this.assertReplacementOwner(current, snapshot, project);
+        if (observed.kind === "file" && observed.mode !== 0o600)
+          setMode(temp, observed.mode);
+        progress.renaming = true;
+        this.fault?.("before-swap");
+        renameSync(temp, path);
+        this.fault?.("after-rename");
+        syncDirectory(parent);
+        this.fault?.("after-swap");
+        if (current)
+          this.store.set(`instruction-history:${id}:${current.eventId}`, current);
+        this.store.set(`instruction:${id}`, record);
+        this.addOwner(id, project);
+        this.store.delete(journalKey);
+        return record;
+      });
+    } catch (error) {
+      if (!progress.renaming) {
+        // Cleanup failures never replace the original error. A journal left
+        // behind is rolled back by recover(), as is a cleanup entry.
+        try {
+          this.store.transaction(() => this.retire(journalKey, cleanupKey, temp));
+        } catch {
+          // The journal stays; the temp file is still removed below.
+        }
+        try {
+          this.discard(cleanupKey, temp);
+        } catch {
+          // recover() removes the temp file its cleanup entry names.
+        }
+      }
+      throw error;
+    }
+    // A renamed temp file is already gone and left no cleanup entry; a write
+    // that lost the lock to the same version left both. The record is
+    // committed either way, so a failed unlink is left to recover().
+    this.discard(cleanupKey, temp);
+    return result;
+  }
+  /**
+   * Replaces a journal whose write will not be committed with a cleanup entry
+   * naming its temp file, inside the caller's transaction. The temp file is
+   * then always named by durable state until it is unlinked, and a cleanup
+   * entry can never establish ownership.
+   */
+  private retire(journalKey: string, cleanupKey: string, temp: string): void {
+    this.store.set(cleanupKey, { temp } satisfies InstructionCleanup);
+    this.store.delete(journalKey);
+  }
+  /**
+   * Unlinks a retired temp file, then forgets it. An unlink that fails keeps
+   * the cleanup entry for the next recover() and never fails the caller: the
+   * entry is not project-scoped, so throwing would stop every sync, resolve
+   * and doctor that shares the store.
+   */
+  private discard(cleanupKey: string, temp: string): void {
+    this.fault?.("before-discard");
+    try {
+      rmSync(temp, { force: true });
+    } catch {
+      return;
+    }
+    this.store.delete(cleanupKey);
+  }
+  /**
+   * Finishes or rolls back writes whose process stopped between the journal
+   * and the record commit. A target that is the journaled temp file, renamed
+   * and unchanged, is committed; otherwise the record and owners stay as they
+   * were, the staged temp file is removed and the target is left untouched.
+   * Running it again is a no-op.
+   */
+  recover(): string[] {
+    const recovered: string[] = [];
+    for (const [key, journal] of this.store.entries<InstructionJournal>(
+      "instruction-journal:",
+    )) {
+      if (writerAlive(journal)) continue;
+      const { record } = journal;
+      const cleanupKey = `${CLEANUP_PREFIX}${key.slice("instruction-journal:".length)}`;
+      let outcome: "gone" | "committed" | "retired";
+      try {
+        outcome = this.store.transaction(() => {
+          // Another recovery handled it first.
+          if (!this.store.get(key)) return "gone";
+          const current = this.store.get<InstructionRecord>(`instruction:${record.id}`);
+          if (
+            (current?.eventId ?? null) === journal.basis &&
+            installed(journal) &&
+            stateOf(record, observe(record.path)) === "in-sync"
+          ) {
+            // The writer may have stopped before making its rename durable. A
+            // failed sync throws here and leaves the journal for the next run.
+            syncDirectory(dirname(record.path));
+            if (current)
+              this.store.set(
+                `instruction-history:${record.id}:${current.eventId}`,
+                current,
+              );
+            this.store.set(`instruction:${record.id}`, record);
+            this.addOwner(record.id, record.project);
+            this.store.delete(key);
+            return "committed";
+          }
+          this.retire(key, cleanupKey, journal.temp);
+          return "retired";
+        });
+      } catch {
+        // The journal and the prior record stay; the next run retries, and
+        // until then sync and doctor report this target as RECOVERY_PENDING.
+        continue;
+      }
+      if (outcome === "committed") recovered.push(record.id);
+      // Removed only once the journal is gone, so the temp file's inode cannot
+      // be reused by another file while a journal still names it.
+      if (outcome === "retired") this.discard(cleanupKey, journal.temp);
+    }
+    // Temp files of writes that will never commit, whose process stopped
+    // before unlinking them, or whose unlink failed. Removal is by path and
+    // never touches ownership; an entry that still cannot be removed stays.
+    for (const [key, { temp }] of this.store.entries<InstructionCleanup>(
+      CLEANUP_PREFIX,
+    ))
+      this.discard(key, temp);
+    return recovered;
+  }
+  /**
+   * Every recorded target plus configured targets that have no record yet. A
+   * configured target reports the decision sync would make for it: the
+   * catalog error, then a hand edit, then the ownership rule for the
+   * artifact its name resolves to.
+   */
+  status(scope?: InstructionStatusScope, userHome = homedir()): InstructionStatus[] {
+    const inspect = (fn: () => InstructionState): string => {
+      try {
+        return fn();
+      } catch (error) {
+        return error instanceof RuntimeError ? error.code : "UNREADABLE";
+      }
+    };
+    const configured = new Map<
+      string,
+      { target: InstructionTarget; resolution: InstructionResolution }
+    >();
+    for (const entry of scope?.targets ?? [])
+      configured.set(
+        InstructionProjections.id(instructionPath(entry.target, userHome)),
+        entry,
+      );
+    // Read under the lock so an in-flight write is never reported as a hand edit.
+    return this.store.transaction(() => {
+      const rows: InstructionStatus[] = this.records().map((record) => {
+        const row: InstructionStatus = {
+          id: record.id,
+          adapter: record.adapter,
+          artifact: record.artifact,
+          path: record.path,
+          version: record.version.semanticVersion ?? record.version.id,
+          configured: configured.has(record.id),
+          state: inspect(() => stateOf(record, observe(record.path))),
+        };
+        const entry = configured.get(record.id);
+        const pending = this.recoveryPending(record.id)
+          ? { ...row, state: "RECOVERY_PENDING", fileState: row.state }
+          : row;
+        if (!entry || !scope) return pending;
+        // sync resolves every name before it looks at any file.
+        const { resolution } = entry;
+        if ("code" in resolution)
+          return { ...row, state: resolution.code, fileState: row.state };
+        if (pending !== row) return pending;
+        // sync reports a hand edit or an unreadable file before ownership.
+        if (row.state !== "in-sync" && row.state !== "missing") return row;
+        if ("unverified" in resolution)
+          return { ...row, state: "unverified", fileState: row.state };
+        const decision = this.ownership(record, resolution.identity, scope.project);
+        if (decision === "owned") return row;
+        return {
+          ...row,
+          configuredArtifact: entry.target.artifact,
+          owners: this.owners(record.id),
+          state: decision === "collision" ? "collision" : "not-synced",
+        };
+      });
+      for (const [id, { target, resolution }] of configured) {
+        if (rows.some((row) => row.id === id)) continue;
+        const path = instructionPath(target, userHome);
+        const row: InstructionStatus = {
+          id,
+          adapter: target.adapter,
+          artifact: target.artifact,
+          path,
+          version: null,
+          configured: true,
+          // Without a record any existing file is unmanaged, whatever the
+          // configured name resolves to.
+          state: inspect(() =>
+            observe(path).kind === "absent" ? "not-synced" : "collision",
+          ),
+        };
+        rows.push(
+          "code" in resolution
+            ? { ...row, state: resolution.code, fileState: row.state }
+            : this.recoveryPending(id)
+              ? { ...row, state: "RECOVERY_PENDING", fileState: row.state }
+              : "unverified" in resolution
+                ? { ...row, state: "unverified", fileState: row.state }
+                : row,
+        );
+      }
+      // An interrupted first write that recovery could not finish yet.
+      for (const [, journal] of this.store.entries<InstructionJournal>(
+        "instruction-journal:",
+      )) {
+        const { record } = journal;
+        if (writerAlive(journal) || rows.some((row) => row.id === record.id)) continue;
+        rows.push({
+          id: record.id,
+          adapter: record.adapter,
+          artifact: record.artifact,
+          path: record.path,
+          version: record.version.semanticVersion ?? record.version.id,
+          configured: false,
+          state: "RECOVERY_PENDING",
+          fileState: inspect(() =>
+            observe(record.path).kind === "absent" ? "not-synced" : "collision",
+          ),
+        });
+      }
+      return rows;
+    });
   }
 }

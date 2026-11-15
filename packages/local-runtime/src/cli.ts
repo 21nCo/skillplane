@@ -36,11 +36,14 @@ Global flags: --home DIR (private runtime state), --project DIR
   export --git DIR [--force]           Write current published skills as a repository tree
   import FILE KEY                       Import a bundle as a new local/cloud skill
   sync                                 Atomically install/update configured projections
+                                       and instruction files (never overwrites a file
+                                       Skillplane did not write or that was hand-edited)
   resolve PROJECTION_ID [--live-only|--cache-only] [--agent PRODUCT]
   approve-trust ID DIGEST               Approve exactly the reviewed pending digest
   rollback ID                          Restore and pin the previous verified version
   uninstall ID                         Remove only a verified owned projection link
   doctor [--online]                     Check ownership, divergence, pending trust, freshness
+                                       and instruction file state
   usage                                Observed counts and coverage disclosure
   usage-upload                         Upload queued primary cloud events after consent
   usage-record FILE                    Record a local action or completion report
@@ -224,9 +227,12 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
           required(1),
         );
         break;
-      case "sync":
-        result = await runtime.sync(project);
+      case "sync": {
+        const synced = await runtime.syncTargets(project);
+        // Instruction records carry kind "instructions"; skill records keep their shape.
+        result = [...synced.projections, ...synced.instructions];
         break;
+      }
       case "resolve":
         result = await runtime.resolve(required(0), {
           liveOnly: flags.has("--live-only"),
