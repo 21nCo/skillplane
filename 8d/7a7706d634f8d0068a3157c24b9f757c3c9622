@@ -1,0 +1,25 @@
+docs/local-first-workspaces.md
+  s_5fc3eb4f79c554::t_54d50ac8ce932e 260-262
+packages/local-runtime/src/instruction-adoption.test.ts
+  s_5fc3eb4f79c554::t_e604c4d48bda6d 1228-1264,1268-1286,1435-1459
+packages/local-runtime/src/projections.ts
+  s_5fc3eb4f79c554::t_41267dd6f0266f 664-670,816-819,821-822,824,827-829,1478-1480,1573,1579-1582,1584-1586,1589-1591,1595,1612-1617,1624-1678,1694,1717,1782-1783,1788-1791,1806
+packages/local-runtime/src/runtime.ts
+  s_5fc3eb4f79c554::t_391552b8f03926 621-624,626-627,637-638,654-655,661-667
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8d7a7706d634f8d0068a3157c24b9f757c3c9622",
+  "prompts": {},
+  "sessions": {
+    "s_5fc3eb4f79c554": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_5fc3eb4f79c554",
+        "model": "unknown"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
