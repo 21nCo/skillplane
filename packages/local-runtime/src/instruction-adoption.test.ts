@@ -20,6 +20,7 @@ import {
   LocalWorkspaceProvider,
   Projections,
   Runtime,
+  RuntimeError,
   requireValue,
   type CreateRequest,
   type InstructionAdoption,
@@ -784,6 +785,65 @@ describe("one adoption lifecycle at a time", () => {
     expect((await f.runtime.syncTargets(f.project)).pending).toMatchObject([
       { id: f.id, code: "ADOPTION_INCOMPLETE" },
     ]);
+  });
+
+  it("reports an adopt interrupted before its artifact existed as adopted, file present or absent", async () => {
+    let fail = true;
+    class Crashing extends LocalWorkspaceProvider {
+      override async createDraft(request: CreateRequest) {
+        if (fail) {
+          fail = false;
+          throw new Error("process stopped");
+        }
+        return super.createDraft(request);
+      }
+    }
+    // The target is configured, so its name resolves to no artifact yet.
+    const f = fixture(
+      undefined,
+      (store) => (ref) => new Crashing(store, (ref as { id: string }).id),
+    );
+    await expect(f.runtime.adoptInstructions(f.project, f.claude)).rejects.toThrow(
+      "process stopped",
+    );
+    expect(await f.provider.list("instructions")).toEqual([]);
+    expect(await states(f)).toEqual({ [f.claude]: "adopted" });
+    expect((await f.runtime.syncTargets(f.project)).pending).toMatchObject([
+      { id: f.id, state: "adopted", code: "ADOPTION_INCOMPLETE" },
+    ]);
+    rmSync(f.claude);
+    expect(await states(f)).toEqual({ [f.claude]: "adopted" });
+    expect((await f.runtime.syncTargets(f.project)).pending).toMatchObject([
+      { id: f.id, state: "adopted", code: "ADOPTION_INCOMPLETE" },
+    ]);
+    // Another missing name keeps its catalog error.
+    const other = join(f.home, ".codex", "AGENTS.md");
+    f.runtime.configure(f.project, {
+      ...f.runtime.project(f.project),
+      instructions: [
+        { adapter: "claude", artifact: "global-agents" },
+        { adapter: "codex", artifact: "missing" },
+      ],
+    });
+    expect((await states(f))[other]).toBe("INSTRUCTIONS_NOT_FOUND");
+  });
+
+  it("refuses an adopt the project configuration cannot hold before backing anything up", async () => {
+    const targets = Array.from({ length: 20 }, (_, index) => ({
+      adapter: "generic",
+      path: `~/unused-${index}/AGENTS.md`,
+      artifact: `target-${index}`,
+    }));
+    const f = fixture(targets);
+    const error: unknown = await f.runtime
+      .adoptInstructions(f.project, f.claude)
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(RuntimeError);
+    expect(error).toMatchObject({ code: "PROJECT_CONFIG_INVALID" });
+    expect(adoption(f)).toBeUndefined();
+    expect(backups(f)).toEqual([]);
+    expect(await f.provider.list()).toEqual([]);
+    expect(f.runtime.project(f.project).instructions).toHaveLength(20);
   });
 
   it("does not write a target uninstalled after the sync read the configuration", async () => {

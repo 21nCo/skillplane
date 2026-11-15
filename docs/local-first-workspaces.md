@@ -237,8 +237,9 @@ finished), and `doctor` lists it as `adopted`. A file edited after adoption is a
 Adopt checks before keeping anything, with the same checks the import applies: a
 file that is not UTF-8 is refused with `INSTRUCTIONS_NOT_UTF8`, an empty, blank or
 oversized one or one holding NUL characters with `INSTRUCTIONS_INVALID`, and a slug a
-skill already holds with `ARTIFACT_SLUG_CONFLICT`, leaving no backup or adoption
-behind. An interrupted adopt can be run again: it reuses the backup, and a draft that
+skill already holds with `ARTIFACT_SLUG_CONFLICT`. A target the project configuration
+cannot hold, such as a 21st instructions target, is refused with
+`PROJECT_CONFIG_INVALID`. Each refusal leaves no backup or adoption behind. An interrupted adopt can be run again: it reuses the backup, and a draft that
 already holds the file's bytes. A draft that can no longer be published, because a
 review rejected it or another version was published over its base, is replaced by a
 fresh one against the current version when adopt runs again; a draft imported for an

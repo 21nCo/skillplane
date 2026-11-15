@@ -672,7 +672,18 @@ export class Runtime {
     const all = [...targets, target];
     const error = this.instructionConfigErrors(all).at(-1);
     if (error) throw error;
-    return { ...context, instructions: all };
+    const next = { ...context, instructions: all };
+    // The whole project schema (its target limit included), so adopt refuses
+    // before it backs anything up rather than when it finally configures.
+    const parsed = projectSchema.safeParse(next);
+    if (!parsed.success) {
+      const issue = parsed.error.issues[0];
+      throw new RuntimeError(
+        "PROJECT_CONFIG_INVALID",
+        `Adding ${path} would make skillplane.json invalid: ${issue?.path.join(".") ?? ""} ${issue?.message ?? ""}`.trim(),
+      );
+    }
+    return next;
   }
   /**
    * Applies configuration removals uninstalls queued: each project drops the

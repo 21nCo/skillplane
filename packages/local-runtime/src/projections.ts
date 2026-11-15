@@ -1863,14 +1863,24 @@ export class InstructionProjections {
           // whatever the configured name resolves to.
           state: inspect(() => this.unrecordedState(id, path, resolution)),
         };
+        // An adoption whose artifact does not exist yet is skipped by sync as
+        // adopted rather than refused for the missing name.
+        const adoptedOnly =
+          "code" in resolution &&
+          resolution.code === "INSTRUCTIONS_NOT_FOUND" &&
+          this.adoption(id)?.artifact === target.artifact;
         rows.push(
-          "code" in resolution
-            ? { ...row, state: resolution.code, fileState: row.state }
-            : this.recoveryPending(id)
-              ? { ...row, state: "RECOVERY_PENDING", fileState: row.state }
-              : "unverified" in resolution
-                ? { ...row, state: "unverified", fileState: row.state }
-                : row,
+          adoptedOnly
+            ? row.state === "adopted"
+              ? row
+              : { ...row, state: "adopted", fileState: row.state }
+            : "code" in resolution
+              ? { ...row, state: resolution.code, fileState: row.state }
+              : this.recoveryPending(id)
+                ? { ...row, state: "RECOVERY_PENDING", fileState: row.state }
+                : "unverified" in resolution
+                  ? { ...row, state: "unverified", fileState: row.state }
+                  : row,
         );
       }
       // An interrupted first write that recovery could not finish yet.
