@@ -1,0 +1,23 @@
+packages/local-runtime/src/instruction-adoption.test.ts
+  s_28cd8e26c0c2ab::t_cacef417ee0320 1746-1784
+packages/local-runtime/src/local-provider.ts
+  s_28cd8e26c0c2ab::t_1521446f777a89 334-336,348,364,373
+packages/local-runtime/src/runtime.ts
+  s_28cd8e26c0c2ab::t_1ae29eb5933529 816-817,853
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3d4bcd65011fe2701469405e733397cf63de8d72",
+  "prompts": {},
+  "sessions": {
+    "s_28cd8e26c0c2ab": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_28cd8e26c0c2ab",
+        "model": "unknown"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
