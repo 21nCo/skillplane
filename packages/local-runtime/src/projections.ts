@@ -1424,6 +1424,27 @@ export class InstructionProjections {
     return this.store.get(`instruction:${id}`) ? undefined : this.adoption(id);
   }
   /**
+   * Refuses a pending adoption whose file was hand-edited, as sync refuses
+   * before taking one over: under the lock, the file must be absent or still
+   * hold the adopted original, whether or not anything can take it over yet.
+   */
+  assertPendingIntact(id: string): void {
+    this.store.transaction(() => {
+      const adoption = this.pendingAdoption(id);
+      if (!adoption) return;
+      this.assertIdle(id, adoption.path);
+      const observed = observe(adoption.path);
+      if (
+        observed.kind !== "absent" &&
+        (observed.kind !== "file" || observed.digest !== adoption.original.digest)
+      )
+        throw new RuntimeError(
+          "PROJECTION_DIVERGED",
+          `${adoption.path} changed after it was adopted; it was not overwritten`,
+        );
+    });
+  }
+  /**
    * Records the imported draft of the adoption nonce names. The first record
    * stands unless it is the replaced draft, one that can no longer be
    * published.
@@ -2000,14 +2021,15 @@ export class InstructionProjections {
           state: inspect(() => this.unrecordedState(id, path, resolution)),
         };
         // An adoption whose artifact does not exist yet is skipped by sync as
-        // adopted rather than refused for the missing name.
+        // adopted rather than refused for the missing name, unless its file
+        // was hand-edited, which sync refuses.
         const adoptedOnly =
           "code" in resolution &&
           resolution.code === "INSTRUCTIONS_NOT_FOUND" &&
           this.adoption(id)?.artifact === target.artifact;
         rows.push(
           adoptedOnly
-            ? row.state === "adopted"
+            ? row.state === "adopted" || row.state === "diverged"
               ? row
               : { ...row, state: "adopted", fileState: row.state }
             : "code" in resolution

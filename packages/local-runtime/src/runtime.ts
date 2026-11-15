@@ -418,6 +418,9 @@ export class Runtime {
       InstructionProjections.id(path),
     );
     if (adoption?.artifact !== target.artifact) return undefined;
+    // A hand-edited adopted file stops the sync before any write, as it does
+    // once the artifact has a published version to take it over with.
+    this.projections.instructions.assertPendingIntact(adoption.id);
     return {
       kind: "instructions",
       id: adoption.id,
@@ -847,9 +850,7 @@ export class Runtime {
       // amended: once a review published it, or while it can still be published
       // over the current version, it is the draft. So a run stopped after its
       // import never imports again, even once that import was approved.
-      const own = provider
-        .imports(`adopt-${adoption.nonce}-`)
-        .filter((entry) => entry.skillId === skillId);
+      const own = provider.imports(`adopt-${adoption.nonce}-`, skillId);
       if (own.length > 0) previous = own.map((entry) => entry.versionId).join(",");
       for (const entry of own) {
         if (

@@ -116,13 +116,18 @@ async function approve(
     randomUUID(),
   );
 }
-async function publish(f: Fixture, skillId: string, text: string): Promise<void> {
+async function publish(
+  f: Fixture,
+  skillId: string,
+  text: string,
+  idempotencyKey: string = randomUUID(),
+): Promise<void> {
   const current = await f.provider.retrieve(skillId);
   const amended = await f.provider.amend({
     skillId,
     baseVersionId: current.version.id,
     proposedBump: "minor",
-    idempotencyKey: randomUUID(),
+    idempotencyKey,
     changes: [
       {
         operation: "replace",
@@ -1849,4 +1854,120 @@ describe("PR review round 3 adoption checks", () => {
     expect(f.runtime.projections.instructions.owners(f.id)).toEqual([f.project]);
     expect(f.runtime.projections.instructions.owners(codexId)).toEqual([]);
   });
+});
+
+describe("PR review round 4 adoption checks", () => {
+  /** Stops an adopt at the provider's import method; returns its nonce. */
+  async function stoppedAt(f: Fixture, method: "amend" | "createDraft") {
+    const spy = vi
+      .spyOn(LocalWorkspaceProvider.prototype, method)
+      .mockImplementationOnce(() => Promise.reject(new Error("process stopped")));
+    await expect(f.runtime.adoptInstructions(f.project, f.claude)).rejects.toThrow(
+      "process stopped",
+    );
+    spy.mockRestore();
+    expect(adoption(f)?.draft).toBeUndefined();
+    return requireValue(adoption(f)).nonce;
+  }
+  /** The adopt re-run imports a fresh candidate that takes over only once published. */
+  async function importsAfresh(f: Fixture, skillId: string, unrelated: string) {
+    const before = (await f.provider.versions(skillId)).length;
+    const draft = requireValue(
+      (await f.runtime.adoptInstructions(f.project, f.claude)).draft,
+    );
+    expect(draft.versionId).not.toBe(unrelated);
+    expect(await f.provider.versions(skillId)).toHaveLength(before + 1);
+    expect((await f.runtime.syncTargets(f.project)).pending).toMatchObject([
+      { id: f.id, code: "ADOPTION_PENDING_REVIEW" },
+    ]);
+    expect(record(f)).toBeUndefined();
+    await approve(f, skillId, draft.versionId);
+    expect((await f.runtime.syncTargets(f.project)).pending).toEqual([]);
+    expect(record(f)).toMatchObject({ version: { id: draft.versionId } });
+    expect(readFileSync(f.claude)).toEqual(Buffer.from(original));
+  }
+
+  for (const suffix of ["zzz", "0123456789abcdef"])
+    it(`never recovers an approved amendment whose key only embeds the adoption's prefix (${suffix})`, async () => {
+      const f = fixture();
+      const created = await f.provider.create(instructions("global-agents", v2));
+      const nonce = await stoppedAt(f, "amend");
+      await publish(f, created.skillId, original, `other:adopt-${nonce}-${suffix}`);
+      const unrelated = requireValue(
+        (await f.provider.versions(created.skillId)).find(
+          (v) => v.state === "published" && v.version !== "1.0.0",
+        ),
+      ).id;
+      await importsAfresh(f, created.skillId, unrelated);
+    });
+
+  it("never recovers an approved draft of an artifact with nothing published whose key only embeds the prefix", async () => {
+    const f = fixture();
+    const created = await f.provider.createDraft(instructions("global-agents", v2));
+    await approve(f, created.skillId, created.versionId, false);
+    const nonce = await stoppedAt(f, "createDraft");
+    const unrelated = await f.provider.createDraft(
+      instructions("global-agents", original, `other:adopt-${nonce}-zzz`),
+      created.skillId,
+    );
+    await approve(f, created.skillId, unrelated.versionId);
+    await importsAfresh(f, created.skillId, unrelated.versionId);
+  });
+
+  for (const [artifact, setup] of [
+    ["an artifact with nothing published", async () => undefined],
+    [
+      "no artifact yet",
+      async (f: Fixture) => {
+        await stoppedAt(f, "createDraft");
+      },
+    ],
+  ] as const)
+    it(`refuses a hand-edited pending adoption of ${artifact} before writing any other target`, async () => {
+      const f = fixture();
+      if (artifact === "no artifact yet") await setup(f);
+      else await f.runtime.adoptInstructions(f.project, f.claude);
+      await f.provider.create(instructions("codex-agents", v2));
+      await f.provider.create({
+        ...instructions("review", "Review carefully."),
+        kind: "skill",
+      });
+      const context = f.runtime.project(f.project);
+      f.runtime.configure(f.project, {
+        ...context,
+        targets: [targetSchema.parse({ adapter: "claude", scope: "user" })],
+        instructions: [
+          ...(context.instructions ?? []),
+          { adapter: "codex", artifact: "codex-agents" },
+        ],
+      });
+      const codex = join(f.home, ".codex", "AGENTS.md");
+      const skill = join(f.home, ".claude", "skills", "review");
+      const code =
+        artifact === "no artifact yet"
+          ? "ADOPTION_INCOMPLETE"
+          : "ADOPTION_PENDING_REVIEW";
+
+      writeFileSync(f.claude, "edited after adopt\n");
+      await expect(f.runtime.syncTargets(f.project)).rejects.toMatchObject({
+        code: "PROJECTION_DIVERGED",
+      });
+      expect(readFileSync(f.claude, "utf8")).toBe("edited after adopt\n");
+      expect(existsSync(codex)).toBe(false);
+      expect(existsSync(skill)).toBe(false);
+      expect(await states(f)).toMatchObject({ [f.claude]: "diverged" });
+
+      // An unchanged or absent original stays pending and others sync.
+      writeFileSync(f.claude, original);
+      expect((await f.runtime.syncTargets(f.project)).pending).toMatchObject([
+        { id: f.id, code },
+      ]);
+      expect(readFileSync(codex, "utf8")).toBe(v2);
+      expect(existsSync(skill)).toBe(true);
+      rmSync(f.claude);
+      expect((await f.runtime.syncTargets(f.project)).pending).toMatchObject([
+        { id: f.id, code },
+      ]);
+      expect(existsSync(f.claude)).toBe(false);
+    });
 });

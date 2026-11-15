@@ -330,12 +330,17 @@ export class LocalWorkspaceProvider implements WorkspaceProvider {
     });
   }
   /**
-   * The versions this workspace's drafts and amendments created under an
-   * idempotency key starting with prefix, latest committed first whatever the
-   * clock said, in whatever state they are now, so a caller recovers its own
-   * import after a review decided it.
+   * The versions of skillId this workspace's drafts and amendments created
+   * under an idempotency key that is exactly prefix and 16 hex digits, latest
+   * committed first whatever the clock said, in whatever state they are now,
+   * so a caller recovers its own import after a review decided it. Only the
+   * keys such a caller issues count: a new artifact's draft, a draft of
+   * skillId and an amendment; a key merely containing prefix never does.
    */
-  imports(prefix: string): {
+  imports(
+    prefix: string,
+    skillId: string,
+  ): {
     skillId: string;
     versionId: string;
     state: VersionInfo["state"];
@@ -349,11 +354,24 @@ export class LocalWorkspaceProvider implements WorkspaceProvider {
       )
       .all(scope.length, scope, `:${prefix}`)) {
       const operation = String(row.key).slice(scope.length);
-      if (!operation.startsWith("draft:") && !operation.startsWith("amend:")) continue;
+      const issued = [
+        `draft:${prefix}`,
+        `draft:${skillId}:${prefix}`,
+        `amend:${prefix}`,
+      ];
+      if (
+        !issued.some(
+          (start) =>
+            operation.startsWith(start) &&
+            /^[0-9a-f]{16}$/.test(operation.slice(start.length)),
+        )
+      )
+        continue;
       const result = JSON.parse(String(row.result)) as {
         skillId: string;
         versionId: string;
       };
+      if (result.skillId !== skillId) continue;
       let table: string;
       try {
         table = this.skill(result.skillId).version;
