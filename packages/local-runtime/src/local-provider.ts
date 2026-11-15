@@ -329,6 +329,49 @@ export class LocalWorkspaceProvider implements WorkspaceProvider {
       return result;
     });
   }
+  /**
+   * The versions this workspace's drafts and amendments created under an
+   * idempotency key starting with prefix, newest first, in whatever state
+   * they are now, so a caller recovers its own import after a review decided it.
+   */
+  imports(prefix: string): {
+    skillId: string;
+    versionId: string;
+    state: VersionInfo["state"];
+    base: string | null;
+  }[] {
+    const scope = `${this.workspace.id}:`;
+    const found = [];
+    for (const row of this.store.db
+      .prepare("SELECT key,result FROM mutation WHERE substr(key,1,?)=? AND instr(key,?)>0")
+      .all(scope.length, scope, `:${prefix}`)) {
+      const operation = String(row.key).slice(scope.length);
+      if (!operation.startsWith("draft:") && !operation.startsWith("amend:")) continue;
+      const result = JSON.parse(String(row.result)) as {
+        skillId: string;
+        versionId: string;
+      };
+      let table: string;
+      try {
+        table = this.skill(result.skillId).version;
+      } catch {
+        continue;
+      }
+      const stored = this.store.db
+        .prepare(`SELECT state,base,created FROM ${table} WHERE id=? AND skill=?`)
+        .get(result.versionId, result.skillId);
+      if (stored)
+        found.push({
+          ...result,
+          state: stored.state as VersionInfo["state"],
+          base: typeof stored.base === "string" ? stored.base : null,
+          created: String(stored.created),
+        });
+    }
+    return found
+      .sort((a, b) => b.created.localeCompare(a.created))
+      .map(({ created: _created, ...entry }) => entry);
+  }
   async candidates(skillId: string): Promise<Row[]> {
     const skill = this.skill(skillId);
     return this.store.db

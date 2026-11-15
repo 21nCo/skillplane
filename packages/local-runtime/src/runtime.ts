@@ -791,7 +791,8 @@ export class Runtime {
    * nothing published, or a review candidate of a published one, even one
    * whose bytes the published version already holds. Keys are scoped to the
    * adoption and its base, so a re-adoption or a retry after the base moved
-   * never replays an earlier request.
+   * never replays an earlier request; the adoption's own import is recovered
+   * by its nonce first, published or still publishable.
    */
   private async importDraft(
     provider: LocalWorkspaceProvider,
@@ -812,9 +813,12 @@ export class Runtime {
       createdAt: snapshot.version.createdAt,
     });
     // Scoped to this adoption, the draft it replaces and the base it amends.
+    // After an import of its own a review rejected or a publication moved
+    // past, that import takes the replaced draft's place, so it never replays.
+    let previous = adoption.draft?.versionId ?? "";
     const key = (base: string) =>
       `adopt-${adoption.nonce}-${createHash("sha256")
-        .update(`${adoption.draft?.versionId ?? ""}\0${base}`)
+        .update(`${previous}\0${base}`)
         .digest("hex")
         .slice(0, 16)}`;
     const request = (slug: string, name: string, description: string) =>
@@ -839,6 +843,24 @@ export class Runtime {
       }
     } else {
       const current = await currentVersion(provider, skillId);
+      // This adoption's own earlier import, found by its nonce whatever base it
+      // amended: once a review published it, or while it can still be published
+      // over the current version, it is the draft. So a run stopped after its
+      // import never imports again, even once that import was approved.
+      const own = provider
+        .imports(`adopt-${adoption.nonce}-`)
+        .filter((entry) => entry.skillId === skillId);
+      previous = own[0]?.versionId ?? previous;
+      for (const entry of own) {
+        if (
+          entry.state !== "published" &&
+          (!["draft", "pending_review"].includes(entry.state) ||
+            entry.base !== (current?.version.id ?? null))
+        )
+          continue;
+        const snapshot = await provider.retrieve(skillId, entry.versionId);
+        if (holds(snapshot)) return draft(snapshot);
+      }
       // A draft an interrupted run created, or one awaiting review from an
       // earlier adoption, that a decision can still approve over the current
       // version.
@@ -1028,7 +1050,29 @@ export class Runtime {
         skill: { id: snapshot.skill.id },
       };
     }
-    this.store.set(claimsKey(project), claims);
+    // An adoption set aside as pending keeps the identity a concurrent sync
+    // recorded when it took the file over, while it agrees with what this
+    // sync resolved: same catalog configuration, artifact and, where the
+    // artifact resolved, the same workspace and artifact identity.
+    this.store.transaction(() => {
+      const stored = this.store.get<InstructionClaims>(claimsKey(project));
+      if (stored?.catalog === claims.catalog)
+        for (const entry of pending) {
+          const kept = stored.targets[entry.id];
+          const identity = resolved.plans.find(
+            ({ target }) =>
+              InstructionProjections.id(instructionPath(target)) === entry.id,
+          )?.snapshot;
+          if (
+            kept?.artifact === entry.artifact &&
+            (!identity ||
+              (workspaceKey(kept.workspace) === workspaceKey(identity.workspace) &&
+                kept.skill.id === identity.skill.id))
+          )
+            claims.targets[entry.id] = kept;
+        }
+      this.store.set(claimsKey(project), claims);
+    });
     // A target dropped from this project's configuration keeps its file and
     // record; only the project's claim on it is released.
     // A configured adoption awaiting review keeps its claim too, as a

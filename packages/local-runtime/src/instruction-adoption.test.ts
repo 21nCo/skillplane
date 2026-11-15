@@ -1664,3 +1664,146 @@ describe("PR review round 2 adoption checks", () => {
     expect(f.runtime.projections.instructions.owners(codexId)).toEqual([]);
   });
 });
+
+describe("PR review round 3 adoption checks", () => {
+  /** Adopts, stopping the run right after its import, and returns that import. */
+  async function interrupted(f: Fixture) {
+    const spy = vi
+      .spyOn(f.runtime.projections.instructions, "recordDraft")
+      .mockImplementationOnce(() => {
+        throw new Error("process stopped");
+      });
+    await expect(f.runtime.adoptInstructions(f.project, f.claude)).rejects.toThrow(
+      "process stopped",
+    );
+    spy.mockRestore();
+    expect(adoption(f)?.draft).toBeUndefined();
+    const item = requireValue(
+      (await f.provider.list("instructions")).find((a) => a.slug === "global-agents"),
+    );
+    const open = (
+      (await f.provider.candidates(item.id)) as { reviewId: string; state: string }[]
+    ).filter((row) => ["draft", "pending_review"].includes(row.state));
+    expect(open).toHaveLength(1);
+    return { skillId: item.id, versionId: requireValue(open[0]).reviewId };
+  }
+
+  for (const [path, published, file] of [
+    ["the unchanged amend", v2, v2],
+    ["the amend with new bytes", v2, original],
+    ["the new-artifact draft", undefined, original],
+  ] as const)
+    it(`recovers an import approved after an interrupted adopt on ${path} without importing again`, async () => {
+      const f = fixture();
+      if (published) await f.provider.create(instructions("global-agents", published));
+      writeFileSync(f.claude, file);
+      const imported = await interrupted(f);
+      await approve(f, imported.skillId, imported.versionId);
+      const versions = await f.provider.versions(imported.skillId);
+
+      const adopted = await f.runtime.adoptInstructions(f.project, f.claude);
+      expect(adopted.draft).toMatchObject({
+        skill: { id: imported.skillId },
+        versionId: imported.versionId,
+      });
+      expect(await f.provider.versions(imported.skillId)).toEqual(versions);
+      expect(backups(f)).toEqual([sha(file).slice(7)]);
+      const synced = await f.runtime.syncTargets(f.project);
+      expect(synced.pending).toEqual([]);
+      expect(record(f)).toMatchObject({
+        digest: sha(file),
+        version: { id: imported.versionId },
+      });
+      expect(readFileSync(f.claude)).toEqual(Buffer.from(file));
+    });
+
+  it("imports afresh after an interrupted adopt whose import a review rejected", async () => {
+    const f = fixture();
+    await f.provider.create(instructions("global-agents", v2));
+    const imported = await interrupted(f);
+    await approve(f, imported.skillId, imported.versionId, false);
+
+    const draft = requireValue(
+      (await f.runtime.adoptInstructions(f.project, f.claude)).draft,
+    );
+    expect(draft.versionId).not.toBe(imported.versionId);
+    expect(
+      ((await f.provider.candidates(imported.skillId)) as { reviewId: string; state: string }[])
+        .find((row) => row.reviewId === draft.versionId)?.state,
+    ).toBe("pending_review");
+    expect((await f.runtime.syncTargets(f.project)).pending).toMatchObject([
+      { id: f.id, code: "ADOPTION_PENDING_REVIEW" },
+    ]);
+    await approve(f, imported.skillId, draft.versionId);
+    expect((await f.runtime.syncTargets(f.project)).pending).toEqual([]);
+    expect(readFileSync(f.claude)).toEqual(Buffer.from(original));
+  });
+
+  it("keeps the identity a concurrent sync recorded for an adoption it set aside, so offline doctor verifies it with a cloud mount", async () => {
+    const cloud: WorkspaceRef = {
+      provider: "cloud",
+      profile: "work",
+      endpoint: "https://mcp.example.com/mcp",
+      id: "workspace:cloud",
+    };
+    let backing: LocalWorkspaceProvider | undefined;
+    const factory = (store: LocalStore) => (ref: WorkspaceRef) => {
+      if (ref.provider === "local") return new LocalWorkspaceProvider(store, ref.id);
+      backing ??= LocalWorkspaceProvider.create(store, "Cloud backing");
+      return backing;
+    };
+    const f = fixture(undefined, factory);
+    await f.provider.create(instructions("codex-agents", v2));
+    const base = f.runtime.project(f.project);
+    const context = { ...base, mounts: [{ workspace: cloud }] };
+    f.runtime.configure(f.project, {
+      ...context,
+      instructions: [
+        ...(context.instructions ?? []),
+        { adapter: "codex", artifact: "codex-agents" },
+      ],
+    });
+    const draft = requireValue(
+      (await f.runtime.adoptInstructions(f.project, f.claude)).draft,
+    );
+    await f.runtime.syncTargets(f.project);
+    const codexId = InstructionProjections.id(join(f.home, ".codex", "AGENTS.md"));
+    expect(f.runtime.projections.instructions.owners(codexId)).toEqual([f.project]);
+    f.runtime.configure(f.project, context);
+
+    const runtime = f.runtime as unknown as {
+      instructionPlans: (...args: unknown[]) => Promise<unknown>;
+    };
+    const plans = runtime.instructionPlans.bind(f.runtime);
+    vi.spyOn(runtime, "instructionPlans").mockImplementationOnce(async (...args) => {
+      const planned = await plans(...args);
+      await approve(f, draft.skill.id, draft.versionId);
+      await new Runtime(f.store, factory(f.store)).sync(f.project);
+      return planned;
+    });
+    const synced = await f.runtime.syncTargets(f.project);
+    expect(synced.pending).toMatchObject([{ id: f.id }]);
+    expect(f.store.get(`instruction-claims:${f.project}`)).toMatchObject({
+      targets: {
+        [f.id]: {
+          artifact: "global-agents",
+          workspace: f.runtime.project(f.project).primary,
+          skill: { id: draft.skill.id },
+        },
+      },
+    });
+    expect(
+      Object.keys(
+        requireValue(
+          f.store.get<{ targets: Record<string, unknown> }>(
+            `instruction-claims:${f.project}`,
+          ),
+        ).targets,
+      ),
+    ).toEqual([f.id]);
+    // Offline, the cloud mount leaves the target to the recorded identity.
+    expect((await states(f))[f.claude]).toBe("in-sync");
+    expect(f.runtime.projections.instructions.owners(f.id)).toEqual([f.project]);
+    expect(f.runtime.projections.instructions.owners(codexId)).toEqual([]);
+  });
+});
