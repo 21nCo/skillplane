@@ -1728,8 +1728,12 @@ describe("PR review round 3 adoption checks", () => {
     );
     expect(draft.versionId).not.toBe(imported.versionId);
     expect(
-      ((await f.provider.candidates(imported.skillId)) as { reviewId: string; state: string }[])
-        .find((row) => row.reviewId === draft.versionId)?.state,
+      (
+        (await f.provider.candidates(imported.skillId)) as {
+          reviewId: string;
+          state: string;
+        }[]
+      ).find((row) => row.reviewId === draft.versionId)?.state,
     ).toBe("pending_review");
     expect((await f.runtime.syncTargets(f.project)).pending).toMatchObject([
       { id: f.id, code: "ADOPTION_PENDING_REVIEW" },

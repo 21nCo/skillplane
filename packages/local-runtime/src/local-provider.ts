@@ -343,7 +343,9 @@ export class LocalWorkspaceProvider implements WorkspaceProvider {
     const scope = `${this.workspace.id}:`;
     const found = [];
     for (const row of this.store.db
-      .prepare("SELECT key,result FROM mutation WHERE substr(key,1,?)=? AND instr(key,?)>0")
+      .prepare(
+        "SELECT key,result FROM mutation WHERE substr(key,1,?)=? AND instr(key,?)>0",
+      )
       .all(scope.length, scope, `:${prefix}`)) {
       const operation = String(row.key).slice(scope.length);
       if (!operation.startsWith("draft:") && !operation.startsWith("amend:")) continue;
@@ -370,7 +372,12 @@ export class LocalWorkspaceProvider implements WorkspaceProvider {
     }
     return found
       .sort((a, b) => b.created.localeCompare(a.created))
-      .map(({ created: _created, ...entry }) => entry);
+      .map(({ skillId, versionId, state, base }) => ({
+        skillId,
+        versionId,
+        state,
+        base,
+      }));
   }
   async candidates(skillId: string): Promise<Row[]> {
     const skill = this.skill(skillId);
