@@ -67,6 +67,20 @@ const claimsKey = (project: string) => `instruction-claims:${resolve(project)}`;
 function overlaps(a: string, b: string): boolean {
   return a === b || a.startsWith(b + sep) || b.startsWith(a + sep);
 }
+/** Refuses an instructions destination that overlaps a skill destination. */
+function assertNoSkillOverlap(
+  paths: readonly string[],
+  skills: readonly string[],
+): void {
+  for (const path of paths) {
+    const skill = skills.find((destination) => overlaps(destination, path));
+    if (skill !== undefined)
+      throw new RuntimeError(
+        "PROJECTION_COLLISION",
+        `Instructions destination ${path} overlaps skill destination ${skill}`,
+      );
+  }
+}
 /** Fingerprint of the configuration that decides what a catalog name resolves to. */
 /** The artifact a file is adopted into without --artifact: its slugged base name. */
 function defaultArtifact(path: string): string {
@@ -566,6 +580,8 @@ export class Runtime {
         "WORKSPACE_READ_ONLY",
         `${name} is read from a mounted workspace; adopt into an artifact of the primary workspace`,
       );
+    // Sync refuses an instructions destination overlapping a skill one.
+    assertNoSkillOverlap([path], await this.skillDestinations(context, project));
     // A skill holding the slug conflicts even beside a visible instructions
     // artifact of the same slug, as a legacy store may hold both.
     const holders = (await primary.list()).filter((entry) => entry.slug === name);
@@ -616,15 +632,20 @@ export class Runtime {
     // A recorded draft that can no longer be published, because a review
     // rejected it or another version was published over its base, is
     // replaced by a fresh one against the current version.
-    // So is one of another artifact than the name resolves to now, as when a
-    // run that recorded it stopped at a workspace change.
-    const foreign = (draft: InstructionAdoption["draft"]): boolean =>
+    // So is one of another artifact than the name resolves to now, or of one
+    // no longer reachable under the name at all, as when a run that recorded
+    // it stopped at a workspace or alias change.
+    const foreign = (
+      draft: InstructionAdoption["draft"],
+      resolved: CatalogEntry | undefined,
+    ): boolean =>
       !!draft &&
       (workspaceKey(draft.workspace) !== workspaceKey(context.primary) ||
-        (item !== undefined && item.skillId !== draft.skill.id));
+        resolved?.skillId !== draft.skill.id);
     const replaced =
       adoption.draft &&
-      (foreign(adoption.draft) || (await this.unpublishable(primary, adoption.draft)))
+      (foreign(adoption.draft, item) ||
+        (await this.unpublishable(primary, adoption.draft)))
         ? adoption.draft.versionId
         : undefined;
     if (!adoption.draft || replaced)
@@ -632,13 +653,7 @@ export class Runtime {
         adoption = this.projections.instructions.recordDraft(
           adoption.id,
           adoption.nonce,
-          await this.importDraft(
-            primary,
-            item?.skillId ??
-              (foreign(adoption.draft) ? undefined : adoption.draft?.skill.id),
-            adoption,
-            backedUp.bytes,
-          ),
+          await this.importDraft(primary, item?.skillId, adoption, backedUp.bytes),
           replaced,
         );
       } catch (error) {
@@ -648,6 +663,21 @@ export class Runtime {
           this.projections.instructions.discardAdoption(adoption);
         throw error;
       }
+    // Sync's checks again, against the configuration and catalog as they are
+    // after the import: the name must still resolve to the draft's artifact
+    // and no skill destination may overlap the target.
+    const changed = () =>
+      new RuntimeError(
+        "PROJECTION_CHANGED",
+        `The workspaces of ${project} changed while ${path} was being adopted; run instructions adopt again`,
+      );
+    const latest = this.project(project);
+    if (catalogFingerprint(latest) !== catalogFingerprint(context)) throw changed();
+    const resolved = (await this.catalog(latest, "instructions")).find(
+      (entry) => entry.name === name,
+    );
+    if (foreign(adoption.draft, resolved)) throw changed();
+    assertNoSkillOverlap([path], await this.skillDestinations(latest, project));
     // Merged into the configuration as it is now, under the lock, so a
     // concurrent change to it is never lost.
     this.store.transaction(() => {
@@ -658,21 +688,32 @@ export class Runtime {
           `${path} was uninstalled while it was being adopted; nothing was configured`,
         );
       const current = this.project(project);
-      // The recorded draft, which a concurrent run may have set, belongs to
-      // the artifact the name resolved to then; a configuration that now
-      // resolves names differently would attach it to another one.
+      // The recorded draft, which a concurrent run may have set, must belong
+      // to the artifact the name resolved to above, under the configuration
+      // those checks read.
       if (
-        catalogFingerprint(current) !== catalogFingerprint(context) ||
-        foreign(recorded.draft)
+        catalogFingerprint(current) !== catalogFingerprint(latest) ||
+        JSON.stringify(current.targets) !== JSON.stringify(latest.targets) ||
+        foreign(recorded.draft, resolved)
       )
-        throw new RuntimeError(
-          "PROJECTION_CHANGED",
-          `The workspaces of ${project} changed while ${path} was being adopted; run instructions adopt again`,
-        );
+        throw changed();
       const next = this.withTarget(current, target);
       if (next !== current) this.configure(project, next);
     });
     return { ...adoption, configured: target };
+  }
+  /** The skill destinations sync plans for the configuration's skill targets. */
+  private async skillDestinations(
+    context: ProjectContext,
+    project: string,
+  ): Promise<string[]> {
+    if (context.targets.length === 0) return [];
+    const catalog = await this.catalog(context);
+    return context.targets.flatMap((target) =>
+      catalog
+        .filter((item) => !target.skills || target.skills.includes(item.name))
+        .map((item) => join(targetDirectory(target, project), item.name)),
+    );
   }
   /**
    * The configuration with target added, or the same object when it already
@@ -745,11 +786,12 @@ export class Runtime {
     return (row.base ?? null) !== (current?.version.id ?? null);
   }
   /**
-   * Imports adopted bytes as a draft: a pending version or the current one
-   * that already holds them, else a new draft-only artifact, another draft of
-   * an artifact with nothing published, or a review candidate of a published
-   * one. Keys are scoped to the adoption and its base, so a re-adoption or a
-   * retry after the base moved never replays an earlier request.
+   * Imports adopted bytes as a draft: a pending version that already holds
+   * them, else a new draft-only artifact, another draft of an artifact with
+   * nothing published, or a review candidate of a published one, even one
+   * whose bytes the published version already holds. Keys are scoped to the
+   * adoption and its base, so a re-adoption or a retry after the base moved
+   * never replays an earlier request.
    */
   private async importDraft(
     provider: LocalWorkspaceProvider,
@@ -797,7 +839,6 @@ export class Runtime {
       }
     } else {
       const current = await currentVersion(provider, skillId);
-      if (current && holds(current)) return draft(current);
       // A draft an interrupted run created, or one awaiting review from an
       // earlier adoption, that a decision can still approve over the current
       // version.
@@ -812,36 +853,42 @@ export class Runtime {
       }
       if (current) {
         const entrypoint = bundleEntrypoint(current.bundle.skill);
-        created = await provider.amend({
-          skillId,
-          baseVersionId: current.version.id,
-          proposedBump: "minor",
-          idempotencyKey: key(current.version.id),
-          changes: [
-            {
-              operation: "replace",
-              path: entrypoint,
-              expectedSha256: createHash("sha256")
-                .update(requireValue(current.bundle.files.get(entrypoint)))
-                .digest("hex"),
-              contentBase64: Buffer.from(bytes).toString("base64"),
+        // Bytes the published version already holds still go through review
+        // as a candidate of their own; adopt never takes a file over unreviewed.
+        created = await provider.amend(
+          {
+            skillId,
+            baseVersionId: current.version.id,
+            proposedBump: "minor",
+            idempotencyKey: key(current.version.id),
+            changes: [
+              {
+                operation: "replace",
+                path: entrypoint,
+                expectedSha256: createHash("sha256")
+                  .update(requireValue(current.bundle.files.get(entrypoint)))
+                  .digest("hex"),
+                contentBase64: Buffer.from(bytes).toString("base64"),
+              },
+            ],
+            learning: {
+              summary: `Adopt ${basename(adoption.path)}`,
+              observation:
+                "The user handed an existing instructions file to Skillplane",
+              rationale: "Review the adopted content before it replaces the file",
+              confidence: "high",
+              evidence: [],
+              evidenceUnavailableReason: "Imported from a local file",
+              validation: [],
+              validationNotRunReason: "Instructions have no executable checks",
+              sourceContextId: null,
+              tags: [],
+              externalReferences: [],
+              extra: {},
             },
-          ],
-          learning: {
-            summary: `Adopt ${basename(adoption.path)}`,
-            observation: "The user handed an existing instructions file to Skillplane",
-            rationale: "Review the adopted content before it replaces the file",
-            confidence: "high",
-            evidence: [],
-            evidenceUnavailableReason: "Imported from a local file",
-            validation: [],
-            validationNotRunReason: "Instructions have no executable checks",
-            sourceContextId: null,
-            tags: [],
-            externalReferences: [],
-            extra: {},
           },
-        });
+          { unchanged: holds(current) },
+        );
       } else {
         // Nothing is published, as after a rejected draft: add another draft.
         const info = requireValue(
@@ -927,15 +974,10 @@ export class Runtime {
     const { pending } = resolved;
     // Writing one destination inside another would fail midway; refuse first.
     // Every configured destination counts, one awaiting adoption review too.
-    for (const target of context.instructions ?? []) {
-      const path = instructionPath(target);
-      const skill = [...desired].find((destination) => overlaps(destination, path));
-      if (skill !== undefined)
-        throw new RuntimeError(
-          "PROJECTION_COLLISION",
-          `Instructions destination ${path} overlaps skill destination ${skill}`,
-        );
-    }
+    assertNoSkillOverlap(
+      (context.instructions ?? []).map((target) => instructionPath(target)),
+      [...desired],
+    );
     // An unmanaged or hand-edited instructions file, or an unsafe directory
     // above one, stops the sync before any write.
     const instructionPlans = resolved.plans.filter(
@@ -989,9 +1031,11 @@ export class Runtime {
     this.store.set(claimsKey(project), claims);
     // A target dropped from this project's configuration keeps its file and
     // record; only the project's claim on it is released.
+    // A configured adoption awaiting review keeps its claim too, as a
+    // concurrent sync may have taken the file over since it was set aside.
     this.projections.instructions.release(
       project,
-      new Set(instructions.map((record) => record.id)),
+      new Set([...instructions, ...pending].map((entry) => entry.id)),
     );
     return { projections: records, instructions, pending };
   }

@@ -248,12 +248,16 @@ fresh one against the current version when adopt runs again; a draft imported fo
 adoption that was uninstalled meanwhile is never recorded for a later one.
 Adopting the same file again after `uninstall` reuses a candidate still awaiting
 review, or imports a new one when the published version has moved on. A file whose
-bytes the artifact's published version already holds records that version, since the
-workspace refuses a draft identical to it; the next `sync` takes the file over
-unchanged. An adopt whose project changed its primary or mounted workspaces meanwhile
+bytes the artifact's published version already holds is still imported as a review
+candidate of its own, and `sync` takes the file over only once that candidate is
+published. An adopt whose project changed its primary or mounted workspaces meanwhile
 is refused with `PROJECTION_CHANGED`; running it again imports into the artifact the
-name resolves to now. The destination of an adoption awaiting review stays reserved:
-a skill destination overlapping it is refused with `PROJECTION_COLLISION`.
+name resolves to now, also when an alias that resolved the name to another artifact
+was removed. A file under a configured skill destination is refused with
+`PROJECTION_COLLISION`, before anything is kept and again before the target is
+configured. The destination of an adoption awaiting review stays reserved: a skill
+destination overlapping it is refused with `PROJECTION_COLLISION`, and the project
+keeps its claim on the target.
 
 `skillplane rollback TARGET` restores an instruction file's previous version by the
 same journaled rename; the next `sync` applies the latest published version again.

@@ -28,6 +28,7 @@ import {
   type InstructionStatus,
   type WorkspaceRef,
   targetSchema,
+  workspaceKey,
 } from "./index.js";
 import { main } from "./cli.js";
 
@@ -1348,12 +1349,12 @@ describe("PR review round 1 adoption and rollback checks", () => {
     expect(record(f)).not.toHaveProperty("sequence");
   });
 
-  it("records the published version that already holds the adopted bytes, as no draft can repeat it", async () => {
+  it("imports bytes the published version already holds as a candidate for review, and takes over only once it is published", async () => {
     const f = fixture();
     const created = await f.provider.create(instructions("global-agents", v2));
     writeFileSync(f.claude, v2);
     const current = await f.provider.retrieve(created.skillId);
-    // The provider refuses a version identical to the published one.
+    // Amend refuses a version identical to the published one unless asked.
     await expect(
       f.provider.amend({
         skillId: created.skillId,
@@ -1385,12 +1386,31 @@ describe("PR review round 1 adoption and rollback checks", () => {
       }),
     ).rejects.toMatchObject({ code: "UNCHANGED_BUNDLE" });
     const adopted = await f.runtime.adoptInstructions(f.project, f.claude);
-    expect(adopted.draft?.versionId).toBe(current.version.id);
+    const draft = requireValue(adopted.draft);
+    expect(draft.skill.id).toBe(created.skillId);
+    expect(draft.versionId).not.toBe(current.version.id);
+    expect(
+      (await f.provider.retrieve(created.skillId, draft.versionId)).bundle.digest,
+    ).toBe(current.bundle.digest);
     expect(backups(f)).toEqual([sha(v2).slice(7)]);
-    // The reviewed bytes are the file's bytes, so the takeover changes nothing.
-    await f.runtime.sync(f.project);
-    expect(record(f)?.digest).toBe(sha(v2));
+    const before = await f.runtime.syncTargets(f.project);
+    expect(before.pending).toMatchObject([
+      { id: f.id, code: "ADOPTION_PENDING_REVIEW" },
+    ]);
+    expect(record(f)).toBeUndefined();
+    // A re-run keeps the candidate awaiting review.
+    expect((await f.runtime.adoptInstructions(f.project, f.claude)).draft).toEqual(
+      draft,
+    );
+    await approve(f, created.skillId, draft.versionId);
+    const after = await f.runtime.syncTargets(f.project);
+    expect(after.pending).toEqual([]);
+    expect(record(f)).toMatchObject({
+      digest: sha(v2),
+      version: { id: draft.versionId },
+    });
     expect(readFileSync(f.claude, "utf8")).toBe(v2);
+    expect(f.runtime.projections.instructions.owners(f.id)).toEqual([f.project]);
   });
 
   it("refuses an adopt when a skill shares the slug of a visible instructions artifact", async () => {
@@ -1504,5 +1524,143 @@ describe("PR review round 1 adoption and rollback checks", () => {
     writeFileSync(file, v2);
     const adopted = await f.runtime.adoptInstructions(f.project, file);
     expect(adopted.artifact).toBe("team-rules");
+  });
+});
+
+describe("PR review round 2 adoption checks", () => {
+  /** A published skill review and a generic skill target at ~/rules. */
+  async function skillRules(f: Fixture) {
+    const rules = join(f.home, "rules");
+    mkdirSync(rules);
+    const file = join(rules, "review");
+    writeFileSync(file, v2);
+    await f.provider.create({
+      ...instructions("review", "Review carefully."),
+      kind: "skill",
+    });
+    const targets = [targetSchema.parse({ adapter: "generic", directory: rules })];
+    return { rules, file, targets };
+  }
+
+  it("refuses an adopt under a configured skill destination before any write", async () => {
+    const f = fixture([]);
+    const { rules, file, targets } = await skillRules(f);
+    const fileId = InstructionProjections.id(file);
+    for (const instructions of [
+      [],
+      [{ adapter: "generic", path: "~/rules/review", artifact: "rules" }],
+    ]) {
+      f.runtime.configure(f.project, {
+        ...f.runtime.project(f.project),
+        targets,
+        instructions,
+      });
+      const before = f.runtime.project(f.project);
+      await expect(
+        f.runtime.adoptInstructions(f.project, file, "rules"),
+      ).rejects.toMatchObject({
+        code: "PROJECTION_COLLISION",
+        message: expect.stringContaining("overlaps skill destination"),
+      });
+      expect(readFileSync(file, "utf8")).toBe(v2);
+      expect(f.runtime.project(f.project)).toEqual(before);
+      expect(f.runtime.projections.instructions.adoption(fileId)).toBeUndefined();
+      expect(existsSync(join(rules, ".skillplane-projections"))).toBe(false);
+      expect(await f.provider.list("instructions")).toEqual([]);
+    }
+  });
+
+  it("does not configure an adoption once a skill destination overlapping it is configured meanwhile", async () => {
+    const f = fixture([]);
+    const { file, targets } = await skillRules(f);
+    const state = f.runtime.projections.instructions;
+    const recordDraft = state.recordDraft.bind(state);
+    vi.spyOn(state, "recordDraft").mockImplementationOnce((...args) => {
+      const recorded = recordDraft(...args);
+      f.runtime.configure(f.project, { ...f.runtime.project(f.project), targets });
+      return recorded;
+    });
+    await expect(
+      f.runtime.adoptInstructions(f.project, file, "rules"),
+    ).rejects.toMatchObject({ code: "PROJECTION_COLLISION" });
+    expect(f.runtime.project(f.project).instructions ?? []).toEqual([]);
+    expect(readFileSync(file, "utf8")).toBe(v2);
+  });
+
+  it("re-imports under the requested name once the alias that resolved it to another artifact is removed", async () => {
+    const f = fixture([]);
+    const bar = await f.provider.create(instructions("bar", v2));
+    const alias = `${workspaceKey(f.runtime.project(f.project).primary)}/${bar.skillId}`;
+    f.runtime.configure(f.project, {
+      ...f.runtime.project(f.project),
+      aliases: { [alias]: "foo" },
+    });
+    const state = f.runtime.projections.instructions;
+    const recordDraft = state.recordDraft.bind(state);
+    vi.spyOn(state, "recordDraft").mockImplementationOnce((...args) => {
+      recordDraft(...args);
+      throw new Error("stopped after the draft");
+    });
+    await expect(
+      f.runtime.adoptInstructions(f.project, f.claude, "foo"),
+    ).rejects.toThrow("stopped after the draft");
+    expect(adoption(f)?.draft?.skill.id).toBe(bar.skillId);
+    f.runtime.configure(f.project, { ...f.runtime.project(f.project), aliases: {} });
+
+    const adopted = await f.runtime.adoptInstructions(f.project, f.claude, "foo");
+    const draft = requireValue(adopted.draft);
+    expect(draft.skill.id).not.toBe(bar.skillId);
+    expect((await f.provider.list("instructions")).map((a) => a.slug)).toEqual([
+      "bar",
+      "foo",
+    ]);
+    expect(f.runtime.project(f.project).instructions).toEqual([
+      { adapter: "claude", scope: "user", artifact: "foo" },
+    ]);
+    expect(backups(f)).toEqual([sha(original).slice(7)]);
+    await approve(f, draft.skill.id, draft.versionId);
+    const synced = await f.runtime.syncTargets(f.project);
+    expect(synced.pending).toEqual([]);
+    expect(record(f)).toMatchObject({ artifact: "foo", skill: { id: draft.skill.id } });
+    expect(readFileSync(f.claude)).toEqual(Buffer.from(original));
+  });
+
+  it("keeps the claim of an adoption awaiting review that a concurrent sync took over, and releases removed targets", async () => {
+    const f = fixture();
+    await f.provider.create(instructions("codex-agents", v2));
+    const context = f.runtime.project(f.project);
+    f.runtime.configure(f.project, {
+      ...context,
+      instructions: [
+        ...(context.instructions ?? []),
+        { adapter: "codex", artifact: "codex-agents" },
+      ],
+    });
+    const draft = requireValue(
+      (await f.runtime.adoptInstructions(f.project, f.claude)).draft,
+    );
+    await f.runtime.syncTargets(f.project);
+    const codexId = InstructionProjections.id(join(f.home, ".codex", "AGENTS.md"));
+    expect(f.runtime.projections.instructions.owners(codexId)).toEqual([f.project]);
+    // The codex target is dropped from the configuration.
+    f.runtime.configure(f.project, context);
+
+    // Another process publishes the draft and syncs after this sync set the
+    // adoption aside as pending.
+    const runtime = f.runtime as unknown as {
+      instructionPlans: (...args: unknown[]) => Promise<unknown>;
+    };
+    const plans = runtime.instructionPlans.bind(f.runtime);
+    vi.spyOn(runtime, "instructionPlans").mockImplementationOnce(async (...args) => {
+      const planned = await plans(...args);
+      await approve(f, draft.skill.id, draft.versionId);
+      await new Runtime(f.store).sync(f.project);
+      return planned;
+    });
+    const synced = await f.runtime.syncTargets(f.project);
+    expect(synced.pending).toMatchObject([{ id: f.id }]);
+    expect(record(f)?.digest).toBe(sha(original));
+    expect(f.runtime.projections.instructions.owners(f.id)).toEqual([f.project]);
+    expect(f.runtime.projections.instructions.owners(codexId)).toEqual([]);
   });
 });

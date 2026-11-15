@@ -262,7 +262,14 @@ export class LocalWorkspaceProvider implements WorkspaceProvider {
       return result;
     });
   }
-  async amend(request: AmendRequest): Promise<{
+  /**
+   * Proposes a review candidate. With unchanged, a candidate identical to its
+   * base is allowed, as an adoption of the published bytes still needs review.
+   */
+  async amend(
+    request: AmendRequest,
+    options: { unchanged?: boolean } = {},
+  ): Promise<{
     skillId: string;
     versionId: string;
   }> {
@@ -287,7 +294,7 @@ export class LocalWorkspaceProvider implements WorkspaceProvider {
       parseAmendmentOperations(input.changes),
     );
     const bundle = await canonicalizeBundleFiles({ skill: base.bundle.skill, files });
-    if (bundle.digest === base.bundle.digest)
+    if (bundle.digest === base.bundle.digest && !options.unchanged)
       throw new RuntimeError("UNCHANGED_BUNDLE");
     this.store.putBundle(bundle);
     return this.store.transaction(() => {
