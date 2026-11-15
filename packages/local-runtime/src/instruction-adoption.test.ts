@@ -1743,6 +1743,45 @@ describe("PR review round 3 adoption checks", () => {
     expect(readFileSync(f.claude)).toEqual(Buffer.from(original));
   });
 
+  for (const [clock, step] of [
+    ["stands still", 0],
+    ["moves backward", -60_000],
+  ] as const)
+    it(`imports a publishable draft after successive rejections while the clock ${clock}`, async () => {
+      const f = fixture();
+      const created = await f.provider.create(instructions("global-agents", v2));
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        let now = Date.parse("2026-11-16T00:00:00Z");
+        const rejected: string[] = [];
+        for (let round = 0; round < 3; round++) {
+          vi.setSystemTime(now);
+          now += step;
+          const draft = requireValue(
+            (await f.runtime.adoptInstructions(f.project, f.claude)).draft,
+          );
+          expect(rejected).not.toContain(draft.versionId);
+          const row = (
+            (await f.provider.candidates(created.skillId)) as {
+              reviewId: string;
+              state: string;
+            }[]
+          ).find((candidate) => candidate.reviewId === draft.versionId);
+          expect(row?.state).toBe("pending_review");
+          if (round === 2) {
+            await approve(f, created.skillId, draft.versionId);
+            break;
+          }
+          await approve(f, created.skillId, draft.versionId, false);
+          rejected.push(draft.versionId);
+        }
+      } finally {
+        vi.useRealTimers();
+      }
+      expect((await f.runtime.syncTargets(f.project)).pending).toEqual([]);
+      expect(readFileSync(f.claude)).toEqual(Buffer.from(original));
+    });
+
   it("keeps the identity a concurrent sync recorded for an adoption it set aside, so offline doctor verifies it with a cloud mount", async () => {
     const cloud: WorkspaceRef = {
       provider: "cloud",

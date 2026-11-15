@@ -813,8 +813,8 @@ export class Runtime {
       createdAt: snapshot.version.createdAt,
     });
     // Scoped to this adoption, the draft it replaces and the base it amends.
-    // After an import of its own a review rejected or a publication moved
-    // past, that import takes the replaced draft's place, so it never replays.
+    // After imports of its own a review rejected or a publication moved past,
+    // all of them take the replaced draft's place, so none is ever replayed.
     let previous = adoption.draft?.versionId ?? "";
     const key = (base: string) =>
       `adopt-${adoption.nonce}-${createHash("sha256")
@@ -850,7 +850,7 @@ export class Runtime {
       const own = provider
         .imports(`adopt-${adoption.nonce}-`)
         .filter((entry) => entry.skillId === skillId);
-      previous = own[0]?.versionId ?? previous;
+      if (own.length > 0) previous = own.map((entry) => entry.versionId).join(",");
       for (const entry of own) {
         if (
           entry.state !== "published" &&

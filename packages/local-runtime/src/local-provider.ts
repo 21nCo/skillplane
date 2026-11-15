@@ -331,8 +331,9 @@ export class LocalWorkspaceProvider implements WorkspaceProvider {
   }
   /**
    * The versions this workspace's drafts and amendments created under an
-   * idempotency key starting with prefix, newest first, in whatever state
-   * they are now, so a caller recovers its own import after a review decided it.
+   * idempotency key starting with prefix, latest committed first whatever the
+   * clock said, in whatever state they are now, so a caller recovers its own
+   * import after a review decided it.
    */
   imports(prefix: string): {
     skillId: string;
@@ -344,7 +345,7 @@ export class LocalWorkspaceProvider implements WorkspaceProvider {
     const found = [];
     for (const row of this.store.db
       .prepare(
-        "SELECT key,result FROM mutation WHERE substr(key,1,?)=? AND instr(key,?)>0",
+        "SELECT key,result FROM mutation WHERE substr(key,1,?)=? AND instr(key,?)>0 ORDER BY rowid DESC",
       )
       .all(scope.length, scope, `:${prefix}`)) {
       const operation = String(row.key).slice(scope.length);
@@ -360,24 +361,16 @@ export class LocalWorkspaceProvider implements WorkspaceProvider {
         continue;
       }
       const stored = this.store.db
-        .prepare(`SELECT state,base,created FROM ${table} WHERE id=? AND skill=?`)
+        .prepare(`SELECT state,base FROM ${table} WHERE id=? AND skill=?`)
         .get(result.versionId, result.skillId);
       if (stored)
         found.push({
           ...result,
           state: stored.state as VersionInfo["state"],
           base: typeof stored.base === "string" ? stored.base : null,
-          created: String(stored.created),
         });
     }
-    return found
-      .sort((a, b) => b.created.localeCompare(a.created))
-      .map(({ skillId, versionId, state, base }) => ({
-        skillId,
-        versionId,
-        state,
-        base,
-      }));
+    return found;
   }
   async candidates(skillId: string): Promise<Row[]> {
     const skill = this.skill(skillId);
