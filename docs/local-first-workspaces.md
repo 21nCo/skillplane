@@ -223,22 +223,37 @@ SHA-256, and imports the same bytes as a draft of the instructions document: a n
 draft-only document, or a review candidate of an existing one in the project's local
 primary workspace. A cloud primary is refused with `ADOPT_LOCAL_PRIMARY_REQUIRED`.
 `--artifact` defaults to the configured target's document, else to the file name;
-an unconfigured file is added to `instructions`. Adopt never publishes and never
-changes the file. Once the adopted draft, or a later version, is published, `sync`
-replaces the file by the same rename and records it; until then `sync` fails with
-`ADOPTION_PENDING_REVIEW` or, for a document with no published version,
-`VERSION_UNAVAILABLE`, and `doctor` lists the file as `adopted`. A file edited after
-adoption is a `PROJECTION_DIVERGED`. An interrupted adopt can be run again: it
-reuses the backup and the draft.
+an unconfigured file is added to `instructions`, merged into `skillplane.json` as it
+is when adopt finishes; a target configured for another document meanwhile is a
+`PROJECTION_COLLISION`. Adopt never publishes and never changes the file. Once the
+adopted draft, or a later version, is published, `sync` replaces the file by the same
+rename and records it. Until then `sync` leaves the file alone and still syncs skills
+and every other target: it lists the file with state `adopted` and code
+`ADOPTION_PENDING_REVIEW` (or `ADOPTION_INCOMPLETE` when the draft import has not
+finished), and `doctor` lists it as `adopted`. A file edited after adoption is a
+`PROJECTION_DIVERGED`.
+
+Adopt checks before keeping anything: a file that is not UTF-8 is refused with
+`INSTRUCTIONS_NOT_UTF8` and a slug a skill already holds with
+`ARTIFACT_SLUG_CONFLICT`, leaving no backup or adoption behind. An interrupted adopt
+can be run again: it reuses the backup, and a draft that already holds the file's
+bytes. A draft a review rejected is replaced by a fresh one when adopt runs again.
+Adopting the same file again after `uninstall` reuses a candidate still awaiting
+review, or imports a new one when the published version has moved on.
 
 `skillplane rollback TARGET` restores an instruction file's previous version by the
 same journaled rename; the next `sync` applies the latest published version again.
 `skillplane uninstall TARGET` restores the adopted original, or removes a file
 Skillplane created, and clears the file's projection state; the original's backup
-goes with it. `TARGET` is the ID `doctor` lists or the file's path. Both refuse a
+goes with it. The target also leaves the `instructions` of the project that adopted
+or synced it, so the next `sync` neither refuses the restored file nor writes the
+removed one again; add it back, or adopt the file again, to resume. `TARGET` is the ID `doctor` lists or the file's path. Both refuse a
 hand-edited file with `PROJECTION_DIVERGED`; `--force` first copies the edited file
 into the backup directory, where it stays. An uninstall interrupted after it
-replaced the file is finished by the next `sync` or `doctor`.
+replaced the file is finished by the next `sync` or `doctor`. Uninstall, and a
+rollback to another document, refuse with `PROJECTION_SHARED` when another project
+claims the file, checked again in the same commit that replaces or removes it, and a `sync` that reaches a file being
+uninstalled is refused with `PROJECTION_BUSY`.
 
 ## Freshness and trust
 

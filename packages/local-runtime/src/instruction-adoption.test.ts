@@ -26,6 +26,7 @@ import {
   type InstructionRecord,
   type InstructionStatus,
   type WorkspaceRef,
+  targetSchema,
 } from "./index.js";
 import { main } from "./cli.js";
 
@@ -93,7 +94,12 @@ async function states(f: Fixture): Promise<Record<string, string>> {
   };
   return Object.fromEntries(report.instructions.map((row) => [row.path, row.state]));
 }
-async function approve(f: Fixture, skillId: string, versionId: string): Promise<void> {
+async function approve(
+  f: Fixture,
+  skillId: string,
+  versionId: string,
+  accept = true,
+): Promise<void> {
   const rows = (await f.provider.candidates(skillId)) as {
     reviewId: string;
     expectedUpdatedAt: string;
@@ -103,7 +109,7 @@ async function approve(f: Fixture, skillId: string, versionId: string): Promise<
     skillId,
     versionId,
     row.expectedUpdatedAt,
-    true,
+    accept,
     "Reviewed",
     randomUUID(),
   );
@@ -142,6 +148,22 @@ async function publish(f: Fixture, skillId: string, text: string): Promise<void>
   });
   await approve(f, skillId, amended.versionId);
 }
+const instructions = (slug: string, text: string, key = slug): CreateRequest => ({
+  kind: "instructions",
+  slug,
+  name: slug,
+  description: "",
+  tags: [],
+  visibility: "private",
+  instructions: text,
+  assets: [],
+  idempotencyKey: key,
+});
+/** Adds a project claim on the target, as a concurrent sync elsewhere would. */
+const claim = (f: Fixture) =>
+  f.store.db
+    .prepare("INSERT OR IGNORE INTO projection_owner VALUES (?,?)")
+    .run(f.id, join(f.root, "elsewhere"));
 /** Adopts the Claude file, publishes the draft and syncs it. */
 async function adoptAndSync(f: Fixture) {
   const adopted = await f.runtime.adoptInstructions(f.project, f.claude);
@@ -178,10 +200,17 @@ describe("instructions adopt", () => {
       new Uint8Array(Buffer.from(original)),
     );
 
-    // Nothing is published, so sync has nothing to write and the file stays.
-    await expect(f.runtime.sync(f.project)).rejects.toMatchObject({
-      code: "VERSION_UNAVAILABLE",
-    });
+    // Nothing is published, so sync leaves the target alone and the file stays.
+    expect((await f.runtime.syncTargets(f.project)).pending).toEqual([
+      {
+        kind: "instructions",
+        id: f.id,
+        path: f.claude,
+        artifact: "global-agents",
+        state: "adopted",
+        code: "ADOPTION_PENDING_REVIEW",
+      },
+    ]);
     const after = statSync(f.claude);
     expect(after.ino).toBe(before.ino);
     expect(after.mtimeMs).toBe(before.mtimeMs);
@@ -230,9 +259,11 @@ describe("instructions adopt", () => {
       (await f.provider.versions(created.skillId)).map((v) => v.state).sort(),
     ).toEqual(["pending_review", "published"]);
     // The older published version never replaces the adopted file.
-    await expect(f.runtime.sync(f.project)).rejects.toMatchObject({
-      code: "ADOPTION_PENDING_REVIEW",
-    });
+    const synced = await f.runtime.syncTargets(f.project);
+    expect(synced.instructions).toEqual([]);
+    expect(synced.pending).toMatchObject([
+      { id: f.id, code: "ADOPTION_PENDING_REVIEW" },
+    ]);
     expect(readFileSync(f.claude, "utf8")).toBe(original);
     await approve(f, created.skillId, requireValue(draft.versionId));
     await f.runtime.sync(f.project);
@@ -362,11 +393,16 @@ describe("instructions rollback and uninstall", () => {
     expect(f.store.entries(`instruction-history:${f.id}:`)).toEqual([]);
     expect(f.runtime.projections.instructions.owners(f.id)).toEqual([]);
     expect(backups(f)).toEqual([]);
-    // Still configured, the restored file is the user's again and sync refuses it.
-    await expect(f.runtime.sync(f.project)).rejects.toMatchObject({
-      code: "PROJECTION_COLLISION",
+    // The target leaves the configuration, so the next sync neither refuses
+    // the restored file nor writes over it.
+    expect(f.runtime.project(f.project).instructions).toEqual([]);
+    expect(await f.runtime.syncTargets(f.project)).toEqual({
+      projections: [],
+      instructions: [],
+      pending: [],
     });
     expect(readFileSync(f.claude)).toEqual(Buffer.from(original));
+    expect(f.store.entries("instruction-unconfigure:")).toEqual([]);
   });
 
   it("removes a managed file that was never adopted", async () => {
@@ -388,6 +424,10 @@ describe("instructions rollback and uninstall", () => {
     expect(f.runtime.uninstallInstructions(f.id).restored).toBeNull();
     expect(existsSync(f.claude)).toBe(false);
     expect(record(f)).toBeUndefined();
+    // The next sync does not write the removed file again.
+    expect(f.runtime.project(f.project).instructions).toEqual([]);
+    expect((await f.runtime.syncTargets(f.project)).instructions).toEqual([]);
+    expect(existsSync(f.claude)).toBe(false);
   });
 
   it("restores an adopted file that was never synced", async () => {
@@ -397,7 +437,8 @@ describe("instructions rollback and uninstall", () => {
     expect(result.restored?.digest).toBe(sha(original));
     expect(readFileSync(f.claude)).toEqual(Buffer.from(original));
     expect(adoption(f)).toBeUndefined();
-    expect(await states(f)).toEqual({ [f.claude]: "collision" });
+    expect(await states(f)).toEqual({});
+    expect((await f.runtime.syncTargets(f.project)).pending).toEqual([]);
   });
 
   it("refuses a hand-edited file and backs it up first with force", async () => {
@@ -447,9 +488,13 @@ describe("instructions rollback and uninstall", () => {
     expect(() => crashing.instructions.uninstall(f.id)).toThrow("process stopped");
     expect(readFileSync(f.claude)).toEqual(Buffer.from(original));
     expect(record(f)?.digest).toBe(sha(v2));
-    expect(await states(f)).toEqual({ [f.claude]: "collision" });
+    // Recovery finishes it, including dropping the target from the project.
+    expect(await states(f)).toEqual({});
     expect(record(f)).toBeUndefined();
     expect(adoption(f)).toBeUndefined();
+    expect(f.runtime.project(f.project).instructions).toEqual([]);
+    expect((await f.runtime.syncTargets(f.project)).instructions).toEqual([]);
+    expect(readFileSync(f.claude)).toEqual(Buffer.from(original));
     expect(
       readdirSync(dirname(f.claude)).filter((n) =>
         n.startsWith(".skillplane-instructions-"),
@@ -489,6 +534,185 @@ describe("instructions rollback and uninstall", () => {
     expect(f.runtime.projections.recover()).toEqual([f.id]);
     expect(record(f)?.digest).toBe(sha(original));
     expect(await states(f)).toEqual({ [f.claude]: "in-sync" });
+  });
+});
+
+describe("adoption lifecycle", () => {
+  it("re-adopts after uninstall on the amend path, and again after the base moved", async () => {
+    const f = fixture([]);
+    const created = await f.provider.create(instructions("mine", v2));
+    const first = await f.runtime.adoptInstructions(f.project, f.claude, "mine");
+    const candidate = requireValue(first.draft).versionId;
+    f.runtime.uninstallInstructions(f.id);
+    expect(readFileSync(f.claude)).toEqual(Buffer.from(original));
+
+    // The candidate still awaiting review holds the bytes and is reused.
+    const second = await f.runtime.adoptInstructions(f.project, f.claude, "mine");
+    expect(second.nonce).not.toBe(first.nonce);
+    expect(second.draft?.versionId).toBe(candidate);
+
+    // Once another version is published, that candidate can no longer be
+    // approved, so a fresh one is imported against the new base.
+    f.runtime.uninstallInstructions(f.id);
+    await publish(f, created.skillId, v3);
+    const third = requireValue(
+      (await f.runtime.adoptInstructions(f.project, f.claude, "mine")).draft,
+    );
+    expect(third.versionId).not.toBe(candidate);
+    await approve(f, created.skillId, third.versionId);
+    await f.runtime.sync(f.project);
+    expect(record(f)?.version.id).toBe(third.versionId);
+    expect(readFileSync(f.claude)).toEqual(Buffer.from(original));
+  });
+
+  it("replaces a rejected draft with a fresh one, also after uninstall", async () => {
+    const f = fixture();
+    const first = requireValue(
+      (await f.runtime.adoptInstructions(f.project, f.claude)).draft,
+    );
+    await approve(f, first.skill.id, first.versionId, false);
+    const second = requireValue(
+      (await f.runtime.adoptInstructions(f.project, f.claude)).draft,
+    );
+    expect(second.skill.id).toBe(first.skill.id);
+    expect(second.versionId).not.toBe(first.versionId);
+    await approve(f, second.skill.id, second.versionId, false);
+    f.runtime.uninstallInstructions(f.id);
+
+    // Uninstall dropped the configured name, so it is given again.
+    const third = requireValue(
+      (await f.runtime.adoptInstructions(f.project, f.claude, "global-agents")).draft,
+    );
+    expect([first.versionId, second.versionId]).not.toContain(third.versionId);
+    expect(await f.provider.list("instructions")).toHaveLength(1);
+    await approve(f, third.skill.id, third.versionId);
+    await f.runtime.sync(f.project);
+    expect(record(f)?.version.id).toBe(third.versionId);
+    expect(readFileSync(f.claude)).toEqual(Buffer.from(original));
+  });
+
+  it("keeps nothing when the file is not UTF-8 or a skill holds the slug", async () => {
+    const f = fixture();
+    writeFileSync(f.claude, Buffer.from([0x23, 0x20, 0xff, 0xfe, 0x0a]));
+    // A re-run fails the same way instead of finding a half-finished adoption.
+    for (let run = 0; run < 2; run++)
+      await expect(
+        f.runtime.adoptInstructions(f.project, f.claude),
+      ).rejects.toMatchObject({ code: "INSTRUCTIONS_NOT_UTF8" });
+    expect(adoption(f)).toBeUndefined();
+    expect(backups(f)).toEqual([]);
+    expect(await f.provider.list()).toEqual([]);
+
+    writeFileSync(f.claude, original);
+    await f.provider.create({
+      ...instructions("global-agents", "Review carefully."),
+      kind: "skill",
+    });
+    await expect(
+      f.runtime.adoptInstructions(f.project, f.claude),
+    ).rejects.toMatchObject({ code: "ARTIFACT_SLUG_CONFLICT" });
+    expect(adoption(f)).toBeUndefined();
+    expect(backups(f)).toEqual([]);
+  });
+
+  it("syncs skills and other instruction targets while an adoption awaits review", async () => {
+    const f = fixture();
+    await f.runtime.adoptInstructions(f.project, f.claude);
+    await f.provider.create(instructions("codex-agents", v2));
+    await f.provider.create({
+      ...instructions("review", "Review carefully."),
+      kind: "skill",
+    });
+    const context = f.runtime.project(f.project);
+    f.runtime.configure(f.project, {
+      ...context,
+      targets: [targetSchema.parse({ adapter: "claude", scope: "user" })],
+      instructions: [
+        ...(context.instructions ?? []),
+        { adapter: "codex", artifact: "codex-agents" },
+      ],
+    });
+    const synced = await f.runtime.syncTargets(f.project);
+    expect(synced.projections.map((r) => r.name)).toEqual(["review"]);
+    const codex = join(f.home, ".codex", "AGENTS.md");
+    expect(synced.instructions.map((r) => r.path)).toEqual([codex]);
+    expect(synced.pending).toMatchObject([{ id: f.id, state: "adopted" }]);
+    expect(readFileSync(codex, "utf8")).toBe(v2);
+    expect(readFileSync(f.claude)).toEqual(Buffer.from(original));
+  });
+
+  it("keeps both targets when two adopts in one project run concurrently", async () => {
+    const f = fixture([]);
+    const codex = join(f.home, ".codex", "AGENTS.md");
+    mkdirSync(dirname(codex));
+    writeFileSync(codex, v2);
+    await Promise.all([
+      f.runtime.adoptInstructions(f.project, f.claude, "claude-agents"),
+      f.runtime.adoptInstructions(f.project, codex, "codex-agents"),
+    ]);
+    expect(
+      (f.runtime.project(f.project).instructions ?? []).map((t) => t.artifact).sort(),
+    ).toEqual(["claude-agents", "codex-agents"]);
+  });
+
+  it("refuses to configure a target configured for another artifact meanwhile", async () => {
+    const f = fixture([]);
+    const catalog = f.runtime.catalog.bind(f.runtime);
+    vi.spyOn(f.runtime, "catalog").mockImplementationOnce(async (...args) => {
+      f.runtime.configure(f.project, {
+        ...f.runtime.project(f.project),
+        instructions: [{ adapter: "claude", artifact: "someone-else" }],
+      });
+      return catalog(...args);
+    });
+    await expect(
+      f.runtime.adoptInstructions(f.project, f.claude, "mine"),
+    ).rejects.toMatchObject({ code: "PROJECTION_COLLISION" });
+    expect(f.runtime.project(f.project).instructions).toEqual([
+      { adapter: "claude", scope: "user", artifact: "someone-else" },
+    ]);
+    expect(readFileSync(f.claude)).toEqual(Buffer.from(original));
+  });
+});
+
+describe("ownership is checked in the commit that changes the target", () => {
+  it("refuses an uninstall once another project claims the target after it was planned", async () => {
+    const f = fixture();
+    const skillId = await adoptAndSync(f);
+    await publish(f, skillId, v2);
+    await f.runtime.sync(f.project);
+    const racing = new Projections(f.store, (point) => {
+      if (point === "after-mark") claim(f);
+    });
+    expect(() => racing.instructions.uninstall(f.id)).toThrow(
+      expect.objectContaining({ code: "PROJECTION_SHARED" }),
+    );
+    expect(readFileSync(f.claude, "utf8")).toBe(v2);
+    expect(record(f)?.digest).toBe(sha(v2));
+    expect(adoption(f)).toBeDefined();
+    expect(f.store.entries("instruction-uninstall:")).toEqual([]);
+  });
+
+  it("refuses a rollback to another artifact once another project claims the target", async () => {
+    const f = fixture();
+    rmSync(f.claude);
+    await f.provider.create(instructions("global-agents", v2));
+    await f.provider.create(instructions("other", v3));
+    await f.runtime.sync(f.project);
+    f.runtime.configure(f.project, {
+      ...f.runtime.project(f.project),
+      instructions: [{ adapter: "claude", artifact: "other" }],
+    });
+    await f.runtime.sync(f.project);
+    expect(readFileSync(f.claude, "utf8")).toBe(v3);
+    const racing = new Projections(f.store, (point) => {
+      if (point === "after-stage") claim(f);
+    });
+    expect(() => racing.instructions.rollback(f.id)).toThrow(
+      expect.objectContaining({ code: "PROJECTION_SHARED" }),
+    );
+    expect(readFileSync(f.claude, "utf8")).toBe(v3);
+    expect(record(f)?.digest).toBe(sha(v3));
   });
 });
 

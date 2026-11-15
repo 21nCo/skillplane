@@ -93,6 +93,15 @@ function adoptedTarget(path: string, artifact: string): InstructionTarget {
       return instructionTargetSchema.parse({ adapter, artifact });
   return instructionTargetSchema.parse({ adapter: "generic", path, artifact });
 }
+/** A configured adopted target sync left alone, and why. */
+export interface PendingAdoption {
+  kind: "instructions";
+  id: string;
+  path: string;
+  artifact: string;
+  state: "adopted";
+  code: "ADOPTION_PENDING_REVIEW" | "ADOPTION_INCOMPLETE";
+}
 export interface Resolution {
   source: "live-cli" | "cached-cli";
   freshness: "verified" | "unverified" | "pinned";
@@ -280,27 +289,69 @@ export class Runtime {
       return { target, item };
     });
   }
-  /** Resolves every configured instructions target's latest published version. */
-  private async instructionPlans(context: ProjectContext) {
+  /**
+   * Resolves every configured instructions target's latest published version.
+   * An adopted target whose artifact has nothing to take it over with yet is
+   * set aside as pending rather than stopping the sync.
+   */
+  private async instructionPlans(context: ProjectContext): Promise<{
+    plans: { target: InstructionTarget; snapshot: Snapshot }[];
+    pending: PendingAdoption[];
+  }> {
     const targets = context.instructions ?? [];
-    if (targets.length === 0) return [];
+    if (targets.length === 0) return { plans: [], pending: [] };
     const resolved = this.instructionTargets(
       targets,
       await this.catalog(context, "instructions"),
     );
     const plans = [];
+    const pending: PendingAdoption[] = [];
     for (const { target, item, error } of resolved) {
-      if (error || !item) throw error ?? new RuntimeError("INSTRUCTIONS_NOT_FOUND");
-      const selected = selectVersion(
-        await item.provider.versions(item.skillId),
-        policySchema.parse({}),
-      );
-      plans.push({
-        target,
-        snapshot: await item.provider.retrieve(item.skillId, selected.id),
-      });
+      try {
+        if (error || !item) throw error ?? new RuntimeError("INSTRUCTIONS_NOT_FOUND");
+        const selected = selectVersion(
+          await item.provider.versions(item.skillId),
+          policySchema.parse({}),
+        );
+        plans.push({
+          target,
+          snapshot: await item.provider.retrieve(item.skillId, selected.id),
+        });
+      } catch (failure) {
+        const set = this.pendingAdoption(target, failure, [
+          "INSTRUCTIONS_NOT_FOUND",
+          "VERSION_UNAVAILABLE",
+        ]);
+        if (!set) throw failure;
+        pending.push(set);
+      }
     }
-    return plans;
+    return { plans, pending };
+  }
+  /**
+   * The pending entry for an adopted target sync has not taken over, when the
+   * failure is one of codes; undefined otherwise.
+   */
+  private pendingAdoption(
+    target: InstructionTarget,
+    failure: unknown,
+    codes: readonly string[],
+  ): PendingAdoption | undefined {
+    if (!(failure instanceof RuntimeError) || !codes.includes(failure.code))
+      return undefined;
+    const path = instructionPath(target);
+    const adoption = this.projections.instructions.pendingAdoption(
+      InstructionProjections.id(path),
+    );
+    if (adoption?.artifact !== target.artifact) return undefined;
+    return {
+      kind: "instructions",
+      id: adoption.id,
+      path,
+      artifact: target.artifact,
+      state: "adopted",
+      code: adoption.draft ? "ADOPTION_PENDING_REVIEW" : "ADOPTION_INCOMPLETE",
+    };
   }
   /**
    * How sync would resolve each configured instructions target, for doctor.
@@ -407,7 +458,8 @@ export class Runtime {
    * workspace (creating the artifact if needed) and configures the target.
    * Nothing is published and the file is not changed; once the draft is
    * published, sync takes the file over. A re-run after an interruption
-   * reuses the backup and the draft.
+   * reuses the backup and the draft; a deterministic import failure undoes
+   * the adoption it recorded.
    */
   async adoptInstructions(
     project: string,
@@ -416,12 +468,14 @@ export class Runtime {
   ): Promise<InstructionAdoption & { configured: InstructionTarget }> {
     this.projections.recover();
     project = resolve(project);
+    this.applyUnconfigurations();
     const path = file.startsWith("~/")
       ? resolve(homedir(), file.slice(2))
       : resolve(file);
     const context = this.project(project);
-    const targets = context.instructions ?? [];
-    const configured = targets.find((target) => instructionPath(target) === path);
+    const configured = (context.instructions ?? []).find(
+      (target) => instructionPath(target) === path,
+    );
     if (configured && artifact !== undefined && artifact !== configured.artifact)
       throw new RuntimeError(
         "ARGUMENT_INVALID",
@@ -441,9 +495,7 @@ export class Runtime {
         "--artifact must be a lowercase slug naming the instructions artifact",
       );
     const target = configured ?? adoptedTarget(path, name);
-    const all = configured ? targets : [...targets, target];
-    const error = this.instructionConfigErrors(all)[all.indexOf(target)];
-    if (error) throw error;
+    this.withTarget(context, target);
     if (context.primary.provider !== "local")
       throw new RuntimeError(
         "ADOPT_LOCAL_PRIMARY_REQUIRED",
@@ -461,29 +513,109 @@ export class Runtime {
         "WORKSPACE_READ_ONLY",
         `${name} is read from a mounted workspace; adopt into an artifact of the primary workspace`,
       );
+    const holder = item
+      ? undefined
+      : (await primary.list()).find((entry) => entry.slug === name);
+    if (holder)
+      throw new RuntimeError(
+        "ARTIFACT_SLUG_CONFLICT",
+        holder.kind === "skill"
+          ? `A skill holds the slug ${name}; choose another --artifact`
+          : `The instructions artifact ${name} is not visible under that name in this project; choose another --artifact`,
+      );
     const backedUp = this.projections.instructions.adopt({
       path,
       project,
       artifact: name,
     });
-    const adoption = backedUp.adoption.draft
-      ? backedUp.adoption
-      : this.projections.instructions.recordDraft(
-          backedUp.adoption.id,
+    let adoption = backedUp.adoption;
+    // A draft a review rejected is replaced by a fresh one.
+    const rejected =
+      adoption.draft &&
+      (await primary.versions(adoption.draft.skill.id)).find(
+        (version) => version.id === adoption.draft?.versionId,
+      )?.state === "rejected"
+        ? adoption.draft.versionId
+        : undefined;
+    if (!adoption.draft || rejected)
+      try {
+        adoption = this.projections.instructions.recordDraft(
+          adoption.id,
           await this.importDraft(
             primary,
-            item?.skillId,
-            backedUp.adoption,
+            item?.skillId ?? adoption.draft?.skill.id,
+            adoption,
             backedUp.bytes,
           ),
+          rejected,
         );
-    if (!configured) this.configure(project, { ...context, instructions: all });
+      } catch (error) {
+        // A process that stops leaves the adoption for a re-run to finish; a
+        // refusal would refuse every re-run too, so its adoption goes.
+        if (backedUp.created && error instanceof RuntimeError)
+          this.projections.instructions.discardAdoption(adoption);
+        throw error;
+      }
+    // Merged into the configuration as it is now, under the lock, so a
+    // concurrent change to it is never lost.
+    this.store.transaction(() => {
+      const current = this.project(project);
+      const next = this.withTarget(current, target);
+      if (next !== current) this.configure(project, next);
+    });
     return { ...adoption, configured: target };
   }
   /**
-   * Imports adopted bytes as a draft: a new draft-only artifact, or a review
-   * candidate of a published one. The idempotency key names the target and
-   * bytes, so a re-run replays the draft an interrupted run created.
+   * The configuration with target added, or the same object when it already
+   * holds it. A different target at the same path, or one the configuration
+   * checks refuse, is an error.
+   */
+  private withTarget(
+    context: ProjectContext,
+    target: InstructionTarget,
+  ): ProjectContext {
+    const path = instructionPath(target);
+    const targets = context.instructions ?? [];
+    const existing = targets.find((entry) => instructionPath(entry) === path);
+    if (existing) {
+      if (existing.artifact !== target.artifact)
+        throw new RuntimeError(
+          "PROJECTION_COLLISION",
+          `${path} is now configured for the instructions artifact ${existing.artifact}`,
+        );
+      return context;
+    }
+    const all = [...targets, target];
+    const error = this.instructionConfigErrors(all).at(-1);
+    if (error) throw error;
+    return { ...context, instructions: all };
+  }
+  /**
+   * Applies configuration removals uninstalls queued: each project drops the
+   * targets at the released path. A project whose configuration is gone has
+   * nothing to drop; one that cannot be read keeps its removal queued.
+   */
+  private applyUnconfigurations(): void {
+    for (const [key] of this.projections.instructions.unconfigurations())
+      try {
+        this.projections.instructions.unconfigure(key, ({ path, project }) => {
+          if (!existsSync(join(project, "skillplane.json"))) return;
+          const context = this.project(project);
+          const targets = context.instructions ?? [];
+          const kept = targets.filter((target) => instructionPath(target) !== path);
+          if (kept.length !== targets.length)
+            this.configure(project, { ...context, instructions: kept });
+        });
+      } catch {
+        // Retried by the next sync, adopt or uninstall.
+      }
+  }
+  /**
+   * Imports adopted bytes as a draft: a pending version or the current one
+   * that already holds them, else a new draft-only artifact, another draft of
+   * an artifact with nothing published, or a review candidate of a published
+   * one. Keys are scoped to the adoption and its base, so a re-adoption or a
+   * retry after the base moved never replays an earlier request.
    */
   private async importDraft(
     provider: LocalWorkspaceProvider,
@@ -500,22 +632,82 @@ export class Runtime {
         `${adoption.path} is not UTF-8 text and cannot be imported unchanged`,
       );
     }
-    const key = `adopt-${adoption.id.slice(INSTRUCTIONS_ID_PREFIX.length)}-${adoption.original.digest.slice(7, 39)}`;
-    const published =
-      skillId !== undefined &&
-      (await provider.versions(skillId)).some(
-        (version) => version.state === "published",
+    const holds = (snapshot: Snapshot): boolean => {
+      const content = snapshot.bundle.files.get(
+        bundleEntrypoint(snapshot.bundle.skill),
       );
+      return content !== undefined && Buffer.from(content).equals(Buffer.from(bytes));
+    };
+    const draft = (snapshot: Snapshot): NonNullable<InstructionAdoption["draft"]> => ({
+      workspace: provider.workspace,
+      skill: { id: snapshot.skill.id },
+      versionId: snapshot.version.id,
+      createdAt: snapshot.version.createdAt,
+    });
+    // Scoped to this adoption, the draft it replaces and the base it amends.
+    const key = (base: string) =>
+      `adopt-${adoption.nonce}-${createHash("sha256")
+        .update(`${adoption.draft?.versionId ?? ""}\0${base}`)
+        .digest("hex")
+        .slice(0, 16)}`;
+    const request = (slug: string, name: string, description: string) =>
+      ({
+        kind: "instructions",
+        slug,
+        name,
+        description,
+        tags: [],
+        visibility: "private",
+        instructions: text,
+        assets: [],
+        idempotencyKey: key(""),
+      }) satisfies CreateRequest;
     let created: { skillId: string; versionId: string };
-    if (skillId !== undefined && published) {
-      const current = await provider.retrieve(skillId);
-      const entrypoint = bundleEntrypoint(current.bundle.skill);
+    if (skillId === undefined) {
       try {
+        created = await provider.createDraft(
+          request(
+            adoption.artifact,
+            adoption.artifact,
+            `Adopted from ${basename(adoption.path)}`,
+          ),
+        );
+      } catch (error) {
+        if (error instanceof RuntimeError && error.code === "SKILL_SLUG_CONFLICT")
+          throw new RuntimeError(
+            "ARTIFACT_SLUG_CONFLICT",
+            `Another artifact took the slug ${adoption.artifact}; run instructions adopt again`,
+          );
+        throw error;
+      }
+    } else {
+      let current: Snapshot | undefined;
+      try {
+        current = await provider.retrieve(skillId);
+      } catch (error) {
+        if (!(error instanceof RuntimeError && error.code === "VERSION_UNAVAILABLE"))
+          throw error;
+      }
+      if (current && holds(current)) return draft(current);
+      // A draft an interrupted run created, or one awaiting review from an
+      // earlier adoption, that a decision can still approve over the current
+      // version.
+      for (const candidate of await provider.candidates(skillId)) {
+        if (
+          !["draft", "pending_review"].includes(String(candidate.state)) ||
+          (candidate.base ?? null) !== (current?.version.id ?? null)
+        )
+          continue;
+        const snapshot = await provider.retrieve(skillId, String(candidate.reviewId));
+        if (holds(snapshot)) return draft(snapshot);
+      }
+      if (current) {
+        const entrypoint = bundleEntrypoint(current.bundle.skill);
         created = await provider.amend({
           skillId,
           baseVersionId: current.version.id,
           proposedBump: "minor",
-          idempotencyKey: key,
+          idempotencyKey: key(current.version.id),
           changes: [
             {
               operation: "replace",
@@ -541,52 +733,24 @@ export class Runtime {
             extra: {},
           },
         });
-      } catch (error) {
-        // The published version already holds exactly these bytes.
-        if (error instanceof RuntimeError && error.code === "UNCHANGED_BUNDLE")
-          return {
-            workspace: provider.workspace,
-            skill: { id: skillId },
-            versionId: null,
-            createdAt: null,
-          };
-        throw error;
-      }
-    } else {
-      try {
-        created = await provider.createDraft({
-          kind: "instructions",
-          slug: adoption.artifact,
-          name: adoption.artifact,
-          description: `Adopted from ${basename(adoption.path)}`,
-          tags: [],
-          visibility: "private",
-          instructions: text,
-          assets: [],
-          idempotencyKey: key,
-        });
-      } catch (error) {
-        if (error instanceof RuntimeError && error.code === "SKILL_SLUG_CONFLICT")
-          throw new RuntimeError(
-            "INSTRUCTIONS_DRAFT_PENDING",
-            `${adoption.artifact} has no published version yet; review its pending draft first`,
-          );
-        throw error;
+      } else {
+        // Nothing is published, as after a rejected draft: add another draft.
+        const info = requireValue(
+          (await provider.list("instructions")).find((entry) => entry.id === skillId),
+        );
+        created = await provider.createDraft(
+          request(info.slug, info.name, info.description),
+          skillId,
+        );
       }
     }
-    const draft = await provider.retrieve(created.skillId, created.versionId);
-    const imported = draft.bundle.files.get(bundleEntrypoint(draft.bundle.skill));
-    if (!imported || Buffer.compare(Buffer.from(imported), Buffer.from(bytes)) !== 0)
+    const imported = await provider.retrieve(created.skillId, created.versionId);
+    if (!holds(imported))
       throw new RuntimeError(
         "ADOPT_CONTENT_MISMATCH",
         "The imported draft does not hold the file's exact bytes",
       );
-    return {
-      workspace: provider.workspace,
-      skill: { id: created.skillId },
-      versionId: created.versionId,
-      createdAt: draft.version.createdAt,
-    };
+    return draft(imported);
   }
   /** Restores an instructions target's previous generation. */
   rollbackInstructions(
@@ -606,14 +770,19 @@ export class Runtime {
     backup: InstructionBackup | null;
   } {
     this.projections.recover();
-    return { uninstalled: id, ...this.projections.instructions.uninstall(id, force) };
+    const result = this.projections.instructions.uninstall(id, force);
+    this.applyUnconfigurations();
+    return { uninstalled: id, ...result };
   }
   /** Syncs skill projections and instruction files configured by the project. */
   async syncTargets(project: string): Promise<{
     projections: ProjectionRecord[];
     instructions: InstructionRecord[];
+    /** Adopted targets left as they are until their draft is published. */
+    pending: PendingAdoption[];
   }> {
     this.projections.recover();
+    this.applyUnconfigurations();
     const context = this.project(project);
     const catalog = await this.catalog(context);
     // Resolve and validate the catalog before any projection writes. Filesystem
@@ -640,9 +809,10 @@ export class Runtime {
         );
       desired.add(path);
     }
-    const instructionPlans = await this.instructionPlans(context);
+    const resolved = await this.instructionPlans(context);
+    const { pending } = resolved;
     // Writing one destination inside another would fail midway; refuse first.
-    for (const { target } of instructionPlans) {
+    for (const { target } of resolved.plans) {
       const path = instructionPath(target);
       const skill = [...desired].find((destination) => overlaps(destination, path));
       if (skill !== undefined)
@@ -653,8 +823,20 @@ export class Runtime {
     }
     // An unmanaged or hand-edited instructions file, or an unsafe directory
     // above one, stops the sync before any write.
-    for (const { snapshot, target } of instructionPlans)
-      this.projections.instructions.check(snapshot, target, project);
+    const instructionPlans = resolved.plans.filter(({ snapshot, target }) => {
+      try {
+        this.projections.instructions.check(snapshot, target, project);
+        return true;
+      } catch (failure) {
+        const set = this.pendingAdoption(target, failure, [
+          "ADOPTION_PENDING_REVIEW",
+          "ADOPTION_INCOMPLETE",
+        ]);
+        if (!set) throw failure;
+        pending.push(set);
+        return false;
+      }
+    });
     const previous = this.projections.projectIds(project);
     const records = [];
     for (const { target, item, snapshot } of plans) {
@@ -688,7 +870,7 @@ export class Runtime {
       project,
       new Set(instructions.map((record) => record.id)),
     );
-    return { projections: records, instructions };
+    return { projections: records, instructions, pending };
   }
   async resolve(
     id: string,
@@ -886,6 +1068,8 @@ export class Runtime {
   }
   async doctor(checkCloud = false, project?: string): Promise<unknown> {
     const recovery = this.projections.recover();
+    // A recovered uninstall's target leaves its project's configuration first.
+    this.applyUnconfigurations();
     const projections = [];
     for (const [, record] of this.store.entries<ProjectionRecord>("projection:")) {
       let health = "healthy";

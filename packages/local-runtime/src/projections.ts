@@ -55,7 +55,8 @@ export type ProjectionFault =
   | "after-rename"
   | "after-swap"
   | "before-unlink"
-  | "before-discard";
+  | "before-discard"
+  | "after-mark";
 /** Instruction target IDs share the owner ledger with skill projection IDs. */
 export const INSTRUCTIONS_ID_PREFIX = "instructions-";
 export interface ProjectionRecord {
@@ -600,12 +601,24 @@ export interface InstructionAdoption {
   project: string;
   path: string;
   artifact: string;
+  /** Scopes the draft import's idempotency keys to this adoption. */
+  nonce: string;
   original: InstructionBackup;
-  /** Set once the draft exists. versionId is null when the content was already published. */
-  draft?: ArtifactIdentity & { versionId: string | null; createdAt: string | null };
+  /**
+   * Set once the draft exists: the version holding the adopted bytes, which
+   * is the artifact's current version when it already held them.
+   */
+  draft?: ArtifactIdentity & { versionId: string; createdAt: string };
+}
+/** A project whose configuration still names a target uninstall released. */
+export interface InstructionUnconfigure {
+  id: string;
+  path: string;
+  project: string;
 }
 const ADOPTION_PREFIX = "instruction-adoption:";
 const UNINSTALL_PREFIX = "instruction-uninstall:";
+const UNCONFIGURE_PREFIX = "instruction-unconfigure:";
 /** An uninstall that may have replaced or removed the target before it committed. */
 interface InstructionUninstall {
   id: string;
@@ -847,19 +860,23 @@ export class InstructionProjections {
         `${path} changed after it was adopted; it was not overwritten`,
       );
     const { draft } = adoption;
-    if (!snapshot || !draft || !sameArtifact(draft, snapshot))
+    if (!draft)
+      throw new RuntimeError(
+        "ADOPTION_INCOMPLETE",
+        `${path} has no imported draft yet; run instructions adopt again to finish importing it`,
+      );
+    if (!snapshot || !sameArtifact(draft, snapshot))
       throw new RuntimeError(
         "PROJECTION_COLLISION",
-        `${path} was adopted for the instructions artifact ${adoption.artifact}${draft ? "" : "; run instructions adopt again to finish importing it"}`,
+        `${path} was adopted for the instructions artifact ${adoption.artifact}`,
       );
     if (
-      draft.createdAt !== null &&
       snapshot.version.id !== draft.versionId &&
       snapshot.version.createdAt <= draft.createdAt
     )
       throw new RuntimeError(
         "ADOPTION_PENDING_REVIEW",
-        `Publish the adopted draft ${draft.versionId ?? ""} of ${adoption.artifact} before syncing ${path}`,
+        `Publish the adopted draft ${draft.versionId} of ${adoption.artifact} before syncing ${path}`,
       );
   }
   private assertWritable(
@@ -914,11 +931,7 @@ export class InstructionProjections {
     const bytes = this.content(snapshot);
     const path = instructionPath(target, userHome);
     const id = InstructionProjections.id(path);
-    if (this.recoveryPending(id))
-      throw new RuntimeError(
-        "RECOVERY_PENDING",
-        `An interrupted write to ${path} could not be recovered yet; the next run retries it`,
-      );
+    this.assertIdle(id, path);
     const old = this.store.get<InstructionRecord>(`instruction:${id}`);
     const digest = `sha256:${hash(bytes)}`;
     const observed = observe(path);
@@ -967,6 +980,7 @@ export class InstructionProjections {
       stateOf(record, observe(path)) === "in-sync";
     if (old && same)
       return this.store.transaction(() => {
+        this.assertUninstalling(id, path);
         const current = this.store.get<InstructionRecord>(`instruction:${id}`);
         if (current?.eventId === old.eventId)
           this.assertWritable(current, observe(path), path);
@@ -1069,6 +1083,8 @@ export class InstructionProjections {
       this.fault?.("after-stage");
       this.store.set(journalKey, journal);
       result = this.store.transaction(() => {
+        // An uninstall in flight owns the target until it commits or is dropped.
+        this.assertUninstalling(id, path);
         const current = this.store.get<InstructionRecord>(`instruction:${id}`);
         if ((current?.eventId ?? null) !== journal.basis) {
           if (!current || !input.concurrent(current))
@@ -1174,6 +1190,8 @@ export class InstructionProjections {
   adopt(input: { path: string; project: string; artifact: string }): {
     adoption: InstructionAdoption;
     bytes: Uint8Array;
+    /** Whether this call recorded the adoption, rather than a run before it. */
+    created: boolean;
   } {
     const path = resolve(input.path);
     const id = InstructionProjections.id(path);
@@ -1208,7 +1226,7 @@ export class InstructionProjections {
           );
         // The recorded backup stands; a copy lost since is written again.
         this.backup(path, id, file);
-        return { adoption: prior, bytes: file.bytes };
+        return { adoption: prior, bytes: file.bytes, created: false };
       }
       const adoption: InstructionAdoption = {
         formatVersion: 1,
@@ -1216,22 +1234,44 @@ export class InstructionProjections {
         project: resolve(input.project),
         path,
         artifact: input.artifact,
+        nonce: randomUUID(),
         original: this.backup(path, id, file),
       };
       this.store.set(key, adoption);
-      return { adoption, bytes: file.bytes };
+      return { adoption, bytes: file.bytes, created: true };
     });
   }
-  /** Records the imported draft of an adoption; the first record stands. */
+  /**
+   * Undoes an adoption whose draft import failed, when it is still the one
+   * this run recorded and has no draft: its record and backup copy go and the
+   * file, never changed, stays the user's.
+   */
+  discardAdoption(adoption: InstructionAdoption): void {
+    this.store.transaction(() => {
+      const current = this.adoption(adoption.id);
+      if (current?.nonce !== adoption.nonce || current.draft) return;
+      this.store.delete(`${ADOPTION_PREFIX}${adoption.id}`);
+      rmSync(adoption.original.path, { force: true });
+    });
+  }
+  /** The adoption of a target sync has not taken over yet. */
+  pendingAdoption(id: string): InstructionAdoption | undefined {
+    return this.store.get(`instruction:${id}`) ? undefined : this.adoption(id);
+  }
+  /**
+   * Records the imported draft of an adoption. The first record stands unless
+   * it is the replaced draft, one a review rejected.
+   */
   recordDraft(
     id: string,
     draft: NonNullable<InstructionAdoption["draft"]>,
+    replaced?: string,
   ): InstructionAdoption {
     return this.store.transaction(() => {
       const adoption = this.adoption(id);
       if (!adoption)
         throw new RuntimeError("PROJECTION_CHANGED", "The adoption was uninstalled");
-      if (adoption.draft) return adoption;
+      if (adoption.draft && adoption.draft.versionId !== replaced) return adoption;
       const recorded = { ...adoption, draft };
       this.store.set(`${ADOPTION_PREFIX}${id}`, recorded);
       return recorded;
@@ -1244,6 +1284,10 @@ export class InstructionProjections {
         "RECOVERY_PENDING",
         `An interrupted write to ${path} could not be recovered yet; the next run retries it`,
       );
+    this.assertUninstalling(id, path);
+  }
+  /** Refuses while an uninstall of the target is in flight. */
+  private assertUninstalling(id: string, path: string): void {
     if (this.store.get(`${UNINSTALL_PREFIX}${id}`))
       throw new RuntimeError("PROJECTION_BUSY", `${path} is being uninstalled`);
   }
@@ -1267,14 +1311,7 @@ export class InstructionProjections {
         .filter((value) => value.digest !== current.digest)
         .sort((a, b) => b.synchronizedAt.localeCompare(a.synchronizedAt))[0];
       if (!previous) throw new RuntimeError("ROLLBACK_UNAVAILABLE");
-      if (
-        !sameArtifact(previous, current) &&
-        this.owners(id).some((owner) => owner !== current.project)
-      )
-        throw new RuntimeError(
-          "PROJECTION_SHARED",
-          "Another project configures this target for its current artifact",
-        );
+      this.assertRollbackOwner(current, previous);
       const staged = observe(previous.generation);
       if (staged.kind !== "file" || staged.digest !== previous.digest)
         throw new RuntimeError(
@@ -1300,11 +1337,38 @@ export class InstructionProjections {
       basis: current,
       concurrent: () => false,
       guard: (latest, observed) => {
+        // A project may have claimed the target since the plan.
+        if (latest) this.assertRollbackOwner(latest, previous);
         if (latest && this.assertEdit(latest, observed, force))
           backup = this.backup(latest.path, id, readTarget(latest.path));
       },
     });
     return { record, backup };
+  }
+  /**
+   * Another project's claim blocks a rollback to a different artifact, which
+   * would put that artifact into the file it configures.
+   */
+  private assertRollbackOwner(
+    current: InstructionRecord,
+    previous: InstructionRecord,
+  ): void {
+    if (
+      !sameArtifact(previous, current) &&
+      this.owners(current.id).some((owner) => owner !== current.project)
+    )
+      throw new RuntimeError(
+        "PROJECTION_SHARED",
+        "Another project configures this target for its current artifact",
+      );
+  }
+  /** Refuses an uninstall of a target more than one project claims. */
+  private assertUnshared(id: string): void {
+    if (this.owners(id).length > 1)
+      throw new RuntimeError(
+        "PROJECTION_SHARED",
+        "Remove this target from each project's configuration first",
+      );
   }
   /**
    * Whether the target was hand-edited, refusing unless force. A target that
@@ -1340,11 +1404,7 @@ export class InstructionProjections {
       if (!record && !adoption) throw new RuntimeError("PROJECTION_NOT_FOUND");
       const path = record?.path ?? requireValue(adoption).path;
       this.assertIdle(id, path);
-      if (this.owners(id).length > 1)
-        throw new RuntimeError(
-          "PROJECTION_SHARED",
-          "Remove this target from each project's configuration first",
-        );
+      this.assertUnshared(id);
       const marker: InstructionUninstall = {
         id,
         path,
@@ -1359,6 +1419,7 @@ export class InstructionProjections {
       this.store.set(`${UNINSTALL_PREFIX}${id}`, marker);
       return marker;
     });
+    this.fault?.("after-mark");
     const progress = { replacing: false };
     let result: {
       restored: InstructionBackup | null;
@@ -1374,6 +1435,8 @@ export class InstructionProjections {
           (adoption?.original.digest ?? null) !== marker.restore
         )
           throw new RuntimeError("PROJECTION_CHANGED", "Projection changed; try again");
+        // Checked again in the commit that changes the target.
+        this.assertUnshared(id);
         const { path } = marker;
         // Only a restore needs the directory; a removal never creates it.
         const parent = safeDirectory(dirname(path), adoption !== undefined);
@@ -1443,14 +1506,49 @@ export class InstructionProjections {
     }
     return result;
   }
-  /** Clears a target's projection state inside the caller's transaction. */
+  /**
+   * Clears a target's projection state inside the caller's transaction. The
+   * projects that adopted, synced or claim it are queued to drop it from their
+   * configuration, so their next sync neither refuses the restored file nor
+   * writes the removed one again.
+   */
   private forget(id: string): void {
+    const record = this.store.get<InstructionRecord>(`instruction:${id}`);
+    const adoption = this.adoption(id);
+    const path = record?.path ?? adoption?.path;
+    if (path !== undefined)
+      for (const project of new Set(
+        [record?.project, adoption?.project, ...this.owners(id)].filter(
+          (value): value is string => value !== undefined,
+        ),
+      ))
+        this.store.set(`${UNCONFIGURE_PREFIX}${id}:${hash(project)}`, {
+          id,
+          path,
+          project,
+        } satisfies InstructionUnconfigure);
     this.store.delete(`instruction:${id}`);
     for (const [key] of this.store.entries(`instruction-history:${id}:`))
       this.store.delete(key);
     this.store.delete(`${ADOPTION_PREFIX}${id}`);
     this.store.db.prepare("DELETE FROM projection_owner WHERE projection_id=?").run(id);
     this.store.delete(`${UNINSTALL_PREFIX}${id}`);
+  }
+  /** Configuration removals queued by uninstalls, with their keys. */
+  unconfigurations(): [string, InstructionUnconfigure][] {
+    return this.store.entries<InstructionUnconfigure>(UNCONFIGURE_PREFIX);
+  }
+  /**
+   * Runs apply for a queued removal under the lock and drops it in the same
+   * commit; apply throws to keep it queued.
+   */
+  unconfigure(key: string, apply: (entry: InstructionUnconfigure) => void): void {
+    this.store.transaction(() => {
+      const entry = this.store.get<InstructionUnconfigure>(key);
+      if (!entry) return;
+      apply(entry);
+      this.store.delete(key);
+    });
   }
   /**
    * Finishes an uninstall whose process stopped: one whose target already

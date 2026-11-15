@@ -245,8 +245,10 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
         break;
       case "sync": {
         const synced = await runtime.syncTargets(project);
-        // Instruction records carry kind "instructions"; skill records keep their shape.
-        result = [...synced.projections, ...synced.instructions];
+        // Instruction records carry kind "instructions"; skill records keep
+        // their shape. Adopted targets awaiting publication follow, with state
+        // "adopted" and the code that explains why they were left alone.
+        result = [...synced.projections, ...synced.instructions, ...synced.pending];
         break;
       }
       case "resolve":

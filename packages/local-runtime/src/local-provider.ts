@@ -143,17 +143,23 @@ export class LocalWorkspaceProvider implements WorkspaceProvider {
   /**
    * Creates an artifact whose only version is a draft awaiting review: nothing
    * is published and the artifact has no current version until a decision
-   * approves the draft as 1.0.0.
+   * approves the draft as 1.0.0. Given skillId, adds another draft to that
+   * artifact instead, which must have the request's kind and slug and no
+   * published version.
    */
-  async createDraft(request: CreateRequest): Promise<{
+  async createDraft(
+    request: CreateRequest,
+    skillId?: string,
+  ): Promise<{
     skillId: string;
     versionId: string;
   }> {
-    return this.insert(request, true);
+    return this.insert(request, true, skillId);
   }
   private async insert(
     request: CreateRequest,
     draft: boolean,
+    existing?: string,
   ): Promise<{
     skillId: string;
     versionId: string;
@@ -174,7 +180,7 @@ export class LocalWorkspaceProvider implements WorkspaceProvider {
         "COMPOSITION_RESOLUTION_REQUIRED",
         "Create composed skills in a cloud workspace using native MCP",
       );
-    const key = `${this.workspace.id}:${draft ? "draft" : "create"}:${input.idempotencyKey}`;
+    const key = `${this.workspace.id}:${draft ? "draft" : "create"}:${existing ? `${existing}:` : ""}${input.idempotencyKey}`;
     const replay = this.store.replay<{
       skillId: string;
       versionId: string;
@@ -188,6 +194,26 @@ export class LocalWorkspaceProvider implements WorkspaceProvider {
         versionId: string;
       }>(key, request);
       if (replay) return replay;
+      const target = tables[input.kind];
+      if (existing !== undefined) {
+        const artifact = this.skill(existing);
+        if (artifact.kind !== input.kind || artifact.row.slug !== input.slug)
+          throw new RuntimeError("SKILL_NOT_FOUND");
+        if (artifact.row.current !== null)
+          throw new RuntimeError("SKILL_VERSION_CONFLICT");
+        const result = {
+          skillId: existing,
+          versionId: `skill-version:${randomUUID()}`,
+        };
+        const now = new Date().toISOString();
+        this.store.db
+          .prepare(
+            `INSERT INTO ${target.version} VALUES(?,?,?,'draft',NULL,NULL,'patch',?,?,'{}',NULL)`,
+          )
+          .run(result.versionId, existing, bundle.digest, now, now);
+        this.store.remember(key, request, result);
+        return result;
+      }
       if (
         this.store.db
           .prepare(
@@ -196,7 +222,6 @@ export class LocalWorkspaceProvider implements WorkspaceProvider {
           .get(this.workspace.id, input.slug, this.workspace.id, input.slug)
       )
         throw new RuntimeError("SKILL_SLUG_CONFLICT");
-      const target = tables[input.kind];
       const result = {
         skillId: `skill:${randomUUID()}`,
         versionId: `skill-version:${randomUUID()}`,
