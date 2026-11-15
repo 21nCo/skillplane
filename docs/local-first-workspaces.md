@@ -237,7 +237,9 @@ finished), and `doctor` lists it as `adopted`. A file edited after adoption is a
 Adopt checks before keeping anything, with the same checks the import applies: a
 file that is not UTF-8 is refused with `INSTRUCTIONS_NOT_UTF8`, an empty, blank or
 oversized one or one holding NUL characters with `INSTRUCTIONS_INVALID`, and a slug a
-skill already holds with `ARTIFACT_SLUG_CONFLICT`. A target the project configuration
+skill already holds with `ARTIFACT_SLUG_CONFLICT`, even beside an instructions artifact
+of that slug. A configuration `sync` refuses, such as duplicate or overlapping
+destinations, is refused with `PROJECTION_COLLISION`. A target the project configuration
 cannot hold, such as a 21st instructions target, is refused with
 `PROJECT_CONFIG_INVALID`. Each refusal leaves no backup or adoption behind. An interrupted adopt can be run again: it reuses the backup, and a draft that
 already holds the file's bytes. A draft that can no longer be published, because a
@@ -245,12 +247,19 @@ review rejected it or another version was published over its base, is replaced b
 fresh one against the current version when adopt runs again; a draft imported for an
 adoption that was uninstalled meanwhile is never recorded for a later one.
 Adopting the same file again after `uninstall` reuses a candidate still awaiting
-review, or imports a new one when the published version has moved on.
+review, or imports a new one when the published version has moved on. A file whose
+bytes the artifact's published version already holds records that version, since the
+workspace refuses a draft identical to it; the next `sync` takes the file over
+unchanged. An adopt whose project changed its primary or mounted workspaces meanwhile
+is refused with `PROJECTION_CHANGED`; running it again imports into the artifact the
+name resolves to now. The destination of an adoption awaiting review stays reserved:
+a skill destination overlapping it is refused with `PROJECTION_COLLISION`.
 
 `skillplane rollback TARGET` restores an instruction file's previous version by the
 same journaled rename; the next `sync` applies the latest published version again.
 The previous version is the latest earlier generation whose bytes differ from the
-current file, the same rule as skill rollback. A rollback claims the file for no
+current file, the same rule as skill rollback, latest by the order the generations
+were replaced. A rollback claims the file for no
 project, and a rollback interrupted after its rename is finished by the next `sync`
 or `doctor` with the same owners it had.
 `skillplane uninstall TARGET` restores the adopted original, or removes a file
@@ -258,8 +267,11 @@ Skillplane created, and clears the file's projection state; the original's backu
 goes with it. The target also leaves the `instructions` of the project that adopted
 or synced it, so the next `sync` neither refuses the restored file nor writes the
 removed one again; add it back, or adopt the file again, to resume. `TARGET` is the ID `doctor` lists or the file's path; a bare file name such as `AGENTS.md` names a managed or adopted file in the working directory, else a skill projection. Both refuse a
-hand-edited file with `PROJECTION_DIVERGED`; `--force` first copies the edited file
-into the backup directory, where it stays. An uninstall interrupted after it
+hand-edited file with `PROJECTION_DIVERGED`, one edited back to the original bytes
+too; `--force` first copies the edited file into the backup directory, where it stays.
+Backups and their directories are synced before adopt records them or a forced
+rollback or uninstall replaces the file. Uninstall restores the original's saved mode,
+and syncs the file and its directory before the original's backup goes. An uninstall interrupted after it
 replaced the file is finished by the next `sync` or `doctor`, which first makes the
 replacement or removal durable and otherwise keeps the target managed for a retry; it
 also removes the original's backup. Uninstall waits for every write to the file that

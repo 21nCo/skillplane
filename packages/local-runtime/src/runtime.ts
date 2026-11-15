@@ -68,6 +68,15 @@ function overlaps(a: string, b: string): boolean {
   return a === b || a.startsWith(b + sep) || b.startsWith(a + sep);
 }
 /** Fingerprint of the configuration that decides what a catalog name resolves to. */
+/** The artifact a file is adopted into without --artifact: its slugged base name. */
+function defaultArtifact(path: string): string {
+  const slug = basename(path)
+    .replace(/\.md$/i, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-");
+  // Each run is one hyphen now, so trimming one at each edge is enough.
+  return slug.slice(slug.startsWith("-") ? 1 : 0, slug.endsWith("-") ? -1 : undefined);
+}
 function catalogFingerprint(context: ProjectContext): string {
   const { primary, mounts, aliases, collisions } = context;
   return createHash("sha256")
@@ -532,14 +541,7 @@ export class Runtime {
         "ARGUMENT_INVALID",
         `${path} is configured for the instructions artifact ${configured.artifact}`,
       );
-    const name =
-      artifact ??
-      configured?.artifact ??
-      basename(path)
-        .replace(/\.md$/i, "")
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, "-")
-        .replace(/^-+|-+$/g, "");
+    const name = artifact ?? configured?.artifact ?? defaultArtifact(path);
     if (!safeName.safeParse(name).success)
       throw new RuntimeError(
         "ARGUMENT_INVALID",
@@ -564,9 +566,12 @@ export class Runtime {
         "WORKSPACE_READ_ONLY",
         `${name} is read from a mounted workspace; adopt into an artifact of the primary workspace`,
       );
-    const holder = item
-      ? undefined
-      : (await primary.list()).find((entry) => entry.slug === name);
+    // A skill holding the slug conflicts even beside a visible instructions
+    // artifact of the same slug, as a legacy store may hold both.
+    const holders = (await primary.list()).filter((entry) => entry.slug === name);
+    const holder =
+      holders.find((entry) => entry.kind === "skill") ??
+      (item ? undefined : holders[0]);
     if (holder)
       throw new RuntimeError(
         "ARTIFACT_SLUG_CONFLICT",
@@ -611,8 +616,14 @@ export class Runtime {
     // A recorded draft that can no longer be published, because a review
     // rejected it or another version was published over its base, is
     // replaced by a fresh one against the current version.
+    // So is one of another artifact than the name resolves to now, as when a
+    // run that recorded it stopped at a workspace change.
+    const foreign =
+      !!adoption.draft &&
+      (workspaceKey(adoption.draft.workspace) !== workspaceKey(context.primary) ||
+        (item !== undefined && item.skillId !== adoption.draft.skill.id));
     const replaced =
-      adoption.draft && (await this.unpublishable(primary, adoption.draft))
+      adoption.draft && (foreign || (await this.unpublishable(primary, adoption.draft)))
         ? adoption.draft.versionId
         : undefined;
     if (!adoption.draft || replaced)
@@ -622,7 +633,7 @@ export class Runtime {
           adoption.nonce,
           await this.importDraft(
             primary,
-            item?.skillId ?? adoption.draft?.skill.id,
+            item?.skillId ?? (foreign ? undefined : adoption.draft?.skill.id),
             adoption,
             backedUp.bytes,
           ),
@@ -644,6 +655,14 @@ export class Runtime {
           `${path} was uninstalled while it was being adopted; nothing was configured`,
         );
       const current = this.project(project);
+      // The draft belongs to the artifact the name resolved to then; a
+      // configuration that now resolves names differently would attach it to
+      // another one.
+      if (catalogFingerprint(current) !== catalogFingerprint(context))
+        throw new RuntimeError(
+          "PROJECTION_CHANGED",
+          `The workspaces of ${project} changed while ${path} was being adopted; run instructions adopt again`,
+        );
       const next = this.withTarget(current, target);
       if (next !== current) this.configure(project, next);
     });
@@ -661,17 +680,17 @@ export class Runtime {
     const path = instructionPath(target);
     const targets = context.instructions ?? [];
     const existing = targets.find((entry) => instructionPath(entry) === path);
-    if (existing) {
-      if (existing.artifact !== target.artifact)
-        throw new RuntimeError(
-          "PROJECTION_COLLISION",
-          `${path} is now configured for the instructions artifact ${existing.artifact}`,
-        );
-      return context;
-    }
-    const all = [...targets, target];
-    const error = this.instructionConfigErrors(all).at(-1);
+    if (existing && existing.artifact !== target.artifact)
+      throw new RuntimeError(
+        "PROJECTION_COLLISION",
+        `${path} is now configured for the instructions artifact ${existing.artifact}`,
+      );
+    // Sync refuses a configuration any of these checks fail, so adopt refuses
+    // it before backing up or importing, for a configured target too.
+    const all = existing ? targets : [...targets, target];
+    const error = this.instructionConfigErrors(all).find((e) => e !== undefined);
     if (error) throw error;
+    if (existing) return context;
     const next = { ...context, instructions: all };
     // The whole project schema (its target limit included), so adopt refuses
     // before it backs anything up rather than when it finally configures.
@@ -901,7 +920,8 @@ export class Runtime {
     const resolved = await this.instructionPlans(context);
     const { pending } = resolved;
     // Writing one destination inside another would fail midway; refuse first.
-    for (const { target } of resolved.plans) {
+    // Every configured destination counts, one awaiting adoption review too.
+    for (const target of context.instructions ?? []) {
       const path = instructionPath(target);
       const skill = [...desired].find((destination) => overlaps(destination, path));
       if (skill !== undefined)

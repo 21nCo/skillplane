@@ -57,6 +57,7 @@ export type ProjectionFault =
   | "before-unlink"
   | "before-discard"
   | "after-mark"
+  | "before-restore-sync"
   | "before-recover-sync";
 /** Instruction target IDs share the owner ledger with skill projection IDs. */
 export const INSTRUCTIONS_ID_PREFIX = "instructions-";
@@ -552,6 +553,8 @@ export interface InstructionRecord {
   digest: string;
   synchronizedAt: string;
 }
+/** A replaced generation, numbered in the order its replacements committed. */
+type InstructionHistory = InstructionRecord & { sequence?: number };
 /** A temp file of a write that will never commit, kept until it is unlinked. */
 interface InstructionCleanup {
   temp: string;
@@ -1229,8 +1232,7 @@ export class InstructionProjections {
         this.fault?.("after-rename");
         syncDirectory(parent);
         this.fault?.("after-swap");
-        if (current)
-          this.store.set(`instruction-history:${id}:${current.eventId}`, current);
+        if (current) this.archive(current);
         this.store.set(`instruction:${id}`, record);
         if (owner) this.claim(id, owner);
         this.store.delete(journalKey);
@@ -1269,6 +1271,17 @@ export class InstructionProjections {
     this.store.set(cleanupKey, { temp } satisfies InstructionCleanup);
     this.store.delete(journalKey);
   }
+  /** Keeps a replaced generation for rollback, inside the caller's transaction. */
+  private archive(record: InstructionRecord): void {
+    const prefix = `instruction-history:${record.id}:`;
+    const sequence = Math.max(
+      -1,
+      ...this.store
+        .entries<InstructionHistory>(prefix)
+        .map(([, value]) => value.sequence ?? -1),
+    );
+    this.store.set(`${prefix}${record.eventId}`, { ...record, sequence: sequence + 1 });
+  }
   /**
    * Unlinks a retired temp file, then forgets it. An unlink that fails keeps
    * the cleanup entry for the next recover() and never fails the caller: the
@@ -1286,18 +1299,24 @@ export class InstructionProjections {
   }
   /**
    * Copies bytes into the target's backup directory under their digest, once.
-   * Called under the lock; the copy is durable before any caller replaces the
-   * target.
+   * Called under the lock; the copy is durable before any caller records it or
+   * replaces the target.
    */
   private backup(
     path: string,
     id: string,
     file: { bytes: Uint8Array; digest: string; mode: number },
   ): InstructionBackup {
-    const copy = join(safeDirectory(backupDirectory(path, id)), file.digest.slice(7));
+    const directory = safeDirectory(backupDirectory(path, id));
+    const copy = join(directory, file.digest.slice(7));
     const existing = observe(copy);
     if (existing.kind !== "file" || existing.digest !== file.digest)
       writeAtomic(copy, file.bytes);
+    // Every entry from the target's directory down to the copy, created now or
+    // by a run that stopped before syncing them, survives a crash.
+    for (let dir = directory; dir !== dirname(path); dir = dirname(dir))
+      syncDirectory(dir);
+    syncDirectory(dirname(path));
     return {
       path: copy,
       digest: file.digest,
@@ -1444,12 +1463,20 @@ export class InstructionProjections {
       const current = this.store.get<InstructionRecord>(`instruction:${id}`);
       if (!current) throw new RuntimeError("PROJECTION_NOT_FOUND");
       this.assertIdle(id, current.path);
-      const previous = this.store
-        .entries<InstructionRecord>(`instruction-history:${id}:`)
+      // The latest replaced generation with other bytes, by commit order;
+      // entries archived before the order was kept come after, by time.
+      const latest = this.store
+        .entries<InstructionHistory>(`instruction-history:${id}:`)
         .map(([, value]) => value)
         .filter((value) => value.digest !== current.digest)
-        .sort((a, b) => b.synchronizedAt.localeCompare(a.synchronizedAt))[0];
-      if (!previous) throw new RuntimeError("ROLLBACK_UNAVAILABLE");
+        .sort(
+          (a, b) =>
+            (b.sequence ?? -1) - (a.sequence ?? -1) ||
+            b.synchronizedAt.localeCompare(a.synchronizedAt),
+        )[0];
+      if (!latest) throw new RuntimeError("ROLLBACK_UNAVAILABLE");
+      const previous: InstructionHistory = { ...latest };
+      delete previous.sequence;
       this.assertRollbackOwner(current, previous);
       const staged = observe(previous.generation);
       if (staged.kind !== "file" || staged.digest !== previous.digest)
@@ -1583,22 +1610,29 @@ export class InstructionProjections {
         // Only a restore needs the directory; a removal never creates it.
         const parent = safeDirectory(dirname(path), adoption !== undefined);
         const observed = observe(path);
-        const restored =
+        // Divergence is decided by what Skillplane last wrote, or for a target
+        // never synced by the adopted bytes, never by whether the file already
+        // holds the original: a managed file hand-edited back to it is edited.
+        const holdsOriginal =
           adoption !== undefined &&
           observed.kind === "file" &&
           observed.digest === adoption.original.digest;
-        const edited =
-          !restored &&
-          (record
-            ? stateOf(record, observed) === "diverged"
-            : observed.kind !== "absent");
+        const edited = record
+          ? stateOf(record, observed) === "diverged"
+          : observed.kind !== "absent" && !holdsOriginal;
         if (edited && (!force || observed.kind !== "file"))
           throw new RuntimeError(
             "PROJECTION_DIVERGED",
             `${path} changed after Skillplane ${record ? "wrote" : "adopted"} it${force ? " and is not a regular file" : "; --force backs it up first"}`,
           );
         const backup = edited ? this.backup(path, id, readTarget(path)) : null;
-        if (adoption && !restored) {
+        if (adoption && holdsOriginal) {
+          // The bytes are already there: restore the saved mode and make the
+          // data and its directory entry durable before the backup goes.
+          this.fault?.("before-restore-sync");
+          setMode(path, adoption.original.mode);
+          syncDirectory(parent);
+        } else if (adoption) {
           const original = readSafe(adoption.original.path, MAX_INSTRUCTIONS_BYTES);
           if (`sha256:${hash(original)}` !== adoption.original.digest)
             throw new RuntimeError(
@@ -1612,7 +1646,7 @@ export class InstructionProjections {
           renameSync(marker.temp, path);
           this.fault?.("after-rename");
           syncDirectory(parent);
-        } else if (!adoption && observed.kind !== "absent") {
+        } else if (observed.kind !== "absent") {
           progress.replacing = true;
           this.fault?.("before-unlink");
           unlinkSync(path);
@@ -1621,8 +1655,8 @@ export class InstructionProjections {
         this.forget(id);
         // The target now holds the original bytes, so its copy goes with the
         // adoption, under the lock so a concurrent adopt's copy is never lost.
-        // Edited files backed up by force stay.
-        if (adoption)
+        // Edited files backed up by force stay, even one with the same bytes.
+        if (adoption && backup?.path !== adoption.original.path)
           try {
             rmSync(adoption.original.path, { force: true });
           } catch {
@@ -1718,11 +1752,15 @@ export class InstructionProjections {
               : observed.kind === "file" && observed.digest === marker.restore);
           if (done) {
             // The uninstall may have stopped before making its rename or
-            // unlink durable. A failed sync throws here, so the marker, the
-            // record and the owners stay for the next run.
+            // unlink durable, or before restoring the saved mode. A failure
+            // throws here, so the marker, the record and the owners stay for
+            // the next run.
             this.fault?.("before-recover-sync");
-            syncParent(marker.path);
             const adoption = this.adoption(marker.id);
+            // setMode also makes the restored bytes durable.
+            if (marker.restore !== null && adoption)
+              setMode(marker.path, adoption.original.mode);
+            syncParent(marker.path);
             this.forget(marker.id);
             // As uninstall does: the target holds the original bytes, so its
             // copy goes, under the lock. Edited files backed up by force stay.
@@ -1776,11 +1814,7 @@ export class InstructionProjections {
             // The writer may have stopped before making its rename durable. A
             // failed sync throws here and leaves the journal for the next run.
             syncDirectory(dirname(record.path));
-            if (current)
-              this.store.set(
-                `instruction-history:${record.id}:${current.eventId}`,
-                current,
-              );
+            if (current) this.archive(current);
             this.store.set(`instruction:${record.id}`, record);
             // Only the claim the writer would have made: its guard checked
             // that claim under the lock that held the rename, and no release

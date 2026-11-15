@@ -1165,3 +1165,223 @@ describe("instructions CLI", () => {
     expect(readFileSync(f.claude)).toEqual(Buffer.from(original));
   });
 });
+
+describe("uninstall decides divergence apart from restoration", () => {
+  it("refuses a managed file hand-edited back to the original, and restores its mode with force", async () => {
+    const f = fixture();
+    const skillId = await adoptAndSync(f);
+    await publish(f, skillId, v2);
+    await f.runtime.sync(f.project);
+    writeFileSync(f.claude, original);
+    chmodSync(f.claude, 0o666);
+
+    expect(() => f.runtime.uninstallInstructions(f.id)).toThrow(
+      expect.objectContaining({ code: "PROJECTION_DIVERGED" }),
+    );
+    expect(record(f)?.digest).toBe(sha(v2));
+    expect(adoption(f)).toBeDefined();
+    expect(backups(f)).toEqual([sha(original).slice(7)]);
+
+    const removed = f.runtime.uninstallInstructions(f.id, true);
+    expect(removed.backup?.digest).toBe(sha(original));
+    expect(readFileSync(f.claude)).toEqual(Buffer.from(original));
+    expect(statSync(f.claude).mode & 0o777).toBe(0o640);
+    expect(record(f)).toBeUndefined();
+    // The forced backup holds the edited bytes and outlives the uninstall.
+    expect(backups(f)).toEqual([sha(original).slice(7)]);
+  });
+
+  it("restores the saved mode of an adopted file that still holds the original bytes", async () => {
+    const f = fixture();
+    await f.runtime.adoptInstructions(f.project, f.claude);
+    chmodSync(f.claude, 0o600);
+    f.runtime.uninstallInstructions(f.id);
+    expect(readFileSync(f.claude)).toEqual(Buffer.from(original));
+    expect(statSync(f.claude).mode & 0o777).toBe(0o640);
+    expect(adoption(f)).toBeUndefined();
+    expect(backups(f)).toEqual([]);
+  });
+
+  it("recovers an interrupted uninstall only once the saved mode is restored", async () => {
+    const f = fixture();
+    await f.runtime.adoptInstructions(f.project, f.claude);
+    chmodSync(f.claude, 0o600);
+    const stopped = new Projections(f.store, (point) => {
+      if (point === "after-mark") throw new Error("process stopped");
+    });
+    expect(() => stopped.instructions.uninstall(f.id)).toThrow("process stopped");
+    const failing = new Projections(f.store, (point) => {
+      if (point === "before-recover-sync") throw new Error("fsync failed");
+    });
+    expect(failing.recover()).toEqual([]);
+    expect(f.store.entries("instruction-uninstall:")).toHaveLength(1);
+    expect(adoption(f)).toBeDefined();
+    expect(backups(f)).toEqual([sha(original).slice(7)]);
+    expect(statSync(f.claude).mode & 0o777).toBe(0o600);
+
+    expect(f.runtime.projections.recover()).toEqual([f.id]);
+    expect(statSync(f.claude).mode & 0o777).toBe(0o640);
+    expect(adoption(f)).toBeUndefined();
+    expect(backups(f)).toEqual([]);
+    expect(readFileSync(f.claude)).toEqual(Buffer.from(original));
+  });
+});
+
+describe("PR review round 1 adoption and rollback checks", () => {
+  it("rolls back to the latest replaced generation by commit order, not timestamp", async () => {
+    const f = fixture();
+    const skillId = await adoptAndSync(f);
+    await publish(f, skillId, v2);
+    await f.runtime.sync(f.project);
+    await publish(f, skillId, v3);
+    await f.runtime.sync(f.project);
+    // A clock that stepped back gives the older generation the later time.
+    const history = f.store.entries<InstructionRecord>(`instruction-history:${f.id}:`);
+    expect(history).toHaveLength(2);
+    for (const [key, value] of history)
+      f.store.set(key, {
+        ...value,
+        synchronizedAt:
+          value.digest === sha(original)
+            ? "2030-01-01T00:00:00.000Z"
+            : "2020-01-01T00:00:00.000Z",
+      });
+    const { record: restored } = f.runtime.rollbackInstructions(f.id);
+    expect(restored.digest).toBe(sha(v2));
+    expect(readFileSync(f.claude, "utf8")).toBe(v2);
+    expect(record(f)).not.toHaveProperty("sequence");
+  });
+
+  it("records the published version that already holds the adopted bytes, as no draft can repeat it", async () => {
+    const f = fixture();
+    const created = await f.provider.create(instructions("global-agents", v2));
+    writeFileSync(f.claude, v2);
+    const current = await f.provider.retrieve(created.skillId);
+    // The provider refuses a version identical to the published one.
+    await expect(
+      f.provider.amend({
+        skillId: created.skillId,
+        baseVersionId: current.version.id,
+        proposedBump: "minor",
+        idempotencyKey: randomUUID(),
+        changes: [
+          {
+            operation: "replace",
+            path: "AGENTS.md",
+            expectedSha256: sha(v2).slice(7),
+            content: v2,
+          },
+        ],
+        learning: {
+          summary: "Same",
+          observation: "Same",
+          rationale: "Same",
+          confidence: "high",
+          evidence: [],
+          evidenceUnavailableReason: "Same",
+          validation: [],
+          validationNotRunReason: "Same",
+          sourceContextId: null,
+          tags: [],
+          externalReferences: [],
+          extra: {},
+        },
+      }),
+    ).rejects.toMatchObject({ code: "UNCHANGED_BUNDLE" });
+    const adopted = await f.runtime.adoptInstructions(f.project, f.claude);
+    expect(adopted.draft?.versionId).toBe(current.version.id);
+    expect(backups(f)).toEqual([sha(v2).slice(7)]);
+    // The reviewed bytes are the file's bytes, so the takeover changes nothing.
+    await f.runtime.sync(f.project);
+    expect(record(f)?.digest).toBe(sha(v2));
+    expect(readFileSync(f.claude, "utf8")).toBe(v2);
+  });
+
+  it("refuses an adopt when a skill shares the slug of a visible instructions artifact", async () => {
+    const f = fixture();
+    await f.provider.create(instructions("global-agents", v2));
+    const skill = await f.provider.create({
+      ...instructions("review", "Review carefully."),
+      kind: "skill",
+    });
+    // A store from before slugs were unique across kinds may hold both.
+    f.store.db
+      .prepare("UPDATE skill SET slug='global-agents' WHERE id=?")
+      .run(skill.skillId);
+    await expect(
+      f.runtime.adoptInstructions(f.project, f.claude),
+    ).rejects.toMatchObject({ code: "ARTIFACT_SLUG_CONFLICT" });
+    expect(adoption(f)).toBeUndefined();
+    expect(backups(f)).toEqual([]);
+  });
+
+  it("refuses an adopt into a configuration sync refuses, before any write", async () => {
+    const f = fixture([
+      { adapter: "claude", artifact: "global-agents" },
+      { adapter: "generic", path: "~/.claude/CLAUDE.md", artifact: "global-agents" },
+    ]);
+    await expect(
+      f.runtime.adoptInstructions(f.project, f.claude),
+    ).rejects.toMatchObject({ code: "PROJECTION_COLLISION" });
+    expect(adoption(f)).toBeUndefined();
+    expect(backups(f)).toEqual([]);
+    expect(await f.provider.list()).toEqual([]);
+  });
+
+  it("keeps the destination of an adoption awaiting review from a skill, even once its file is deleted", async () => {
+    const f = fixture([]);
+    const rules = join(f.home, "rules");
+    const file = join(rules, "review");
+    mkdirSync(rules);
+    writeFileSync(file, v2);
+    await f.runtime.adoptInstructions(f.project, file, "rules");
+    rmSync(file);
+    await f.provider.create({
+      ...instructions("review", "Review carefully."),
+      kind: "skill",
+    });
+    f.runtime.configure(f.project, {
+      ...f.runtime.project(f.project),
+      targets: [targetSchema.parse({ adapter: "generic", directory: rules })],
+    });
+    await expect(f.runtime.syncTargets(f.project)).rejects.toMatchObject({
+      code: "PROJECTION_COLLISION",
+      message: expect.stringContaining("overlaps skill destination"),
+    });
+    expect(existsSync(file)).toBe(false);
+  });
+
+  it("refuses to configure an adoption whose workspaces changed meanwhile, and a re-run imports into the new primary", async () => {
+    const f = fixture([]);
+    const team = LocalWorkspaceProvider.create(f.store, "Team");
+    const catalog = f.runtime.catalog.bind(f.runtime);
+    vi.spyOn(f.runtime, "catalog").mockImplementationOnce(async (...args) => {
+      const result = await catalog(...args);
+      f.runtime.configure(f.project, {
+        ...f.runtime.project(f.project),
+        primary: team.workspace,
+      });
+      return result;
+    });
+    await expect(
+      f.runtime.adoptInstructions(f.project, f.claude, "mine"),
+    ).rejects.toMatchObject({ code: "PROJECTION_CHANGED" });
+    expect(f.runtime.project(f.project).instructions ?? []).toEqual([]);
+
+    const adopted = await f.runtime.adoptInstructions(f.project, f.claude, "mine");
+    expect(adopted.draft?.workspace).toEqual(team.workspace);
+    expect(f.runtime.project(f.project).instructions).toEqual([
+      { adapter: "claude", scope: "user", artifact: "mine" },
+    ]);
+    expect(backups(f)).toEqual([sha(original).slice(7)]);
+  });
+
+  it("derives a default artifact by trimming one hyphen at each edge", async () => {
+    const f = fixture([]);
+    const file = join(f.home, "notes", "__Team Rules__.md");
+    mkdirSync(dirname(file));
+    writeFileSync(file, v2);
+    const adopted = await f.runtime.adoptInstructions(f.project, file);
+    expect(adopted.artifact).toBe("team-rules");
+  });
+});
