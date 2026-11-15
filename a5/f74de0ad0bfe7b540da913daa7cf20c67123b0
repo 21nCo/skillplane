@@ -1,0 +1,19 @@
+docs/local-first-workspaces.md
+  s_b264fe8f5935ec::t_314ae9d7eba100 245-246
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a5f74de0ad0bfe7b540da913daa7cf20c67123b0",
+  "prompts": {},
+  "sessions": {
+    "s_b264fe8f5935ec": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_b264fe8f5935ec",
+        "model": "unknown"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
