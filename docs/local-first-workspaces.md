@@ -199,7 +199,7 @@ instruction file inside a `.skillplane-projections` directory are a
 too. `doctor` reports the instruction-file cases; the skill overlap and the unsafe
 directory show only when `sync` runs. Removing a target from the configuration leaves its file in place. `doctor`
 lists each instruction file as `in-sync`, `diverged`, `missing`, `collision`,
-`not-synced` or `unverified`. A collision with a file another project's document
+`not-synced`, `unverified` or `adopted`. A collision with a file another project's document
 holds names that document, the one configured and the projects that claim it; a
 collision with an unmanaged file has no record, so it names only the configured
 document. For a configured file, `doctor` resolves the
@@ -213,6 +213,32 @@ agree with the local workspaces; otherwise, or after the catalog configuration
 changes, it is `unverified`, with the file's own state in `fileState`, until
 `doctor --online` or the next `sync`. Cloud workspaces list instructions documents only
 when the server supports artifact kinds; an older server has none.
+
+### Adopting an existing instructions file
+
+`skillplane instructions adopt PATH [--artifact SLUG]` hands a file you already
+maintain, such as `~/.claude/CLAUDE.md`, to Skillplane. It copies the file byte for
+byte to `.skillplane-projections/instructions/<target-id>/backup/`, named by its
+SHA-256, and imports the same bytes as a draft of the instructions document: a new
+draft-only document, or a review candidate of an existing one in the project's local
+primary workspace. A cloud primary is refused with `ADOPT_LOCAL_PRIMARY_REQUIRED`.
+`--artifact` defaults to the configured target's document, else to the file name;
+an unconfigured file is added to `instructions`. Adopt never publishes and never
+changes the file. Once the adopted draft, or a later version, is published, `sync`
+replaces the file by the same rename and records it; until then `sync` fails with
+`ADOPTION_PENDING_REVIEW` or, for a document with no published version,
+`VERSION_UNAVAILABLE`, and `doctor` lists the file as `adopted`. A file edited after
+adoption is a `PROJECTION_DIVERGED`. An interrupted adopt can be run again: it
+reuses the backup and the draft.
+
+`skillplane rollback TARGET` restores an instruction file's previous version by the
+same journaled rename; the next `sync` applies the latest published version again.
+`skillplane uninstall TARGET` restores the adopted original, or removes a file
+Skillplane created, and clears the file's projection state; the original's backup
+goes with it. `TARGET` is the ID `doctor` lists or the file's path. Both refuse a
+hand-edited file with `PROJECTION_DIVERGED`; `--force` first copies the edited file
+into the backup directory, where it stays. An uninstall interrupted after it
+replaced the file is finished by the next `sync` or `doctor`.
 
 ## Freshness and trust
 

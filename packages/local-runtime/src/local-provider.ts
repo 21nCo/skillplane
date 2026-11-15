@@ -138,6 +138,26 @@ export class LocalWorkspaceProvider implements WorkspaceProvider {
     skillId: string;
     versionId: string;
   }> {
+    return this.insert(request, false);
+  }
+  /**
+   * Creates an artifact whose only version is a draft awaiting review: nothing
+   * is published and the artifact has no current version until a decision
+   * approves the draft as 1.0.0.
+   */
+  async createDraft(request: CreateRequest): Promise<{
+    skillId: string;
+    versionId: string;
+  }> {
+    return this.insert(request, true);
+  }
+  private async insert(
+    request: CreateRequest,
+    draft: boolean,
+  ): Promise<{
+    skillId: string;
+    versionId: string;
+  }> {
     const input = skillCreateInputSchema.parse({
       ...request,
       workspace: { id: this.workspace.id },
@@ -154,7 +174,7 @@ export class LocalWorkspaceProvider implements WorkspaceProvider {
         "COMPOSITION_RESOLUTION_REQUIRED",
         "Create composed skills in a cloud workspace using native MCP",
       );
-    const key = `${this.workspace.id}:create:${input.idempotencyKey}`;
+    const key = `${this.workspace.id}:${draft ? "draft" : "create"}:${input.idempotencyKey}`;
     const replay = this.store.replay<{
       skillId: string;
       versionId: string;
@@ -189,14 +209,22 @@ export class LocalWorkspaceProvider implements WorkspaceProvider {
           input.slug,
           input.name,
           input.description,
-          result.versionId,
+          draft ? null : result.versionId,
         );
       const now = new Date().toISOString();
       this.store.db
         .prepare(
-          `INSERT INTO ${target.version} VALUES(?,?,?,'published','1.0.0',NULL,'patch',?,?,'{}',NULL)`,
+          `INSERT INTO ${target.version} VALUES(?,?,?,?,?,NULL,'patch',?,?,'{}',NULL)`,
         )
-        .run(result.versionId, result.skillId, bundle.digest, now, now);
+        .run(
+          result.versionId,
+          result.skillId,
+          bundle.digest,
+          draft ? "draft" : "published",
+          draft ? null : "1.0.0",
+          now,
+          now,
+        );
       this.store.remember(key, request, result);
       return result;
     });

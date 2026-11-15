@@ -1,6 +1,7 @@
 import { requireValue } from "./contracts.js";
 import { existsSync } from "node:fs";
-import { join, resolve, sep } from "node:path";
+import { basename, join, resolve, sep } from "node:path";
+import { homedir } from "node:os";
 import { createHash, randomUUID } from "node:crypto";
 import { bundleEntrypoint, bundleKind, canonicalizeBundle } from "@skillplane/storage";
 import { type LocalStore } from "./store.js";
@@ -9,10 +10,13 @@ import { LocalWorkspaceProvider } from "./local-provider.js";
 import { CloudWorkspaceProvider } from "./cloud-provider.js";
 import { instructionPath, targetDirectory } from "./adapters.js";
 import {
+  INSTRUCTIONS_ID_PREFIX,
   InstructionProjections,
   Projections,
   assertProjectionSupported,
   type ArtifactIdentity,
+  type InstructionAdoption,
+  type InstructionBackup,
   type InstructionRecord,
   type InstructionResolution,
   type InstructionStatusScope,
@@ -23,7 +27,9 @@ import { readSafe, writeAtomic, safeDirectory } from "./files.js";
 import { trustEnvelope, trustExpands } from "./trust.js";
 import {
   catalogName,
+  instructionTargetSchema,
   policySchema,
+  safeName,
   projectSchema,
   selectVersion,
   workspaceKey,
@@ -66,6 +72,26 @@ function catalogFingerprint(context: ProjectContext): string {
   return createHash("sha256")
     .update(JSON.stringify({ primary, mounts, aliases, collisions }))
     .digest("hex");
+}
+/**
+ * The instructions target an argument names: its ID, or a file path that is
+ * absolute, relative to the working directory or starts with `~/`. A bare
+ * name is a skill projection ID and yields undefined.
+ */
+export function instructionTargetId(argument: string): string | undefined {
+  if (argument.startsWith(INSTRUCTIONS_ID_PREFIX)) return argument;
+  if (argument.startsWith("~/"))
+    return InstructionProjections.id(resolve(homedir(), argument.slice(2)));
+  if (/[\\/]/.test(argument) || argument.startsWith("."))
+    return InstructionProjections.id(resolve(argument));
+  return undefined;
+}
+/** The configured target an adopted file becomes when no project configures it. */
+function adoptedTarget(path: string, artifact: string): InstructionTarget {
+  for (const adapter of ["claude", "codex"] as const)
+    if (instructionPath({ adapter, scope: "user", artifact }) === path)
+      return instructionTargetSchema.parse({ adapter, artifact });
+  return instructionTargetSchema.parse({ adapter: "generic", path, artifact });
 }
 export interface Resolution {
   source: "live-cli" | "cached-cli";
@@ -374,6 +400,213 @@ export class Runtime {
           }
         : { code: error?.code ?? "INSTRUCTIONS_NOT_FOUND" },
     }));
+  }
+  /**
+   * Hands an existing instructions file to Skillplane: backs it up byte for
+   * byte, imports it as a draft of the artifact in the project's local primary
+   * workspace (creating the artifact if needed) and configures the target.
+   * Nothing is published and the file is not changed; once the draft is
+   * published, sync takes the file over. A re-run after an interruption
+   * reuses the backup and the draft.
+   */
+  async adoptInstructions(
+    project: string,
+    file: string,
+    artifact?: string,
+  ): Promise<InstructionAdoption & { configured: InstructionTarget }> {
+    this.projections.recover();
+    project = resolve(project);
+    const path = file.startsWith("~/")
+      ? resolve(homedir(), file.slice(2))
+      : resolve(file);
+    const context = this.project(project);
+    const targets = context.instructions ?? [];
+    const configured = targets.find((target) => instructionPath(target) === path);
+    if (configured && artifact !== undefined && artifact !== configured.artifact)
+      throw new RuntimeError(
+        "ARGUMENT_INVALID",
+        `${path} is configured for the instructions artifact ${configured.artifact}`,
+      );
+    const name =
+      artifact ??
+      configured?.artifact ??
+      basename(path)
+        .replace(/\.md$/i, "")
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "");
+    if (!safeName.safeParse(name).success)
+      throw new RuntimeError(
+        "ARGUMENT_INVALID",
+        "--artifact must be a lowercase slug naming the instructions artifact",
+      );
+    const target = configured ?? adoptedTarget(path, name);
+    const all = configured ? targets : [...targets, target];
+    const error = this.instructionConfigErrors(all)[all.indexOf(target)];
+    if (error) throw error;
+    if (context.primary.provider !== "local")
+      throw new RuntimeError(
+        "ADOPT_LOCAL_PRIMARY_REQUIRED",
+        "Adopt imports drafts into a local primary workspace",
+      );
+    const primary = this.provider(context.primary);
+    if (!(primary instanceof LocalWorkspaceProvider))
+      throw new RuntimeError("ADOPT_LOCAL_PRIMARY_REQUIRED");
+    // Resolve the artifact before anything is written.
+    const item = (await this.catalog(context, "instructions")).find(
+      (entry) => entry.name === name,
+    );
+    if (item && workspaceKey(item.provider.workspace) !== workspaceKey(context.primary))
+      throw new RuntimeError(
+        "WORKSPACE_READ_ONLY",
+        `${name} is read from a mounted workspace; adopt into an artifact of the primary workspace`,
+      );
+    const backedUp = this.projections.instructions.adopt({
+      path,
+      project,
+      artifact: name,
+    });
+    const adoption = backedUp.adoption.draft
+      ? backedUp.adoption
+      : this.projections.instructions.recordDraft(
+          backedUp.adoption.id,
+          await this.importDraft(
+            primary,
+            item?.skillId,
+            backedUp.adoption,
+            backedUp.bytes,
+          ),
+        );
+    if (!configured) this.configure(project, { ...context, instructions: all });
+    return { ...adoption, configured: target };
+  }
+  /**
+   * Imports adopted bytes as a draft: a new draft-only artifact, or a review
+   * candidate of a published one. The idempotency key names the target and
+   * bytes, so a re-run replays the draft an interrupted run created.
+   */
+  private async importDraft(
+    provider: LocalWorkspaceProvider,
+    skillId: string | undefined,
+    adoption: InstructionAdoption,
+    bytes: Uint8Array,
+  ): Promise<NonNullable<InstructionAdoption["draft"]>> {
+    let text: string;
+    try {
+      text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+    } catch {
+      throw new RuntimeError(
+        "INSTRUCTIONS_NOT_UTF8",
+        `${adoption.path} is not UTF-8 text and cannot be imported unchanged`,
+      );
+    }
+    const key = `adopt-${adoption.id.slice(INSTRUCTIONS_ID_PREFIX.length)}-${adoption.original.digest.slice(7, 39)}`;
+    const published =
+      skillId !== undefined &&
+      (await provider.versions(skillId)).some(
+        (version) => version.state === "published",
+      );
+    let created: { skillId: string; versionId: string };
+    if (skillId !== undefined && published) {
+      const current = await provider.retrieve(skillId);
+      const entrypoint = bundleEntrypoint(current.bundle.skill);
+      try {
+        created = await provider.amend({
+          skillId,
+          baseVersionId: current.version.id,
+          proposedBump: "minor",
+          idempotencyKey: key,
+          changes: [
+            {
+              operation: "replace",
+              path: entrypoint,
+              expectedSha256: createHash("sha256")
+                .update(requireValue(current.bundle.files.get(entrypoint)))
+                .digest("hex"),
+              contentBase64: Buffer.from(bytes).toString("base64"),
+            },
+          ],
+          learning: {
+            summary: `Adopt ${basename(adoption.path)}`,
+            observation: "The user handed an existing instructions file to Skillplane",
+            rationale: "Review the adopted content before it replaces the file",
+            confidence: "high",
+            evidence: [],
+            evidenceUnavailableReason: "Imported from a local file",
+            validation: [],
+            validationNotRunReason: "Instructions have no executable checks",
+            sourceContextId: null,
+            tags: [],
+            externalReferences: [],
+            extra: {},
+          },
+        });
+      } catch (error) {
+        // The published version already holds exactly these bytes.
+        if (error instanceof RuntimeError && error.code === "UNCHANGED_BUNDLE")
+          return {
+            workspace: provider.workspace,
+            skill: { id: skillId },
+            versionId: null,
+            createdAt: null,
+          };
+        throw error;
+      }
+    } else {
+      try {
+        created = await provider.createDraft({
+          kind: "instructions",
+          slug: adoption.artifact,
+          name: adoption.artifact,
+          description: `Adopted from ${basename(adoption.path)}`,
+          tags: [],
+          visibility: "private",
+          instructions: text,
+          assets: [],
+          idempotencyKey: key,
+        });
+      } catch (error) {
+        if (error instanceof RuntimeError && error.code === "SKILL_SLUG_CONFLICT")
+          throw new RuntimeError(
+            "INSTRUCTIONS_DRAFT_PENDING",
+            `${adoption.artifact} has no published version yet; review its pending draft first`,
+          );
+        throw error;
+      }
+    }
+    const draft = await provider.retrieve(created.skillId, created.versionId);
+    const imported = draft.bundle.files.get(bundleEntrypoint(draft.bundle.skill));
+    if (!imported || Buffer.compare(Buffer.from(imported), Buffer.from(bytes)) !== 0)
+      throw new RuntimeError(
+        "ADOPT_CONTENT_MISMATCH",
+        "The imported draft does not hold the file's exact bytes",
+      );
+    return {
+      workspace: provider.workspace,
+      skill: { id: created.skillId },
+      versionId: created.versionId,
+      createdAt: draft.version.createdAt,
+    };
+  }
+  /** Restores an instructions target's previous generation. */
+  rollbackInstructions(
+    id: string,
+    force = false,
+  ): { record: InstructionRecord; backup: InstructionBackup | null } {
+    this.projections.recover();
+    return this.projections.instructions.rollback(id, force);
+  }
+  /** Restores an adopted original or removes a managed instructions file. */
+  uninstallInstructions(
+    id: string,
+    force = false,
+  ): {
+    uninstalled: string;
+    restored: InstructionBackup | null;
+    backup: InstructionBackup | null;
+  } {
+    this.projections.recover();
+    return { uninstalled: id, ...this.projections.instructions.uninstall(id, force) };
   }
   /** Syncs skill projections and instruction files configured by the project. */
   async syncTargets(project: string): Promise<{
