@@ -156,14 +156,11 @@ export class LocalWorkspaceProvider implements WorkspaceProvider {
   }> {
     return this.insert(request, true, skillId);
   }
-  private async insert(
-    request: CreateRequest,
-    draft: boolean,
-    existing?: string,
-  ): Promise<{
-    skillId: string;
-    versionId: string;
-  }> {
+  /** Runs create's request checks and bundle construction, writing nothing. */
+  async validate(request: CreateRequest): Promise<void> {
+    await createSkillBundle(this.parse(request));
+  }
+  private parse(request: CreateRequest) {
     const input = skillCreateInputSchema.parse({
       ...request,
       workspace: { id: this.workspace.id },
@@ -180,6 +177,17 @@ export class LocalWorkspaceProvider implements WorkspaceProvider {
         "COMPOSITION_RESOLUTION_REQUIRED",
         "Create composed skills in a cloud workspace using native MCP",
       );
+    return input;
+  }
+  private async insert(
+    request: CreateRequest,
+    draft: boolean,
+    existing?: string,
+  ): Promise<{
+    skillId: string;
+    versionId: string;
+  }> {
+    const input = this.parse(request);
     const key = `${this.workspace.id}:${draft ? "draft" : "create"}:${existing ? `${existing}:` : ""}${input.idempotencyKey}`;
     const replay = this.store.replay<{
       skillId: string;

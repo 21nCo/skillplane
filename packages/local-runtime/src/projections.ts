@@ -616,7 +616,16 @@ export interface InstructionUnconfigure {
   path: string;
   project: string;
 }
+/** What sync knew when it planned an instructions target. */
+export interface InstructionPlan {
+  /** The published version IDs of the snapshot's artifact. */
+  published?: ReadonlySet<string>;
+  /** Uninstall marks, from releases(), read before the project's configuration. */
+  releases?: ReadonlyMap<string, string>;
+  userHome?: string;
+}
 const ADOPTION_PREFIX = "instruction-adoption:";
+const RELEASE_PREFIX = "instruction-release:";
 const UNINSTALL_PREFIX = "instruction-uninstall:";
 const UNCONFIGURE_PREFIX = "instruction-unconfigure:";
 /** An uninstall that may have replaced or removed the target before it committed. */
@@ -839,22 +848,29 @@ export class InstructionProjections {
     return this.store.get<InstructionAdoption>(`${ADOPTION_PREFIX}${id}`);
   }
   /**
-   * Whether an unrecorded file may be replaced by the snapshot: only an
-   * adopted file that still holds its original bytes, for the adopted
-   * artifact, once the adopted draft or a later version is published.
+   * Whether an unrecorded target may be written with the snapshot: an absent
+   * one that was never adopted, or an adopted one, absent or still holding
+   * its original bytes, for the adopted artifact once the adopted draft is
+   * published.
    */
   private assertAdopted(
     path: string,
-    observed: Exclude<Observed, { kind: "absent" }>,
+    observed: Observed,
     snapshot: Snapshot | undefined,
+    published: ReadonlySet<string> | undefined,
   ): void {
     const adoption = this.adoption(InstructionProjections.id(path));
-    if (!adoption)
+    if (!adoption) {
+      if (observed.kind === "absent") return;
       throw new RuntimeError(
         "PROJECTION_COLLISION",
         `Unmanaged instructions file exists: ${path}`,
       );
-    if (observed.kind !== "file" || observed.digest !== adoption.original.digest)
+    }
+    if (
+      observed.kind !== "absent" &&
+      (observed.kind !== "file" || observed.digest !== adoption.original.digest)
+    )
       throw new RuntimeError(
         "PROJECTION_DIVERGED",
         `${path} changed after it was adopted; it was not overwritten`,
@@ -870,13 +886,12 @@ export class InstructionProjections {
         "PROJECTION_COLLISION",
         `${path} was adopted for the instructions artifact ${adoption.artifact}`,
       );
-    if (
-      snapshot.version.id !== draft.versionId &&
-      snapshot.version.createdAt <= draft.createdAt
-    )
+    // Published versions form one line, so the snapshot descends from the
+    // draft once the draft is published.
+    if (snapshot.version.id !== draft.versionId && !published?.has(draft.versionId))
       throw new RuntimeError(
         "ADOPTION_PENDING_REVIEW",
-        `Publish the adopted draft ${draft.versionId} of ${adoption.artifact} before syncing ${path}`,
+        `Publish the adopted draft ${draft.versionId} of ${adoption.artifact} before syncing ${path}; if it can no longer be published, run instructions adopt again`,
       );
   }
   private assertWritable(
@@ -884,9 +899,10 @@ export class InstructionProjections {
     observed: Observed,
     path: string,
     snapshot?: Snapshot,
+    published?: ReadonlySet<string>,
   ): void {
     if (!record) {
-      if (observed.kind !== "absent") this.assertAdopted(path, observed, snapshot);
+      this.assertAdopted(path, observed, snapshot, published);
       return;
     }
     if (stateOf(record, observed) === "diverged")
@@ -922,20 +938,49 @@ export class InstructionProjections {
         `${record.path} is owned by another project's instructions`,
       );
   }
+  /** Uninstall marks by target ID, for InstructionPlan.releases. */
+  releases(): Map<string, string> {
+    return new Map(
+      this.store
+        .entries<string>(RELEASE_PREFIX)
+        .map(([key, mark]) => [key.slice(RELEASE_PREFIX.length), mark]),
+    );
+  }
+  /**
+   * Refuses a target an uninstall released after the plan read the project's
+   * configuration, or whose removal from it is still queued.
+   */
+  private assertPlanned(
+    id: string,
+    path: string,
+    project: string,
+    plan: InstructionPlan,
+  ): void {
+    if (!plan.releases) return;
+    if (
+      this.store.get(`${RELEASE_PREFIX}${id}`) !== plan.releases.get(id) ||
+      this.store.get(`${UNCONFIGURE_PREFIX}${id}:${hash(resolve(project))}`)
+    )
+      throw new RuntimeError(
+        "PROJECTION_CHANGED",
+        `${path} was uninstalled after this sync read the configuration; run sync again`,
+      );
+  }
   private prepare(
     snapshot: Snapshot,
     target: InstructionTarget,
     project: string,
-    userHome: string,
+    plan: InstructionPlan,
   ) {
     const bytes = this.content(snapshot);
-    const path = instructionPath(target, userHome);
+    const path = instructionPath(target, plan.userHome ?? homedir());
     const id = InstructionProjections.id(path);
     this.assertIdle(id, path);
+    this.assertPlanned(id, path, project, plan);
     const old = this.store.get<InstructionRecord>(`instruction:${id}`);
     const digest = `sha256:${hash(bytes)}`;
     const observed = observe(path);
-    this.assertWritable(old, observed, path, snapshot);
+    this.assertWritable(old, observed, path, snapshot, plan.published);
     const same =
       old !== undefined &&
       observed.kind === "file" &&
@@ -956,21 +1001,21 @@ export class InstructionProjections {
     snapshot: Snapshot,
     target: InstructionTarget,
     project: string,
-    userHome = homedir(),
+    plan: InstructionPlan = {},
   ): void {
-    safeDirectory(dirname(instructionPath(target, userHome)), false);
+    safeDirectory(dirname(instructionPath(target, plan.userHome ?? homedir())), false);
     // Under the lock, a concurrent writer's renamed but uncommitted file is
     // never mistaken for an unmanaged one.
-    this.store.transaction(() => this.prepare(snapshot, target, project, userHome));
+    this.store.transaction(() => this.prepare(snapshot, target, project, plan));
   }
   sync(
     snapshot: Snapshot,
     target: InstructionTarget,
     project: string,
-    userHome = homedir(),
+    plan: InstructionPlan = {},
   ): InstructionRecord {
     const { bytes, path, id, old, digest, same } = this.store.transaction(() =>
-      this.prepare(snapshot, target, project, userHome),
+      this.prepare(snapshot, target, project, plan),
     );
     const parent = safeDirectory(dirname(path));
     const matches = (record: InstructionRecord): boolean =>
@@ -1035,7 +1080,8 @@ export class InstructionProjections {
       // same version; anything else needs a fresh plan.
       concurrent: matches,
       guard: (current, observed) => {
-        this.assertWritable(current, observed, path, snapshot);
+        this.assertPlanned(id, path, project, plan);
+        this.assertWritable(current, observed, path, snapshot, plan.published);
         if (current) this.assertReplacementOwner(current, snapshot, project);
       },
     });
@@ -1187,7 +1233,13 @@ export class InstructionProjections {
    * artifact. A re-run for the same bytes and artifact returns the recorded
    * adoption without a second backup; the file itself is never changed.
    */
-  adopt(input: { path: string; project: string; artifact: string }): {
+  adopt(input: {
+    path: string;
+    project: string;
+    artifact: string;
+    /** The digest of the bytes the caller validated, or null when it read none. */
+    validated: string | null;
+  }): {
     adoption: InstructionAdoption;
     bytes: Uint8Array;
     /** Whether this call recorded the adoption, rather than a run before it. */
@@ -1208,6 +1260,11 @@ export class InstructionProjections {
         throw new RuntimeError("INSTRUCTIONS_FILE_NOT_FOUND", `${path} does not exist`);
       if (observed.kind !== "file") throw new RuntimeError("UNSAFE_FILE");
       const file = readTarget(path);
+      if (file.digest !== input.validated)
+        throw new RuntimeError(
+          "PROJECTION_CHANGED",
+          `${path} changed while it was being adopted; run instructions adopt again`,
+        );
       const key = `${ADOPTION_PREFIX}${id}`;
       const prior = this.adoption(id);
       if (prior) {
@@ -1259,18 +1316,23 @@ export class InstructionProjections {
     return this.store.get(`instruction:${id}`) ? undefined : this.adoption(id);
   }
   /**
-   * Records the imported draft of an adoption. The first record stands unless
-   * it is the replaced draft, one a review rejected.
+   * Records the imported draft of the adoption nonce names. The first record
+   * stands unless it is the replaced draft, one that can no longer be
+   * published.
    */
   recordDraft(
     id: string,
+    nonce: string,
     draft: NonNullable<InstructionAdoption["draft"]>,
     replaced?: string,
   ): InstructionAdoption {
     return this.store.transaction(() => {
       const adoption = this.adoption(id);
-      if (!adoption)
-        throw new RuntimeError("PROJECTION_CHANGED", "The adoption was uninstalled");
+      if (adoption?.nonce !== nonce)
+        throw new RuntimeError(
+          "PROJECTION_CHANGED",
+          "The adoption was uninstalled while its draft was imported; run instructions adopt again",
+        );
       if (adoption.draft && adoption.draft.versionId !== replaced) return adoption;
       const recorded = { ...adoption, draft };
       this.store.set(`${ADOPTION_PREFIX}${id}`, recorded);
@@ -1533,6 +1595,8 @@ export class InstructionProjections {
     this.store.delete(`${ADOPTION_PREFIX}${id}`);
     this.store.db.prepare("DELETE FROM projection_owner WHERE projection_id=?").run(id);
     this.store.delete(`${UNINSTALL_PREFIX}${id}`);
+    // A sync planned before this commit never writes the target again.
+    this.store.set(`${RELEASE_PREFIX}${id}`, randomUUID());
   }
   /** Configuration removals queued by uninstalls, with their keys. */
   unconfigurations(): [string, InstructionUnconfigure][] {
@@ -1661,9 +1725,11 @@ export class InstructionProjections {
     if (!adoption) return "collision";
     if (observed.kind !== "file" || observed.digest !== adoption.original.digest)
       return "diverged";
+    // An adoption without its draft yet is still adopted, as sync reports it.
     return resolution &&
       "identity" in resolution &&
-      !(adoption.draft && sameArtifact(adoption.draft, resolution.identity))
+      adoption.draft &&
+      !sameArtifact(adoption.draft, resolution.identity)
       ? "collision"
       : "adopted";
   }

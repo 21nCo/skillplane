@@ -225,19 +225,24 @@ primary workspace. A cloud primary is refused with `ADOPT_LOCAL_PRIMARY_REQUIRED
 `--artifact` defaults to the configured target's document, else to the file name;
 an unconfigured file is added to `instructions`, merged into `skillplane.json` as it
 is when adopt finishes; a target configured for another document meanwhile is a
-`PROJECTION_COLLISION`. Adopt never publishes and never changes the file. Once the
-adopted draft, or a later version, is published, `sync` replaces the file by the same
-rename and records it. Until then `sync` leaves the file alone and still syncs skills
+`PROJECTION_COLLISION`, and one uninstalled meanwhile is not configured
+(`PROJECTION_CHANGED`). Adopt never publishes and never changes the file. Once the
+adopted draft is published, `sync` replaces the file, or writes it if it was deleted,
+by the same rename and records it. Until then `sync` leaves the file alone and still syncs skills
 and every other target: it lists the file with state `adopted` and code
 `ADOPTION_PENDING_REVIEW` (or `ADOPTION_INCOMPLETE` when the draft import has not
 finished), and `doctor` lists it as `adopted`. A file edited after adoption is a
 `PROJECTION_DIVERGED`.
 
-Adopt checks before keeping anything: a file that is not UTF-8 is refused with
-`INSTRUCTIONS_NOT_UTF8` and a slug a skill already holds with
-`ARTIFACT_SLUG_CONFLICT`, leaving no backup or adoption behind. An interrupted adopt
-can be run again: it reuses the backup, and a draft that already holds the file's
-bytes. A draft a review rejected is replaced by a fresh one when adopt runs again.
+Adopt checks before keeping anything, with the same checks the import applies: a
+file that is not UTF-8 is refused with `INSTRUCTIONS_NOT_UTF8`, an empty, blank or
+oversized one or one holding NUL characters with `INSTRUCTIONS_INVALID`, and a slug a
+skill already holds with `ARTIFACT_SLUG_CONFLICT`, leaving no backup or adoption
+behind. An interrupted adopt can be run again: it reuses the backup, and a draft that
+already holds the file's bytes. A draft that can no longer be published, because a
+review rejected it or another version was published over its base, is replaced by a
+fresh one against the current version when adopt runs again; a draft imported for an
+adoption that was uninstalled meanwhile is never recorded for a later one.
 Adopting the same file again after `uninstall` reuses a candidate still awaiting
 review, or imports a new one when the published version has moved on.
 
@@ -253,7 +258,9 @@ into the backup directory, where it stays. An uninstall interrupted after it
 replaced the file is finished by the next `sync` or `doctor`. Uninstall, and a
 rollback to another document, refuse with `PROJECTION_SHARED` when another project
 claims the file, checked again in the same commit that replaces or removes it, and a `sync` that reaches a file being
-uninstalled is refused with `PROJECTION_BUSY`.
+uninstalled is refused with `PROJECTION_BUSY`. A `sync` that read the configuration
+before an uninstall committed never writes the released file again; it stops with
+`PROJECTION_CHANGED`, and the next `sync` reads the configuration without it.
 
 ## Freshness and trust
 

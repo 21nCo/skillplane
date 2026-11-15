@@ -17,6 +17,7 @@ import {
   type ArtifactIdentity,
   type InstructionAdoption,
   type InstructionBackup,
+  type InstructionPlan,
   type InstructionRecord,
   type InstructionResolution,
   type InstructionStatusScope,
@@ -85,6 +86,50 @@ export function instructionTargetId(argument: string): string | undefined {
   if (/[\\/]/.test(argument) || argument.startsWith("."))
     return InstructionProjections.id(resolve(argument));
   return undefined;
+}
+/**
+ * The create request that imports bytes unchanged, refusing bytes that are
+ * not UTF-8.
+ */
+function draftRequest(
+  path: string,
+  bytes: Uint8Array,
+  fields: { slug: string; name: string; description: string },
+  idempotencyKey: string,
+): CreateRequest {
+  let instructions: string;
+  try {
+    instructions = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
+      bytes,
+    );
+  } catch {
+    throw new RuntimeError(
+      "INSTRUCTIONS_NOT_UTF8",
+      `${path} is not UTF-8 text and cannot be imported unchanged`,
+    );
+  }
+  return {
+    kind: "instructions",
+    ...fields,
+    tags: [],
+    visibility: "private",
+    instructions,
+    assets: [],
+    idempotencyKey,
+  };
+}
+/** The artifact's current version, or undefined when nothing is published. */
+async function currentVersion(
+  provider: LocalWorkspaceProvider,
+  skillId: string,
+): Promise<Snapshot | undefined> {
+  try {
+    return await provider.retrieve(skillId);
+  } catch (error) {
+    if (error instanceof RuntimeError && error.code === "VERSION_UNAVAILABLE")
+      return undefined;
+    throw error;
+  }
 }
 /** The configured target an adopted file becomes when no project configures it. */
 function adoptedTarget(path: string, artifact: string): InstructionTarget {
@@ -295,7 +340,7 @@ export class Runtime {
    * set aside as pending rather than stopping the sync.
    */
   private async instructionPlans(context: ProjectContext): Promise<{
-    plans: { target: InstructionTarget; snapshot: Snapshot }[];
+    plans: { target: InstructionTarget; snapshot: Snapshot; published: Set<string> }[];
     pending: PendingAdoption[];
   }> {
     const targets = context.instructions ?? [];
@@ -309,13 +354,14 @@ export class Runtime {
     for (const { target, item, error } of resolved) {
       try {
         if (error || !item) throw error ?? new RuntimeError("INSTRUCTIONS_NOT_FOUND");
-        const selected = selectVersion(
-          await item.provider.versions(item.skillId),
-          policySchema.parse({}),
-        );
+        const versions = await item.provider.versions(item.skillId);
+        const selected = selectVersion(versions, policySchema.parse({}));
         plans.push({
           target,
           snapshot: await item.provider.retrieve(item.skillId, selected.id),
+          published: new Set(
+            versions.filter((v) => v.state === "published").map((v) => v.id),
+          ),
         });
       } catch (failure) {
         const set = this.pendingAdoption(target, failure, [
@@ -523,31 +569,59 @@ export class Runtime {
           ? `A skill holds the slug ${name}; choose another --artifact`
           : `The instructions artifact ${name} is not visible under that name in this project; choose another --artifact`,
       );
+    // The bytes get the import's checks before anything is recorded, so a
+    // file that can never be imported leaves no adoption behind.
+    let validated: string | null = null;
+    let bytes: Uint8Array | undefined;
+    try {
+      bytes = readSafe(path);
+    } catch {
+      // Adopt refuses a missing, linked or oversized file itself.
+    }
+    if (bytes) {
+      const request = draftRequest(
+        path,
+        bytes,
+        { slug: name, name, description: `Adopted from ${basename(path)}` },
+        "adopt-validate",
+      );
+      try {
+        await primary.validate(request);
+      } catch (error) {
+        if (error instanceof RuntimeError) throw error;
+        throw new RuntimeError(
+          "INSTRUCTIONS_INVALID",
+          `${path} cannot be imported unchanged as instructions: it is empty, blank, holds NUL characters or exceeds the size limit`,
+        );
+      }
+      validated = `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
+    }
     const backedUp = this.projections.instructions.adopt({
       path,
       project,
       artifact: name,
+      validated,
     });
     let adoption = backedUp.adoption;
-    // A draft a review rejected is replaced by a fresh one.
-    const rejected =
-      adoption.draft &&
-      (await primary.versions(adoption.draft.skill.id)).find(
-        (version) => version.id === adoption.draft?.versionId,
-      )?.state === "rejected"
+    // A recorded draft that can no longer be published, because a review
+    // rejected it or another version was published over its base, is
+    // replaced by a fresh one against the current version.
+    const replaced =
+      adoption.draft && (await this.unpublishable(primary, adoption.draft))
         ? adoption.draft.versionId
         : undefined;
-    if (!adoption.draft || rejected)
+    if (!adoption.draft || replaced)
       try {
         adoption = this.projections.instructions.recordDraft(
           adoption.id,
+          adoption.nonce,
           await this.importDraft(
             primary,
             item?.skillId ?? adoption.draft?.skill.id,
             adoption,
             backedUp.bytes,
           ),
-          rejected,
+          replaced,
         );
       } catch (error) {
         // A process that stops leaves the adoption for a re-run to finish; a
@@ -559,6 +633,11 @@ export class Runtime {
     // Merged into the configuration as it is now, under the lock, so a
     // concurrent change to it is never lost.
     this.store.transaction(() => {
+      if (this.projections.instructions.adoption(adoption.id)?.nonce !== adoption.nonce)
+        throw new RuntimeError(
+          "PROJECTION_CHANGED",
+          `${path} was uninstalled while it was being adopted; nothing was configured`,
+        );
       const current = this.project(project);
       const next = this.withTarget(current, target);
       if (next !== current) this.configure(project, next);
@@ -610,6 +689,20 @@ export class Runtime {
         // Retried by the next sync, adopt or uninstall.
       }
   }
+  /** Whether a recorded draft was rejected or its base is no longer current. */
+  private async unpublishable(
+    provider: LocalWorkspaceProvider,
+    draft: NonNullable<InstructionAdoption["draft"]>,
+  ): Promise<boolean> {
+    const row = (await provider.candidates(draft.skill.id)).find(
+      (candidate) => candidate.reviewId === draft.versionId,
+    );
+    // Candidates exclude published versions, which stay usable.
+    if (!row) return false;
+    if (row.state === "rejected") return true;
+    const current = await currentVersion(provider, draft.skill.id);
+    return (row.base ?? null) !== (current?.version.id ?? null);
+  }
   /**
    * Imports adopted bytes as a draft: a pending version or the current one
    * that already holds them, else a new draft-only artifact, another draft of
@@ -623,15 +716,6 @@ export class Runtime {
     adoption: InstructionAdoption,
     bytes: Uint8Array,
   ): Promise<NonNullable<InstructionAdoption["draft"]>> {
-    let text: string;
-    try {
-      text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
-    } catch {
-      throw new RuntimeError(
-        "INSTRUCTIONS_NOT_UTF8",
-        `${adoption.path} is not UTF-8 text and cannot be imported unchanged`,
-      );
-    }
     const holds = (snapshot: Snapshot): boolean => {
       const content = snapshot.bundle.files.get(
         bundleEntrypoint(snapshot.bundle.skill),
@@ -651,17 +735,7 @@ export class Runtime {
         .digest("hex")
         .slice(0, 16)}`;
     const request = (slug: string, name: string, description: string) =>
-      ({
-        kind: "instructions",
-        slug,
-        name,
-        description,
-        tags: [],
-        visibility: "private",
-        instructions: text,
-        assets: [],
-        idempotencyKey: key(""),
-      }) satisfies CreateRequest;
+      draftRequest(adoption.path, bytes, { slug, name, description }, key(""));
     let created: { skillId: string; versionId: string };
     if (skillId === undefined) {
       try {
@@ -681,13 +755,7 @@ export class Runtime {
         throw error;
       }
     } else {
-      let current: Snapshot | undefined;
-      try {
-        current = await provider.retrieve(skillId);
-      } catch (error) {
-        if (!(error instanceof RuntimeError && error.code === "VERSION_UNAVAILABLE"))
-          throw error;
-      }
+      const current = await currentVersion(provider, skillId);
       if (current && holds(current)) return draft(current);
       // A draft an interrupted run created, or one awaiting review from an
       // earlier adoption, that a decision can still approve over the current
@@ -782,6 +850,11 @@ export class Runtime {
     pending: PendingAdoption[];
   }> {
     this.projections.recover();
+    // Read before queued removals are applied and the configuration is read,
+    // so an uninstall that commits after either is never undone.
+    const plan: InstructionPlan = {
+      releases: this.projections.instructions.releases(),
+    };
     this.applyUnconfigurations();
     const context = this.project(project);
     const catalog = await this.catalog(context);
@@ -823,20 +896,25 @@ export class Runtime {
     }
     // An unmanaged or hand-edited instructions file, or an unsafe directory
     // above one, stops the sync before any write.
-    const instructionPlans = resolved.plans.filter(({ snapshot, target }) => {
-      try {
-        this.projections.instructions.check(snapshot, target, project);
-        return true;
-      } catch (failure) {
-        const set = this.pendingAdoption(target, failure, [
-          "ADOPTION_PENDING_REVIEW",
-          "ADOPTION_INCOMPLETE",
-        ]);
-        if (!set) throw failure;
-        pending.push(set);
-        return false;
-      }
-    });
+    const instructionPlans = resolved.plans.filter(
+      ({ snapshot, target, published }) => {
+        try {
+          this.projections.instructions.check(snapshot, target, project, {
+            ...plan,
+            published,
+          });
+          return true;
+        } catch (failure) {
+          const set = this.pendingAdoption(target, failure, [
+            "ADOPTION_PENDING_REVIEW",
+            "ADOPTION_INCOMPLETE",
+          ]);
+          if (!set) throw failure;
+          pending.push(set);
+          return false;
+        }
+      },
+    );
     const previous = this.projections.projectIds(project);
     const records = [];
     for (const { target, item, snapshot } of plans) {
@@ -853,9 +931,12 @@ export class Runtime {
       catalog: catalogFingerprint(context),
       targets: {},
     };
-    for (const { snapshot, target } of instructionPlans) {
+    for (const { snapshot, target, published } of instructionPlans) {
       this.cache(snapshot);
-      const record = this.projections.instructions.sync(snapshot, target, project);
+      const record = this.projections.instructions.sync(snapshot, target, project, {
+        ...plan,
+        published,
+      });
       instructions.push(record);
       claims.targets[record.id] = {
         artifact: target.artifact,

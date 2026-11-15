@@ -675,6 +675,159 @@ describe("adoption lifecycle", () => {
   });
 });
 
+describe("one adoption lifecycle at a time", () => {
+  it("refuses a draft imported for an adoption uninstalled and adopted again meanwhile", async () => {
+    const paused: { fixture?: Fixture } = {};
+    class Pausing extends LocalWorkspaceProvider {
+      override async createDraft(request: CreateRequest, skillId?: string) {
+        const created = await super.createDraft(request, skillId);
+        const g = paused.fixture;
+        if (g) {
+          delete paused.fixture;
+          g.runtime.uninstallInstructions(g.id);
+          writeFileSync(g.claude, v2);
+          await g.runtime.adoptInstructions(g.project, g.claude, "global-agents");
+        }
+        return created;
+      }
+    }
+    const f = fixture(
+      undefined,
+      (store) => (ref) => new Pausing(store, (ref as { id: string }).id),
+    );
+    paused.fixture = f;
+    await expect(
+      f.runtime.adoptInstructions(f.project, f.claude),
+    ).rejects.toMatchObject({
+      code: "PROJECTION_CHANGED",
+    });
+    const current = requireValue(requireValue(adoption(f)).draft);
+    const snapshot = await f.provider.retrieve(current.skill.id, current.versionId);
+    expect(snapshot.bundle.files.get("AGENTS.md")).toEqual(
+      new Uint8Array(Buffer.from(v2)),
+    );
+    expect(requireValue(adoption(f)).original.digest).toBe(sha(v2));
+  });
+
+  it("keeps nothing for a file the import refuses, and a corrected re-run succeeds", async () => {
+    const f = fixture();
+    for (const content of ["", " \n\t", "a\0b", "x".repeat(2 * 1024 * 1024 + 1)]) {
+      writeFileSync(f.claude, content);
+      await expect(
+        f.runtime.adoptInstructions(f.project, f.claude),
+      ).rejects.toMatchObject({ code: "INSTRUCTIONS_INVALID" });
+      expect(adoption(f)).toBeUndefined();
+      expect(backups(f)).toEqual([]);
+    }
+    expect(await f.provider.list()).toEqual([]);
+    writeFileSync(f.claude, original);
+    const adopted = await f.runtime.adoptInstructions(f.project, f.claude);
+    expect(adopted.original.digest).toBe(sha(original));
+    expect(adopted.draft).toBeDefined();
+  });
+
+  it("re-imports a draft whose base another publication moved, and takes over only once it is published", async () => {
+    const f = fixture([]);
+    const created = await f.provider.create(instructions("mine", v2));
+    const stale = requireValue(
+      (await f.runtime.adoptInstructions(f.project, f.claude, "mine")).draft,
+    );
+    // A version created after the draft is published over the draft's base.
+    await publish(f, created.skillId, v3);
+    expect((await f.runtime.syncTargets(f.project)).pending).toMatchObject([
+      { id: f.id, code: "ADOPTION_PENDING_REVIEW" },
+    ]);
+    expect(readFileSync(f.claude)).toEqual(Buffer.from(original));
+    expect(record(f)).toBeUndefined();
+
+    const fresh = requireValue(
+      (await f.runtime.adoptInstructions(f.project, f.claude, "mine")).draft,
+    );
+    expect(fresh.versionId).not.toBe(stale.versionId);
+    await approve(f, created.skillId, fresh.versionId);
+    await f.runtime.sync(f.project);
+    expect(record(f)?.version.id).toBe(fresh.versionId);
+    expect(readFileSync(f.claude)).toEqual(Buffer.from(original));
+  });
+
+  it("does not write an older version to a deleted adopted file while its draft awaits review", async () => {
+    const f = fixture([]);
+    const created = await f.provider.create(instructions("mine", v2));
+    const draft = requireValue(
+      (await f.runtime.adoptInstructions(f.project, f.claude, "mine")).draft,
+    );
+    rmSync(f.claude);
+    expect((await f.runtime.syncTargets(f.project)).pending).toMatchObject([
+      { id: f.id, code: "ADOPTION_PENDING_REVIEW" },
+    ]);
+    expect(existsSync(f.claude)).toBe(false);
+    expect(record(f)).toBeUndefined();
+    await approve(f, created.skillId, draft.versionId);
+    await f.runtime.sync(f.project);
+    expect(readFileSync(f.claude)).toEqual(Buffer.from(original));
+  });
+
+  it("reports an adopt interrupted before its draft as adopted in doctor and sync", async () => {
+    const f = fixture();
+    await f.provider.create(instructions("global-agents", v2));
+    vi.spyOn(f.runtime.projections.instructions, "recordDraft").mockImplementationOnce(
+      () => {
+        throw new Error("process stopped");
+      },
+    );
+    await expect(f.runtime.adoptInstructions(f.project, f.claude)).rejects.toThrow(
+      "process stopped",
+    );
+    expect(await states(f)).toEqual({ [f.claude]: "adopted" });
+    expect((await f.runtime.syncTargets(f.project)).pending).toMatchObject([
+      { id: f.id, code: "ADOPTION_INCOMPLETE" },
+    ]);
+  });
+
+  it("does not write a target uninstalled after the sync read the configuration", async () => {
+    const f = fixture();
+    rmSync(f.claude);
+    await f.provider.create(instructions("global-agents", v2));
+    await f.runtime.sync(f.project);
+    const instructionsProjections = f.runtime.projections.instructions;
+    const check = instructionsProjections.check.bind(instructionsProjections);
+    vi.spyOn(instructionsProjections, "check").mockImplementationOnce((...args) => {
+      check(...args);
+      f.runtime.uninstallInstructions(f.id);
+    });
+    await expect(f.runtime.syncTargets(f.project)).rejects.toMatchObject({
+      code: "PROJECTION_CHANGED",
+    });
+    expect(existsSync(f.claude)).toBe(false);
+    expect(record(f)).toBeUndefined();
+    // The next sync reads the configuration uninstall released the target from.
+    expect((await f.runtime.syncTargets(f.project)).instructions).toEqual([]);
+    expect(existsSync(f.claude)).toBe(false);
+  });
+
+  it("does not configure a target uninstalled while it was being adopted", async () => {
+    const f = fixture([]);
+    const instructionsProjections = f.runtime.projections.instructions;
+    const recordDraft = instructionsProjections.recordDraft.bind(
+      instructionsProjections,
+    );
+    vi.spyOn(instructionsProjections, "recordDraft").mockImplementationOnce(
+      (...args) => {
+        const recorded = recordDraft(...args);
+        f.runtime.uninstallInstructions(f.id);
+        return recorded;
+      },
+    );
+    await expect(
+      f.runtime.adoptInstructions(f.project, f.claude, "mine"),
+    ).rejects.toMatchObject({ code: "PROJECTION_CHANGED" });
+    expect(f.runtime.project(f.project).instructions).toEqual([]);
+    expect(adoption(f)).toBeUndefined();
+    expect(readFileSync(f.claude)).toEqual(Buffer.from(original));
+    expect((await f.runtime.syncTargets(f.project)).instructions).toEqual([]);
+  });
+});
+
 describe("ownership is checked in the commit that changes the target", () => {
   it("refuses an uninstall once another project claims the target after it was planned", async () => {
     const f = fixture();
