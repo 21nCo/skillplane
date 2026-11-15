@@ -1225,9 +1225,65 @@ describe("uninstall decides divergence apart from restoration", () => {
     expect(backups(f)).toEqual([]);
     expect(readFileSync(f.claude)).toEqual(Buffer.from(original));
   });
+  it("recovers an uninstall only once its own restore landed, never a hand-edit to the original", async () => {
+    const f = fixture();
+    const skillId = await adoptAndSync(f);
+    await publish(f, skillId, v2);
+    await f.runtime.sync(f.project);
+    const stopped = new Projections(f.store, (point) => {
+      if (point === "after-mark") throw new Error("process stopped");
+    });
+    expect(() => stopped.instructions.uninstall(f.id)).toThrow("process stopped");
+    writeFileSync(f.claude, original);
+    expect(f.runtime.projections.recover()).toEqual([]);
+    expect(f.store.entries("instruction-uninstall:")).toEqual([]);
+    expect(record(f)?.digest).toBe(sha(v2));
+    expect(adoption(f)).toBeDefined();
+    expect(backups(f)).toEqual([sha(original).slice(7)]);
+    expect(
+      readdirSync(dirname(f.claude)).filter((n) =>
+        n.startsWith(".skillplane-instructions-"),
+      ),
+    ).toEqual([]);
+  });
+
+  it("keeps a forced backup sharing the original's copy when recovery finishes the uninstall", async () => {
+    const f = fixture();
+    const skillId = await adoptAndSync(f);
+    await publish(f, skillId, v2);
+    await f.runtime.sync(f.project);
+    writeFileSync(f.claude, original);
+    const stopped = new Projections(f.store, (point) => {
+      if (point === "after-mark") throw new Error("process stopped");
+    });
+    expect(() => stopped.instructions.uninstall(f.id, true)).toThrow("process stopped");
+    expect(f.runtime.projections.recover()).toEqual([f.id]);
+    expect(record(f)).toBeUndefined();
+    expect(backups(f)).toEqual([sha(original).slice(7)]);
+    expect(statSync(f.claude).mode & 0o777).toBe(0o640);
+  });
 });
 
 describe("PR review round 1 adoption and rollback checks", () => {
+  it("rolls back to the generation the current one replaced, even with the same bytes", async () => {
+    const f = fixture();
+    const skillId = await adoptAndSync(f);
+    await publish(f, skillId, v2);
+    await f.runtime.sync(f.project);
+    // Another artifact with the same bytes replaces it.
+    const other = await f.provider.create(instructions("other-agents", v2));
+    f.runtime.configure(f.project, {
+      ...f.runtime.project(f.project),
+      instructions: [{ adapter: "claude", artifact: "other-agents" }],
+    });
+    await f.runtime.sync(f.project);
+    expect(record(f)?.skill.id).toBe(other.skillId);
+    const { record: restored } = f.runtime.rollbackInstructions(f.id);
+    expect(restored.skill.id).toBe(skillId);
+    expect(restored.digest).toBe(sha(v2));
+    expect(readFileSync(f.claude, "utf8")).toBe(v2);
+  });
+
   it("rolls back to the latest replaced generation by commit order, not timestamp", async () => {
     const f = fixture();
     const skillId = await adoptAndSync(f);
@@ -1374,6 +1430,31 @@ describe("PR review round 1 adoption and rollback checks", () => {
       { adapter: "claude", scope: "user", artifact: "mine" },
     ]);
     expect(backups(f)).toEqual([sha(original).slice(7)]);
+  });
+
+  it("refuses to configure a draft another run recorded for a workspace the project left", async () => {
+    const f = fixture([]);
+    const personal = f.runtime.project(f.project).primary;
+    const team = LocalWorkspaceProvider.create(f.store, "Team");
+    f.runtime.configure(f.project, {
+      ...f.runtime.project(f.project),
+      primary: team.workspace,
+    });
+    const instructionsState = f.runtime.projections.instructions;
+    const record = instructionsState.recordDraft.bind(instructionsState);
+    // A run that started in the personal workspace records its draft first.
+    vi.spyOn(instructionsState, "recordDraft").mockImplementationOnce(
+      (id, nonce, draft, replaced) => {
+        record(id, nonce, { ...draft, workspace: personal }, replaced);
+        return record(id, nonce, draft, replaced);
+      },
+    );
+    await expect(
+      f.runtime.adoptInstructions(f.project, f.claude, "mine"),
+    ).rejects.toMatchObject({ code: "PROJECTION_CHANGED" });
+    expect(f.runtime.project(f.project).instructions ?? []).toEqual([]);
+    const adopted = await f.runtime.adoptInstructions(f.project, f.claude, "mine");
+    expect(adopted.draft?.workspace).toEqual(team.workspace);
   });
 
   it("derives a default artifact by trimming one hyphen at each edge", async () => {

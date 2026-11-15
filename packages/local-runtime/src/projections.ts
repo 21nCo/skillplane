@@ -661,6 +661,13 @@ interface InstructionUninstall {
   temp: string;
   pid: number;
   startedAt: string;
+  // Absent on markers from before uninstall checked the target first.
+  /** The digest the checks saw at path, or null when it held no file. */
+  observed?: string | null;
+  /** The file that holds the restored bytes once the uninstall lands. */
+  file?: FileIdentity | null;
+  /** Whether a forced backup shares the original's copy, which then stays. */
+  keep?: boolean;
 }
 export interface InstructionStatus {
   id: string;
@@ -806,14 +813,19 @@ function installed(journal: InstructionJournal): boolean {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") return false;
   }
+  return sameFile(identity(journal.record.path), file);
+}
+/** The identity of the regular file at path, or null. */
+function identity(path: string): FileIdentity | null {
   try {
-    const stat = lstatSync(journal.record.path, { bigint: true });
-    return (
-      stat.isFile() && String(stat.dev) === file.dev && String(stat.ino) === file.ino
-    );
+    const stat = lstatSync(path, { bigint: true });
+    return stat.isFile() ? { dev: String(stat.dev), ino: String(stat.ino) } : null;
   } catch {
-    return false;
+    return null;
   }
+}
+function sameFile(a: FileIdentity | null, b: FileIdentity | null): boolean {
+  return a !== null && b !== null && a.dev === b.dev && a.ino === b.ino;
 }
 /**
  * Projects one published instructions artifact into a single user-level file.
@@ -1463,12 +1475,12 @@ export class InstructionProjections {
       const current = this.store.get<InstructionRecord>(`instruction:${id}`);
       if (!current) throw new RuntimeError("PROJECTION_NOT_FOUND");
       this.assertIdle(id, current.path);
-      // The latest replaced generation with other bytes, by commit order;
-      // entries archived before the order was kept come after, by time.
+      // The generation the current one replaced: the latest by commit order,
+      // its bytes the same or not; entries kept before the order was recorded
+      // come after, by time.
       const latest = this.store
         .entries<InstructionHistory>(`instruction-history:${id}:`)
         .map(([, value]) => value)
-        .filter((value) => value.digest !== current.digest)
         .sort(
           (a, b) =>
             (b.sequence ?? -1) - (a.sequence ?? -1) ||
@@ -1558,57 +1570,29 @@ export class InstructionProjections {
    * Restores an adopted target's original bytes, or removes a target
    * Skillplane created, and clears its projection state. A hand-edited target
    * is refused unless force, which first backs the edited file up. A target
-   * that already holds the original bytes, as after an uninstall interrupted
-   * past its rename, needs only its state cleared.
+   * that already holds the original bytes gets its saved mode back.
    */
   uninstall(
     id: string,
     force = false,
   ): { restored: InstructionBackup | null; backup: InstructionBackup | null } {
-    const marker = this.store.transaction(() => {
-      const record = this.store.get<InstructionRecord>(`instruction:${id}`);
-      const adoption = this.adoption(id);
-      if (!record && !adoption) throw new RuntimeError("PROJECTION_NOT_FOUND");
-      const path = record?.path ?? requireValue(adoption).path;
-      this.assertUninstalling(id, path);
-      this.assertUnwritten(id, path);
-      this.assertUnshared(id);
-      const marker: InstructionUninstall = {
-        id,
-        path,
-        eventId: record?.eventId ?? null,
-        restore: adoption?.original.digest ?? null,
-        temp: join(dirname(path), `.skillplane-instructions-${randomUUID()}`),
-        pid: process.pid,
-        startedAt: new Date().toISOString(),
-      };
-      // Committed before the target changes, so recover() can finish an
-      // uninstall whose rename or unlink landed before its commit.
-      this.store.set(`${UNINSTALL_PREFIX}${id}`, marker);
-      return marker;
-    });
-    this.fault?.("after-mark");
-    const progress = { replacing: false };
-    let result: {
-      restored: InstructionBackup | null;
-      backup: InstructionBackup | null;
-    };
+    const temp = { path: "" };
+    let backup: InstructionBackup | null = null;
+    let restored: InstructionBackup | null = null;
+    let marker: InstructionUninstall;
     try {
-      result = this.store.transaction(() => {
+      // Checked, backed up and staged before the marker commits, so a marker
+      // names the file only an uninstall that passed its checks installs.
+      marker = this.store.transaction(() => {
         const record = this.store.get<InstructionRecord>(`instruction:${id}`);
         const adoption = this.adoption(id);
-        if (
-          !this.store.get(`${UNINSTALL_PREFIX}${id}`) ||
-          (record?.eventId ?? null) !== marker.eventId ||
-          (adoption?.original.digest ?? null) !== marker.restore
-        )
-          throw new RuntimeError("PROJECTION_CHANGED", "Projection changed; try again");
-        const { path } = marker;
-        // Checked again in the commit that changes the target.
+        if (!record && !adoption) throw new RuntimeError("PROJECTION_NOT_FOUND");
+        const path = record?.path ?? requireValue(adoption).path;
+        this.assertUninstalling(id, path);
         this.assertUnwritten(id, path);
         this.assertUnshared(id);
         // Only a restore needs the directory; a removal never creates it.
-        const parent = safeDirectory(dirname(path), adoption !== undefined);
+        safeDirectory(dirname(path), adoption !== undefined);
         const observed = observe(path);
         // Divergence is decided by what Skillplane last wrote, or for a target
         // never synced by the adopted bytes, never by whether the file already
@@ -1625,22 +1609,73 @@ export class InstructionProjections {
             "PROJECTION_DIVERGED",
             `${path} changed after Skillplane ${record ? "wrote" : "adopted"} it${force ? " and is not a regular file" : "; --force backs it up first"}`,
           );
-        const backup = edited ? this.backup(path, id, readTarget(path)) : null;
-        if (adoption && holdsOriginal) {
-          // The bytes are already there: restore the saved mode and make the
-          // data and its directory entry durable before the backup goes.
-          this.fault?.("before-restore-sync");
-          setMode(path, adoption.original.mode);
-          syncDirectory(parent);
-        } else if (adoption) {
+        backup = edited ? this.backup(path, id, readTarget(path)) : null;
+        restored = adoption?.original ?? null;
+        temp.path = join(dirname(path), `.skillplane-instructions-${randomUUID()}`);
+        let file: FileIdentity | null = null;
+        if (adoption && holdsOriginal) file = identity(path);
+        else if (adoption) {
           const original = readSafe(adoption.original.path, MAX_INSTRUCTIONS_BYTES);
           if (`sha256:${hash(original)}` !== adoption.original.digest)
             throw new RuntimeError(
               "BACKUP_INVALID",
               `The backup of ${path} at ${adoption.original.path} changed; nothing was restored`,
             );
-          writeFileDurably(marker.temp, original);
-          setMode(marker.temp, adoption.original.mode);
+          file = writeFileDurably(temp.path, original);
+          setMode(temp.path, adoption.original.mode);
+        }
+        const marker: InstructionUninstall = {
+          id,
+          path,
+          eventId: record?.eventId ?? null,
+          restore: adoption?.original.digest ?? null,
+          temp: temp.path,
+          pid: process.pid,
+          startedAt: new Date().toISOString(),
+          observed: observed.kind === "file" ? observed.digest : null,
+          file,
+          keep: backup?.path === adoption?.original.path,
+        };
+        // Committed before the target changes, so recover() can finish an
+        // uninstall whose rename or unlink landed before its commit.
+        this.store.set(`${UNINSTALL_PREFIX}${id}`, marker);
+        return marker;
+      });
+    } catch (error) {
+      if (temp.path) rmSync(temp.path, { force: true });
+      throw error;
+    }
+    this.fault?.("after-mark");
+    const progress = { replacing: false };
+    try {
+      this.store.transaction(() => {
+        const record = this.store.get<InstructionRecord>(`instruction:${id}`);
+        const adoption = this.adoption(id);
+        const { path } = marker;
+        const observed = observe(path);
+        if (
+          !this.store.get(`${UNINSTALL_PREFIX}${id}`) ||
+          (record?.eventId ?? null) !== marker.eventId ||
+          (adoption?.original.digest ?? null) !== marker.restore ||
+          // A file edited since the checks is checked again by a new run.
+          (observed.kind === "file" ? observed.digest : null) !== marker.observed
+        )
+          throw new RuntimeError("PROJECTION_CHANGED", "Projection changed; try again");
+        // Checked again in the commit that changes the target.
+        this.assertUnwritten(id, path);
+        this.assertUnshared(id);
+        const parent = dirname(path);
+        if (
+          adoption &&
+          observed.kind === "file" &&
+          observed.digest === marker.restore
+        ) {
+          // The bytes are already there: restore the saved mode and make the
+          // data and its directory entry durable before the backup goes.
+          this.fault?.("before-restore-sync");
+          setMode(path, adoption.original.mode);
+          syncDirectory(parent);
+        } else if (adoption) {
           progress.replacing = true;
           this.fault?.("before-swap");
           renameSync(marker.temp, path);
@@ -1656,13 +1691,12 @@ export class InstructionProjections {
         // The target now holds the original bytes, so its copy goes with the
         // adoption, under the lock so a concurrent adopt's copy is never lost.
         // Edited files backed up by force stay, even one with the same bytes.
-        if (adoption && backup?.path !== adoption.original.path)
+        if (adoption && !marker.keep)
           try {
             rmSync(adoption.original.path, { force: true });
           } catch {
             // A leftover copy is harmless; the next adopt reuses it.
           }
-        return { restored: adoption?.original ?? null, backup };
       });
     } catch (error) {
       if (!progress.replacing)
@@ -1680,7 +1714,7 @@ export class InstructionProjections {
         }
       throw error;
     }
-    return result;
+    return { restored, backup };
   }
   /**
    * Clears a target's projection state inside the caller's transaction. The
@@ -1745,11 +1779,16 @@ export class InstructionProjections {
           if (current?.temp !== marker.temp) return false;
           const record = this.store.get<InstructionRecord>(`instruction:${marker.id}`);
           const observed = observe(marker.path);
+          // A restore landed only when the file the checked uninstall staged
+          // or kept is at the path: matching bytes alone may be a hand-edit.
           const done =
             (record?.eventId ?? null) === marker.eventId &&
             (marker.restore === null
               ? observed.kind === "absent"
-              : observed.kind === "file" && observed.digest === marker.restore);
+              : observed.kind === "file" &&
+                observed.digest === marker.restore &&
+                (marker.file === undefined ||
+                  sameFile(identity(marker.path), marker.file)));
           if (done) {
             // The uninstall may have stopped before making its rename or
             // unlink durable, or before restoring the saved mode. A failure
@@ -1764,7 +1803,7 @@ export class InstructionProjections {
             this.forget(marker.id);
             // As uninstall does: the target holds the original bytes, so its
             // copy goes, under the lock. Edited files backed up by force stay.
-            if (adoption)
+            if (adoption && !marker.keep)
               try {
                 rmSync(adoption.original.path, { force: true });
               } catch {

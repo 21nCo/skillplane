@@ -618,12 +618,13 @@ export class Runtime {
     // replaced by a fresh one against the current version.
     // So is one of another artifact than the name resolves to now, as when a
     // run that recorded it stopped at a workspace change.
-    const foreign =
-      !!adoption.draft &&
-      (workspaceKey(adoption.draft.workspace) !== workspaceKey(context.primary) ||
-        (item !== undefined && item.skillId !== adoption.draft.skill.id));
+    const foreign = (draft: InstructionAdoption["draft"]): boolean =>
+      !!draft &&
+      (workspaceKey(draft.workspace) !== workspaceKey(context.primary) ||
+        (item !== undefined && item.skillId !== draft.skill.id));
     const replaced =
-      adoption.draft && (foreign || (await this.unpublishable(primary, adoption.draft)))
+      adoption.draft &&
+      (foreign(adoption.draft) || (await this.unpublishable(primary, adoption.draft)))
         ? adoption.draft.versionId
         : undefined;
     if (!adoption.draft || replaced)
@@ -633,7 +634,8 @@ export class Runtime {
           adoption.nonce,
           await this.importDraft(
             primary,
-            item?.skillId ?? (foreign ? undefined : adoption.draft?.skill.id),
+            item?.skillId ??
+              (foreign(adoption.draft) ? undefined : adoption.draft?.skill.id),
             adoption,
             backedUp.bytes,
           ),
@@ -649,16 +651,20 @@ export class Runtime {
     // Merged into the configuration as it is now, under the lock, so a
     // concurrent change to it is never lost.
     this.store.transaction(() => {
-      if (this.projections.instructions.adoption(adoption.id)?.nonce !== adoption.nonce)
+      const recorded = this.projections.instructions.adoption(adoption.id);
+      if (recorded?.nonce !== adoption.nonce)
         throw new RuntimeError(
           "PROJECTION_CHANGED",
           `${path} was uninstalled while it was being adopted; nothing was configured`,
         );
       const current = this.project(project);
-      // The draft belongs to the artifact the name resolved to then; a
-      // configuration that now resolves names differently would attach it to
-      // another one.
-      if (catalogFingerprint(current) !== catalogFingerprint(context))
+      // The recorded draft, which a concurrent run may have set, belongs to
+      // the artifact the name resolved to then; a configuration that now
+      // resolves names differently would attach it to another one.
+      if (
+        catalogFingerprint(current) !== catalogFingerprint(context) ||
+        foreign(recorded.draft)
+      )
         throw new RuntimeError(
           "PROJECTION_CHANGED",
           `The workspaces of ${project} changed while ${path} was being adopted; run instructions adopt again`,
