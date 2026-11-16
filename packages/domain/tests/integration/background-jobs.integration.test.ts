@@ -94,6 +94,16 @@ beforeEach(async () => {
 
 afterAll(async () => {
   await pool?.end();
+  // pool.end() resolves before its sockets close; a forced drop that races a
+  // closing client surfaces as an unhandled 57P01, so wait for them first.
+  for (let attempt = 0; admin && attempt < 50; attempt += 1) {
+    const active = await admin.query<{ count: number }>(
+      "SELECT count(*)::int AS count FROM pg_stat_activity WHERE datname = $1",
+      [database],
+    );
+    if (active.rows[0]?.count === 0) break;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
   await admin?.query(`DROP DATABASE IF EXISTS "${database}" WITH (FORCE)`);
   await admin?.end();
 });

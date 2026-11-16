@@ -42,6 +42,7 @@ const RETRY_BASE_MS = 30_000;
 const RETRY_CAP_MS = 60 * 60_000;
 const MAX_PAYLOAD_BYTES = 16_384;
 const MAX_ERROR_LENGTH = 2_000;
+const MAX_ERROR_SCAN = 16_384;
 const KIND_PATTERN = /^[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*)+$/u;
 
 type Queryable = Pick<Pool | PoolClient, "query">;
@@ -142,7 +143,7 @@ function assertPayloadValue(value: unknown, depth: number): void {
       throw invalid("Background job payload key is too long");
     }
     assertPayloadText(key);
-    if (CREDENTIAL_KEY.test(key)) {
+    if (isCredentialName(key)) {
       throw invalid("Background job payload must not contain secrets or personal data");
     }
     assertPayloadValue(item, depth + 1);
@@ -324,21 +325,25 @@ export function backgroundJobRetryDelayMs(attempt: number): number {
 }
 
 // Credential vocabulary shared by payload keys, payload values and error text.
-const CREDENTIAL_TERM =
-  "(?:token|secret|passw(?:or)?d|api[_-]?key|credentials?|private[_-]?key|authorization|cookie)";
-// Any key containing a credential term (githubToken, x-api-key, privateKeyPem).
-const CREDENTIAL_KEY = new RegExp(CREDENTIAL_TERM, "iu");
-// A credential-named assignment: name=value, name: value or JSON "name":"value",
-// at any level of quoting (\"name\": inside a serialized JSON string).
-const CREDENTIAL_ASSIGNMENT = new RegExp(
-  `\\b[a-z0-9_-]{0,40}?${CREDENTIAL_TERM}\\\\*["']?\\s*[:=]\\s*`,
-  "giu",
-);
-const UNQUOTED_VALUE = /[^\s"',;&}\]\\]+/uy;
-const ALREADY_REDACTED = /\[redacted\]|(?:bearer|basic) \[redacted\]/iuy;
+// Names are compared after normalization, so api_key, api.key, "api key" and
+// Api-Key are one name.
+const CREDENTIAL_NAME =
+  /token|secret|passw(?:or)?d|apikey|credential|privatekey|authorization|cookie/u;
+// Header-style names whose unquoted values (schemes, cookie lists) run to the end of the line.
+const HEADER_NAME = /authorization|cookie/u;
+
+function normalizeName(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]/gu, "");
+}
+
+/** True when a key or assignment name, whatever its separators, names a credential. */
+function isCredentialName(name: string): boolean {
+  return CREDENTIAL_NAME.test(normalizeName(name));
+}
 
 const SECRET_PATTERNS: readonly [RegExp, string][] = [
-  [/([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/giu, "$1[redacted]@"],
+  // A bounded scheme keeps the scan linear on long word runs.
+  [/([a-z][a-z0-9+.-]{0,31}:\/\/)[^\s/@]+@/giu, "$1[redacted]@"],
   [
     /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/gu,
     "[redacted]",
@@ -352,6 +357,11 @@ const SECRET_PATTERNS: readonly [RegExp, string][] = [
   [/\bAKIA[0-9A-Z]{16}\b/gu, "[redacted]"],
   [/\beyJ[A-Z0-9_-]{8,}\.[A-Z0-9_-]{8,}\.[A-Z0-9_-]+/giu, "[redacted]"],
 ];
+
+const MAX_NAME_SCAN = 128;
+const NAME_CHAR = /[A-Za-z0-9._-]/u;
+const MAX_NAME_WORDS = 3;
+const JSON_LITERAL = /(?:-?[0-9][0-9.eE+-]*|true|false|null)(?=\s*(?:[,}\]]|$))/uy;
 
 /**
  * End of a quoted value opened by `level` backslashes and a double quote. At
@@ -377,36 +387,127 @@ function quotedValueEnd(text: string, start: number, level: number): number {
   return text.length;
 }
 
-function credentialValueEnd(text: string, start: number): number {
+/** End of a single-quoted value; a backslash escapes the next character. */
+function singleQuotedValueEnd(text: string, start: number): number {
+  for (let index = start; index < text.length; index += 1) {
+    if (text[index] === "\\") index += 1;
+    else if (text[index] === "'") return index + 1;
+  }
+  return text.length;
+}
+
+/**
+ * End of a JSON array or object value: its balanced close, skipping quoted
+ * strings at any quoting level, or the end of the text when unbalanced.
+ */
+function balancedValueEnd(text: string, start: number): number {
+  let depth = 1;
+  let index = start;
+  while (index < text.length) {
+    let run = 0;
+    while (text[index] === "\\") {
+      run += 1;
+      index += 1;
+    }
+    const char = text[index];
+    if (char === '"') {
+      index = quotedValueEnd(text, index + 1, run);
+      continue;
+    }
+    if (char === "[" || char === "{") depth += 1;
+    else if (char === "]" || char === "}") {
+      depth -= 1;
+      if (depth === 0) return index + 1;
+    }
+    index += 1;
+  }
+  return text.length;
+}
+
+function lineEnd(text: string, start: number): number {
+  const match = /[\r\n]/u.exec(text.slice(start));
+  return match ? start + match.index : text.length;
+}
+
+/**
+ * The name before the separator at `separator`: a quoted name (JSON "name",
+ * \"name\" or 'name') or unquoted words. Returns null when there is none.
+ */
+function assignmentName(
+  text: string,
+  separator: number,
+): { readonly name: string; readonly quoted: boolean } | null {
+  let index = separator;
+  while (index > 0 && /\s/u.test(text[index - 1] ?? "")) index -= 1;
+  const quote = text[index - 1];
+  if (quote === '"' || quote === "'") {
+    let nameEnd = index - 1;
+    while (nameEnd > 0 && text[nameEnd - 1] === "\\") nameEnd -= 1;
+    const limit = Math.max(0, nameEnd - MAX_NAME_SCAN);
+    let open = nameEnd;
+    while (open > limit && text[open - 1] !== quote) open -= 1;
+    // Without an opening quote in range, the scanned window is the name (fail-closed).
+    const name = text.slice(open, nameEnd).replaceAll("\\", "");
+    return { name, quoted: true };
+  }
+  // An unquoted name: up to three words joined by single spaces (api key, private key).
+  const limit = Math.max(0, index - MAX_NAME_SCAN);
+  let from = index;
+  let words = 0;
+  while (words < MAX_NAME_WORDS) {
+    let wordStart = from;
+    while (wordStart > limit && NAME_CHAR.test(text[wordStart - 1] ?? ""))
+      wordStart -= 1;
+    if (wordStart === from) break;
+    from = wordStart;
+    words += 1;
+    if (from - 1 <= limit || text[from - 1] !== " ") break;
+    if (!NAME_CHAR.test(text[from - 2] ?? "")) break;
+    from -= 1;
+  }
+  if (words === 0) return null;
+  return { name: text.slice(from, index).trimStart(), quoted: false };
+}
+
+/**
+ * End of a credential value. Fail-closed: a value the scanner cannot delimit
+ * exactly runs to the end of the line, never just one word.
+ */
+function credentialValueEnd(
+  text: string,
+  start: number,
+  name: { readonly name: string; readonly quoted: boolean },
+): number {
   let quote = start;
   while (text[quote] === "\\") quote += 1;
   if (text[quote] === '"') return quotedValueEnd(text, quote + 1, quote - start);
-  if (quote === start && text[start] === "'") {
-    const close = text.indexOf("'", start + 1);
-    return close < 0 ? text.length : close + 1;
+  if (quote === start) {
+    const char = text[start];
+    if (char === "'") return singleQuotedValueEnd(text, start + 1);
+    if (char === "[" || char === "{") return balancedValueEnd(text, start + 1);
+    if (name.quoted && !HEADER_NAME.test(normalizeName(name.name))) {
+      JSON_LITERAL.lastIndex = start;
+      if (JSON_LITERAL.test(text)) return JSON_LITERAL.lastIndex;
+    }
   }
-  UNQUOTED_VALUE.lastIndex = start;
-  return UNQUOTED_VALUE.test(text) ? UNQUOTED_VALUE.lastIndex : start;
+  return lineEnd(text, start);
 }
 
 /** Redacts the whole value of every credential-named assignment. */
 function scrubCredentialAssignments(text: string): string {
+  const separators = /[:=]/gu;
   let scrubbed = "";
   let copied = 0;
-  CREDENTIAL_ASSIGNMENT.lastIndex = 0;
-  for (
-    let match = CREDENTIAL_ASSIGNMENT.exec(text);
-    match;
-    match = CREDENTIAL_ASSIGNMENT.exec(text)
-  ) {
-    const start = match.index + match[0].length;
-    ALREADY_REDACTED.lastIndex = start;
-    if (ALREADY_REDACTED.test(text)) continue;
-    const end = credentialValueEnd(text, start);
-    if (end === start) continue;
+  for (let match = separators.exec(text); match; match = separators.exec(text)) {
+    const name = assignmentName(text, match.index);
+    if (!name || !isCredentialName(name.name)) continue;
+    let start = match.index + 1;
+    while (start < text.length && /\s/u.test(text[start] ?? "")) start += 1;
+    const end = credentialValueEnd(text, start, name);
+    if (end <= start) continue;
     scrubbed += `${text.slice(copied, start)}[redacted]`;
     copied = end;
-    CREDENTIAL_ASSIGNMENT.lastIndex = end;
+    separators.lastIndex = end;
   }
   return scrubbed + text.slice(copied);
 }
@@ -431,9 +532,17 @@ export function sanitizeBackgroundJobError(error: unknown): string {
       : typeof error === "string"
         ? error
         : "Unknown error";
+  // Scanning is bounded too. A cut can split a token, so the cut drops the
+  // trailing partial word rather than leave a prefix the patterns miss.
+  let scanned = raw;
+  if (raw.length > MAX_ERROR_SCAN) {
+    let cut = MAX_ERROR_SCAN;
+    while (cut > 0 && !/[\s"',;:=]/u.test(raw[cut - 1] ?? "")) cut -= 1;
+    scanned = raw.slice(0, cut);
+  }
   // PostgreSQL text cannot hold NUL. Bounding can split a surrogate pair, so
   // replace unstorable text last.
-  return scrubSecrets(raw)
+  return scrubSecrets(scanned)
     .slice(0, MAX_ERROR_LENGTH)
     .replaceAll("\u0000", "\uFFFD")
     .replace(LONE_SURROGATES, "\uFFFD");

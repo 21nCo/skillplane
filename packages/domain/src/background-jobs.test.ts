@@ -86,6 +86,14 @@ describe("background job payloads", () => {
     [{ private_key: "neutral" }],
     [{ passwd: "neutral" }],
     [{ nested: [{ githubToken: 1 }] }],
+    // Any separator between the words of a credential name.
+    [{ nested: { "api.key": "neutral" } }],
+    [{ nested: [{ "api key": "neutral" }] }],
+    [{ nested: { "private.key": "neutral" } }],
+    [{ nested: [{ "private key": "neutral" }] }],
+    [{ API_KEY: "neutral" }],
+    [{ list: [{ "Api-Key": "neutral" }] }],
+    [{ note: "api.key=neutral" }],
     // Text PostgreSQL jsonb cannot store.
     [{ ref: "main\u0000" }],
     [{ ref: "\ud800" }],
@@ -183,7 +191,7 @@ describe("background job errors", () => {
     );
     expect(message).toBe(
       "Error: push to https://[redacted]@github.com/a/b failed; " +
-        "Authorization: Bearer [redacted] token=[redacted]",
+        "Authorization: [redacted]",
     );
     expect(
       sanitizeBackgroundJobError(
@@ -203,7 +211,7 @@ describe("background job errors", () => {
       sanitizeBackgroundJobError(
         `remote rejected ghs_${"a".repeat(36)}; authorization: Basic dXNlcjpwYXNz`,
       ),
-    ).toBe("remote rejected [redacted]; authorization: Basic [redacted]");
+    ).toBe("remote rejected [redacted]; authorization: [redacted]");
     expect(sanitizeBackgroundJobError(new Error("x".repeat(5_000)))).toHaveLength(
       2_000,
     );
@@ -245,6 +253,75 @@ describe("background job errors", () => {
       );
     },
   );
+
+  it.each([
+    ['{"token":["CRED1"],"next":"kept"}', '{"token":[redacted],"next":"kept"}'],
+    [
+      '{"credentials":{"value":"CRED2","inner":[1,"]"]},"next":"kept"}',
+      '{"credentials":[redacted],"next":"kept"}',
+    ],
+    ['{"token":["CRED1"', '{"token":[redacted]'],
+    [
+      "Authorization: Token abc123SECRET\nnext: kept",
+      "Authorization: [redacted]\nnext: kept",
+    ],
+    [
+      'Authorization: Digest username="u", response="SECRET"\nkept',
+      "Authorization: [redacted]\nkept",
+    ],
+    ["Cookie: a=b; session=SECRET", "Cookie: [redacted]"],
+    ["Set-Cookie: session=SECRET; Path=/", "Set-Cookie: [redacted]"],
+    ["proxy-authorization: Negotiate SECRET", "proxy-authorization: [redacted]"],
+    [
+      "{'password': 'pa\\'ss SECRET', 'next': 'kept'}",
+      "{'password': [redacted], 'next': 'kept'}",
+    ],
+    ["password=hunter2 SECRET", "password=[redacted]"],
+    ['{"token":12345,"next":"kept"}', '{"token":[redacted],"next":"kept"}'],
+    ["api.key=SECRET", "api.key=[redacted]"],
+    [
+      '{"private key": "SECRET","next":"kept"}',
+      '{"private key": [redacted],"next":"kept"}',
+    ],
+    ["the api key: SECRET", "the api key: [redacted]"],
+    [`${"x".repeat(60)}_token=SECRET`, `${"x".repeat(60)}_token=[redacted]`],
+  ])("redacts the whole credential value in %j", (text, expected) => {
+    const scrubbed = sanitizeBackgroundJobError(text);
+    expect(scrubbed).toBe(expected);
+    expect(scrubbed).not.toMatch(/CRED|SECRET|hunter2|12345/u);
+  });
+
+  it("redacts nested-stringified array and object credential values", () => {
+    const inner = JSON.stringify({
+      token: ["CRED1", 'x"]'],
+      credentials: { value: "CRED2" },
+      next: "kept",
+    });
+    for (const text of [
+      JSON.stringify({ body: inner, next: "kept" }),
+      JSON.stringify({ wrapper: JSON.stringify({ body: inner }), next: "kept" }),
+    ]) {
+      const scrubbed = sanitizeBackgroundJobError(text);
+      expect(scrubbed).not.toMatch(/CRED/u);
+      expect(scrubbed).toMatch(/\\+"next\\+":\\+"kept/u);
+      expect(scrubbed).toMatch(/"next":"kept"\}$/u);
+    }
+    expect(
+      sanitizeBackgroundJobError(JSON.stringify({ body: inner, next: "kept" })),
+    ).toBe(
+      '{"body":"{\\"token\\":[redacted],\\"credentials\\":[redacted],' +
+        '\\"next\\":\\"kept\\"}","next":"kept"}',
+    );
+  });
+
+  it("bounds the scanned text without leaving part of a token", () => {
+    const text = `${"x ".repeat(10_000)}ghs_${"a".repeat(36)}`;
+    expect(sanitizeBackgroundJobError(text)).toHaveLength(2_000);
+    // The redacted first line shrinks, so the cut token would reach the stored text.
+    const line = `{"token":"${"a".repeat(16_361)}"}\n`;
+    const cut = `${line}ghs_${"b".repeat(36)} tail`;
+    expect(sanitizeBackgroundJobError(cut)).toBe('{"token":[redacted]}\n');
+  });
 
   it("replaces text PostgreSQL cannot store", () => {
     expect(
