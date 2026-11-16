@@ -1,5 +1,6 @@
 import { skillGroupSchema } from "./skill-groups.js";
 import { gitSourceSchema } from "./git-sources.js";
+import { backgroundJobSchema } from "./background-jobs.js";
 import {
   skillVersionCompositions,
   skillVersionDependencies,
@@ -51,6 +52,7 @@ const regionalCompositionSchema = {
 export const schema = {
   ...skillGroupSchema,
   ...gitSourceSchema,
+  ...backgroundJobSchema,
   ...regionalCompositionSchema,
   public_skill_version_lifecycle: publicSkillVersionLifecycle,
   ...authfnSchema,
@@ -76,6 +78,7 @@ export const globalControlSchema = {
 export const regionalWorkspaceSchema = {
   ...skillGroupSchema,
   ...gitSourceSchema,
+  ...backgroundJobSchema,
   ...regionalCompositionSchema,
   skills,
   skill_versions: skillVersions,
@@ -102,3 +105,4 @@ export * from "./composition.js";
 
 export * from "./skill-groups.js";
 export * from "./git-sources.js";
+export * from "./background-jobs.js";

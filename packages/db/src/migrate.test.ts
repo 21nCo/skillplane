@@ -66,6 +66,7 @@ describe("migration chain", () => {
       "0052_regional_skill_groups.sql",
       "0053_regional_git_sources.sql",
       "0054_regional_artifact_kind.sql",
+      "0055_regional_background_jobs.sql",
     ]);
     expect(new Set(migrations.map((migration) => migration.sha256)).size).toBe(
       migrations.length,

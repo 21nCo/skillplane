@@ -59,6 +59,7 @@ const regionalTables = [
   "idempotency_records",
   "regional_projection_sequences",
   "regional_projection_outbox",
+  "background_jobs",
 ] as const;
 
 type NamespaceColumn = "workspace_id" | "__ns" | "namespace";

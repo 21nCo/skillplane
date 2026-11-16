@@ -12,6 +12,7 @@
   "dependencies": {
     "@skillplane/control-plane": "workspace:*",
     "@skillplane/db": "workspace:*",
+    "@skillplane/domain": "workspace:*",
     "pg": "catalog:"
   },
   "devDependencies": {

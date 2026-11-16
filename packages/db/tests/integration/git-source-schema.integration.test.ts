@@ -4,6 +4,7 @@ import { Pool } from "pg";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { migrateDatabase, resolveTestDatabaseUrl } from "../../src/index.js";
 import { gitSourceSchema } from "../../src/schema/git-sources.js";
+import { backgroundJobSchema } from "../../src/schema/background-jobs.js";
 
 // Schema-diff tooling trusts the Drizzle model, so every check and secondary
 // index the migration creates must be modeled with the same definition. Postgres
@@ -20,7 +21,7 @@ beforeAll(async () => {
 }, 60000);
 afterAll(() => pool.end());
 
-it.each(Object.entries(gitSourceSchema))(
+it.each(Object.entries({ ...gitSourceSchema, ...backgroundJobSchema }))(
   "models every migrated check and index of %s",
   async (name, table: PgTable) => {
     const config = getTableConfig(table);

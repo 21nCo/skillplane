@@ -12,6 +12,12 @@ import {
   createControlDatabaseClient,
   createRegionalDatabaseClient,
 } from "@skillplane/db";
+import {
+  createBackgroundJobRegistry,
+  drainBackgroundJobs,
+  type BackgroundJobDrainResult,
+  type BackgroundJobHandler,
+} from "@skillplane/domain";
 
 interface HyperdriveBinding {
   readonly connectionString: string;
@@ -25,6 +31,14 @@ interface ProjectionBindings {
   readonly SKILLPLANE_REGION_ID: string;
 }
 
+/** Handlers for this cell's background jobs, keyed by kind. */
+export const projectionJobHandlers: readonly BackgroundJobHandler[] = [];
+
+// Each one-minute tick spends at most 45s starting projection events and 10s
+// retiring retained rows; background jobs then get their own 10s to start
+// runs, so neither side can starve the other.
+const BACKGROUND_JOB_BUDGET_MS = 10_000;
+
 function connectionString(value: HyperdriveBinding | undefined, name: string) {
   if (!value?.connectionString) throw new Error(`${name}_UNAVAILABLE`);
   return value.connectionString;
@@ -32,9 +46,17 @@ function connectionString(value: HyperdriveBinding | undefined, name: string) {
 
 export async function drainProjectionCell(
   bindings: ProjectionBindings,
-): Promise<{ readonly processed: number; readonly failed: number }> {
+  options: { readonly jobHandlers?: readonly BackgroundJobHandler[] } = {},
+): Promise<{
+  readonly processed: number;
+  readonly failed: number;
+  readonly jobs: BackgroundJobDrainResult;
+}> {
   const regionId = bindings.SKILLPLANE_REGION_ID.trim();
   if (!regionId) throw new Error("SKILLPLANE_REGION_ID_UNAVAILABLE");
+  const registry = createBackgroundJobRegistry(
+    options.jobHandlers ?? projectionJobHandlers,
+  );
   const control = createControlDatabaseClient({
     connectionString: connectionString(bindings.CONTROL_DATABASE, "CONTROL_DATABASE"),
     applicationName: `skillplane-projection-control-${regionId}`,
@@ -51,7 +73,9 @@ export async function drainProjectionCell(
     const publicStore = createImmutableObjectPublicationStore(bindings.PUBLIC_BUNDLES);
     const directory = new PostgresPublicProjectionDirectory(control.pool);
     const resourceDirectory = createPostgresResourceRoutingDirectory(control.pool);
-    const result = await drainRegionalProjectionOutbox({
+    // Jobs run even when projection work fails, and that failure is rethrown
+    // after them so the tick still reports it.
+    const projection = drainRegionalProjectionOutbox({
       regionId,
       database: regional.pool,
       limit: 50_000,
@@ -103,12 +127,36 @@ export async function drainProjectionCell(
           }),
         );
       },
+    }).then(async (result) => {
+      await cleanupProjectionRetention({
+        regionalDatabase: regional.pool,
+        controlDatabase: control.pool,
+      });
+      return result;
     });
-    await cleanupProjectionRetention({
-      regionalDatabase: regional.pool,
-      controlDatabase: control.pool,
+    const projected = await projection.then(
+      (result) => ({ ok: true as const, result }),
+      (error: unknown) => ({ ok: false as const, error }),
+    );
+    const jobs = await drainBackgroundJobs({
+      database: regional.pool,
+      registry,
+      workerId: `projection-${regionId}`,
+      maxDurationMs: BACKGROUND_JOB_BUDGET_MS,
+      onEvent(event) {
+        console.info(
+          JSON.stringify({
+            event: `background_job.${event.type}`,
+            regionId,
+            jobId: event.jobId,
+            ...(event.kind ? { kind: event.kind } : {}),
+            ...(event.attempt ? { attempt: event.attempt } : {}),
+          }),
+        );
+      },
     });
-    return result;
+    if (!projected.ok) throw projected.error;
+    return { ...projected.result, jobs };
   } finally {
     await Promise.allSettled([regional.close(), control.close()]);
   }
