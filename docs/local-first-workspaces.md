@@ -199,7 +199,7 @@ instruction file inside a `.skillplane-projections` directory are a
 too. `doctor` reports the instruction-file cases; the skill overlap and the unsafe
 directory show only when `sync` runs. Removing a target from the configuration leaves its file in place. `doctor`
 lists each instruction file as `in-sync`, `diverged`, `missing`, `collision`,
-`not-synced` or `unverified`. A collision with a file another project's document
+`not-synced`, `unverified` or `adopted`. A collision with a file another project's document
 holds names that document, the one configured and the projects that claim it; a
 collision with an unmanaged file has no record, so it names only the configured
 document. For a configured file, `doctor` resolves the
@@ -213,6 +213,83 @@ agree with the local workspaces; otherwise, or after the catalog configuration
 changes, it is `unverified`, with the file's own state in `fileState`, until
 `doctor --online` or the next `sync`. Cloud workspaces list instructions documents only
 when the server supports artifact kinds; an older server has none.
+
+### Adopting an existing instructions file
+
+`skillplane instructions adopt PATH [--artifact SLUG]` hands a file you already
+maintain, such as `~/.claude/CLAUDE.md`, to Skillplane. It copies the file byte for
+byte to `.skillplane-projections/instructions/<target-id>/backup/`, named by its
+SHA-256, and imports the same bytes as a draft of the instructions document: a new
+draft-only document, or a review candidate of an existing one in the project's local
+primary workspace. A cloud primary is refused with `ADOPT_LOCAL_PRIMARY_REQUIRED`.
+`--artifact` defaults to the configured target's document, else to the file name;
+an unconfigured file is added to `instructions`, merged into `skillplane.json` as it
+is when adopt finishes; a target configured for another document meanwhile is a
+`PROJECTION_COLLISION`, and one uninstalled meanwhile is not configured
+(`PROJECTION_CHANGED`). Adopt never publishes and never changes the file. Once the
+adopted draft is published, `sync` replaces the file, or writes it if it was deleted,
+by the same rename and records it. Until then `sync` leaves the file alone and still syncs skills
+and every other target: it lists the file with state `adopted` and code
+`ADOPTION_PENDING_REVIEW` (or `ADOPTION_INCOMPLETE` when the draft import has not
+finished), and `doctor` lists it as `adopted`. A file edited after adoption is a
+`PROJECTION_DIVERGED`.
+
+Adopt checks before keeping anything, with the same checks the import applies: a
+file that is not UTF-8 is refused with `INSTRUCTIONS_NOT_UTF8`, an empty, blank or
+oversized one or one holding NUL characters with `INSTRUCTIONS_INVALID`, and a slug a
+skill already holds with `ARTIFACT_SLUG_CONFLICT`, even beside an instructions artifact
+of that slug. A configuration `sync` refuses, such as duplicate or overlapping
+destinations, is refused with `PROJECTION_COLLISION`. A target the project configuration
+cannot hold, such as a 21st instructions target, is refused with
+`PROJECT_CONFIG_INVALID`. Each refusal leaves no backup or adoption behind. An interrupted adopt can be run again: it reuses the backup, and a draft that
+already holds the file's bytes, including its own import that a review approved
+meanwhile, which sync then takes over with no further review. A draft that can no longer be published, because a
+review rejected it or another version was published over its base, is replaced by a
+fresh one against the current version when adopt runs again; a draft imported for an
+adoption that was uninstalled meanwhile is never recorded for a later one.
+Adopting the same file again after `uninstall` reuses a candidate still awaiting
+review, or imports a new one when the published version has moved on. A file whose
+bytes the artifact's published version already holds is still imported as a review
+candidate of its own, and `sync` takes the file over only once that candidate is
+published. An adopt whose project changed its primary or mounted workspaces meanwhile
+is refused with `PROJECTION_CHANGED`; running it again imports into the artifact the
+name resolves to now, also when an alias that resolved the name to another artifact
+was removed. A file under a configured skill destination is refused with
+`PROJECTION_COLLISION`, before anything is kept and again before the target is
+configured. The destination of an adoption awaiting review stays reserved: a skill
+destination overlapping it is refused with `PROJECTION_COLLISION`, and the project
+keeps its claim on the target.
+
+`skillplane rollback TARGET` restores an instruction file's previous version by the
+same journaled rename; the next `sync` applies the latest published version again.
+The previous version is the latest generation, by the order the generations were
+replaced, that differs from the current one: another artifact or version counts even
+with the same bytes, while a rewrite of the current version, as after its file was
+deleted, does not. A rollback claims the file for no
+project, and a rollback interrupted after its rename is finished by the next `sync`
+or `doctor` with the same owners it had.
+`skillplane uninstall TARGET` restores the adopted original, or removes a file
+Skillplane created, and clears the file's projection state; the original's backup
+goes with it. The target also leaves the `instructions` of the project that adopted
+or synced it, so the next `sync` neither refuses the restored file nor writes the
+removed one again; add it back, or adopt the file again, to resume. `TARGET` is the ID `doctor` lists or the file's path; a bare file name such as `AGENTS.md` names a managed or adopted file in the working directory, else a skill projection. Both refuse a
+hand-edited file with `PROJECTION_DIVERGED`, one edited back to the original bytes
+too; `--force` first copies the edited file into the backup directory, where it stays.
+Backups and their directories are synced before adopt records them or a forced
+rollback or uninstall replaces the file. Uninstall restores the original's saved mode,
+and syncs the file and its directory before the original's backup goes. An uninstall interrupted after it
+replaced the file is finished by the next `sync` or `doctor`, which first makes the
+replacement or removal durable and otherwise keeps the target managed for a retry; it
+also removes the original's backup. Uninstall waits for every write to the file that
+may still land: it is refused with `PROJECTION_BUSY` while another process's write is
+in flight, and with `RECOVERY_PENDING` until an interrupted one is recovered. A write
+recovered after an uninstall released the file records and claims nothing. Uninstall, and a
+rollback to another document, refuse with `PROJECTION_SHARED` when another project
+claims the file, checked again in the same commit that replaces or removes it, and a `sync` that reaches a file being
+uninstalled is refused with `PROJECTION_BUSY`. A `sync` that read the configuration
+before an uninstall committed never writes or claims the released file again, even
+when another project synced the same version there meanwhile; it stops with
+`PROJECTION_CHANGED`, and the next `sync` reads the configuration without it.
 
 ## Freshness and trust
 

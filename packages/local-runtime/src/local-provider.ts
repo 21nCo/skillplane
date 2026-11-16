@@ -138,6 +138,29 @@ export class LocalWorkspaceProvider implements WorkspaceProvider {
     skillId: string;
     versionId: string;
   }> {
+    return this.insert(request, false);
+  }
+  /**
+   * Creates an artifact whose only version is a draft awaiting review: nothing
+   * is published and the artifact has no current version until a decision
+   * approves the draft as 1.0.0. Given skillId, adds another draft to that
+   * artifact instead, which must have the request's kind and slug and no
+   * published version.
+   */
+  async createDraft(
+    request: CreateRequest,
+    skillId?: string,
+  ): Promise<{
+    skillId: string;
+    versionId: string;
+  }> {
+    return this.insert(request, true, skillId);
+  }
+  /** Runs create's request checks and bundle construction, writing nothing. */
+  async validate(request: CreateRequest): Promise<void> {
+    await createSkillBundle(this.parse(request));
+  }
+  private parse(request: CreateRequest) {
     const input = skillCreateInputSchema.parse({
       ...request,
       workspace: { id: this.workspace.id },
@@ -154,7 +177,18 @@ export class LocalWorkspaceProvider implements WorkspaceProvider {
         "COMPOSITION_RESOLUTION_REQUIRED",
         "Create composed skills in a cloud workspace using native MCP",
       );
-    const key = `${this.workspace.id}:create:${input.idempotencyKey}`;
+    return input;
+  }
+  private async insert(
+    request: CreateRequest,
+    draft: boolean,
+    existing?: string,
+  ): Promise<{
+    skillId: string;
+    versionId: string;
+  }> {
+    const input = this.parse(request);
+    const key = `${this.workspace.id}:${draft ? "draft" : "create"}:${existing ? `${existing}:` : ""}${input.idempotencyKey}`;
     const replay = this.store.replay<{
       skillId: string;
       versionId: string;
@@ -168,6 +202,26 @@ export class LocalWorkspaceProvider implements WorkspaceProvider {
         versionId: string;
       }>(key, request);
       if (replay) return replay;
+      const target = tables[input.kind];
+      if (existing !== undefined) {
+        const artifact = this.skill(existing);
+        if (artifact.kind !== input.kind || artifact.row.slug !== input.slug)
+          throw new RuntimeError("SKILL_NOT_FOUND");
+        if (artifact.row.current !== null)
+          throw new RuntimeError("SKILL_VERSION_CONFLICT");
+        const result = {
+          skillId: existing,
+          versionId: `skill-version:${randomUUID()}`,
+        };
+        const now = new Date().toISOString();
+        this.store.db
+          .prepare(
+            `INSERT INTO ${target.version} VALUES(?,?,?,'draft',NULL,NULL,'patch',?,?,'{}',NULL)`,
+          )
+          .run(result.versionId, existing, bundle.digest, now, now);
+        this.store.remember(key, request, result);
+        return result;
+      }
       if (
         this.store.db
           .prepare(
@@ -176,7 +230,6 @@ export class LocalWorkspaceProvider implements WorkspaceProvider {
           .get(this.workspace.id, input.slug, this.workspace.id, input.slug)
       )
         throw new RuntimeError("SKILL_SLUG_CONFLICT");
-      const target = tables[input.kind];
       const result = {
         skillId: `skill:${randomUUID()}`,
         versionId: `skill-version:${randomUUID()}`,
@@ -189,19 +242,34 @@ export class LocalWorkspaceProvider implements WorkspaceProvider {
           input.slug,
           input.name,
           input.description,
-          result.versionId,
+          draft ? null : result.versionId,
         );
       const now = new Date().toISOString();
       this.store.db
         .prepare(
-          `INSERT INTO ${target.version} VALUES(?,?,?,'published','1.0.0',NULL,'patch',?,?,'{}',NULL)`,
+          `INSERT INTO ${target.version} VALUES(?,?,?,?,?,NULL,'patch',?,?,'{}',NULL)`,
         )
-        .run(result.versionId, result.skillId, bundle.digest, now, now);
+        .run(
+          result.versionId,
+          result.skillId,
+          bundle.digest,
+          draft ? "draft" : "published",
+          draft ? null : "1.0.0",
+          now,
+          now,
+        );
       this.store.remember(key, request, result);
       return result;
     });
   }
-  async amend(request: AmendRequest): Promise<{
+  /**
+   * Proposes a review candidate. With unchanged, a candidate identical to its
+   * base is allowed, as an adoption of the published bytes still needs review.
+   */
+  async amend(
+    request: AmendRequest,
+    options: { unchanged?: boolean } = {},
+  ): Promise<{
     skillId: string;
     versionId: string;
   }> {
@@ -226,7 +294,7 @@ export class LocalWorkspaceProvider implements WorkspaceProvider {
       parseAmendmentOperations(input.changes),
     );
     const bundle = await canonicalizeBundleFiles({ skill: base.bundle.skill, files });
-    if (bundle.digest === base.bundle.digest)
+    if (bundle.digest === base.bundle.digest && !options.unchanged)
       throw new RuntimeError("UNCHANGED_BUNDLE");
     this.store.putBundle(bundle);
     return this.store.transaction(() => {
@@ -260,6 +328,67 @@ export class LocalWorkspaceProvider implements WorkspaceProvider {
       this.store.remember(key, request, result);
       return result;
     });
+  }
+  /**
+   * The versions of skillId this workspace's drafts and amendments created
+   * under an idempotency key that is exactly prefix and 16 hex digits, latest
+   * committed first whatever the clock said, in whatever state they are now,
+   * so a caller recovers its own import after a review decided it. Only the
+   * keys such a caller issues count: a new artifact's draft, a draft of
+   * skillId and an amendment; a key merely containing prefix never does.
+   */
+  imports(
+    prefix: string,
+    skillId: string,
+  ): {
+    skillId: string;
+    versionId: string;
+    state: VersionInfo["state"];
+    base: string | null;
+  }[] {
+    const scope = `${this.workspace.id}:`;
+    const found = [];
+    for (const row of this.store.db
+      .prepare(
+        "SELECT key,result FROM mutation WHERE substr(key,1,?)=? AND instr(key,?)>0 ORDER BY rowid DESC",
+      )
+      .all(scope.length, scope, `:${prefix}`)) {
+      const operation = String(row.key).slice(scope.length);
+      const issued = [
+        `draft:${prefix}`,
+        `draft:${skillId}:${prefix}`,
+        `amend:${prefix}`,
+      ];
+      if (
+        !issued.some(
+          (start) =>
+            operation.startsWith(start) &&
+            /^[0-9a-f]{16}$/.test(operation.slice(start.length)),
+        )
+      )
+        continue;
+      const result = JSON.parse(String(row.result)) as {
+        skillId: string;
+        versionId: string;
+      };
+      if (result.skillId !== skillId) continue;
+      let table: string;
+      try {
+        table = this.skill(result.skillId).version;
+      } catch {
+        continue;
+      }
+      const stored = this.store.db
+        .prepare(`SELECT state,base FROM ${table} WHERE id=? AND skill=?`)
+        .get(result.versionId, result.skillId);
+      if (stored)
+        found.push({
+          ...result,
+          state: stored.state as VersionInfo["state"],
+          base: typeof stored.base === "string" ? stored.base : null,
+        });
+    }
+    return found;
   }
   async candidates(skillId: string): Promise<Row[]> {
     const skill = this.skill(skillId);

@@ -14,6 +14,7 @@ import {
   targetSchema,
   projectSchema,
   workspaceKey,
+  instructionTargetId,
   type CreateRequest,
   type AmendRequest,
 } from "./index.js";
@@ -40,8 +41,15 @@ Global flags: --home DIR (private runtime state), --project DIR
                                        Skillplane did not write or that was hand-edited)
   resolve PROJECTION_ID [--live-only|--cache-only] [--agent PRODUCT]
   approve-trust ID DIGEST               Approve exactly the reviewed pending digest
+  instructions adopt PATH [--artifact SLUG]
+                                       Back up an existing instructions file and import
+                                       it as a draft; sync takes it over once published
   rollback ID                          Restore and pin the previous verified version
+  rollback TARGET [--force]            Restore an instructions file's previous version
   uninstall ID                         Remove only a verified owned projection link
+  uninstall TARGET [--force]           Restore an adopted instructions file's original,
+                                       else remove the managed file; --force backs up
+                                       a hand-edited file first (TARGET: ID or path)
   doctor [--online]                     Check ownership, divergence, pending trust, freshness
                                        and instruction file state
   usage                                Observed counts and coverage disclosure
@@ -69,6 +77,7 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
   const agent = requireValue(value("--agent", "unknown"));
   const target = value("--target");
   const git = value("--git");
+  const artifact = value("--artifact");
   const flags = new Set(
     args.filter((a) =>
       ["--live-only", "--cache-only", "--online", "--force"].includes(a),
@@ -79,10 +88,17 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
     console.log(help);
     return;
   }
-  if ((git !== undefined || flags.has("--force")) && command !== "export")
+  if (git !== undefined && command !== "export")
+    throw new RuntimeError("ARGUMENT_INVALID", "--git applies only to export");
+  if (flags.has("--force") && !["export", "rollback", "uninstall"].includes(command))
     throw new RuntimeError(
       "ARGUMENT_INVALID",
-      "--git and --force apply only to export",
+      "--force applies only to export, rollback and uninstall",
+    );
+  if (artifact !== undefined && command !== "instructions")
+    throw new RuntimeError(
+      "ARGUMENT_INVALID",
+      "--artifact applies only to instructions adopt",
     );
   const required = (index: number): string => {
     const v = rest[index];
@@ -229,8 +245,10 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
         break;
       case "sync": {
         const synced = await runtime.syncTargets(project);
-        // Instruction records carry kind "instructions"; skill records keep their shape.
-        result = [...synced.projections, ...synced.instructions];
+        // Instruction records carry kind "instructions"; skill records keep
+        // their shape. Adopted targets awaiting publication follow, with state
+        // "adopted" and the code that explains why they were left alone.
+        result = [...synced.projections, ...synced.instructions, ...synced.pending];
         break;
       }
       case "resolve":
@@ -247,13 +265,44 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
           next: "Run sync to install reviewed metadata before invoking",
         };
         break;
-      case "rollback":
+      case "instructions":
+        if (rest[0] !== "adopt" || rest.length !== 2)
+          throw new RuntimeError("UNKNOWN_COMMAND", "Use instructions adopt PATH");
+        result = await runtime.adoptInstructions(project, required(1), artifact);
+        break;
+      case "rollback": {
+        const id = instructionTargetId(required(0), (target) =>
+          runtime.projections.instructions.known(target),
+        );
+        if (id) {
+          result = runtime.rollbackInstructions(id, flags.has("--force"));
+          break;
+        }
+        if (flags.has("--force"))
+          throw new RuntimeError(
+            "ARGUMENT_INVALID",
+            "--force applies to instruction targets",
+          );
         result = await runtime.projections.rollback(required(0));
         break;
-      case "uninstall":
+      }
+      case "uninstall": {
+        const id = instructionTargetId(required(0), (target) =>
+          runtime.projections.instructions.known(target),
+        );
+        if (id) {
+          result = runtime.uninstallInstructions(id, flags.has("--force"));
+          break;
+        }
+        if (flags.has("--force"))
+          throw new RuntimeError(
+            "ARGUMENT_INVALID",
+            "--force applies to instruction targets",
+          );
         runtime.projections.uninstall(required(0));
         result = { uninstalled: required(0) };
         break;
+      }
       case "doctor":
         result = await runtime.doctor(flags.has("--online"), project);
         break;

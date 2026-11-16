@@ -55,7 +55,10 @@ export type ProjectionFault =
   | "after-rename"
   | "after-swap"
   | "before-unlink"
-  | "before-discard";
+  | "before-discard"
+  | "after-mark"
+  | "before-restore-sync"
+  | "before-recover-sync";
 /** Instruction target IDs share the owner ledger with skill projection IDs. */
 export const INSTRUCTIONS_ID_PREFIX = "instructions-";
 export interface ProjectionRecord {
@@ -550,6 +553,8 @@ export interface InstructionRecord {
   digest: string;
   synchronizedAt: string;
 }
+/** A replaced generation, numbered in the order its replacements committed. */
+type InstructionHistory = InstructionRecord & { sequence?: number };
 /** A temp file of a write that will never commit, kept until it is unlinked. */
 interface InstructionCleanup {
   temp: string;
@@ -565,6 +570,19 @@ interface InstructionJournal {
    * target that is this file was installed by the write.
    */
   file?: FileIdentity;
+  /**
+   * The project a committed write claims, or null for a write that claims
+   * none (a rollback), so recovery commits the same owner set as the writer
+   * would have. Absent in journals written before rollback existed, which
+   * only a sync wrote and which claim their record's project.
+   */
+  owner?: string | null;
+  /**
+   * The target's uninstall mark when the writer read its state, or null
+   * before any uninstall. Recovery commits nothing for a target released
+   * since. Absent in journals written before release marks existed.
+   */
+  release?: string | null;
   pid: number;
   startedAt: string;
 }
@@ -573,7 +591,84 @@ interface FileIdentity {
   ino: string;
 }
 export type InstructionState =
-  "in-sync" | "diverged" | "missing" | "collision" | "not-synced" | "unverified";
+  | "in-sync"
+  | "diverged"
+  | "missing"
+  | "collision"
+  | "not-synced"
+  | "unverified"
+  | "adopted";
+/** A byte-for-byte copy of an instructions file, named by its digest. */
+export interface InstructionBackup {
+  path: string;
+  /** SHA-256 of the copied bytes. */
+  digest: string;
+  mode: number;
+  createdAt: string;
+}
+/**
+ * A user's own instructions file handed to Skillplane. Its original bytes are
+ * kept until uninstall restores them; sync takes the file over only while it
+ * still holds those bytes, for the adopted artifact, once the adopted draft or
+ * a later version is published.
+ */
+export interface InstructionAdoption {
+  formatVersion: 1;
+  id: string;
+  project: string;
+  path: string;
+  artifact: string;
+  /** Scopes the draft import's idempotency keys to this adoption. */
+  nonce: string;
+  original: InstructionBackup;
+  /**
+   * Set once the draft exists: the version holding the adopted bytes, which
+   * is the artifact's current version when it already held them.
+   */
+  draft?: ArtifactIdentity & { versionId: string; createdAt: string };
+}
+/** A project whose configuration still names a target uninstall released. */
+export interface InstructionUnconfigure {
+  id: string;
+  path: string;
+  project: string;
+}
+/** A project's claim on a target and the check that must pass to add it. */
+interface InstructionClaim {
+  project: string;
+  assert: () => void;
+}
+/** What sync knew when it planned an instructions target. */
+export interface InstructionPlan {
+  /** The published version IDs of the snapshot's artifact. */
+  published?: ReadonlySet<string>;
+  /** Uninstall marks, from releases(), read before the project's configuration. */
+  releases?: ReadonlyMap<string, string>;
+  userHome?: string;
+}
+const ADOPTION_PREFIX = "instruction-adoption:";
+const RELEASE_PREFIX = "instruction-release:";
+const UNINSTALL_PREFIX = "instruction-uninstall:";
+const UNCONFIGURE_PREFIX = "instruction-unconfigure:";
+/** An uninstall that may have replaced or removed the target before it committed. */
+interface InstructionUninstall {
+  id: string;
+  path: string;
+  /** The record the uninstall replaces, or null for an adoption that never synced. */
+  eventId: string | null;
+  /** The digest the target holds once restored, or null when it is removed. */
+  restore: string | null;
+  temp: string;
+  pid: number;
+  startedAt: string;
+  // Absent on markers from before uninstall checked the target first.
+  /** The digest the checks saw at path, or null when it held no file. */
+  observed?: string | null;
+  /** The file that holds the restored bytes once the uninstall lands. */
+  file?: FileIdentity | null;
+  /** Whether a forced backup shares the original's copy, which then stays. */
+  keep?: boolean;
+}
 export interface InstructionStatus {
   id: string;
   adapter: InstructionTarget["adapter"];
@@ -641,13 +736,13 @@ function stateOf(record: InstructionRecord, observed: Observed): InstructionStat
   if (observed.kind === "other" || observed.digest !== record.digest) return "diverged";
   return "in-sync";
 }
-function sameArtifact(record: InstructionRecord, artifact: ArtifactIdentity): boolean {
+function sameArtifact(record: ArtifactIdentity, artifact: ArtifactIdentity): boolean {
   return (
     workspaceKey(record.workspace) === workspaceKey(artifact.workspace) &&
     record.skill.id === artifact.skill.id
   );
 }
-function writerAlive(journal: InstructionJournal): boolean {
+function writerAlive(journal: { pid: number; startedAt: string }): boolean {
   // Instruction writes are synchronous, so this process has none in flight
   // while it recovers.
   if (journal.pid === process.pid) return false;
@@ -674,6 +769,27 @@ function writeFileDurably(path: string, bytes: Uint8Array): FileIdentity {
     closeSync(fd);
   }
 }
+/** The bytes of a regular instructions file, refusing links and oversized files. */
+function readTarget(path: string): { bytes: Buffer; digest: string; mode: number } {
+  const stat = lstatSync(path);
+  const bytes = readSafe(path, MAX_INSTRUCTIONS_BYTES);
+  return { bytes, digest: `sha256:${hash(bytes)}`, mode: stat.mode & 0o777 };
+}
+/** Where a target's backups live, beside its generations. */
+function backupDirectory(path: string, id: string): string {
+  return join(dirname(path), ".skillplane-projections", "instructions", id, "backup");
+}
+/**
+ * Makes a rename or unlink in path's directory durable. A directory that no
+ * longer exists holds nothing to lose.
+ */
+function syncParent(path: string): void {
+  try {
+    syncDirectory(dirname(path));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+}
 function setMode(path: string, mode: number): void {
   const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
@@ -697,14 +813,19 @@ function installed(journal: InstructionJournal): boolean {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") return false;
   }
+  return sameFile(identity(journal.record.path), file);
+}
+/** The identity of the regular file at path, or null. */
+function identity(path: string): FileIdentity | null {
   try {
-    const stat = lstatSync(journal.record.path, { bigint: true });
-    return (
-      stat.isFile() && String(stat.dev) === file.dev && String(stat.ino) === file.ino
-    );
+    const stat = lstatSync(path, { bigint: true });
+    return stat.isFile() ? { dev: String(stat.dev), ino: String(stat.ino) } : null;
   } catch {
-    return false;
+    return null;
   }
+}
+function sameFile(a: FileIdentity | null, b: FileIdentity | null): boolean {
+  return a !== null && b !== null && a.dev === b.dev && a.ino === b.ino;
 }
 /**
  * Projects one published instructions artifact into a single user-level file.
@@ -747,6 +868,11 @@ export class InstructionProjections {
       .prepare("INSERT OR IGNORE INTO projection_owner VALUES (?,?)")
       .run(id, resolve(project));
   }
+  /** Adds the project's claim once its assert passes, inside the caller's transaction. */
+  private claim(id: string, owner: InstructionClaim): void {
+    owner.assert();
+    this.addOwner(id, owner.project);
+  }
   /** Drops the project's claim on targets it no longer configures; files stay. */
   release(project: string, keep: ReadonlySet<string>): void {
     this.store.transaction(() => {
@@ -768,17 +894,72 @@ export class InstructionProjections {
     if (!bytes) throw new RuntimeError("BUNDLE_INVALID");
     return bytes;
   }
+  /** Whether the target has a record or an adoption, for rollback and uninstall. */
+  known(id: string): boolean {
+    return (
+      this.store.get(`instruction:${id}`) !== undefined ||
+      this.adoption(id) !== undefined
+    );
+  }
+  adoption(id: string): InstructionAdoption | undefined {
+    return this.store.get<InstructionAdoption>(`${ADOPTION_PREFIX}${id}`);
+  }
+  /**
+   * Whether an unrecorded target may be written with the snapshot: an absent
+   * one that was never adopted, or an adopted one, absent or still holding
+   * its original bytes, for the adopted artifact once the adopted draft is
+   * published.
+   */
+  private assertAdopted(
+    path: string,
+    observed: Observed,
+    snapshot: Snapshot | undefined,
+    published: ReadonlySet<string> | undefined,
+  ): void {
+    const adoption = this.adoption(InstructionProjections.id(path));
+    if (!adoption) {
+      if (observed.kind === "absent") return;
+      throw new RuntimeError(
+        "PROJECTION_COLLISION",
+        `Unmanaged instructions file exists: ${path}`,
+      );
+    }
+    if (
+      observed.kind !== "absent" &&
+      (observed.kind !== "file" || observed.digest !== adoption.original.digest)
+    )
+      throw new RuntimeError(
+        "PROJECTION_DIVERGED",
+        `${path} changed after it was adopted; it was not overwritten`,
+      );
+    const { draft } = adoption;
+    if (!draft)
+      throw new RuntimeError(
+        "ADOPTION_INCOMPLETE",
+        `${path} has no imported draft yet; run instructions adopt again to finish importing it`,
+      );
+    if (!snapshot || !sameArtifact(draft, snapshot))
+      throw new RuntimeError(
+        "PROJECTION_COLLISION",
+        `${path} was adopted for the instructions artifact ${adoption.artifact}`,
+      );
+    // Published versions form one line, so the snapshot descends from the
+    // draft once the draft is published.
+    if (snapshot.version.id !== draft.versionId && !published?.has(draft.versionId))
+      throw new RuntimeError(
+        "ADOPTION_PENDING_REVIEW",
+        `Publish the adopted draft ${draft.versionId} of ${adoption.artifact} before syncing ${path}; if it can no longer be published, run instructions adopt again`,
+      );
+  }
   private assertWritable(
     record: InstructionRecord | undefined,
     observed: Observed,
     path: string,
+    snapshot?: Snapshot,
+    published?: ReadonlySet<string>,
   ): void {
     if (!record) {
-      if (observed.kind !== "absent")
-        throw new RuntimeError(
-          "PROJECTION_COLLISION",
-          `Unmanaged instructions file exists: ${path}`,
-        );
+      this.assertAdopted(path, observed, snapshot, published);
       return;
     }
     if (stateOf(record, observed) === "diverged")
@@ -814,24 +995,49 @@ export class InstructionProjections {
         `${record.path} is owned by another project's instructions`,
       );
   }
+  /** Uninstall marks by target ID, for InstructionPlan.releases. */
+  releases(): Map<string, string> {
+    return new Map(
+      this.store
+        .entries<string>(RELEASE_PREFIX)
+        .map(([key, mark]) => [key.slice(RELEASE_PREFIX.length), mark]),
+    );
+  }
+  /**
+   * Refuses a target an uninstall released after the plan read the project's
+   * configuration, or whose removal from it is still queued.
+   */
+  private assertPlanned(
+    id: string,
+    path: string,
+    project: string,
+    plan: InstructionPlan,
+  ): void {
+    if (!plan.releases) return;
+    if (
+      this.store.get(`${RELEASE_PREFIX}${id}`) !== plan.releases.get(id) ||
+      this.store.get(`${UNCONFIGURE_PREFIX}${id}:${hash(resolve(project))}`)
+    )
+      throw new RuntimeError(
+        "PROJECTION_CHANGED",
+        `${path} was uninstalled after this sync read the configuration; run sync again`,
+      );
+  }
   private prepare(
     snapshot: Snapshot,
     target: InstructionTarget,
     project: string,
-    userHome: string,
+    plan: InstructionPlan,
   ) {
     const bytes = this.content(snapshot);
-    const path = instructionPath(target, userHome);
+    const path = instructionPath(target, plan.userHome ?? homedir());
     const id = InstructionProjections.id(path);
-    if (this.recoveryPending(id))
-      throw new RuntimeError(
-        "RECOVERY_PENDING",
-        `An interrupted write to ${path} could not be recovered yet; the next run retries it`,
-      );
+    this.assertIdle(id, path);
+    this.assertPlanned(id, path, project, plan);
     const old = this.store.get<InstructionRecord>(`instruction:${id}`);
     const digest = `sha256:${hash(bytes)}`;
     const observed = observe(path);
-    this.assertWritable(old, observed, path);
+    this.assertWritable(old, observed, path, snapshot, plan.published);
     const same =
       old !== undefined &&
       observed.kind === "file" &&
@@ -839,7 +1045,11 @@ export class InstructionProjections {
       old.version.id === snapshot.version.id &&
       old.digest === digest;
     if (old && !same) this.assertReplacementOwner(old, snapshot, project);
-    return { bytes, path, id, old, digest, same };
+    return { bytes, path, id, old, digest, same, release: this.releaseMark(id) };
+  }
+  /** The target's current uninstall mark, or null if it was never released. */
+  private releaseMark(id: string): string | null {
+    return this.store.get<string>(`${RELEASE_PREFIX}${id}`) ?? null;
   }
   /** Whether a dead writer's journal for this target is still unrecovered. */
   private recoveryPending(id: string): boolean {
@@ -847,28 +1057,52 @@ export class InstructionProjections {
       .entries<InstructionJournal>(`instruction-journal:${id}:`)
       .some(([, journal]) => !writerAlive(journal));
   }
+  /**
+   * Refuses while any write to the target may still land: a live writer's
+   * journal, including one whose commit failed after its rename, or a dead
+   * writer's unrecovered one. An uninstall that went ahead would release a
+   * target such a write could then establish again.
+   */
+  private assertUnwritten(id: string, path: string): void {
+    if (this.recoveryPending(id))
+      throw new RuntimeError(
+        "RECOVERY_PENDING",
+        `An interrupted write to ${path} could not be recovered yet; the next run retries it`,
+      );
+    if (this.store.entries(`instruction-journal:${id}:`).length > 0)
+      throw new RuntimeError(
+        "PROJECTION_BUSY",
+        `A write to ${path} is in progress or awaits recovery once its process stops; try again then`,
+      );
+  }
   /** Raises the error sync would raise, without writing anything. */
   check(
     snapshot: Snapshot,
     target: InstructionTarget,
     project: string,
-    userHome = homedir(),
+    plan: InstructionPlan = {},
   ): void {
-    safeDirectory(dirname(instructionPath(target, userHome)), false);
+    safeDirectory(dirname(instructionPath(target, plan.userHome ?? homedir())), false);
     // Under the lock, a concurrent writer's renamed but uncommitted file is
     // never mistaken for an unmanaged one.
-    this.store.transaction(() => this.prepare(snapshot, target, project, userHome));
+    this.store.transaction(() => this.prepare(snapshot, target, project, plan));
   }
   sync(
     snapshot: Snapshot,
     target: InstructionTarget,
     project: string,
-    userHome = homedir(),
+    plan: InstructionPlan = {},
   ): InstructionRecord {
-    const { bytes, path, id, old, digest, same } = this.store.transaction(() =>
-      this.prepare(snapshot, target, project, userHome),
+    const { bytes, path, id, old, digest, same, release } = this.store.transaction(() =>
+      this.prepare(snapshot, target, project, plan),
     );
     const parent = safeDirectory(dirname(path));
+    // Every commit that claims the target for this plan checks its release
+    // fence first, so an uninstall since the plan is never undone by a claim.
+    const owner: InstructionClaim = {
+      project,
+      assert: () => this.assertPlanned(id, path, project, plan),
+    };
     const matches = (record: InstructionRecord): boolean =>
       sameArtifact(record, snapshot) &&
       record.version.id === snapshot.version.id &&
@@ -876,6 +1110,7 @@ export class InstructionProjections {
       stateOf(record, observe(path)) === "in-sync";
     if (old && same)
       return this.store.transaction(() => {
+        this.assertUninstalling(id, path);
         const current = this.store.get<InstructionRecord>(`instruction:${id}`);
         if (current?.eventId === old.eventId)
           this.assertWritable(current, observe(path), path);
@@ -884,7 +1119,7 @@ export class InstructionProjections {
             "PROJECTION_CHANGED",
             "Projection changed; run sync again",
           );
-        this.addOwner(id, project);
+        this.claim(id, owner);
         return current;
       });
     this.fault?.("before-write");
@@ -921,6 +1156,43 @@ export class InstructionProjections {
       digest,
       synchronizedAt: new Date().toISOString(),
     };
+    return this.write({
+      record,
+      bytes,
+      basis: old,
+      release,
+      owner,
+      // Another lock holder committed first. Its result stands when it is the
+      // same version; anything else needs a fresh plan.
+      concurrent: matches,
+      guard: (current, observed) => {
+        owner.assert();
+        this.assertWritable(current, observed, path, snapshot, plan.published);
+        if (current) this.assertReplacementOwner(current, snapshot, project);
+      },
+    });
+  }
+  /**
+   * Replaces the target with bytes by a journaled same-directory rename and
+   * commits record in the same lock hold. guard runs under the lock before the
+   * rename and throws to refuse it; a write whose basis is no longer current
+   * returns the concurrent record when concurrent accepts it, else fails.
+   * Either way owner, when given, is claimed only if its assert passes in
+   * that commit.
+   */
+  private write(input: {
+    record: InstructionRecord;
+    bytes: Uint8Array;
+    basis: InstructionRecord | undefined;
+    /** The target's uninstall mark when the basis was read. */
+    release: string | null;
+    owner?: InstructionClaim;
+    concurrent: (current: InstructionRecord) => boolean;
+    guard: (current: InstructionRecord | undefined, observed: Observed) => void;
+  }): InstructionRecord {
+    const { record, bytes, owner } = input;
+    const { id, path } = record;
+    const parent = dirname(path);
     const journalKey = `instruction-journal:${id}:${record.eventId}`;
     const cleanupKey = `${CLEANUP_PREFIX}${id}:${record.eventId}`;
     const temp = join(parent, `.skillplane-instructions-${record.eventId}`);
@@ -937,8 +1209,10 @@ export class InstructionProjections {
       // by recover(); the journal is deleted in the same commit as the record.
       const journal: InstructionJournal = {
         record,
-        basis: old?.eventId ?? null,
+        basis: input.basis?.eventId ?? null,
         temp,
+        owner: owner ? resolve(owner.project) : null,
+        release: input.release,
         pid: process.pid,
         startedAt: record.synchronizedAt,
       };
@@ -947,22 +1221,21 @@ export class InstructionProjections {
       this.fault?.("after-stage");
       this.store.set(journalKey, journal);
       result = this.store.transaction(() => {
+        // An uninstall in flight owns the target until it commits or is dropped.
+        this.assertUninstalling(id, path);
         const current = this.store.get<InstructionRecord>(`instruction:${id}`);
         if ((current?.eventId ?? null) !== journal.basis) {
-          // Another lock holder committed first. Its result stands when it is
-          // the same version; anything else needs a fresh plan.
-          if (!current || !matches(current))
+          if (!current || !input.concurrent(current))
             throw new RuntimeError(
               "PROJECTION_CHANGED",
               "Projection changed; run sync again",
             );
-          this.addOwner(id, project);
+          if (owner) this.claim(id, owner);
           this.retire(journalKey, cleanupKey, temp);
           return current;
         }
         const observed = observe(path);
-        this.assertWritable(current, observed, path);
-        if (current) this.assertReplacementOwner(current, snapshot, project);
+        input.guard(current, observed);
         if (observed.kind === "file" && observed.mode !== 0o600)
           setMode(temp, observed.mode);
         progress.renaming = true;
@@ -971,10 +1244,9 @@ export class InstructionProjections {
         this.fault?.("after-rename");
         syncDirectory(parent);
         this.fault?.("after-swap");
-        if (current)
-          this.store.set(`instruction-history:${id}:${current.eventId}`, current);
+        if (current) this.archive(current);
         this.store.set(`instruction:${id}`, record);
-        this.addOwner(id, project);
+        if (owner) this.claim(id, owner);
         this.store.delete(journalKey);
         return record;
       });
@@ -1011,6 +1283,17 @@ export class InstructionProjections {
     this.store.set(cleanupKey, { temp } satisfies InstructionCleanup);
     this.store.delete(journalKey);
   }
+  /** Keeps a replaced generation for rollback, inside the caller's transaction. */
+  private archive(record: InstructionRecord): void {
+    const prefix = `instruction-history:${record.id}:`;
+    const sequence = Math.max(
+      -1,
+      ...this.store
+        .entries<InstructionHistory>(prefix)
+        .map(([, value]) => value.sequence ?? -1),
+    );
+    this.store.set(`${prefix}${record.eventId}`, { ...record, sequence: sequence + 1 });
+  }
   /**
    * Unlinks a retired temp file, then forgets it. An unlink that fails keeps
    * the cleanup entry for the next recover() and never fails the caller: the
@@ -1027,6 +1310,553 @@ export class InstructionProjections {
     this.store.delete(cleanupKey);
   }
   /**
+   * Copies bytes into the target's backup directory under their digest, once.
+   * Called under the lock; the copy is durable before any caller records it or
+   * replaces the target.
+   */
+  private backup(
+    path: string,
+    id: string,
+    file: { bytes: Uint8Array; digest: string; mode: number },
+  ): InstructionBackup {
+    const directory = safeDirectory(backupDirectory(path, id));
+    const copy = join(directory, file.digest.slice(7));
+    const existing = observe(copy);
+    if (existing.kind !== "file" || existing.digest !== file.digest)
+      writeAtomic(copy, file.bytes);
+    // Every entry from the target's directory down to the copy, created now or
+    // by a run that stopped before syncing them, survives a crash.
+    for (let dir = directory; dir !== dirname(path); dir = dirname(dir))
+      syncDirectory(dir);
+    syncDirectory(dirname(path));
+    return {
+      path: copy,
+      digest: file.digest,
+      mode: file.mode,
+      createdAt: new Date().toISOString(),
+    };
+  }
+  /**
+   * Backs up an unmanaged instructions file and records its adoption for the
+   * artifact. A re-run for the same bytes and artifact returns the recorded
+   * adoption without a second backup; the file itself is never changed.
+   */
+  adopt(input: {
+    path: string;
+    project: string;
+    artifact: string;
+    /** The digest of the bytes the caller validated, or null when it read none. */
+    validated: string | null;
+  }): {
+    adoption: InstructionAdoption;
+    bytes: Uint8Array;
+    /** Whether this call recorded the adoption, rather than a run before it. */
+    created: boolean;
+  } {
+    const path = resolve(input.path);
+    const id = InstructionProjections.id(path);
+    safeDirectory(dirname(path), false);
+    return this.store.transaction(() => {
+      this.assertIdle(id, path);
+      if (this.store.get(`instruction:${id}`))
+        throw new RuntimeError(
+          "INSTRUCTIONS_MANAGED",
+          `${path} is already managed by Skillplane`,
+        );
+      const observed = observe(path);
+      if (observed.kind === "absent")
+        throw new RuntimeError("INSTRUCTIONS_FILE_NOT_FOUND", `${path} does not exist`);
+      if (observed.kind !== "file") throw new RuntimeError("UNSAFE_FILE");
+      const file = readTarget(path);
+      if (file.digest !== input.validated)
+        throw new RuntimeError(
+          "PROJECTION_CHANGED",
+          `${path} changed while it was being adopted; run instructions adopt again`,
+        );
+      const key = `${ADOPTION_PREFIX}${id}`;
+      const prior = this.adoption(id);
+      if (prior) {
+        if (prior.original.digest !== file.digest)
+          throw new RuntimeError(
+            "PROJECTION_DIVERGED",
+            `${path} changed after it was adopted; uninstall ${id} restores the adopted original`,
+          );
+        if (
+          prior.artifact !== input.artifact ||
+          prior.project !== resolve(input.project)
+        )
+          throw new RuntimeError(
+            "PROJECTION_COLLISION",
+            `${path} was adopted for the instructions artifact ${prior.artifact}`,
+          );
+        // The recorded backup stands; a copy lost since is written again.
+        this.backup(path, id, file);
+        return { adoption: prior, bytes: file.bytes, created: false };
+      }
+      const adoption: InstructionAdoption = {
+        formatVersion: 1,
+        id,
+        project: resolve(input.project),
+        path,
+        artifact: input.artifact,
+        nonce: randomUUID(),
+        original: this.backup(path, id, file),
+      };
+      this.store.set(key, adoption);
+      return { adoption, bytes: file.bytes, created: true };
+    });
+  }
+  /**
+   * Undoes an adoption whose draft import failed, when it is still the one
+   * this run recorded and has no draft: its record and backup copy go and the
+   * file, never changed, stays the user's.
+   */
+  discardAdoption(adoption: InstructionAdoption): void {
+    this.store.transaction(() => {
+      const current = this.adoption(adoption.id);
+      if (current?.nonce !== adoption.nonce || current.draft) return;
+      this.store.delete(`${ADOPTION_PREFIX}${adoption.id}`);
+      rmSync(adoption.original.path, { force: true });
+    });
+  }
+  /** The adoption of a target sync has not taken over yet. */
+  pendingAdoption(id: string): InstructionAdoption | undefined {
+    return this.store.get(`instruction:${id}`) ? undefined : this.adoption(id);
+  }
+  /**
+   * Refuses a pending adoption whose file was hand-edited, as sync refuses
+   * before taking one over: under the lock, the file must be absent or still
+   * hold the adopted original, whether or not anything can take it over yet.
+   */
+  assertPendingIntact(id: string): void {
+    this.store.transaction(() => {
+      const adoption = this.pendingAdoption(id);
+      if (!adoption) return;
+      this.assertIdle(id, adoption.path);
+      const observed = observe(adoption.path);
+      if (
+        observed.kind !== "absent" &&
+        (observed.kind !== "file" || observed.digest !== adoption.original.digest)
+      )
+        throw new RuntimeError(
+          "PROJECTION_DIVERGED",
+          `${adoption.path} changed after it was adopted; it was not overwritten`,
+        );
+    });
+  }
+  /**
+   * Records the imported draft of the adoption nonce names. The first record
+   * stands unless it is the replaced draft, one that can no longer be
+   * published.
+   */
+  recordDraft(
+    id: string,
+    nonce: string,
+    draft: NonNullable<InstructionAdoption["draft"]>,
+    replaced?: string,
+  ): InstructionAdoption {
+    return this.store.transaction(() => {
+      const adoption = this.adoption(id);
+      if (adoption?.nonce !== nonce)
+        throw new RuntimeError(
+          "PROJECTION_CHANGED",
+          "The adoption was uninstalled while its draft was imported; run instructions adopt again",
+        );
+      if (adoption.draft && adoption.draft.versionId !== replaced) return adoption;
+      const recorded = { ...adoption, draft };
+      this.store.set(`${ADOPTION_PREFIX}${id}`, recorded);
+      return recorded;
+    });
+  }
+  /** Refuses while an interrupted write or uninstall of the target is unrecovered. */
+  private assertIdle(id: string, path: string): void {
+    if (this.recoveryPending(id))
+      throw new RuntimeError(
+        "RECOVERY_PENDING",
+        `An interrupted write to ${path} could not be recovered yet; the next run retries it`,
+      );
+    this.assertUninstalling(id, path);
+  }
+  /** Refuses while an uninstall of the target is in flight. */
+  private assertUninstalling(id: string, path: string): void {
+    if (this.store.get(`${UNINSTALL_PREFIX}${id}`))
+      throw new RuntimeError("PROJECTION_BUSY", `${path} is being uninstalled`);
+  }
+  /**
+   * Restores the target's previous generation by the same journaled rename
+   * sync uses. A hand-edited target is refused unless force, which first
+   * backs the edited file up. The next sync applies the latest published
+   * version again.
+   */
+  rollback(
+    id: string,
+    force = false,
+  ): { record: InstructionRecord; backup: InstructionBackup | null } {
+    const { current, previous, bytes, release } = this.store.transaction(() => {
+      const current = this.store.get<InstructionRecord>(`instruction:${id}`);
+      if (!current) throw new RuntimeError("PROJECTION_NOT_FOUND");
+      this.assertIdle(id, current.path);
+      // The latest generation by commit order that the current one differs
+      // from: another artifact or version counts even with the same bytes,
+      // while a rewrite of the current one, as after its file was deleted,
+      // does not. Entries kept before the order was recorded come after, by time.
+      const latest = this.store
+        .entries<InstructionHistory>(`instruction-history:${id}:`)
+        .map(([, value]) => value)
+        .filter(
+          (value) =>
+            !sameArtifact(value, current) ||
+            value.version.id !== current.version.id ||
+            value.digest !== current.digest,
+        )
+        .sort(
+          (a, b) =>
+            (b.sequence ?? -1) - (a.sequence ?? -1) ||
+            b.synchronizedAt.localeCompare(a.synchronizedAt),
+        )[0];
+      if (!latest) throw new RuntimeError("ROLLBACK_UNAVAILABLE");
+      const previous: InstructionHistory = { ...latest };
+      delete previous.sequence;
+      this.assertRollbackOwner(current, previous);
+      const staged = observe(previous.generation);
+      if (staged.kind !== "file" || staged.digest !== previous.digest)
+        throw new RuntimeError(
+          "PROJECTION_DIVERGED",
+          `The kept copy of version ${previous.version.id} changed`,
+        );
+      const bytes = readSafe(previous.generation, MAX_INSTRUCTIONS_BYTES);
+      if (`sha256:${hash(bytes)}` !== previous.digest)
+        throw new RuntimeError("PROJECTION_DIVERGED");
+      this.assertEdit(current, observe(current.path), force);
+      return { current, previous, bytes, release: this.releaseMark(id) };
+    });
+    let backup: InstructionBackup | null = null;
+    const record = this.write({
+      record: {
+        ...previous,
+        eventId: randomUUID(),
+        installationId: requireValue(this.store.get<string>("installation")),
+        project: current.project,
+        synchronizedAt: new Date().toISOString(),
+      },
+      bytes,
+      basis: current,
+      release,
+      concurrent: () => false,
+      guard: (latest, observed) => {
+        // A project may have claimed the target since the plan.
+        if (latest) this.assertRollbackOwner(latest, previous);
+        if (latest && this.assertEdit(latest, observed, force))
+          backup = this.backup(latest.path, id, readTarget(latest.path));
+      },
+    });
+    return { record, backup };
+  }
+  /**
+   * Another project's claim blocks a rollback to a different artifact, which
+   * would put that artifact into the file it configures.
+   */
+  private assertRollbackOwner(
+    current: InstructionRecord,
+    previous: InstructionRecord,
+  ): void {
+    if (
+      !sameArtifact(previous, current) &&
+      this.owners(current.id).some((owner) => owner !== current.project)
+    )
+      throw new RuntimeError(
+        "PROJECTION_SHARED",
+        "Another project configures this target for its current artifact",
+      );
+  }
+  /** Refuses an uninstall of a target more than one project claims. */
+  private assertUnshared(id: string): void {
+    if (this.owners(id).length > 1)
+      throw new RuntimeError(
+        "PROJECTION_SHARED",
+        "Remove this target from each project's configuration first",
+      );
+  }
+  /**
+   * Whether the target was hand-edited, refusing unless force. A target that
+   * is not a regular file is refused even with force.
+   */
+  private assertEdit(
+    record: InstructionRecord,
+    observed: Observed,
+    force: boolean,
+  ): boolean {
+    if (stateOf(record, observed) !== "diverged") return false;
+    if (!force || observed.kind !== "file")
+      throw new RuntimeError(
+        "PROJECTION_DIVERGED",
+        `${record.path} changed after Skillplane wrote it${force ? " and is not a regular file" : "; --force backs it up first"}`,
+      );
+    return true;
+  }
+  /**
+   * Restores an adopted target's original bytes, or removes a target
+   * Skillplane created, and clears its projection state. A hand-edited target
+   * is refused unless force, which first backs the edited file up. A target
+   * that already holds the original bytes gets its saved mode back.
+   */
+  uninstall(
+    id: string,
+    force = false,
+  ): { restored: InstructionBackup | null; backup: InstructionBackup | null } {
+    // Checked and backed up before the marker commits, so the file a marker
+    // names is installed only by an uninstall that passed its checks.
+    const planned = this.store.transaction(() => {
+      const record = this.store.get<InstructionRecord>(`instruction:${id}`);
+      const adoption = this.adoption(id);
+      if (!record && !adoption) throw new RuntimeError("PROJECTION_NOT_FOUND");
+      const path = record?.path ?? requireValue(adoption).path;
+      this.assertUninstalling(id, path);
+      this.assertUnwritten(id, path);
+      this.assertUnshared(id);
+      // Only a restore needs the directory; a removal never creates it.
+      safeDirectory(dirname(path), adoption !== undefined);
+      const observed = observe(path);
+      // Divergence is decided by what Skillplane last wrote, or for a target
+      // never synced by the adopted bytes, never by whether the file already
+      // holds the original: a managed file hand-edited back to it is edited.
+      const holdsOriginal =
+        adoption !== undefined &&
+        observed.kind === "file" &&
+        observed.digest === adoption.original.digest;
+      const edited = record
+        ? stateOf(record, observed) === "diverged"
+        : observed.kind !== "absent" && !holdsOriginal;
+      if (edited && (!force || observed.kind !== "file"))
+        throw new RuntimeError(
+          "PROJECTION_DIVERGED",
+          `${path} changed after Skillplane ${record ? "wrote" : "adopted"} it${force ? " and is not a regular file" : "; --force backs it up first"}`,
+        );
+      const backup = edited ? this.backup(path, id, readTarget(path)) : null;
+      let original: Buffer | null = null;
+      if (adoption && !holdsOriginal) {
+        original = readSafe(adoption.original.path, MAX_INSTRUCTIONS_BYTES);
+        if (`sha256:${hash(original)}` !== adoption.original.digest)
+          throw new RuntimeError(
+            "BACKUP_INVALID",
+            `The backup of ${path} at ${adoption.original.path} changed; nothing was restored`,
+          );
+      }
+      const marker: InstructionUninstall = {
+        id,
+        path,
+        eventId: record?.eventId ?? null,
+        restore: adoption?.original.digest ?? null,
+        temp: join(dirname(path), `.skillplane-instructions-${randomUUID()}`),
+        pid: process.pid,
+        startedAt: new Date().toISOString(),
+        observed: observed.kind === "file" ? observed.digest : null,
+        // A restore in place keeps the target; a staged one is named once
+        // its temp file exists.
+        file: holdsOriginal ? identity(path) : null,
+        keep: backup?.path === adoption?.original.path,
+      };
+      // Committed before the temp file exists and the target changes, so
+      // recover() removes the one and finishes an uninstall whose rename or
+      // unlink landed before its commit.
+      this.store.set(`${UNINSTALL_PREFIX}${id}`, marker);
+      return { marker, backup, original, restored: adoption?.original ?? null };
+    });
+    const { backup, original, restored } = planned;
+    let { marker } = planned;
+    this.fault?.("after-mark");
+    const progress = { replacing: false };
+    try {
+      if (original && restored) {
+        const file = writeFileDurably(marker.temp, original);
+        setMode(marker.temp, restored.mode);
+        marker = this.store.transaction(() => {
+          const current = this.store.get<InstructionUninstall>(
+            `${UNINSTALL_PREFIX}${id}`,
+          );
+          if (current?.temp !== marker.temp)
+            throw new RuntimeError(
+              "PROJECTION_CHANGED",
+              "Projection changed; try again",
+            );
+          const staged = { ...current, file };
+          this.store.set(`${UNINSTALL_PREFIX}${id}`, staged);
+          return staged;
+        });
+      }
+      this.store.transaction(() => {
+        const record = this.store.get<InstructionRecord>(`instruction:${id}`);
+        const adoption = this.adoption(id);
+        const { path } = marker;
+        const observed = observe(path);
+        if (
+          !this.store.get(`${UNINSTALL_PREFIX}${id}`) ||
+          (record?.eventId ?? null) !== marker.eventId ||
+          (adoption?.original.digest ?? null) !== marker.restore ||
+          // A file edited since the checks is checked again by a new run.
+          (observed.kind === "file" ? observed.digest : null) !== marker.observed
+        )
+          throw new RuntimeError("PROJECTION_CHANGED", "Projection changed; try again");
+        // Checked again in the commit that changes the target.
+        this.assertUnwritten(id, path);
+        this.assertUnshared(id);
+        const parent = dirname(path);
+        if (
+          adoption &&
+          observed.kind === "file" &&
+          observed.digest === marker.restore
+        ) {
+          // The bytes are already there: restore the saved mode and make the
+          // data and its directory entry durable before the backup goes.
+          this.fault?.("before-restore-sync");
+          setMode(path, adoption.original.mode);
+          syncDirectory(parent);
+        } else if (adoption) {
+          progress.replacing = true;
+          this.fault?.("before-swap");
+          renameSync(marker.temp, path);
+          this.fault?.("after-rename");
+          syncDirectory(parent);
+        } else if (observed.kind !== "absent") {
+          progress.replacing = true;
+          this.fault?.("before-unlink");
+          unlinkSync(path);
+          syncDirectory(parent);
+        }
+        this.forget(id);
+        // The target now holds the original bytes, so its copy goes with the
+        // adoption, under the lock so a concurrent adopt's copy is never lost.
+        // Edited files backed up by force stay, even one with the same bytes.
+        if (adoption && !marker.keep)
+          try {
+            rmSync(adoption.original.path, { force: true });
+          } catch {
+            // A leftover copy is harmless; the next adopt reuses it.
+          }
+      });
+    } catch (error) {
+      if (!progress.replacing)
+        try {
+          rmSync(marker.temp, { force: true });
+          this.store.transaction(() => {
+            const current = this.store.get<InstructionUninstall>(
+              `${UNINSTALL_PREFIX}${id}`,
+            );
+            if (current?.temp === marker.temp)
+              this.store.delete(`${UNINSTALL_PREFIX}${id}`);
+          });
+        } catch {
+          // recover() removes the marker and its temp file.
+        }
+      throw error;
+    }
+    return { restored, backup };
+  }
+  /**
+   * Clears a target's projection state inside the caller's transaction. The
+   * projects that adopted, synced or claim it are queued to drop it from their
+   * configuration, so their next sync neither refuses the restored file nor
+   * writes the removed one again.
+   */
+  private forget(id: string): void {
+    const record = this.store.get<InstructionRecord>(`instruction:${id}`);
+    const adoption = this.adoption(id);
+    const path = record?.path ?? adoption?.path;
+    if (path !== undefined)
+      for (const project of new Set(
+        [record?.project, adoption?.project, ...this.owners(id)].filter(
+          (value): value is string => value !== undefined,
+        ),
+      ))
+        this.store.set(`${UNCONFIGURE_PREFIX}${id}:${hash(project)}`, {
+          id,
+          path,
+          project,
+        } satisfies InstructionUnconfigure);
+    this.store.delete(`instruction:${id}`);
+    for (const [key] of this.store.entries(`instruction-history:${id}:`))
+      this.store.delete(key);
+    this.store.delete(`${ADOPTION_PREFIX}${id}`);
+    this.store.db.prepare("DELETE FROM projection_owner WHERE projection_id=?").run(id);
+    this.store.delete(`${UNINSTALL_PREFIX}${id}`);
+    // A sync planned before this commit never writes the target again.
+    this.store.set(`${RELEASE_PREFIX}${id}`, randomUUID());
+  }
+  /** Configuration removals queued by uninstalls, with their keys. */
+  unconfigurations(): [string, InstructionUnconfigure][] {
+    return this.store.entries<InstructionUnconfigure>(UNCONFIGURE_PREFIX);
+  }
+  /**
+   * Runs apply for a queued removal under the lock and drops it in the same
+   * commit; apply throws to keep it queued.
+   */
+  unconfigure(key: string, apply: (entry: InstructionUnconfigure) => void): void {
+    this.store.transaction(() => {
+      const entry = this.store.get<InstructionUnconfigure>(key);
+      if (!entry) return;
+      apply(entry);
+      this.store.delete(key);
+    });
+  }
+  /**
+   * Finishes an uninstall whose process stopped: one whose target already
+   * holds the restored bytes, or is gone when nothing was to be restored, has
+   * its state cleared; any other is dropped and the target stays managed.
+   */
+  private recoverUninstalls(): string[] {
+    const recovered: string[] = [];
+    for (const [key, marker] of this.store.entries<InstructionUninstall>(
+      UNINSTALL_PREFIX,
+    )) {
+      if (writerAlive(marker)) continue;
+      try {
+        const finished = this.store.transaction(() => {
+          const current = this.store.get<InstructionUninstall>(key);
+          if (current?.temp !== marker.temp) return false;
+          const record = this.store.get<InstructionRecord>(`instruction:${marker.id}`);
+          const observed = observe(marker.path);
+          // A restore landed only when the file the checked uninstall staged
+          // or kept is at the path: matching bytes alone may be a hand-edit.
+          const done =
+            (record?.eventId ?? null) === marker.eventId &&
+            (marker.restore === null
+              ? observed.kind === "absent"
+              : observed.kind === "file" &&
+                observed.digest === marker.restore &&
+                (marker.file === undefined ||
+                  sameFile(identity(marker.path), marker.file)));
+          if (done) {
+            // The uninstall may have stopped before making its rename or
+            // unlink durable, or before restoring the saved mode. A failure
+            // throws here, so the marker, the record and the owners stay for
+            // the next run.
+            this.fault?.("before-recover-sync");
+            const adoption = this.adoption(marker.id);
+            // setMode also makes the restored bytes durable.
+            if (marker.restore !== null && adoption)
+              setMode(marker.path, adoption.original.mode);
+            syncParent(marker.path);
+            this.forget(marker.id);
+            // As uninstall does: the target holds the original bytes, so its
+            // copy goes, under the lock. Edited files backed up by force stay.
+            if (adoption && !marker.keep)
+              try {
+                rmSync(adoption.original.path, { force: true });
+              } catch {
+                // A leftover copy is harmless; the next adopt reuses it.
+              }
+          } else this.store.delete(key);
+          return done;
+        });
+        if (finished) recovered.push(marker.id);
+        rmSync(marker.temp, { force: true });
+      } catch {
+        // The marker stays for the next run.
+      }
+    }
+    return recovered;
+  }
+  /**
    * Finishes or rolls back writes whose process stopped between the journal
    * and the record commit. A target that is the journaled temp file, renamed
    * and unchanged, is committed; otherwise the record and owners stay as they
@@ -1034,7 +1864,7 @@ export class InstructionProjections {
    * Running it again is a no-op.
    */
   recover(): string[] {
-    const recovered: string[] = [];
+    const recovered: string[] = this.recoverUninstalls();
     for (const [key, journal] of this.store.entries<InstructionJournal>(
       "instruction-journal:",
     )) {
@@ -1049,19 +1879,23 @@ export class InstructionProjections {
           const current = this.store.get<InstructionRecord>(`instruction:${record.id}`);
           if (
             (current?.eventId ?? null) === journal.basis &&
+            // A target released since the writer read it is never claimed or
+            // recorded again; uninstall also waits for every journal.
+            (journal.release === undefined ||
+              journal.release === this.releaseMark(record.id)) &&
             installed(journal) &&
             stateOf(record, observe(record.path)) === "in-sync"
           ) {
             // The writer may have stopped before making its rename durable. A
             // failed sync throws here and leaves the journal for the next run.
             syncDirectory(dirname(record.path));
-            if (current)
-              this.store.set(
-                `instruction-history:${record.id}:${current.eventId}`,
-                current,
-              );
+            if (current) this.archive(current);
             this.store.set(`instruction:${record.id}`, record);
-            this.addOwner(record.id, record.project);
+            // Only the claim the writer would have made: its guard checked
+            // that claim under the lock that held the rename, and no release
+            // happened since. A rollback claims nothing.
+            const owner = journal.owner === undefined ? record.project : journal.owner;
+            if (owner) this.addOwner(record.id, owner);
             this.store.delete(key);
             return "committed";
           }
@@ -1086,6 +1920,33 @@ export class InstructionProjections {
     ))
       this.discard(key, temp);
     return recovered;
+  }
+  /**
+   * What sync would find in a target that has no record: nothing, an
+   * unmanaged file, or an adopted target, absent or still holding its original
+   * bytes, unless edited since or the configured name resolves elsewhere.
+   */
+  private unrecordedState(
+    id: string,
+    path: string,
+    resolution?: InstructionResolution,
+  ): InstructionState {
+    const observed = observe(path);
+    const adoption = this.adoption(id);
+    if (!adoption) return observed.kind === "absent" ? "not-synced" : "collision";
+    // An absent adopted target stays adopted, as sync reports it.
+    if (
+      observed.kind !== "absent" &&
+      (observed.kind !== "file" || observed.digest !== adoption.original.digest)
+    )
+      return "diverged";
+    // An adoption without its draft yet is still adopted, as sync reports it.
+    return resolution &&
+      "identity" in resolution &&
+      adoption.draft &&
+      !sameArtifact(adoption.draft, resolution.identity)
+      ? "collision"
+      : "adopted";
   }
   /**
    * Every recorded target plus configured targets that have no record yet. A
@@ -1155,20 +2016,29 @@ export class InstructionProjections {
           path,
           version: null,
           configured: true,
-          // Without a record any existing file is unmanaged, whatever the
-          // configured name resolves to.
-          state: inspect(() =>
-            observe(path).kind === "absent" ? "not-synced" : "collision",
-          ),
+          // Without a record any existing file is unmanaged unless adopted,
+          // whatever the configured name resolves to.
+          state: inspect(() => this.unrecordedState(id, path, resolution)),
         };
+        // An adoption whose artifact does not exist yet is skipped by sync as
+        // adopted rather than refused for the missing name, unless its file
+        // was hand-edited, which sync refuses.
+        const adoptedOnly =
+          "code" in resolution &&
+          resolution.code === "INSTRUCTIONS_NOT_FOUND" &&
+          this.adoption(id)?.artifact === target.artifact;
         rows.push(
-          "code" in resolution
-            ? { ...row, state: resolution.code, fileState: row.state }
-            : this.recoveryPending(id)
-              ? { ...row, state: "RECOVERY_PENDING", fileState: row.state }
-              : "unverified" in resolution
-                ? { ...row, state: "unverified", fileState: row.state }
-                : row,
+          adoptedOnly
+            ? row.state === "adopted" || row.state === "diverged"
+              ? row
+              : { ...row, state: "adopted", fileState: row.state }
+            : "code" in resolution
+              ? { ...row, state: resolution.code, fileState: row.state }
+              : this.recoveryPending(id)
+                ? { ...row, state: "RECOVERY_PENDING", fileState: row.state }
+                : "unverified" in resolution
+                  ? { ...row, state: "unverified", fileState: row.state }
+                  : row,
         );
       }
       // An interrupted first write that recovery could not finish yet.
@@ -1185,9 +2055,22 @@ export class InstructionProjections {
           version: record.version.semanticVersion ?? record.version.id,
           configured: false,
           state: "RECOVERY_PENDING",
-          fileState: inspect(() =>
-            observe(record.path).kind === "absent" ? "not-synced" : "collision",
-          ),
+          fileState: inspect(() => this.unrecordedState(record.id, record.path)),
+        });
+      }
+      // Adopted files no project configures.
+      for (const adoption of this.store
+        .entries<InstructionAdoption>(ADOPTION_PREFIX)
+        .map(([, value]) => value)) {
+        if (rows.some((row) => row.id === adoption.id)) continue;
+        rows.push({
+          id: adoption.id,
+          adapter: "generic",
+          artifact: adoption.artifact,
+          path: adoption.path,
+          version: null,
+          configured: false,
+          state: inspect(() => this.unrecordedState(adoption.id, adoption.path)),
         });
       }
       return rows;
