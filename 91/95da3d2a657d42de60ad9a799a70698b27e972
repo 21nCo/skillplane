@@ -1,0 +1,51 @@
+packages/control-plane/src/concrete-migration.ts
+  s_0632d15ff4b386::t_6e7684bddf9de5 62
+packages/control-plane/src/table-ownership.ts
+  s_0632d15ff4b386::t_c30b429008e597 67
+packages/db/migrations/0055_regional_background_jobs.sql
+  s_0632d15ff4b386::t_2826b186089c79 1-55
+packages/db/src/migrate.test.ts
+  s_0632d15ff4b386::t_a2d6a91aea36ae 69
+packages/db/src/schema/background-jobs.ts
+  s_0632d15ff4b386::t_99790e8dd48019 1-78
+packages/db/src/schema/index.ts
+  s_0632d15ff4b386::t_f32124764b8d49 3,55,81,108
+packages/db/tests/integration/background-jobs-migration.integration.test.ts
+  s_0632d15ff4b386::t_ec76eb01f424ba 1-101
+packages/db/tests/integration/development-topology-migration.integration.test.mjs
+  s_0632d15ff4b386::t_a86d6bbc6f06c1 40,58,146-150
+packages/db/tests/integration/git-source-schema.integration.test.ts
+  s_0632d15ff4b386::t_480ee3498ce42d 7,24
+packages/domain/src/background-jobs.test.ts
+  s_0632d15ff4b386::t_17850b1c79daa2 1-109
+packages/domain/src/background-jobs.ts
+  s_0632d15ff4b386::t_d37d756dd98237 1-644
+packages/domain/src/index.ts
+  s_0632d15ff4b386::t_d8eae0a93a1d2c 36
+packages/domain/tests/integration/background-jobs.integration.test.ts
+  s_0632d15ff4b386::t_4fce033c82c8de 1-422
+packages/testing/src/fixtures.ts
+  s_0632d15ff4b386::t_281a9f4320dd31 169
+pnpm-lock.yaml
+  s_0632d15ff4b386::t_784196344d36f7 946-948,3285-3287,3292-3294,3927,3933,3939,3945,3952,3959,3966,3973,3980,3987,3993,3999
+projection/package.json
+  s_0632d15ff4b386::t_95d46b2d5da2b2 15
+projection/src/index.ts
+  s_0632d15ff4b386::t_e64de8119136cf 15-20,34-41,49-54,57-59,76-78,130-135,137-156,158-159
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9195da3d2a657d42de60ad9a799a70698b27e972",
+  "prompts": {},
+  "sessions": {
+    "s_0632d15ff4b386": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e5bbe310-34b2-4eda-8c5b-af3a0f8f707d",
+        "model": "unknown"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
