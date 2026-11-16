@@ -94,6 +94,15 @@ describe("background job payloads", () => {
     [{ API_KEY: "neutral" }],
     [{ list: [{ "Api-Key": "neutral" }] }],
     [{ note: "api.key=neutral" }],
+    // Names are classified in canonical form: JSON escapes decoded, any
+    // separator run (tab, NBSP, repeated spaces) between the words.
+    [{ note: String.raw`{"to\u006ben":"X"}` }],
+    [{ note: String.raw`{"api\tkey":"X"}` }],
+    [{ note: "api  key: S1" }],
+    [{ note: "api\u00a0key=S2" }],
+    [{ note: JSON.stringify({ body: String.raw`{"to\u006ben":"X"}` }) }],
+    [{ [String.raw`to\u006ben`]: 1 }],
+    [{ nested: { "api\tkey": 1 } }],
     // Text PostgreSQL jsonb cannot store.
     [{ ref: "main\u0000" }],
     [{ ref: "\ud800" }],
@@ -108,6 +117,27 @@ describe("background job payloads", () => {
     ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
     expect(database.query).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ["workspace:a", "k\u0000"],
+    ["workspace:a", "k\ud800"],
+    ["workspace:a", "k\udfff"],
+    ["workspace:\u0000", "key"],
+    ["workspace:\udfff", "key"],
+  ])(
+    "rejects unstorable workspace %j or idempotency key %j before any query",
+    async (workspaceId, idempotencyKey) => {
+      await expect(
+        enqueueJob(database, {
+          workspaceId,
+          kind: "test.echo",
+          idempotencyKey,
+          payload: {},
+        }),
+      ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+      expect(database.query).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects oversized and non-object payloads", async () => {
     for (const payload of [
@@ -285,6 +315,26 @@ describe("background job errors", () => {
     ],
     ["the api key: SECRET", "the api key: [redacted]"],
     [`${"x".repeat(60)}_token=SECRET`, `${"x".repeat(60)}_token=[redacted]`],
+    // Names are classified in canonical form, values delimited in the raw text.
+    [
+      String.raw`{"to\u006ben":"CREDENTIAL","next":"kept"}`,
+      String.raw`{"to\u006ben":[redacted],"next":"kept"}`,
+    ],
+    [
+      String.raw`{"api\tkey":"CRED2","next":"kept"}`,
+      String.raw`{"api\tkey":[redacted],"next":"kept"}`,
+    ],
+    ["api  key: SECRET1\nnext: kept", "api  key: [redacted]\nnext: kept"],
+    ["api\u00a0key=SECRET2\nnext: kept", "api\u00a0key=[redacted]\nnext: kept"],
+    [
+      JSON.stringify({ body: String.raw`{"to\u006ben":"CRED","next":"kept"}` }),
+      String.raw`{"body":"{\"to\\u006ben\":[redacted],\"next\":\"kept\"}"}`,
+    ],
+    [
+      String.raw`{"to\u005cu006ben":"CRED","next":"kept"}`,
+      String.raw`{"to\u005cu006ben":[redacted],"next":"kept"}`,
+    ],
+    ["gh\\u0070_" + "a".repeat(36), "[redacted]"],
   ])("redacts the whole credential value in %j", (text, expected) => {
     const scrubbed = sanitizeBackgroundJobError(text);
     expect(scrubbed).toBe(expected);
@@ -320,7 +370,31 @@ describe("background job errors", () => {
     // The redacted first line shrinks, so the cut token would reach the stored text.
     const line = `{"token":"${"a".repeat(16_361)}"}\n`;
     const cut = `${line}ghs_${"b".repeat(36)} tail`;
-    expect(sanitizeBackgroundJobError(cut)).toBe('{"token":[redacted]}\n');
+    expect(sanitizeBackgroundJobError(cut)).toBe('{"token":[redacted]} [truncated]');
+  });
+
+  it("drops a URL credential split by the scan boundary", () => {
+    const url = ` https://user:SECRET_HEAD:${"b".repeat(100)}@example.com/path`;
+    const withHead = (length: number) =>
+      `${JSON.stringify({ token: "a".repeat(length) })}${url}`;
+    // The reviewer's repro: redacting the head pulls the cut URL into the stored text.
+    expect(sanitizeBackgroundJobError(withHead(16_320))).toBe(
+      '{"token":[redacted]} [truncated]',
+    );
+    // Boundaries inside the user, inside the password and just before the "@".
+    const user = url.indexOf("user") + 2;
+    const password = url.indexOf("SECRET_HEAD") + 6;
+    const at = url.indexOf("@");
+    for (const offset of [user, user + 1, password, password + 1, at - 1, at]) {
+      const text = withHead(16_384 - 12 - offset);
+      expect(text[16_384]).toBe(url[offset]);
+      const scrubbed = sanitizeBackgroundJobError(text);
+      expect(scrubbed).toBe('{"token":[redacted]} [truncated]');
+    }
+    // An unterminated scheme://user:password at the end of the text.
+    expect(sanitizeBackgroundJobError("clone https://user:SECRET")).toBe(
+      "clone https://[redacted]",
+    );
   });
 
   it("replaces text PostgreSQL cannot store", () => {

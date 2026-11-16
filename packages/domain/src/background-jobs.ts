@@ -99,11 +99,16 @@ const MAX_PAYLOAD_STRING_LENGTH = 4_096;
 // Lone UTF-16 surrogates: in Unicode mode a valid pair is one code point.
 const LONE_SURROGATE = /[\uD800-\uDFFF]/u;
 
+/** False for text PostgreSQL cannot store: NUL or an unpaired surrogate. */
+function isStorableText(text: string): boolean {
+  return !text.includes("\u0000") && !LONE_SURROGATE.test(text);
+}
+
 function assertPayloadText(text: string): void {
-  if (text.includes("\u0000") || LONE_SURROGATE.test(text)) {
+  if (!isStorableText(text)) {
     throw invalid("Background job payload contains an invalid character");
   }
-  if (scrubSecrets(text) !== text) {
+  if (secretSpans(text, SECRET_PATTERNS).length > 0) {
     throw invalid("Background job payload must not contain secrets or personal data");
   }
 }
@@ -204,8 +209,13 @@ export async function enqueueJob(
   input: EnqueueJobInput,
 ): Promise<{ readonly job: BackgroundJob; readonly created: boolean }> {
   if (!input.workspaceId.trim()) throw invalid("Workspace is required");
+  if (!isStorableText(input.workspaceId)) throw invalid("Workspace is invalid");
   assertKind(input.kind);
-  if (input.idempotencyKey.length < 1 || input.idempotencyKey.length > 200) {
+  if (
+    input.idempotencyKey.length < 1 ||
+    input.idempotencyKey.length > 200 ||
+    !isStorableText(input.idempotencyKey)
+  ) {
     throw invalid("Background job idempotency key is invalid");
   }
   if (input.runAfter !== undefined && Number.isNaN(input.runAfter.getTime())) {
@@ -324,43 +334,132 @@ export function backgroundJobRetryDelayMs(attempt: number): number {
   return Math.min(RETRY_CAP_MS, RETRY_BASE_MS * 2 ** exponent);
 }
 
-// Credential vocabulary shared by payload keys, payload values and error text.
-// Names are compared after normalization, so api_key, api.key, "api key" and
-// Api-Key are one name.
-const CREDENTIAL_NAME =
-  /token|secret|passw(?:or)?d|apikey|credential|privatekey|authorization|cookie/u;
+// Credential vocabulary shared by payload keys, payload strings and error
+// text. Text is always classified in its canonical form (below), and the words
+// of a compound name may be joined by any run of non-alphanumeric characters,
+// so api_key, api.key, "api  key", api\tkey and Api-Key are one name.
+const NAME_SEPARATOR_RUN = "[^a-z0-9]{0,16}";
+const CREDENTIAL_TERM_SOURCE = [
+  "token",
+  "secret",
+  `pass${NAME_SEPARATOR_RUN}w(?:or)?d`,
+  `api${NAME_SEPARATOR_RUN}key`,
+  "credential",
+  `private${NAME_SEPARATOR_RUN}key`,
+  "authorization",
+  "cookie",
+].join("|");
+const CREDENTIAL_TERMS = new RegExp(CREDENTIAL_TERM_SOURCE, "giu");
+const CREDENTIAL_TERM = new RegExp(CREDENTIAL_TERM_SOURCE, "iu");
 // Header-style names whose unquoted values (schemes, cookie lists) run to the end of the line.
-const HEADER_NAME = /authorization|cookie/u;
+const HEADER_TERM = /^(?:authorization|cookie)$/iu;
 
-function normalizeName(name: string): string {
-  return name.toLowerCase().replace(/[^a-z0-9]/gu, "");
+/**
+ * Text with JSON escapes decoded at every quoting level, plus the raw offsets
+ * of each decoded character. A backslash run before u+4 hex digits, a quote or
+ * a control escape decodes, whatever its length (a nested level doubles it);
+ * any other backslash run is quoting noise and is dropped. Decoding repeats
+ * while it uncovers new escapes, such as \.
+ */
+interface CanonicalText {
+  readonly text: string;
+  readonly rawStart: (index: number) => number;
+  readonly rawEnd: (index: number) => number;
 }
 
-/** True when a key or assignment name, whatever its separators, names a credential. */
+const ESCAPED_CHARS = new Map([
+  ["b", " "],
+  ["f", " "],
+  ["n", "\n"],
+  ["r", "\r"],
+  ["t", "\t"],
+  ['"', '"'],
+  ["'", "'"],
+  ["/", "/"],
+]);
+const MAX_DECODE_PASSES = 4;
+
+function decodeEscapes(text: string): {
+  readonly text: string;
+  readonly start: number[];
+  readonly end: number[];
+} {
+  let decoded = "";
+  const start: number[] = [];
+  const end: number[] = [];
+  let index = 0;
+  while (index < text.length) {
+    const from = index;
+    while (text[index] === "\\") index += 1;
+    const char = text[index] ?? "";
+    const hex = text.slice(index + 1, index + 5);
+    let next = index + 1;
+    if (index === from) decoded += char;
+    else if (char === "u" && /^[0-9a-f]{4}$/iu.test(hex)) {
+      decoded += String.fromCharCode(Number.parseInt(hex, 16));
+      next = index + 5;
+    } else if (ESCAPED_CHARS.has(char)) decoded += ESCAPED_CHARS.get(char) ?? "";
+    // Any other backslash run is dropped; the character after it is read next.
+    else continue;
+    start.push(from);
+    end.push(next);
+    index = next;
+  }
+  return { text: decoded, start, end };
+}
+
+function canonicalize(raw: string): CanonicalText {
+  let text = raw;
+  let start: number[] | null = null;
+  let end: number[] | null = null;
+  for (let pass = 0; pass < MAX_DECODE_PASSES && text.includes("\\"); pass += 1) {
+    const decoded = decodeEscapes(text);
+    const previousStart: number[] | null = start;
+    const previousEnd: number[] | null = end;
+    start = previousStart
+      ? decoded.start.map((offset) => previousStart[offset] ?? raw.length)
+      : decoded.start;
+    end = previousEnd
+      ? decoded.end.map((offset) => previousEnd[offset - 1] ?? raw.length)
+      : decoded.end;
+    text = decoded.text;
+  }
+  const starts = start;
+  const ends = end;
+  return {
+    text,
+    rawStart: (index) => (starts ? (starts[index] ?? raw.length) : index),
+    rawEnd: (index) => (ends ? (ends[index] ?? raw.length) : index + 1),
+  };
+}
+
+/** True when a payload key, in canonical form, names a credential. */
 function isCredentialName(name: string): boolean {
-  return CREDENTIAL_NAME.test(normalizeName(name));
+  return CREDENTIAL_TERM.test(canonicalize(name).text);
 }
 
-const SECRET_PATTERNS: readonly [RegExp, string][] = [
+// The first capture group of a pattern, when present, is context kept in
+// clear text; the rest of the match is the secret.
+const SECRET_PATTERNS: readonly RegExp[] = [
   // A bounded scheme keeps the scan linear on long word runs.
-  [/([a-z][a-z0-9+.-]{0,31}:\/\/)[^\s/@]+@/giu, "$1[redacted]@"],
-  [
-    /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/gu,
-    "[redacted]",
-  ],
-  [/\bbearer\s+[A-Z0-9._~+/-]+=*/giu, "Bearer [redacted]"],
-  [/\bbasic\s+[A-Z0-9+/]{8,}=*/giu, "Basic [redacted]"],
-  [
-    /\b(?:gh[pousr]_|github_pat_|spk_|glpat-|xox[abprs]-|sk[-_](?:live_|test_|proj-)?)[A-Z0-9_-]{12,}/giu,
-    "[redacted]",
-  ],
-  [/\bAKIA[0-9A-Z]{16}\b/gu, "[redacted]"],
-  [/\beyJ[A-Z0-9_-]{8,}\.[A-Z0-9_-]{8,}\.[A-Z0-9_-]+/giu, "[redacted]"],
+  /([a-z][a-z0-9+.-]{0,31}:\/\/)[^\s/@]+(?=@)/giu,
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/gu,
+  /(\bbearer\s+)[A-Z0-9._~+/-]+=*/giu,
+  /(\bbasic\s+)[A-Z0-9+/]{8,}=*/giu,
+  /\b(?:gh[pousr]_|github_pat_|spk_|glpat-|xox[abprs]-|sk[-_](?:live_|test_|proj-)?)[A-Z0-9_-]{12,}/giu,
+  /\bAKIA[0-9A-Z]{16}\b/gu,
+  /\beyJ[A-Z0-9_-]{8,}\.[A-Z0-9_-]{8,}\.[A-Z0-9_-]+/giu,
+];
+// Error text only: a scheme://user:password cut off at the end of the text.
+const ERROR_PATTERNS: readonly RegExp[] = [
+  ...SECRET_PATTERNS,
+  /([a-z][a-z0-9+.-]{0,31}:\/\/)[^\s/@:]*:[^\s/@]*$/giu,
 ];
 
-const MAX_NAME_SCAN = 128;
-const NAME_CHAR = /[A-Za-z0-9._-]/u;
+const MAX_NAME_TAIL = 128;
 const MAX_NAME_WORDS = 3;
+const NAME_CHAR = /[A-Za-z0-9._-]/u;
+const INLINE_SPACE = /[^\S\r\n]/u;
 const JSON_LITERAL = /(?:-?[0-9][0-9.eE+-]*|true|false|null)(?=\s*(?:[,}\]]|$))/uy;
 
 /**
@@ -425,59 +524,39 @@ function balancedValueEnd(text: string, start: number): number {
 }
 
 function lineEnd(text: string, start: number): number {
-  const match = /[\r\n]/u.exec(text.slice(start));
-  return match ? start + match.index : text.length;
+  for (let index = start; index < text.length; index += 1) {
+    if (text[index] === "\n" || text[index] === "\r") return index;
+  }
+  return text.length;
 }
 
 /**
- * The name before the separator at `separator`: a quoted name (JSON "name",
- * \"name\" or 'name') or unquoted words. Returns null when there is none.
+ * The [:=] that makes the credential term ending at `from` an assignment name,
+ * or -1. The name may continue with word characters and up to three more
+ * words, then a closing quote, before the separator.
  */
-function assignmentName(
-  text: string,
-  separator: number,
-): { readonly name: string; readonly quoted: boolean } | null {
-  let index = separator;
-  while (index > 0 && /\s/u.test(text[index - 1] ?? "")) index -= 1;
-  const quote = text[index - 1];
-  if (quote === '"' || quote === "'") {
-    let nameEnd = index - 1;
-    while (nameEnd > 0 && text[nameEnd - 1] === "\\") nameEnd -= 1;
-    const limit = Math.max(0, nameEnd - MAX_NAME_SCAN);
-    let open = nameEnd;
-    while (open > limit && text[open - 1] !== quote) open -= 1;
-    // Without an opening quote in range, the scanned window is the name (fail-closed).
-    const name = text.slice(open, nameEnd).replaceAll("\\", "");
-    return { name, quoted: true };
+function assignmentSeparator(text: string, from: number): number {
+  const limit = Math.min(text.length, from + MAX_NAME_TAIL);
+  const skip = (index: number, pattern: RegExp): number => {
+    let next = index;
+    while (next < limit && pattern.test(text[next] ?? "")) next += 1;
+    return next;
+  };
+  let index = skip(from, NAME_CHAR);
+  for (let words = 0; words < MAX_NAME_WORDS; words += 1) {
+    const word = skip(index, INLINE_SPACE);
+    if (word === index || !NAME_CHAR.test(text[word] ?? "")) break;
+    index = skip(word, NAME_CHAR);
   }
-  // An unquoted name: up to three words joined by single spaces (api key, private key).
-  const limit = Math.max(0, index - MAX_NAME_SCAN);
-  let from = index;
-  let words = 0;
-  while (words < MAX_NAME_WORDS) {
-    let wordStart = from;
-    while (wordStart > limit && NAME_CHAR.test(text[wordStart - 1] ?? ""))
-      wordStart -= 1;
-    if (wordStart === from) break;
-    from = wordStart;
-    words += 1;
-    if (from - 1 <= limit || text[from - 1] !== " ") break;
-    if (!NAME_CHAR.test(text[from - 2] ?? "")) break;
-    from -= 1;
-  }
-  if (words === 0) return null;
-  return { name: text.slice(from, index).trimStart(), quoted: false };
+  index = skip(skip(index, /["']/u), INLINE_SPACE);
+  return index < limit && (text[index] === ":" || text[index] === "=") ? index : -1;
 }
 
 /**
- * End of a credential value. Fail-closed: a value the scanner cannot delimit
- * exactly runs to the end of the line, never just one word.
+ * End of a credential value in the raw text. Fail-closed: a value the scanner
+ * cannot delimit exactly runs to the end of the line, never just one word.
  */
-function credentialValueEnd(
-  text: string,
-  start: number,
-  name: { readonly name: string; readonly quoted: boolean },
-): number {
+function credentialValueEnd(text: string, start: number, literal: boolean): number {
   let quote = start;
   while (text[quote] === "\\") quote += 1;
   if (text[quote] === '"') return quotedValueEnd(text, quote + 1, quote - start);
@@ -485,7 +564,7 @@ function credentialValueEnd(
     const char = text[start];
     if (char === "'") return singleQuotedValueEnd(text, start + 1);
     if (char === "[" || char === "{") return balancedValueEnd(text, start + 1);
-    if (name.quoted && !HEADER_NAME.test(normalizeName(name.name))) {
+    if (literal) {
       JSON_LITERAL.lastIndex = start;
       if (JSON_LITERAL.test(text)) return JSON_LITERAL.lastIndex;
     }
@@ -493,36 +572,81 @@ function credentialValueEnd(
   return lineEnd(text, start);
 }
 
-/** Redacts the whole value of every credential-named assignment. */
-function scrubCredentialAssignments(text: string): string {
-  const separators = /[:=]/gu;
-  let scrubbed = "";
-  let copied = 0;
-  for (let match = separators.exec(text); match; match = separators.exec(text)) {
-    const name = assignmentName(text, match.index);
-    if (!name || !isCredentialName(name.name)) continue;
-    let start = match.index + 1;
-    while (start < text.length && /\s/u.test(text[start] ?? "")) start += 1;
-    const end = credentialValueEnd(text, start, name);
-    if (end <= start) continue;
-    scrubbed += `${text.slice(copied, start)}[redacted]`;
-    copied = end;
-    separators.lastIndex = end;
+type Span = readonly [number, number];
+
+function patternSpans(
+  text: string,
+  patterns: readonly RegExp[],
+  toRaw: (from: number, to: number) => Span,
+): Span[] {
+  const spans: Span[] = [];
+  for (const pattern of patterns) {
+    for (const match of text.matchAll(pattern)) {
+      const from = match.index + (match[1]?.length ?? 0);
+      const to = match.index + match[0].length;
+      if (to > from) spans.push(toRaw(from, to));
+    }
   }
-  return scrubbed + text.slice(copied);
+  return spans;
 }
 
-/** Replaces credentials embedded in free text. */
-function scrubSecrets(text: string): string {
-  let scrubbed = text;
-  for (const [pattern, replacement] of SECRET_PATTERNS) {
-    scrubbed = scrubbed.replace(pattern, replacement);
+/**
+ * Raw spans of every secret in `raw`. Patterns run on the raw and canonical
+ * text. Assignments are term-anchored on the canonical text: any credential
+ * term followed by [:=] redacts its whole value, delimited in the raw text.
+ */
+function secretSpans(raw: string, patterns: readonly RegExp[]): Span[] {
+  const canonical = canonicalize(raw);
+  const spans = patternSpans(raw, patterns, (from, to) => [from, to]);
+  if (canonical.text !== raw) {
+    spans.push(
+      ...patternSpans(canonical.text, patterns, (from, to) => [
+        canonical.rawStart(from),
+        canonical.rawEnd(to - 1),
+      ]),
+    );
   }
-  return scrubCredentialAssignments(scrubbed);
+  // A credential name inside URL userinfo (x-access-token:...@) is part of a
+  // userinfo span already redacted up to its "@".
+  const userinfo = spans.filter(([, to]) => raw[to] === "@");
+  const text = canonical.text;
+  let redactedTo = 0;
+  for (const match of text.matchAll(CREDENTIAL_TERMS)) {
+    // A term inside a value already redacted whole adds nothing.
+    if (canonical.rawStart(match.index) < redactedTo) continue;
+    const separator = assignmentSeparator(text, match.index + match[0].length);
+    if (separator < 0) continue;
+    const at = canonical.rawStart(separator);
+    if (userinfo.some(([from, to]) => from <= at && at < to)) continue;
+    let nameEnd = separator;
+    while (nameEnd > 0 && INLINE_SPACE.test(text[nameEnd - 1] ?? "")) nameEnd -= 1;
+    const quoted = text[nameEnd - 1] === '"' || text[nameEnd - 1] === "'";
+    const header = HEADER_TERM.test(match[0]);
+    let start = canonical.rawEnd(separator);
+    while (start < raw.length && /\s/u.test(raw[start] ?? "")) start += 1;
+    const end = credentialValueEnd(raw, start, quoted && !header);
+    if (end <= start) continue;
+    spans.push([start, end]);
+    redactedTo = Math.max(redactedTo, end);
+  }
+  return spans;
+}
+
+/** Replaces each secret span, merging overlapping and adjacent ones. */
+function redactSpans(raw: string, spans: readonly Span[]): string {
+  let redacted = "";
+  let copied = -1;
+  for (const [from, to] of [...spans].sort((a, b) => a[0] - b[0])) {
+    if (to <= copied) continue;
+    if (from > copied) redacted += `${raw.slice(Math.max(copied, 0), from)}[redacted]`;
+    copied = to;
+  }
+  return redacted + raw.slice(Math.max(copied, 0));
 }
 
 // In Unicode mode this matches only unpaired surrogates, which are not valid UTF-8.
 const LONE_SURROGATES = /[\uD800-\uDFFF]/gu;
+const TRUNCATED_MARK = " [truncated]";
 
 /** Bounds and scrubs a handler error before it is stored and shown to operators. */
 export function sanitizeBackgroundJobError(error: unknown): string {
@@ -532,20 +656,24 @@ export function sanitizeBackgroundJobError(error: unknown): string {
       : typeof error === "string"
         ? error
         : "Unknown error";
-  // Scanning is bounded too. A cut can split a token, so the cut drops the
-  // trailing partial word rather than leave a prefix the patterns miss.
+  // Scanning is bounded too. Fail closed at the boundary: cut only at
+  // whitespace and drop the whole segment the boundary splits, so no part of
+  // a credential the patterns can no longer recognize is kept.
   let scanned = raw;
+  let truncated = false;
   if (raw.length > MAX_ERROR_SCAN) {
     let cut = MAX_ERROR_SCAN;
-    while (cut > 0 && !/[\s"',;:=]/u.test(raw[cut - 1] ?? "")) cut -= 1;
+    while (cut > 0 && !/\s/u.test(raw[cut] ?? "")) cut -= 1;
     scanned = raw.slice(0, cut);
+    truncated = true;
   }
+  const scrubbed = redactSpans(scanned, secretSpans(scanned, ERROR_PATTERNS));
+  const bounded = truncated
+    ? `${scrubbed.slice(0, MAX_ERROR_LENGTH - TRUNCATED_MARK.length)}${TRUNCATED_MARK}`
+    : scrubbed.slice(0, MAX_ERROR_LENGTH);
   // PostgreSQL text cannot hold NUL. Bounding can split a surrogate pair, so
   // replace unstorable text last.
-  return scrubSecrets(scanned)
-    .slice(0, MAX_ERROR_LENGTH)
-    .replaceAll("\u0000", "\uFFFD")
-    .replace(LONE_SURROGATES, "\uFFFD");
+  return bounded.replaceAll("\u0000", "�").replace(LONE_SURROGATES, "�");
 }
 
 export interface ClaimedBackgroundJob {
