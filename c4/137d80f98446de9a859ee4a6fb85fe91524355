@@ -1,0 +1,31 @@
+packages/domain/src/background-jobs.test.ts
+  s_f058f999ab46b7::t_8fc7be0514739d 86-104,206-209,335,615,618,621-654
+packages/domain/src/background-jobs.ts
+  s_6ac91a4c99c94d::t_9993c302bbc8c2 618-633,652-654,673-674,684-687,700-702,705,720-724,767-789,792-794,797,896,985-988,992-993,995
+packages/domain/tests/integration/background-jobs.integration.test.ts
+  s_6ac91a4c99c94d::t_0c02bc4208d79f 2,452-484
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c4137d80f98446de9a859ee4a6fb85fe91524355",
+  "prompts": {},
+  "sessions": {
+    "s_6ac91a4c99c94d": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1e051-7322-7aa1-be20-c259d2364d00",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    },
+    "s_f058f999ab46b7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fb025346-b9a2-48b2-b8e1-3df0ee912478",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
