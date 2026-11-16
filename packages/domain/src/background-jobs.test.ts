@@ -83,6 +83,25 @@ function chainedRemote(repeats: number): string {
   });
 }
 
+/**
+ * URL userinfo whose host "@" is escaped behind `repeats` \u005c escapes, so
+ * the decode bound falls after the user and password.
+ */
+function chainedUserinfo(repeats: number): string {
+  return JSON.stringify({
+    remote: `https://USER_CANARY:PASS_CANARY:tail${BS}${"u005c".repeat(repeats)}u0040example.com/path`,
+    next: "context kept",
+  });
+}
+
+// Command-line options whose name is a credential; the value is SECRET.
+const CREDENTIAL_OPTIONS: readonly string[] = [
+  "Command failed: tool --token SECRET",
+  "Command failed: tool --password SECRET",
+  "Command failed: tool --api-key SECRET",
+  "Command failed: tool --token SECRET --repo=a/b",
+];
+
 // Names classified whole before a [:=], quoted or not, of any length.
 const WHOLE_NAMES: readonly string[] = [
   "t.o.k.e.n=abc123 next=kept",
@@ -184,6 +203,10 @@ describe("background job payloads", () => {
       { note: chainedRemote(repeats) },
     ]),
     [{ note: `token=abcdef${BS}${"u005c".repeat(4)}u006b` }],
+    ...[3, 4, 5].map((repeats): [Record<string, unknown>] => [
+      { note: chainedUserinfo(repeats) },
+    ]),
+    ...CREDENTIAL_OPTIONS.map((note): [Record<string, unknown>] => [{ note }]),
     // Text PostgreSQL jsonb cannot store.
     [{ ref: "main\u0000" }],
     [{ ref: "\ud800" }],
@@ -309,6 +332,7 @@ describe("background job payloads", () => {
           status: "status=ok",
           url: "https://example.com/search?a=b&c=d",
           json: '{"note":"t.o.k.e.n","next":"kept"}',
+          command: "tool --verbose x --repo a/b",
         },
       },
     );
@@ -588,10 +612,45 @@ describe("background job errors", () => {
   );
 
   it("redacts a credential value whose escape is left at the decode bound", () => {
+    // The span starts at the word, never at a [:=] inside it.
     expect(
       sanitizeBackgroundJobError(`token=abcdef${BS}${"u005c".repeat(4)}u006b`),
-    ).toBe("token=[redacted]");
+    ).toBe("[redacted]");
   });
+
+  it.each([3, 4, 5])(
+    "redacts URL userinfo before the decode bound (%i escapes)",
+    (repeats) => {
+      const scrubbed = sanitizeBackgroundJobError(chainedUserinfo(repeats));
+      expect(scrubbed).not.toContain("USER_CANARY");
+      expect(scrubbed).not.toContain("PASS_CANARY");
+      expect(scrubbed.startsWith('{"remote":')).toBe(true);
+    },
+  );
+
+  it.each([
+    [CREDENTIAL_OPTIONS[0], "Command failed: tool --token [redacted]"],
+    [CREDENTIAL_OPTIONS[1], "Command failed: tool --password [redacted]"],
+    [CREDENTIAL_OPTIONS[2], "Command failed: tool --api-key [redacted]"],
+    // The whole name before "=" (back to the ":") contains token, so the
+    // later value fails closed too.
+    [
+      CREDENTIAL_OPTIONS[3],
+      "Command failed: tool --token [redacted] --repo=[redacted]",
+    ],
+    ["tool --token SECRET --repo a/b", "tool --token [redacted] --repo a/b"],
+    ['tool -token "two words" next', "tool -token [redacted] next"],
+    ['["git","--password","SECRET","next"]', '["git","--password",[redacted],"next"]'],
+  ])("redacts the value of the credential option in %j", (text, expected) => {
+    expect(sanitizeBackgroundJobError(text)).toBe(expected);
+  });
+
+  it.each(["tool --verbose x", "tool --repo a/b", "tool --verbose x --repo a/b"])(
+    "leaves the option %j unchanged",
+    (text) => {
+      expect(sanitizeBackgroundJobError(text)).toBe(text);
+    },
+  );
 
   it("does not classify quoted free text that is not an assignment name", () => {
     expect(sanitizeBackgroundJobError('{"note":"t.o.k.e.n","next":"kept"}')).toBe(

@@ -615,6 +615,22 @@ function credentialValueEnd(text: string, start: number, literal: boolean): numb
   return lineEnd(text, start);
 }
 
+/**
+ * Raw end of a command-line option value starting at canonical `start`: a
+ * quoted string, delimited in the raw text at its quoting level, or the
+ * canonical token up to whitespace or a quote.
+ */
+function optionValueEnd(raw: string, canonical: CanonicalText, start: number): number {
+  const first = canonical.text[start];
+  if (first === '"' || first === "'") {
+    return credentialValueEnd(raw, canonical.rawStart(start), false);
+  }
+  let end = start;
+  while (end < canonical.text.length && !/[\s"']/u.test(canonical.text[end] ?? ""))
+    end += 1;
+  return end > start ? canonical.rawEnd(end - 1) : canonical.rawStart(start);
+}
+
 type Span = readonly [number, number];
 
 function patternSpans(
@@ -633,8 +649,9 @@ function patternSpans(
   return spans;
 }
 
-// Characters a value or word follows: whitespace, a quote or [:=,{[].
-const VALUE_START = /[\s"':=,{[]/u;
+// Characters an unresolved escape's word follows: whitespace, a quote or
+// [,{[]. Never : or =, which also sit inside one value (URL userinfo).
+const VALUE_START = /[\s"',{[]/u;
 
 /**
  * Raw spans of every secret in `raw`. Patterns run on the raw and canonical
@@ -653,8 +670,8 @@ function secretSpans(raw: string, patterns: readonly RegExp[]): Span[] {
     );
   }
   if (canonical.unresolved >= 0) {
-    // Fail closed from the start of the value or word holding the escape, so
-    // no decoded prefix of a credential survives.
+    // Fail closed from the start of the word holding the escape, so no
+    // decoded prefix of a credential (or of URL userinfo) survives.
     let from = canonical.unresolved;
     while (from > 0 && !VALUE_START.test(canonical.text[from - 1] ?? "")) from -= 1;
     spans.push([canonical.rawStart(from), raw.length]);
@@ -664,8 +681,10 @@ function secretSpans(raw: string, patterns: readonly RegExp[]): Span[] {
   const userinfo = spans.filter(([, to]) => raw[to] === "@");
   let redactedTo = 0;
   for (const assignment of credentialAssignments(canonical.text)) {
-    // A name inside a value already redacted whole adds nothing.
-    if (canonical.rawStart(assignment.at) < redactedTo) continue;
+    // A name inside a value already redacted whole adds nothing. An option
+    // is never skipped: its value is one token, and an earlier whole-name
+    // assignment (tool --token X --repo=a/b) may redact only a later value.
+    if (!assignment.option && canonical.rawStart(assignment.at) < redactedTo) continue;
     if (assignment.separator === undefined) {
       // A name the scanner cannot delimit is redacted from the name on.
       const start = canonical.rawEnd(assignment.nameEnd - 1);
@@ -678,10 +697,12 @@ function secretSpans(raw: string, patterns: readonly RegExp[]): Span[] {
     if (userinfo.some(([from, to]) => from <= at && at < to)) continue;
     let start = canonical.rawEnd(assignment.separator);
     while (start < raw.length && /\s/u.test(raw[start] ?? "")) start += 1;
-    const end = credentialValueEnd(raw, start, assignment.literal);
+    const end = assignment.option
+      ? optionValueEnd(raw, canonical, assignment.separator + 1)
+      : credentialValueEnd(raw, start, assignment.literal);
     if (end <= start) continue;
     spans.push([start, end]);
-    redactedTo = Math.max(redactedTo, end);
+    if (!assignment.option) redactedTo = Math.max(redactedTo, end);
   }
   return spans;
 }
@@ -696,6 +717,11 @@ interface CredentialAssignment {
   readonly nameEnd: number;
   readonly separator?: number;
   readonly literal: boolean;
+  /**
+   * A command-line option (--token X): the value after `separator` is the
+   * next quoted string or whitespace-delimited token.
+   */
+  readonly option?: boolean;
 }
 
 // Characters that end an unquoted name scanning back from its [:=]: a line
@@ -738,13 +764,37 @@ function separatorAssignments(text: string): CredentialAssignment[] {
   return found;
 }
 
+// A command-line option -name or --name that starts a word (or an argv
+// string), followed by whitespace or an argv comma, then a value. The name
+// stops at whitespace, quotes, commas and [:=]; --name=value is a separator
+// assignment already.
+const OPTION = /(?<![^\s"'[,(])--?([^\s"',:=-][^\s"',:=]*)["']?(?:\s*,\s*|\s+)(?=\S)/gu;
+
+/** Options whose name the compact classifier recognizes (--token, --api-key). */
+function optionAssignments(text: string): CredentialAssignment[] {
+  const found: CredentialAssignment[] = [];
+  for (const match of text.matchAll(OPTION)) {
+    if (!isCredentialName(match[1] ?? "")) continue;
+    const valueStart = match.index + match[0].length;
+    found.push({
+      at: match.index,
+      nameEnd: valueStart,
+      separator: valueStart - 1,
+      literal: false,
+      option: true,
+    });
+  }
+  return found;
+}
+
 /**
  * Every credential-named assignment in canonical text, in text order: a name
- * before a [:=] the compact classifier recognizes, or a credential term
- * followed (after a bounded name tail of up to three words) by [:=].
+ * before a [:=] the compact classifier recognizes, a credential-named
+ * command-line option, or a credential term followed (after a bounded name
+ * tail of up to three words) by [:=].
  */
 function credentialAssignments(text: string): CredentialAssignment[] {
-  const found = separatorAssignments(text);
+  const found = [...separatorAssignments(text), ...optionAssignments(text)];
   for (const match of text.matchAll(CREDENTIAL_TERMS)) {
     const termEnd = match.index + match[0].length;
     const name = assignmentName(text, termEnd);
@@ -843,6 +893,7 @@ export type BackgroundJobClaim =
 class ClaimBudgetSpent extends Error {}
 
 const LEASE_EXPIRED_ERROR = "Lease expired before the job finished";
+const ATTEMPT_LIMIT_ERROR = "Attempt limit reached before the job ran";
 // The stored lease outlasts the handler's own timeout, so a live drainer gives
 // up on a run before another drainer can reclaim it.
 const LEASE_GRACE_MS = 30_000;
@@ -931,13 +982,17 @@ export async function claimBackgroundJob(input: {
       }
       const handler = input.registry.get(row.kind);
       const reclaimed = row.state === "running";
-      if (reclaimed && row.attempts >= handler.maxAttempts) {
+      // Every candidate at or over its kind's limit (which can drop between
+      // attempts) is dead without another run. A reclaimed run records its
+      // lease expiry; a queued or failed row keeps its last error.
+      if (row.attempts >= handler.maxAttempts) {
         await client.query(
           `UPDATE background_jobs
               SET state = 'dead', lease_owner = NULL, lease_expires_at = NULL,
-                  last_error = $2, completed_at = now(), updated_at = now()
+                  last_error = COALESCE($2, last_error, $3), completed_at = now(),
+                  updated_at = now()
             WHERE id = $1`,
-          [row.id, LEASE_EXPIRED_ERROR],
+          [row.id, reclaimed ? LEASE_EXPIRED_ERROR : null, ATTEMPT_LIMIT_ERROR],
         );
         return { type: "dead", jobId: row.id, kind: row.kind } as const;
       }

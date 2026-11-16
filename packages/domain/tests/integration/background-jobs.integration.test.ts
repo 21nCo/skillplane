@@ -1,5 +1,5 @@
 import { Pool } from "pg";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { migrateDatabase } from "../../../db/src/migrate.js";
 import { resolveTestDatabaseUrl } from "../../../db/src/database-url.js";
 import {
@@ -446,6 +446,39 @@ describe("drainBackgroundJobs", () => {
       state: "dead",
       attempts: 1,
       last_error: "Lease expired before the job finished",
+    });
+  });
+
+  it("marks a failed or queued job at a lowered attempt limit dead without running it", async () => {
+    const run = vi.fn();
+    const registry = createBackgroundJobRegistry([
+      { ...testEchoJobHandler, run, maxAttempts: 3 },
+    ]);
+    const failed = await enqueueEcho(workspace(), "lowered-failed");
+    const queued = await enqueueEcho(workspace(), "lowered-queued");
+    // Three attempts already ran under the kind's earlier, higher limit.
+    await pool.query(
+      `UPDATE background_jobs SET state = 'failed', attempts = 3, last_error = 'earlier'
+        WHERE id = $1`,
+      [failed.id],
+    );
+    await pool.query(`UPDATE background_jobs SET attempts = 3 WHERE id = $1`, [
+      queued.id,
+    ]);
+    expect(await drain(registry)).toMatchObject({ dead: 2, succeeded: 0, failed: 0 });
+    expect(run).not.toHaveBeenCalled();
+    expect(await row(failed.id)).toMatchObject({
+      state: "dead",
+      attempts: 3,
+      last_error: "earlier",
+      lease_owner: null,
+      completed: true,
+    });
+    expect(await row(queued.id)).toMatchObject({
+      state: "dead",
+      attempts: 3,
+      last_error: "Attempt limit reached before the job ran",
+      lease_owner: null,
     });
   });
 
