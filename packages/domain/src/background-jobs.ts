@@ -119,6 +119,14 @@ function assertPayloadValue(value: unknown, depth: number): void {
     assertPayloadText(value);
     return;
   }
+  if (typeof value === "number") {
+    // jsonb prints numbers in plain decimal form, so an exponent number such
+    // as 1e300 can grow past the stored-size limit after this check.
+    if (/e/iu.test(String(value))) {
+      throw invalid("Background job payload numbers must be plain decimals");
+    }
+    return;
+  }
   if (value === null || typeof value !== "object") return;
   if (depth >= MAX_PAYLOAD_DEPTH) {
     throw invalid("Background job payload is nested too deeply");
@@ -134,6 +142,9 @@ function assertPayloadValue(value: unknown, depth: number): void {
       throw invalid("Background job payload key is too long");
     }
     assertPayloadText(key);
+    if (CREDENTIAL_KEY.test(key)) {
+      throw invalid("Background job payload must not contain secrets or personal data");
+    }
     assertPayloadValue(item, depth + 1);
   }
 }
@@ -169,8 +180,8 @@ function serializePayload(payload: Readonly<Record<string, unknown>>): string {
 
 /**
  * The database is the final authority on what jsonb accepts and how large its
- * text form is (numbers can expand); report its payload rejections as
- * validation failures too.
+ * text form is. The checks above keep valid payloads clear of its limits; any
+ * rejection that still happens is reported as a validation failure too.
  */
 function isPayloadRejection(error: unknown): boolean {
   if (typeof error !== "object" || error === null) return false;
@@ -312,9 +323,19 @@ export function backgroundJobRetryDelayMs(attempt: number): number {
   return Math.min(RETRY_CAP_MS, RETRY_BASE_MS * 2 ** exponent);
 }
 
-// Credential-like field names, optionally prefixed (githubToken, x-api-key).
-const CREDENTIAL_NAME =
-  "[a-z0-9_-]{0,40}?(?:token|secret|passw(?:or)?d|api[_-]?key|credentials?|private[_-]?key|authorization|cookie)";
+// Credential vocabulary shared by payload keys, payload values and error text.
+const CREDENTIAL_TERM =
+  "(?:token|secret|passw(?:or)?d|api[_-]?key|credentials?|private[_-]?key|authorization|cookie)";
+// Any key containing a credential term (githubToken, x-api-key, privateKeyPem).
+const CREDENTIAL_KEY = new RegExp(CREDENTIAL_TERM, "iu");
+// A credential-named assignment: name=value, name: value or JSON "name":"value",
+// at any level of quoting (\"name\": inside a serialized JSON string).
+const CREDENTIAL_ASSIGNMENT = new RegExp(
+  `\\b[a-z0-9_-]{0,40}?${CREDENTIAL_TERM}\\\\*["']?\\s*[:=]\\s*`,
+  "giu",
+);
+const UNQUOTED_VALUE = /[^\s"',;&}\]\\]+/uy;
+const ALREADY_REDACTED = /\[redacted\]|(?:bearer|basic) \[redacted\]/iuy;
 
 const SECRET_PATTERNS: readonly [RegExp, string][] = [
   [/([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/giu, "$1[redacted]@"],
@@ -330,17 +351,65 @@ const SECRET_PATTERNS: readonly [RegExp, string][] = [
   ],
   [/\bAKIA[0-9A-Z]{16}\b/gu, "[redacted]"],
   [/\beyJ[A-Z0-9_-]{8,}\.[A-Z0-9_-]{8,}\.[A-Z0-9_-]+/giu, "[redacted]"],
-  // name=value, name: value and JSON "name":"value", plain or escaped quotes.
-  [
-    new RegExp(
-      `\\b(${CREDENTIAL_NAME}\\\\?["']?\\s*[:=]\\s*)` +
-        `(?!\\[redacted\\]|(?:bearer|basic) \\[redacted\\])` +
-        `(\\\\?"(?:[^"\\\\]|\\\\.)*?\\\\?"|'[^']*'|[^\\s"',;&}\\]\\\\]+)`,
-      "giu",
-    ),
-    "$1[redacted]",
-  ],
 ];
+
+/**
+ * End of a quoted value opened by `level` backslashes and a double quote. At
+ * nesting depth n the delimiter is 2^n - 1 backslashes and a quote, and each
+ * deeper level doubles the backslashes, so a run of r backslashes before a
+ * quote closes the value only when r mod 2(level + 1) equals level; any other
+ * run is an escaped quote inside the value. An unterminated value runs to the
+ * end of the text.
+ */
+function quotedValueEnd(text: string, start: number, level: number): number {
+  const unit = 2 * (level + 1);
+  let index = start;
+  while (index < text.length) {
+    let run = 0;
+    while (text[index] === "\\") {
+      run += 1;
+      index += 1;
+    }
+    if (index >= text.length) break;
+    if (text[index] === '"' && run % unit === level) return index + 1;
+    index += 1;
+  }
+  return text.length;
+}
+
+function credentialValueEnd(text: string, start: number): number {
+  let quote = start;
+  while (text[quote] === "\\") quote += 1;
+  if (text[quote] === '"') return quotedValueEnd(text, quote + 1, quote - start);
+  if (quote === start && text[start] === "'") {
+    const close = text.indexOf("'", start + 1);
+    return close < 0 ? text.length : close + 1;
+  }
+  UNQUOTED_VALUE.lastIndex = start;
+  return UNQUOTED_VALUE.test(text) ? UNQUOTED_VALUE.lastIndex : start;
+}
+
+/** Redacts the whole value of every credential-named assignment. */
+function scrubCredentialAssignments(text: string): string {
+  let scrubbed = "";
+  let copied = 0;
+  CREDENTIAL_ASSIGNMENT.lastIndex = 0;
+  for (
+    let match = CREDENTIAL_ASSIGNMENT.exec(text);
+    match;
+    match = CREDENTIAL_ASSIGNMENT.exec(text)
+  ) {
+    const start = match.index + match[0].length;
+    ALREADY_REDACTED.lastIndex = start;
+    if (ALREADY_REDACTED.test(text)) continue;
+    const end = credentialValueEnd(text, start);
+    if (end === start) continue;
+    scrubbed += `${text.slice(copied, start)}[redacted]`;
+    copied = end;
+    CREDENTIAL_ASSIGNMENT.lastIndex = end;
+  }
+  return scrubbed + text.slice(copied);
+}
 
 /** Replaces credentials embedded in free text. */
 function scrubSecrets(text: string): string {
@@ -348,8 +417,11 @@ function scrubSecrets(text: string): string {
   for (const [pattern, replacement] of SECRET_PATTERNS) {
     scrubbed = scrubbed.replace(pattern, replacement);
   }
-  return scrubbed;
+  return scrubCredentialAssignments(scrubbed);
 }
+
+// In Unicode mode this matches only unpaired surrogates, which are not valid UTF-8.
+const LONE_SURROGATES = /[\uD800-\uDFFF]/gu;
 
 /** Bounds and scrubs a handler error before it is stored and shown to operators. */
 export function sanitizeBackgroundJobError(error: unknown): string {
@@ -359,7 +431,12 @@ export function sanitizeBackgroundJobError(error: unknown): string {
       : typeof error === "string"
         ? error
         : "Unknown error";
-  return scrubSecrets(raw).slice(0, MAX_ERROR_LENGTH);
+  // PostgreSQL text cannot hold NUL. Bounding can split a surrogate pair, so
+  // replace unstorable text last.
+  return scrubSecrets(raw)
+    .slice(0, MAX_ERROR_LENGTH)
+    .replaceAll("\u0000", "\uFFFD")
+    .replace(LONE_SURROGATES, "\uFFFD");
 }
 
 export interface ClaimedBackgroundJob {

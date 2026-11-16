@@ -77,6 +77,15 @@ describe("background job payloads", () => {
       ]),
     ],
     [{ [`${"k".repeat(129)}`]: 1 }],
+    // Credential-named keys, whatever their value.
+    [{ apiKey: "neutral" }],
+    [{ api_key: "neutral" }],
+    [{ "x-api-key": "neutral" }],
+    [{ credentials: { user: "neutral" } }],
+    [{ privateKey: "neutral" }],
+    [{ private_key: "neutral" }],
+    [{ passwd: "neutral" }],
+    [{ nested: [{ githubToken: 1 }] }],
     // Text PostgreSQL jsonb cannot store.
     [{ ref: "main\u0000" }],
     [{ ref: "\ud800" }],
@@ -107,6 +116,60 @@ describe("background job payloads", () => {
       ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
     }
     expect(database.query).not.toHaveBeenCalled();
+  });
+
+  it("rejects exponent numbers that jsonb would expand, before any query", async () => {
+    for (const payload of [
+      { a: Array(200).fill(1e300), b: Array(200).fill(1e300) },
+      { tiny: 1e-7 },
+      { huge: 1e21 },
+    ]) {
+      await expect(
+        enqueueJob(database, {
+          workspaceId: "workspace:a",
+          kind: "test.echo",
+          idempotencyKey: "key",
+          payload,
+        }),
+      ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+    }
+    expect(database.query).not.toHaveBeenCalled();
+  });
+
+  it("accepts identifier payloads with plain numbers", async () => {
+    const query = vi.fn().mockResolvedValue({
+      rows: [
+        {
+          id: "background-job:1",
+          workspace_id: "workspace:a",
+          kind: "test.echo",
+          idempotency_key: "key",
+          payload: {},
+          state: "queued",
+          attempts: 0,
+          run_after: new Date(),
+          last_error: null,
+          created_at: new Date(),
+          updated_at: new Date(),
+          completed_at: null,
+        },
+      ],
+    });
+    await enqueueJob(
+      { query },
+      {
+        workspaceId: "workspace:a",
+        kind: "test.echo",
+        idempotencyKey: "key",
+        payload: {
+          sourceId: "source-1",
+          attempt: 3,
+          ratio: 0.25,
+          tokenizer: undefined,
+        },
+      },
+    );
+    expect(query).toHaveBeenCalledOnce();
   });
 });
 
@@ -145,5 +208,50 @@ describe("background job errors", () => {
       2_000,
     );
     expect(sanitizeBackgroundJobError({})).toBe("Unknown error");
+  });
+
+  it.each(["password", "token", "apiKey"])(
+    "redacts a whole %s value containing escaped quotes, plain or nested",
+    (name) => {
+      const value = 'before\\"AFTER_CREDENTIAL\\\\';
+      const plain = JSON.stringify({ [name]: value, next: "kept" });
+      const nested = JSON.stringify({ body: plain, next: "kept" });
+      const twice = JSON.stringify({ wrapper: nested });
+      const quoted = JSON.stringify({
+        [name]: 'before"AFTER_CREDENTIAL',
+        next: "kept",
+      });
+      for (const text of [
+        plain,
+        nested,
+        twice,
+        quoted,
+        JSON.stringify({ body: quoted, next: "kept" }),
+      ]) {
+        const scrubbed = sanitizeBackgroundJobError(text);
+        expect(scrubbed).not.toContain("AFTER_CREDENTIAL");
+        expect(scrubbed).not.toContain("before");
+        expect(scrubbed).toContain("kept");
+      }
+      expect(sanitizeBackgroundJobError(plain)).toBe(
+        `{"${name}":[redacted],"next":"kept"}`,
+      );
+      expect(sanitizeBackgroundJobError(nested)).toBe(
+        `{"body":"{\\"${name}\\":[redacted],\\"next\\":\\"kept\\"}","next":"kept"}`,
+      );
+      // An unterminated value is redacted to the end.
+      expect(sanitizeBackgroundJobError(`password: "open ${value}`)).toBe(
+        "password: [redacted]",
+      );
+    },
+  );
+
+  it("replaces text PostgreSQL cannot store", () => {
+    expect(
+      sanitizeBackgroundJobError(new Error("bad\u0000byte \ud800 ok \u{1f600}")),
+    ).toBe("Error: bad\ufffdbyte \ufffd ok \u{1f600}");
+    // Bounding must not leave half of a surrogate pair behind.
+    const bounded = sanitizeBackgroundJobError(`${"x".repeat(1_999)}\u{1f600}`);
+    expect(bounded).toBe(`${"x".repeat(1_999)}\ufffd`);
   });
 });

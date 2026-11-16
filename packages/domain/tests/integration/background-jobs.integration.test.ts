@@ -197,10 +197,6 @@ describe("enqueueJob", () => {
         idempotencyKey: "rejected",
         payload,
       });
-    // Exponent numbers are small as JSON but expand in jsonb's text form.
-    await expect(
-      enqueue({ a: Array(200).fill(1e300), b: Array(200).fill(1e300) }),
-    ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
     await expect(enqueue({ ref: "main\u0000" })).rejects.toMatchObject({
       code: "VALIDATION_FAILED",
     });
@@ -208,6 +204,38 @@ describe("enqueueJob", () => {
       "SELECT count(*) FROM background_jobs",
     );
     expect(count.rows[0]?.count).toBe("0");
+  });
+
+  it("rejects an expanding payload without aborting the caller's transaction", async () => {
+    const workspaceId = workspace();
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      // Exponent numbers are small as JSON but expand in jsonb's text form.
+      await expect(
+        enqueueJob(client, {
+          workspaceId,
+          kind: "test.echo",
+          idempotencyKey: "expanding",
+          payload: { a: Array(200).fill(1e300), b: Array(200).fill(1e300) },
+        }),
+      ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+      const { created } = await enqueueJob(client, {
+        workspaceId,
+        kind: "test.echo",
+        idempotencyKey: "after",
+        payload: { ref: "main" },
+      });
+      expect(created).toBe(true);
+      await client.query("COMMIT");
+    } finally {
+      client.release();
+    }
+    const keys = await pool.query<{ idempotency_key: string }>(
+      "SELECT idempotency_key FROM background_jobs WHERE workspace_id = $1",
+      [workspaceId],
+    );
+    expect(keys.rows).toEqual([{ idempotency_key: "after" }]);
   });
 });
 
@@ -313,6 +341,41 @@ describe("drainBackgroundJobs", () => {
     expect(await listFailedBackgroundJobs(pool, { workspaceId: workspace() })).toEqual(
       [],
     );
+  });
+
+  it("stores a handler error with unstorable text and keeps draining", async () => {
+    const workspaceId = workspace();
+    const registry = createBackgroundJobRegistry([
+      testEchoJobHandler,
+      {
+        kind: "test.fail",
+        run() {
+          return Promise.reject(new Error("bad\u0000byte \ud800"));
+        },
+      },
+    ]);
+    const { job } = await enqueueJob(pool, {
+      workspaceId,
+      kind: "test.fail",
+      idempotencyKey: "nul",
+      payload: { sourceId: "source-1" },
+      runAfter: new Date(Date.now() - 60_000),
+    });
+    const echoJobs = await Promise.all([
+      enqueueEcho(workspaceId, "after-1"),
+      enqueueEcho(workspaceId, "after-2"),
+    ]);
+    expect(await drain(registry)).toMatchObject({ failed: 1, succeeded: 2 });
+    expect(await row(job.id)).toMatchObject({
+      state: "failed",
+      attempts: 1,
+      lease_owner: null,
+      delay_seconds: 30,
+      last_error: "Error: bad\ufffdbyte \ufffd",
+    });
+    for (const echoJob of echoJobs) {
+      expect(await row(echoJob.id)).toMatchObject({ state: "succeeded" });
+    }
   });
 
   it("reclaims a job whose drainer died mid-run and completes it", async () => {
