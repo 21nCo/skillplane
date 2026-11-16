@@ -1,0 +1,37 @@
+packages/control-plane/src/concrete-migration.ts
+  s_59f56e7daef495::t_06b6dd769b5ed3 971-982
+packages/db/migrations/0055_regional_background_jobs.sql
+  s_59f56e7daef495::t_d94ea53f711921 27-28,30
+packages/db/src/schema/background-jobs.ts
+  s_59f56e7daef495::t_ff9999670f1f98 59
+packages/db/tests/integration/concrete-migration.integration.test.ts
+  s_59f56e7daef495::t_ddb4a163290eef 6-10,670-770
+packages/db/tests/integration/migration-key-matrix.integration.test.ts
+  s_59f56e7daef495::t_e1de0aba4ebfce 324-339
+packages/domain/src/background-jobs.test.ts
+  s_59f56e7daef495::t_f28936f9b11b26 62-82,125-143
+packages/domain/src/background-jobs.ts
+  s_59f56e7daef495::t_559a68a94a1134 94-140,143-144,153-155,163,170-184,203-222,240,249-251,315-318,321-324,326,328-341,345-353,362,580-583,587,590,592-593,597-607,610,612,619,630-631,638-644,661,684-696,701
+packages/domain/tests/integration/background-jobs.integration.test.ts
+  s_59f56e7daef495::t_6c93c0486f28b0 156-210,331-337,379,381-393,400-424
+projection/src/index.test.ts
+  s_59f56e7daef495::t_28fd03b869d66f 1-98
+projection/src/index.ts
+  s_59f56e7daef495::t_2a984f1669eecc 157-166,168-169
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "dee963890518423f7381c0d7746c168d4e27c34f",
+  "prompts": {},
+  "sessions": {
+    "s_59f56e7daef495": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_59f56e7daef495",
+        "model": "unknown"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
