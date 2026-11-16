@@ -51,6 +51,27 @@ describe("background job registry", () => {
   });
 });
 
+// esbuild cooks \u escapes even inside String.raw, so tests that need a
+// literal backslash before "u" spell it with BS.
+const BS = "\\";
+
+/**
+ * {"to\u006ben":"abc123","next":"kept"} wrapped `levels` times in stringified
+ * JSON, with each level's escaped backslashes written as \u005c escapes.
+ */
+function wrapCredential(levels: number): string {
+  let text = String.raw`{"to${BS}u006ben":"abc123","next":"kept"}`;
+  for (let level = 0; level < levels; level += 1) {
+    text = JSON.stringify({ inner: text }).replaceAll("\\\\", "\\u005c");
+  }
+  return text;
+}
+
+/** "token" with its "k" escaped so that decoding it takes `passes` passes. */
+function chainedToken(passes: number): string {
+  return `to${BS}${"u005c".repeat(passes - 1)}u006ben`;
+}
+
 describe("background job payloads", () => {
   const database = { query: vi.fn() };
 
@@ -94,14 +115,24 @@ describe("background job payloads", () => {
     [{ API_KEY: "neutral" }],
     [{ list: [{ "Api-Key": "neutral" }] }],
     [{ note: "api.key=neutral" }],
+    // A quoted name is classified whole by the compact key classifier.
+    [{ note: '{"t.o.k.e.n":"abc123","next":"kept"}' }],
+    [{ note: '{"a.p.i.key":"abc123","next":"kept"}' }],
+    [{ note: '{"private.k.e.y":"abc123","next":"kept"}' }],
+    // Escapes still undecoded at the decode bound fail closed.
+    [{ note: wrapCredential(4) }],
+    [{ note: wrapCredential(5) }],
+    [{ note: `${chainedToken(4)}=abc123` }],
+    [{ note: `${chainedToken(5)}=abc123` }],
+    [{ nested: [{ note: `see ${chainedToken(6)}` }] }],
     // Names are classified in canonical form: JSON escapes decoded, any
     // separator run (tab, NBSP, repeated spaces) between the words.
-    [{ note: String.raw`{"to\u006ben":"X"}` }],
+    [{ note: String.raw`{"to${BS}u006ben":"X"}` }],
     [{ note: String.raw`{"api\tkey":"X"}` }],
     [{ note: "api  key: S1" }],
     [{ note: "api\u00a0key=S2" }],
-    [{ note: JSON.stringify({ body: String.raw`{"to\u006ben":"X"}` }) }],
-    [{ [String.raw`to\u006ben`]: 1 }],
+    [{ note: JSON.stringify({ body: String.raw`{"to${BS}u006ben":"X"}` }) }],
+    [{ [String.raw`to${BS}u006ben`]: 1 }],
     [{ nested: { "api\tkey": 1 } }],
     // A separator run of any length between the words, in keys and text.
     ...[16, 17, 64].flatMap((width): [Record<string, unknown>][] => {
@@ -356,8 +387,8 @@ describe("background job errors", () => {
     [`${"x".repeat(60)}_token=SECRET`, `${"x".repeat(60)}_token=[redacted]`],
     // Names are classified in canonical form, values delimited in the raw text.
     [
-      String.raw`{"to\u006ben":"CREDENTIAL","next":"kept"}`,
-      String.raw`{"to\u006ben":[redacted],"next":"kept"}`,
+      String.raw`{"to${BS}u006ben":"CREDENTIAL","next":"kept"}`,
+      String.raw`{"to${BS}u006ben":[redacted],"next":"kept"}`,
     ],
     [
       String.raw`{"api\tkey":"CRED2","next":"kept"}`,
@@ -366,12 +397,12 @@ describe("background job errors", () => {
     ["api  key: SECRET1\nnext: kept", "api  key: [redacted]\nnext: kept"],
     ["api\u00a0key=SECRET2\nnext: kept", "api\u00a0key=[redacted]\nnext: kept"],
     [
-      JSON.stringify({ body: String.raw`{"to\u006ben":"CRED","next":"kept"}` }),
-      String.raw`{"body":"{\"to\\u006ben\":[redacted],\"next\":\"kept\"}"}`,
+      JSON.stringify({ body: String.raw`{"to${BS}u006ben":"CRED","next":"kept"}` }),
+      String.raw`{"body":"{\"to${BS}${BS}u006ben\":[redacted],\"next\":\"kept\"}"}`,
     ],
     [
-      String.raw`{"to\u005cu006ben":"CRED","next":"kept"}`,
-      String.raw`{"to\u005cu006ben":[redacted],"next":"kept"}`,
+      String.raw`{"to${BS}u005cu006ben":"CRED","next":"kept"}`,
+      String.raw`{"to${BS}u005cu006ben":[redacted],"next":"kept"}`,
     ],
     ["gh\\u0070_" + "a".repeat(36), "[redacted]"],
   ])("redacts the whole credential value in %j", (text, expected) => {
@@ -464,6 +495,46 @@ describe("background job errors", () => {
     // An unterminated scheme://user:password at the end of the text.
     expect(sanitizeBackgroundJobError("clone https://user:SECRET")).toBe(
       "clone https://[redacted]",
+    );
+  });
+
+  it.each(["t.o.k.e.n", "a.p.i.key", "private.k.e.y"])(
+    "classifies the quoted name %s with the compact key classifier",
+    (name) => {
+      expect(sanitizeBackgroundJobError(`{"${name}":"abc123","next":"kept"}`)).toBe(
+        `{"${name}":[redacted],"next":"kept"}`,
+      );
+      expect(sanitizeBackgroundJobError(`set '${name}' = 'abc123' next`)).toBe(
+        `set '${name}' = [redacted] next`,
+      );
+    },
+  );
+
+  it("does not classify quoted free text that is not an assignment name", () => {
+    expect(sanitizeBackgroundJobError('{"note":"t.o.k.e.n","next":"kept"}')).toBe(
+      '{"note":"t.o.k.e.n","next":"kept"}',
+    );
+  });
+
+  it.each([3, 4, 5])(
+    "fails closed on escapes left at the decode bound (%i wrappers)",
+    (levels) => {
+      const text = wrapCredential(levels);
+      const scrubbed = sanitizeBackgroundJobError(text);
+      expect(scrubbed).not.toContain("abc123");
+      expect(scrubbed).toMatch(/\[redacted\]$/u);
+      expect(text.startsWith(scrubbed.slice(0, -"[redacted]".length))).toBe(true);
+    },
+  );
+
+  it("redacts from the first escape still undecoded at the decode bound", () => {
+    // Four passes decode the name and its value is redacted as usual.
+    expect(sanitizeBackgroundJobError(`${chainedToken(4)}=abc123\nnext=kept`)).toBe(
+      `${chainedToken(4)}=[redacted]\nnext=kept`,
+    );
+    // One more level leaves an escape the classifier never saw.
+    expect(sanitizeBackgroundJobError(`a=b ${chainedToken(5)}=abc123\nnext=kept`)).toBe(
+      "a=b to[redacted]",
     );
   });
 

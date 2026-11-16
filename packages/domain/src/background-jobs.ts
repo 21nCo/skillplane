@@ -372,6 +372,11 @@ const HEADER_TERM = /^(?:authorization|cookie)$/iu;
  */
 interface CanonicalText {
   readonly text: string;
+  /**
+   * Index in `text` of the first escape still decodable after the last
+   * decode pass, or -1. Text past it was not classified and fails closed.
+   */
+  readonly unresolved: number;
   readonly rawStart: (index: number) => number;
   readonly rawEnd: (index: number) => number;
 }
@@ -387,6 +392,9 @@ const ESCAPED_CHARS = new Map([
   ["/", "/"],
 ]);
 const MAX_DECODE_PASSES = 4;
+// An escape decodeEscapes would still decode: a backslash run before u+4 hex
+// digits, a quote or a control escape.
+const DECODABLE_ESCAPE = /\\+(?:u[0-9a-fA-F]{4}|["'/bfnrt])/u;
 
 function decodeEscapes(text: string): {
   readonly text: string;
@@ -435,8 +443,14 @@ function canonicalize(raw: string): CanonicalText {
   }
   const starts = start;
   const ends = end;
+  // Fail closed at the decode bound: an escape left after the last pass hides
+  // text the classifier never saw.
+  const unresolved = text.includes("\\")
+    ? (DECODABLE_ESCAPE.exec(text)?.index ?? -1)
+    : -1;
   return {
     text,
+    unresolved,
     rawStart: (index) => (starts ? (starts[index] ?? raw.length) : index),
     rawEnd: (index) => (ends ? (ends[index] ?? raw.length) : index + 1),
   };
@@ -635,40 +649,87 @@ function secretSpans(raw: string, patterns: readonly RegExp[]): Span[] {
       ]),
     );
   }
+  if (canonical.unresolved >= 0) {
+    spans.push([canonical.rawStart(canonical.unresolved), raw.length]);
+  }
   // A credential name inside URL userinfo (x-access-token:...@) is part of a
   // userinfo span already redacted up to its "@".
   const userinfo = spans.filter(([, to]) => raw[to] === "@");
-  const text = canonical.text;
   let redactedTo = 0;
-  for (const match of text.matchAll(CREDENTIAL_TERMS)) {
-    // A term inside a value already redacted whole adds nothing.
-    if (canonical.rawStart(match.index) < redactedTo) continue;
-    const termEnd = match.index + match[0].length;
-    const name = assignmentName(text, termEnd);
-    if (name.type === "none") continue;
-    if (name.type === "unbounded") {
-      // A name the scanner cannot delimit is redacted from the term on.
-      const start = canonical.rawEnd(termEnd - 1);
+  for (const assignment of credentialAssignments(canonical.text)) {
+    // A name inside a value already redacted whole adds nothing.
+    if (canonical.rawStart(assignment.at) < redactedTo) continue;
+    if (assignment.separator === undefined) {
+      // A name the scanner cannot delimit is redacted from the name on.
+      const start = canonical.rawEnd(assignment.nameEnd - 1);
       const end = lineEnd(raw, start);
       spans.push([start, end]);
       redactedTo = Math.max(redactedTo, end);
       continue;
     }
-    const separator = name.index;
-    const at = canonical.rawStart(separator);
+    const at = canonical.rawStart(assignment.separator);
     if (userinfo.some(([from, to]) => from <= at && at < to)) continue;
-    let nameEnd = separator;
-    while (nameEnd > 0 && INLINE_SPACE.test(text[nameEnd - 1] ?? "")) nameEnd -= 1;
-    const quoted = text[nameEnd - 1] === '"' || text[nameEnd - 1] === "'";
-    const header = HEADER_TERM.test(match[0]);
-    let start = canonical.rawEnd(separator);
+    let start = canonical.rawEnd(assignment.separator);
     while (start < raw.length && /\s/u.test(raw[start] ?? "")) start += 1;
-    const end = credentialValueEnd(raw, start, quoted && !header);
+    const end = credentialValueEnd(raw, start, assignment.literal);
     if (end <= start) continue;
     spans.push([start, end]);
     redactedTo = Math.max(redactedTo, end);
   }
   return spans;
+}
+
+/**
+ * A credential-named assignment in canonical text. `at` is where its name
+ * starts; `separator` is the index of its [:=], or undefined for a name the
+ * scanner could not delimit (fail closed from `nameEnd`).
+ */
+interface CredentialAssignment {
+  readonly at: number;
+  readonly nameEnd: number;
+  readonly separator?: number;
+  readonly literal: boolean;
+}
+
+// A quoted name at any quoting level (canonical text has its escapes decoded)
+// followed by optional whitespace and [:=]. Quotes bound the name, so it is
+// classified whole by isCredentialName and never matches across free-text
+// words. Every quote is tried as an opening quote (lookahead, so overlapping).
+const QUOTED_NAME = /(["'])(?=((?:(?!\1)[^\r\n]){1,128})\1\s*[:=])/gu;
+
+/**
+ * Every credential-named assignment in canonical text, in text order: a
+ * quoted name the compact classifier recognizes, or an unquoted credential
+ * term followed (after a bounded name tail) by [:=].
+ */
+function credentialAssignments(text: string): CredentialAssignment[] {
+  const found: CredentialAssignment[] = [];
+  for (const match of text.matchAll(QUOTED_NAME)) {
+    const name = match[2] ?? "";
+    if (!isCredentialName(name)) continue;
+    let separator = match.index + name.length + 2;
+    while (/\s/u.test(text[separator] ?? "")) separator += 1;
+    found.push({ at: match.index, nameEnd: separator, separator, literal: true });
+  }
+  for (const match of text.matchAll(CREDENTIAL_TERMS)) {
+    const termEnd = match.index + match[0].length;
+    const name = assignmentName(text, termEnd);
+    if (name.type === "none") continue;
+    if (name.type === "unbounded") {
+      found.push({ at: match.index, nameEnd: termEnd, literal: false });
+      continue;
+    }
+    let nameEnd = name.index;
+    while (nameEnd > 0 && INLINE_SPACE.test(text[nameEnd - 1] ?? "")) nameEnd -= 1;
+    const quoted = text[nameEnd - 1] === '"' || text[nameEnd - 1] === "'";
+    found.push({
+      at: match.index,
+      nameEnd,
+      separator: name.index,
+      literal: quoted && !HEADER_TERM.test(match[0]),
+    });
+  }
+  return found.sort((a, b) => a.at - b.at);
 }
 
 /** Replaces each secret span, merging overlapping and adjacent ones. */
@@ -997,10 +1058,12 @@ export interface BackgroundJobDrainResult {
 
 /**
  * Runs due jobs one at a time until none are due, `limit` jobs have run, or
- * the time budget is spent. The budget bounds when new jobs start, and is
- * checked again at the end of each claim, so a claim that outlasts the budget
- * is rolled back instead of run. A job that is already running may finish
- * later, bounded by its lease.
+ * the time budget is spent. The budget bounds when new jobs start. It is
+ * checked again inside each claim transaction just before its COMMIT, so a
+ * claim that outlasts the budget is rolled back instead of run. A claim whose
+ * COMMIT succeeds always runs its handler: the overshoot past the budget is
+ * bounded by one COMMIT round trip plus that handler, whose own run deadline
+ * and lease bound it in turn.
  *
  * A run that outlives its deadline is aborted and abandoned without releasing
  * its stored lease: a handler that ignores the abort signal may still be
@@ -1033,7 +1096,8 @@ export async function drainBackgroundJobs(input: {
       registry: input.registry,
       workerId: input.workerId,
       exclude,
-      // A slow claim must not start a handler after the budget is spent.
+      // A claim still in progress at the deadline rolls back before COMMIT;
+      // a committed claim always runs (overshoot: one COMMIT round trip).
       budgetSpent: () => clock() >= deadline,
     });
     if (claim.type === "empty" || claim.type === "budget_spent") break;
