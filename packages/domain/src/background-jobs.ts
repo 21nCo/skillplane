@@ -698,16 +698,18 @@ interface CredentialAssignment {
   readonly literal: boolean;
 }
 
-// Characters that end an unquoted name scanning back from its [:=]: whitespace,
-// another assignment separator, or a pair delimiter (JSON, query strings,
-// cookie lists). No credential name contains them.
-const NAME_BOUNDARY = /[\s:=,;&]/u;
+// Characters that end an unquoted name scanning back from its [:=]: a line
+// break, another assignment separator, or a pair delimiter (JSON, query
+// strings, cookie lists). Spaces, dots and quotes stay in the name.
+const NAME_BOUNDARY = /[\r\n:=,;&]/u;
 
 /**
  * The names before every [:=] in canonical text, each classified whole by
  * isCredentialName with no length bound. Whitespace before the separator is
- * skipped (any run, newlines too). The unquoted name is the run back to a
- * NAME_BOUNDARY; a name ending in a quote is also read back to its opening
+ * skipped (any run, newlines too). The unquoted name is the text back to a
+ * NAME_BOUNDARY or the start, spaces included, so "api k.e.y" and
+ * "t o k e n" are one name (free text such as "the token count=5" fails
+ * closed). A name ending in a quote is also read back to its opening
  * quote (any characters, newlines too), so "api key" and multi-line JSON names
  * are one name. Each scan stops at the previous separator or quote of its
  * kind, so all of them together stay linear.
@@ -818,8 +820,20 @@ export interface ClaimedBackgroundJob {
   readonly leaseMs: number;
 }
 
+interface ClaimedJobPrior {
+  readonly state: BackgroundJobState;
+  readonly leaseOwner: string | null;
+  readonly leaseExpiresAt: string | null;
+  readonly lastError: string | null;
+}
+
 export type BackgroundJobClaim =
-  | { readonly type: "claimed"; readonly job: ClaimedBackgroundJob }
+  | {
+      readonly type: "claimed";
+      readonly job: ClaimedBackgroundJob;
+      /** The row as it was before the claim, restored by a release. */
+      readonly prior: ClaimedJobPrior;
+    }
   | { readonly type: "dead"; readonly jobId: string; readonly kind: string }
   | { readonly type: "fenced"; readonly jobId: string }
   | { readonly type: "empty" }
@@ -880,8 +894,13 @@ export async function claimBackgroundJob(input: {
         kind: string;
         state: BackgroundJobState;
         attempts: number;
+        lease_owner: string | null;
+        lease_expires_at: string | null;
+        last_error: string | null;
       }>(
-        `SELECT job.id, job.workspace_id, job.kind, job.state, job.attempts
+        `SELECT job.id, job.workspace_id, job.kind, job.state, job.attempts,
+                job.lease_owner, job.lease_expires_at::text AS lease_expires_at,
+                job.last_error
            FROM background_jobs AS job
           WHERE job.kind = ANY($1::text[])
             AND NOT (job.id = ANY($2::text[]))
@@ -955,6 +974,12 @@ export async function claimBackgroundJob(input: {
           leaseOwner,
           leaseMs: handler.leaseMs,
         },
+        prior: {
+          state: row.state,
+          leaseOwner: row.lease_owner,
+          leaseExpiresAt: row.lease_expires_at,
+          lastError: row.last_error,
+        },
       } as const;
     });
   } catch (error) {
@@ -1027,6 +1052,43 @@ export async function completeBackgroundJob(input: {
   }
 }
 
+/**
+ * Gives back a claim whose handler was never started: the row returns to its
+ * state, attempts, lease and last error from before the claim, in one
+ * statement guarded on the claim's lease owner. A fenced or lost claim is left
+ * to its lease.
+ */
+async function releaseBackgroundJobClaim(
+  database: Pool,
+  job: ClaimedBackgroundJob,
+  prior: ClaimedJobPrior,
+): Promise<void> {
+  try {
+    await inTransaction(database, async (client) => {
+      await setCurrentWorkspaceRoutingEpoch(client, job.workspaceId);
+      await client.query(
+        `UPDATE background_jobs
+            SET state = $3, attempts = attempts - 1, lease_owner = $4,
+                lease_expires_at = $5::timestamptz, last_error = $6,
+                updated_at = now()
+          WHERE id = $1 AND state = 'running' AND lease_owner = $2`,
+        [
+          job.id,
+          job.leaseOwner,
+          prior.state,
+          prior.leaseOwner,
+          prior.leaseExpiresAt,
+          prior.lastError,
+        ],
+      );
+    });
+  } catch (error) {
+    if (error instanceof WorkspaceMaintenanceFencedError || isFencedWrite(error))
+      return;
+    throw error;
+  }
+}
+
 class BackgroundJobTimeoutError extends Error {
   constructor() {
     super("Job exceeded its lease");
@@ -1092,10 +1154,10 @@ export interface BackgroundJobDrainResult {
  * Runs due jobs one at a time until none are due, `limit` jobs have run, or
  * the time budget is spent. The budget bounds when new jobs start. It is
  * checked again inside each claim transaction just before its COMMIT, so a
- * claim that outlasts the budget is rolled back instead of run. A claim whose
- * COMMIT succeeds always runs its handler: the overshoot past the budget is
- * bounded by one COMMIT round trip plus that handler, whose own run deadline
- * and lease bound it in turn.
+ * claim that outlasts the budget is rolled back, and once more after the claim
+ * commits: a claim whose COMMIT crossed the deadline is released to its prior
+ * state without using an attempt, and its handler never starts. A started
+ * handler is bounded by its own run deadline and lease.
  *
  * A run that outlives its deadline is aborted and abandoned without releasing
  * its stored lease: a handler that ignores the abort signal may still be
@@ -1128,11 +1190,15 @@ export async function drainBackgroundJobs(input: {
       registry: input.registry,
       workerId: input.workerId,
       exclude,
-      // A claim still in progress at the deadline rolls back before COMMIT;
-      // a committed claim always runs (overshoot: one COMMIT round trip).
+      // A claim still in progress at the deadline rolls back before COMMIT.
       budgetSpent: () => clock() >= deadline,
     });
     if (claim.type === "empty" || claim.type === "budget_spent") break;
+    if (claim.type === "claimed" && clock() >= deadline) {
+      // The COMMIT crossed the deadline: give the job back unrun.
+      await releaseBackgroundJobClaim(input.database, claim.job, claim.prior);
+      break;
+    }
     if (claim.type === "fenced") {
       exclude.push(claim.jobId);
       input.onEvent?.({ type: "fenced", jobId: claim.jobId });

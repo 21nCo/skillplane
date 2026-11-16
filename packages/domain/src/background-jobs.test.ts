@@ -90,6 +90,11 @@ const WHOLE_NAMES: readonly string[] = [
   `token${" ".repeat(200)}=abc123`,
   "a.p.i.key=X",
   JSON.stringify({ [`${"x".repeat(130)}token`]: "abc123", next: "kept" }),
+  // Names with spaces between their parts: the name runs back to the line start.
+  "private k.e.y=CANARY123 next=kept",
+  "api k.e.y=CANARY123 next=kept",
+  "t o k e n=CANARY123 next=kept",
+  "p a s s w o r d: hunter2 next=kept",
 ];
 
 describe("background job payloads", () => {
@@ -550,6 +555,16 @@ describe("background job errors", () => {
     ["a.p.i.key=X", "a.p.i.key=[redacted]"],
     [WHOLE_NAMES[4], `{"${"x".repeat(130)}token":[redacted],"next":"kept"}`],
     ["token\n: abc123\nnext=kept", "token\n: [redacted]\nnext=kept"],
+    // An unquoted value fails closed to the end of its line; the next line is kept.
+    [WHOLE_NAMES[5], "private k.e.y=[redacted]"],
+    [`${WHOLE_NAMES[5]}\nnext=kept`, "private k.e.y=[redacted]\nnext=kept"],
+    [`${WHOLE_NAMES[6]}\nnext=kept`, "api k.e.y=[redacted]\nnext=kept"],
+    [`${WHOLE_NAMES[7]}\nnext=kept`, "t o k e n=[redacted]\nnext=kept"],
+    [`${WHOLE_NAMES[8]}\nnext=kept`, "p a s s w o r d: [redacted]\nnext=kept"],
+    [
+      '{"api k.e.y":"CANARY123","next":"kept"}',
+      '{"api k.e.y":[redacted],"next":"kept"}',
+    ],
   ])("classifies the whole name before a separator in %j", (text, expected) => {
     expect(sanitizeBackgroundJobError(text)).toBe(expected);
   });

@@ -560,6 +560,64 @@ describe("drainBackgroundJobs", () => {
     });
   });
 
+  it.each(["queued", "failed"])(
+    "releases a %s job unrun when its claim commits after the tick budget",
+    async (state) => {
+      const job = await enqueueEcho(workspace(), `late-commit-${state}`);
+      if (state === "failed") {
+        await pool.query(
+          `UPDATE background_jobs SET state = 'failed', attempts = 2,
+                  last_error = 'earlier', run_after = now() - interval '1 second'
+            WHERE id = $1`,
+          [job.id],
+        );
+      }
+      const before = await row(job.id);
+      let now = 0;
+      let runs = 0;
+      // The claim's own work fits the 25 ms budget; its COMMIT takes 50 ms.
+      const slowCommitPool = {
+        connect: async () => {
+          const client = await pool.connect();
+          return {
+            query: async (text: string, values?: unknown[]) => {
+              const result = await client.query(text, values);
+              if (text === "COMMIT") now += 50;
+              return result;
+            },
+            release: () => client.release(),
+          };
+        },
+      } as unknown as Pool;
+      const result = await drainBackgroundJobs({
+        database: slowCommitPool,
+        registry: createBackgroundJobRegistry([
+          {
+            kind: "test.echo",
+            async run() {
+              runs += 1;
+            },
+          },
+        ]),
+        workerId: "late-commit",
+        maxDurationMs: 25,
+        clock: () => now,
+      });
+      expect(runs).toBe(0);
+      expect(result).toEqual({
+        succeeded: 0,
+        failed: 0,
+        dead: 0,
+        lost: 0,
+        timedOut: 0,
+      });
+      // The claim committed, so the release (not a rollback) restored the row.
+      expect(now).toBeGreaterThanOrEqual(100);
+      expect(await row(job.id)).toEqual(before);
+      expect(await row(job.id)).toMatchObject({ state, lease_owner: null });
+    },
+  );
+
   it("skips unregistered kinds and workspaces fenced for migration", async () => {
     const fenced = workspace();
     const open = workspace();
