@@ -633,6 +633,9 @@ function patternSpans(
   return spans;
 }
 
+// Characters a value or word follows: whitespace, a quote or [:=,{[].
+const VALUE_START = /[\s"':=,{[]/u;
+
 /**
  * Raw spans of every secret in `raw`. Patterns run on the raw and canonical
  * text. Assignments are term-anchored on the canonical text: any credential
@@ -650,7 +653,11 @@ function secretSpans(raw: string, patterns: readonly RegExp[]): Span[] {
     );
   }
   if (canonical.unresolved >= 0) {
-    spans.push([canonical.rawStart(canonical.unresolved), raw.length]);
+    // Fail closed from the start of the value or word holding the escape, so
+    // no decoded prefix of a credential survives.
+    let from = canonical.unresolved;
+    while (from > 0 && !VALUE_START.test(canonical.text[from - 1] ?? "")) from -= 1;
+    spans.push([canonical.rawStart(from), raw.length]);
   }
   // A credential name inside URL userinfo (x-access-token:...@) is part of a
   // userinfo span already redacted up to its "@".
@@ -691,26 +698,51 @@ interface CredentialAssignment {
   readonly literal: boolean;
 }
 
-// A quoted name at any quoting level (canonical text has its escapes decoded)
-// followed by optional whitespace and [:=]. Quotes bound the name, so it is
-// classified whole by isCredentialName and never matches across free-text
-// words. Every quote is tried as an opening quote (lookahead, so overlapping).
-const QUOTED_NAME = /(["'])(?=((?:(?!\1)[^\r\n]){1,128})\1\s*[:=])/gu;
+// Characters that end an unquoted name scanning back from its [:=]: whitespace,
+// another assignment separator, or a pair delimiter (JSON, query strings,
+// cookie lists). No credential name contains them.
+const NAME_BOUNDARY = /[\s:=,;&]/u;
 
 /**
- * Every credential-named assignment in canonical text, in text order: a
- * quoted name the compact classifier recognizes, or an unquoted credential
- * term followed (after a bounded name tail) by [:=].
+ * The names before every [:=] in canonical text, each classified whole by
+ * isCredentialName with no length bound. Whitespace before the separator is
+ * skipped (any run, newlines too). The unquoted name is the run back to a
+ * NAME_BOUNDARY; a name ending in a quote is also read back to its opening
+ * quote (any characters, newlines too), so "api key" and multi-line JSON names
+ * are one name. Each scan stops at the previous separator or quote of its
+ * kind, so all of them together stay linear.
+ */
+function separatorAssignments(text: string): CredentialAssignment[] {
+  const found: CredentialAssignment[] = [];
+  for (let separator = 0; separator < text.length; separator += 1) {
+    if (text[separator] !== ":" && text[separator] !== "=") continue;
+    let nameEnd = separator;
+    while (nameEnd > 0 && /\s/u.test(text[nameEnd - 1] ?? "")) nameEnd -= 1;
+    let at = nameEnd;
+    while (at > 0 && !NAME_BOUNDARY.test(text[at - 1] ?? "")) at -= 1;
+    const quote = text[nameEnd - 1];
+    let quoted = false;
+    if (nameEnd > 1 && (quote === '"' || quote === "'")) {
+      const open = text.lastIndexOf(quote, nameEnd - 2);
+      if (open >= 0 && isCredentialName(text.slice(open + 1, nameEnd - 1))) {
+        at = Math.min(at, open);
+        quoted = true;
+      }
+    }
+    if (quoted || isCredentialName(text.slice(at, nameEnd))) {
+      found.push({ at, nameEnd, separator, literal: quote === '"' || quote === "'" });
+    }
+  }
+  return found;
+}
+
+/**
+ * Every credential-named assignment in canonical text, in text order: a name
+ * before a [:=] the compact classifier recognizes, or a credential term
+ * followed (after a bounded name tail of up to three words) by [:=].
  */
 function credentialAssignments(text: string): CredentialAssignment[] {
-  const found: CredentialAssignment[] = [];
-  for (const match of text.matchAll(QUOTED_NAME)) {
-    const name = match[2] ?? "";
-    if (!isCredentialName(name)) continue;
-    let separator = match.index + name.length + 2;
-    while (/\s/u.test(text[separator] ?? "")) separator += 1;
-    found.push({ at: match.index, nameEnd: separator, separator, literal: true });
-  }
+  const found = separatorAssignments(text);
   for (const match of text.matchAll(CREDENTIAL_TERMS)) {
     const termEnd = match.index + match[0].length;
     const name = assignmentName(text, termEnd);

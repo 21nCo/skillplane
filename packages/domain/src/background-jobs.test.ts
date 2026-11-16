@@ -72,6 +72,26 @@ function chainedToken(passes: number): string {
   return `to${BS}${"u005c".repeat(passes - 1)}u006ben`;
 }
 
+/**
+ * A ghs_ token whose "k" is escaped behind `repeats` \u005c escapes, so its
+ * decoded prefix sits right before the decode bound.
+ */
+function chainedRemote(repeats: number): string {
+  return JSON.stringify({
+    remote: `ghs_abcdefghij${BS}${"u005c".repeat(repeats)}u006blmnopqrstuvwxyz0123456789`,
+    next: "kept",
+  });
+}
+
+// Names classified whole before a [:=], quoted or not, of any length.
+const WHOLE_NAMES: readonly string[] = [
+  "t.o.k.e.n=abc123 next=kept",
+  JSON.stringify({ ["t\no\nk\ne\nn"]: "abc123", next: "kept" }),
+  `token${" ".repeat(200)}=abc123`,
+  "a.p.i.key=X",
+  JSON.stringify({ [`${"x".repeat(130)}token`]: "abc123", next: "kept" }),
+];
+
 describe("background job payloads", () => {
   const database = { query: vi.fn() };
 
@@ -152,6 +172,13 @@ describe("background job payloads", () => {
     [{ note: "token[0]=x" }],
     // A name still running at the scan bound fails closed.
     [{ note: `token${"x".repeat(200)}` }],
+    // Every [:=] has its name classified whole, and an escape left at the
+    // decode bound fails closed from the start of its word.
+    ...WHOLE_NAMES.map((note): [Record<string, unknown>] => [{ note }]),
+    ...[3, 4, 5].map((repeats): [Record<string, unknown>] => [
+      { note: chainedRemote(repeats) },
+    ]),
+    [{ note: `token=abcdef${BS}${"u005c".repeat(4)}u006b` }],
     // Text PostgreSQL jsonb cannot store.
     [{ ref: "main\u0000" }],
     [{ ref: "\ud800" }],
@@ -274,6 +301,9 @@ describe("background job payloads", () => {
           attempt: 3,
           ratio: 0.25,
           tokenizer: undefined,
+          status: "status=ok",
+          url: "https://example.com/search?a=b&c=d",
+          json: '{"note":"t.o.k.e.n","next":"kept"}',
         },
       },
     );
@@ -437,7 +467,10 @@ describe("background job errors", () => {
       '{"auth":{"token[0]": "X","next":"kept"}}',
       '{"auth":{"token[0]": [redacted],"next":"kept"}}',
     ],
-    [`token${"x".repeat(200)}=SECRET\nnext`, "token[redacted]\nnext"],
+    [
+      `token${"x".repeat(200)}=SECRET\nnext`,
+      `token${"x".repeat(200)}=[redacted]\nnext`,
+    ],
   ])("redacts values after any credential name shape in %j", (text, expected) => {
     expect(sanitizeBackgroundJobError(text)).toBe(expected);
   });
@@ -510,6 +543,41 @@ describe("background job errors", () => {
     },
   );
 
+  it.each([
+    ["t.o.k.e.n=abc123 next=kept", "t.o.k.e.n=[redacted]"],
+    [WHOLE_NAMES[1], '{"t\\no\\nk\\ne\\nn":[redacted],"next":"kept"}'],
+    [WHOLE_NAMES[2], `token${" ".repeat(200)}=[redacted]`],
+    ["a.p.i.key=X", "a.p.i.key=[redacted]"],
+    [WHOLE_NAMES[4], `{"${"x".repeat(130)}token":[redacted],"next":"kept"}`],
+    ["token\n: abc123\nnext=kept", "token\n: [redacted]\nnext=kept"],
+  ])("classifies the whole name before a separator in %j", (text, expected) => {
+    expect(sanitizeBackgroundJobError(text)).toBe(expected);
+  });
+
+  it.each([
+    "status=ok",
+    "see https://example.com/search?a=b&c=d",
+    "at 12:30:45 retry=3",
+  ])("leaves the benign assignment %j unchanged", (text) => {
+    expect(sanitizeBackgroundJobError(text)).toBe(text);
+  });
+
+  it.each([3, 4, 5])(
+    "redacts a credential prefix before the decode bound (%i escapes)",
+    (repeats) => {
+      const scrubbed = sanitizeBackgroundJobError(chainedRemote(repeats));
+      expect(scrubbed).not.toContain("ghs_");
+      expect(scrubbed).not.toContain("abcdefghij");
+      expect(scrubbed.startsWith('{"remote":')).toBe(true);
+    },
+  );
+
+  it("redacts a credential value whose escape is left at the decode bound", () => {
+    expect(
+      sanitizeBackgroundJobError(`token=abcdef${BS}${"u005c".repeat(4)}u006b`),
+    ).toBe("token=[redacted]");
+  });
+
   it("does not classify quoted free text that is not an assignment name", () => {
     expect(sanitizeBackgroundJobError('{"note":"t.o.k.e.n","next":"kept"}')).toBe(
       '{"note":"t.o.k.e.n","next":"kept"}',
@@ -534,7 +602,7 @@ describe("background job errors", () => {
     );
     // One more level leaves an escape the classifier never saw.
     expect(sanitizeBackgroundJobError(`a=b ${chainedToken(5)}=abc123\nnext=kept`)).toBe(
-      "a=b to[redacted]",
+      "a=b [redacted]",
     );
   });
 
