@@ -525,6 +525,41 @@ describe("drainBackgroundJobs", () => {
     expect(queued.rows[0]?.count).toBe("3");
   });
 
+  it("rolls back a claim that finishes after the tick budget", async () => {
+    const workspaceId = workspace();
+    const job = await enqueueEcho(workspaceId, "slow-claim");
+    let now = 0;
+    let runs = 0;
+    // Each claim transaction takes 50 ms of the 25 ms budget.
+    const slowPool = {
+      connect: async () => {
+        now += 50;
+        return pool.connect();
+      },
+    } as unknown as Pool;
+    const result = await drainBackgroundJobs({
+      database: slowPool,
+      registry: createBackgroundJobRegistry([
+        {
+          kind: "test.echo",
+          async run() {
+            runs += 1;
+          },
+        },
+      ]),
+      workerId: "slow-claim",
+      maxDurationMs: 25,
+      clock: () => now,
+    });
+    expect(runs).toBe(0);
+    expect(result).toEqual({ succeeded: 0, failed: 0, dead: 0, lost: 0, timedOut: 0 });
+    expect(await row(job.id)).toMatchObject({
+      state: "queued",
+      attempts: 0,
+      lease_owner: null,
+    });
+  });
+
   it("skips unregistered kinds and workspaces fenced for migration", async () => {
     const fenced = workspace();
     const open = workspace();

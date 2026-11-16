@@ -103,6 +103,24 @@ describe("background job payloads", () => {
     [{ note: JSON.stringify({ body: String.raw`{"to\u006ben":"X"}` }) }],
     [{ [String.raw`to\u006ben`]: 1 }],
     [{ nested: { "api\tkey": 1 } }],
+    // A separator run of any length between the words, in keys and text.
+    ...[16, 17, 64].flatMap((width): [Record<string, unknown>][] => {
+      const gap = " ".repeat(width);
+      return [
+        [{ nested: { [`api${gap}key`]: "neutral" } }],
+        [{ nested: [{ [`api${gap}key`]: "neutral" }] }],
+        [{ nested: { [`private${"-".repeat(width)}key`]: "neutral" } }],
+        [{ nested: [{ [`private${gap}key`]: "neutral" }] }],
+        [{ note: `api${gap}key=x` }],
+        [{ note: `private${gap}key: x` }],
+      ];
+    }),
+    // Any non-whitespace name characters between a term and its separator.
+    [{ note: "user[password]=x" }],
+    [{ note: "params[token]=x" }],
+    [{ note: "token[0]=x" }],
+    // A name still running at the scan bound fails closed.
+    [{ note: `token${"x".repeat(200)}` }],
     // Text PostgreSQL jsonb cannot store.
     [{ ref: "main\u0000" }],
     [{ ref: "\ud800" }],
@@ -133,6 +151,27 @@ describe("background job payloads", () => {
           kind: "test.echo",
           idempotencyKey,
           payload: {},
+        }),
+      ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+      expect(database.query).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    new Date(Date.UTC(10_000, 0, 1)),
+    new Date(Date.UTC(-1, 0, 1)),
+    new Date("0000-06-01T00:00:00Z"),
+    new Date(Number.NaN),
+  ])(
+    "rejects run time %s outside the timestamptz text range before any query",
+    async (runAfter) => {
+      await expect(
+        enqueueJob(database, {
+          workspaceId: "workspace:a",
+          kind: "test.echo",
+          idempotencyKey: "key",
+          payload: {},
+          runAfter,
         }),
       ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
       expect(database.query).not.toHaveBeenCalled();
@@ -339,6 +378,37 @@ describe("background job errors", () => {
     const scrubbed = sanitizeBackgroundJobError(text);
     expect(scrubbed).toBe(expected);
     expect(scrubbed).not.toMatch(/CRED|SECRET|hunter2|12345/u);
+  });
+
+  it.each([16, 17, 64])(
+    "redacts credential names joined by %i separator characters",
+    (width) => {
+      const gap = " ".repeat(width);
+      expect(sanitizeBackgroundJobError(`{"api${gap}key":"S1","next":"kept"}`)).toBe(
+        `{"api${gap}key":[redacted],"next":"kept"}`,
+      );
+      expect(
+        sanitizeBackgroundJobError(
+          `{"private${"\t".repeat(width)}key":"S2","next":"kept"}`,
+        ),
+      ).toBe(`{"private${"\t".repeat(width)}key":[redacted],"next":"kept"}`);
+      expect(sanitizeBackgroundJobError(`api${gap}key=S3`)).toBe(
+        `api${gap}key=[redacted]`,
+      );
+    },
+  );
+
+  it.each([
+    ["user[password]=hunter2&next=kept", "user[password]=[redacted]"],
+    ["params[token]=X", "params[token]=[redacted]"],
+    ["token[0]=X", "token[0]=[redacted]"],
+    [
+      '{"auth":{"token[0]": "X","next":"kept"}}',
+      '{"auth":{"token[0]": [redacted],"next":"kept"}}',
+    ],
+    [`token${"x".repeat(200)}=SECRET\nnext`, "token[redacted]\nnext"],
+  ])("redacts values after any credential name shape in %j", (text, expected) => {
+    expect(sanitizeBackgroundJobError(text)).toBe(expected);
   });
 
   it("redacts nested-stringified array and object credential values", () => {

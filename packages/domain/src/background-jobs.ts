@@ -218,8 +218,13 @@ export async function enqueueJob(
   ) {
     throw invalid("Background job idempotency key is invalid");
   }
-  if (input.runAfter !== undefined && Number.isNaN(input.runAfter.getTime())) {
-    throw invalid("Background job run time is invalid");
+  if (input.runAfter !== undefined) {
+    // Years outside 0001-9999 serialize in a form timestamptz does not accept
+    // (+010000-..., -000001-...), and that error would abort a caller's transaction.
+    const year = input.runAfter.getUTCFullYear();
+    if (Number.isNaN(input.runAfter.getTime()) || year < 1 || year > 9_999) {
+      throw invalid("Background job run time is invalid");
+    }
   }
   const payload = serializePayload(input.payload);
   const inserted = await database
@@ -335,10 +340,15 @@ export function backgroundJobRetryDelayMs(attempt: number): number {
 }
 
 // Credential vocabulary shared by payload keys, payload strings and error
-// text. Text is always classified in its canonical form (below), and the words
-// of a compound name may be joined by any run of non-alphanumeric characters,
-// so api_key, api.key, "api  key", api\tkey and Api-Key are one name.
-const NAME_SEPARATOR_RUN = "[^a-z0-9]{0,16}";
+// text, in compact form: lowercase with every non-alphanumeric character
+// removed, so api_key, api.key, "api  key", api\tkey and Api-Key are one name.
+const COMPACT_CREDENTIAL_TERM =
+  /token|secret|passw(?:or)?d|apikey|credential|privatekey|authorization|cookie/u;
+// The same vocabulary on canonical text, where the words of a compound name
+// may be joined by a separator run of any length. Matching an unbounded
+// [^a-z0-9]* run is the same as matching on a view with each such run
+// collapsed, and stays linear: a run ends at the next alphanumeric character.
+const NAME_SEPARATOR_RUN = "[^a-z0-9]*";
 const CREDENTIAL_TERM_SOURCE = [
   "token",
   "secret",
@@ -350,7 +360,6 @@ const CREDENTIAL_TERM_SOURCE = [
   "cookie",
 ].join("|");
 const CREDENTIAL_TERMS = new RegExp(CREDENTIAL_TERM_SOURCE, "giu");
-const CREDENTIAL_TERM = new RegExp(CREDENTIAL_TERM_SOURCE, "iu");
 // Header-style names whose unquoted values (schemes, cookie lists) run to the end of the line.
 const HEADER_TERM = /^(?:authorization|cookie)$/iu;
 
@@ -433,9 +442,15 @@ function canonicalize(raw: string): CanonicalText {
   };
 }
 
-/** True when a payload key, in canonical form, names a credential. */
+/**
+ * True when a payload key names a credential: its canonical form, with every
+ * non-alphanumeric character removed (no length bound), contains a term.
+ */
 function isCredentialName(name: string): boolean {
-  return CREDENTIAL_TERM.test(canonicalize(name).text);
+  const compact = canonicalize(name)
+    .text.toLowerCase()
+    .replace(/[^a-z0-9]+/gu, "");
+  return COMPACT_CREDENTIAL_TERM.test(compact);
 }
 
 // The first capture group of a pattern, when present, is context kept in
@@ -458,7 +473,9 @@ const ERROR_PATTERNS: readonly RegExp[] = [
 
 const MAX_NAME_TAIL = 128;
 const MAX_NAME_WORDS = 3;
-const NAME_CHAR = /[A-Za-z0-9._-]/u;
+// Anything that can continue a name before its [:=]: brackets, dots, quotes,
+// digits, and every other non-whitespace character.
+const NAME_CHAR = /[^\s:=]/u;
 const INLINE_SPACE = /[^\S\r\n]/u;
 const JSON_LITERAL = /(?:-?[0-9][0-9.eE+-]*|true|false|null)(?=\s*(?:[,}\]]|$))/uy;
 
@@ -530,12 +547,19 @@ function lineEnd(text: string, start: number): number {
   return text.length;
 }
 
+/** Where the value of an assignment starts, or why there is none. */
+type AssignmentName =
+  | { readonly type: "none" }
+  | { readonly type: "separator"; readonly index: number }
+  | { readonly type: "unbounded" };
+
 /**
- * The [:=] that makes the credential term ending at `from` an assignment name,
- * or -1. The name may continue with word characters and up to three more
- * words, then a closing quote, before the separator.
+ * The [:=] that makes the credential term ending at `from` an assignment name.
+ * The name may continue with any non-whitespace characters (user[password],
+ * token[0], "api key") and up to three more words before the separator. A name
+ * still running at the bound is "unbounded" and fails closed.
  */
-function assignmentSeparator(text: string, from: number): number {
+function assignmentName(text: string, from: number): AssignmentName {
   const limit = Math.min(text.length, from + MAX_NAME_TAIL);
   const skip = (index: number, pattern: RegExp): number => {
     let next = index;
@@ -548,8 +572,13 @@ function assignmentSeparator(text: string, from: number): number {
     if (word === index || !NAME_CHAR.test(text[word] ?? "")) break;
     index = skip(word, NAME_CHAR);
   }
-  index = skip(skip(index, /["']/u), INLINE_SPACE);
-  return index < limit && (text[index] === ":" || text[index] === "=") ? index : -1;
+  index = skip(index, INLINE_SPACE);
+  if (index < text.length && (text[index] === ":" || text[index] === "=")) {
+    return { type: "separator", index };
+  }
+  return index >= limit && index < text.length && /\S/u.test(text[index] ?? "")
+    ? { type: "unbounded" }
+    : { type: "none" };
 }
 
 /**
@@ -614,8 +643,18 @@ function secretSpans(raw: string, patterns: readonly RegExp[]): Span[] {
   for (const match of text.matchAll(CREDENTIAL_TERMS)) {
     // A term inside a value already redacted whole adds nothing.
     if (canonical.rawStart(match.index) < redactedTo) continue;
-    const separator = assignmentSeparator(text, match.index + match[0].length);
-    if (separator < 0) continue;
+    const termEnd = match.index + match[0].length;
+    const name = assignmentName(text, termEnd);
+    if (name.type === "none") continue;
+    if (name.type === "unbounded") {
+      // A name the scanner cannot delimit is redacted from the term on.
+      const start = canonical.rawEnd(termEnd - 1);
+      const end = lineEnd(raw, start);
+      spans.push([start, end]);
+      redactedTo = Math.max(redactedTo, end);
+      continue;
+    }
+    const separator = name.index;
     const at = canonical.rawStart(separator);
     if (userinfo.some(([from, to]) => from <= at && at < to)) continue;
     let nameEnd = separator;
@@ -690,7 +729,11 @@ export type BackgroundJobClaim =
   | { readonly type: "claimed"; readonly job: ClaimedBackgroundJob }
   | { readonly type: "dead"; readonly jobId: string; readonly kind: string }
   | { readonly type: "fenced"; readonly jobId: string }
-  | { readonly type: "empty" };
+  | { readonly type: "empty" }
+  /** The time budget ran out during the claim, which was rolled back. */
+  | { readonly type: "budget_spent" };
+
+class ClaimBudgetSpent extends Error {}
 
 const LEASE_EXPIRED_ERROR = "Lease expired before the job finished";
 // The stored lease outlasts the handler's own timeout, so a live drainer gives
@@ -727,6 +770,11 @@ export async function claimBackgroundJob(input: {
   readonly registry: BackgroundJobRegistry;
   readonly workerId: string;
   readonly exclude?: readonly string[];
+  /**
+   * Checked after the claim's own work, just before it commits. When it
+   * returns true the claim is rolled back, so the job is left untouched.
+   */
+  readonly budgetSpent?: () => boolean;
 }): Promise<BackgroundJobClaim> {
   if (input.registry.kinds.length === 0) return { type: "empty" };
   const leaseOwner = `${input.workerId}:${crypto.randomUUID()}`;
@@ -802,6 +850,7 @@ export async function claimBackgroundJob(input: {
       );
       const updated = claimed.rows[0];
       if (!updated) throw new Error("BACKGROUND_JOB_CLAIM_LOST");
+      if (input.budgetSpent?.()) throw new ClaimBudgetSpent();
       return {
         type: "claimed",
         job: {
@@ -816,6 +865,7 @@ export async function claimBackgroundJob(input: {
       } as const;
     });
   } catch (error) {
+    if (error instanceof ClaimBudgetSpent) return { type: "budget_spent" };
     // The fence can land between the candidate scan and the claim write.
     if (isFencedWrite(error) && candidateId !== undefined) {
       return { type: "fenced", jobId: candidateId };
@@ -947,8 +997,10 @@ export interface BackgroundJobDrainResult {
 
 /**
  * Runs due jobs one at a time until none are due, `limit` jobs have run, or
- * the time budget is spent. The budget bounds when new jobs start; a job that
- * is already running may finish later, bounded by its lease.
+ * the time budget is spent. The budget bounds when new jobs start, and is
+ * checked again at the end of each claim, so a claim that outlasts the budget
+ * is rolled back instead of run. A job that is already running may finish
+ * later, bounded by its lease.
  *
  * A run that outlives its deadline is aborted and abandoned without releasing
  * its stored lease: a handler that ignores the abort signal may still be
@@ -981,8 +1033,10 @@ export async function drainBackgroundJobs(input: {
       registry: input.registry,
       workerId: input.workerId,
       exclude,
+      // A slow claim must not start a handler after the budget is spent.
+      budgetSpent: () => clock() >= deadline,
     });
-    if (claim.type === "empty") break;
+    if (claim.type === "empty" || claim.type === "budget_spent") break;
     if (claim.type === "fenced") {
       exclude.push(claim.jobId);
       input.onEvent?.({ type: "fenced", jobId: claim.jobId });
