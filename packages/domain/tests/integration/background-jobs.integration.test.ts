@@ -153,7 +153,61 @@ describe("enqueueJob", () => {
       payload: {},
       runAfter: new Date(Date.now() + 60_000),
     });
-    expect(await drain()).toEqual({ succeeded: 0, failed: 0, dead: 0, lost: 0 });
+    expect(await drain()).toEqual({
+      succeeded: 0,
+      failed: 0,
+      dead: 0,
+      lost: 0,
+      timedOut: 0,
+    });
+  });
+
+  it("stores payloads whose jsonb text outgrows the compact limit", async () => {
+    // 1,000 short strings: compact JSON stays under 16 KiB while jsonb's text
+    // form, with a space after every separator, does not.
+    const payload = Object.fromEntries(
+      Array.from({ length: 5 }, (_, group) => [
+        `g${group}`,
+        Array.from(
+          { length: 200 },
+          (_, index) => `ref-${group}-${String(index).padStart(7, "0")}`,
+        ),
+      ]),
+    );
+    const compact = new TextEncoder().encode(JSON.stringify(payload)).byteLength;
+    expect(compact).toBeLessThanOrEqual(16_384);
+    const { job } = await enqueueJob(pool, {
+      workspaceId: workspace(),
+      kind: "test.echo",
+      idempotencyKey: "near-limit",
+      payload,
+    });
+    const stored = await pool.query<{ size: number }>(
+      "SELECT octet_length(payload::text) AS size FROM background_jobs WHERE id = $1",
+      [job.id],
+    );
+    expect(stored.rows[0]?.size).toBeGreaterThan(16_384);
+  });
+
+  it("reports payloads PostgreSQL rejects as validation failures", async () => {
+    const enqueue = (payload: Record<string, unknown>) =>
+      enqueueJob(pool, {
+        workspaceId: workspace(),
+        kind: "test.echo",
+        idempotencyKey: "rejected",
+        payload,
+      });
+    // Exponent numbers are small as JSON but expand in jsonb's text form.
+    await expect(
+      enqueue({ a: Array(200).fill(1e300), b: Array(200).fill(1e300) }),
+    ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+    await expect(enqueue({ ref: "main\u0000" })).rejects.toMatchObject({
+      code: "VALIDATION_FAILED",
+    });
+    const count = await pool.query<{ count: string }>(
+      "SELECT count(*) FROM background_jobs",
+    );
+    expect(count.rows[0]?.count).toBe("0");
   });
 });
 
@@ -274,7 +328,13 @@ describe("drainBackgroundJobs", () => {
     if (crashed.type !== "claimed") return;
 
     // While the lease is live, no other drainer can take the job.
-    expect(await drain()).toEqual({ succeeded: 0, failed: 0, dead: 0, lost: 0 });
+    expect(await drain()).toEqual({
+      succeeded: 0,
+      failed: 0,
+      dead: 0,
+      lost: 0,
+      timedOut: 0,
+    });
     expect(await row(job.id)).toMatchObject({ state: "running", attempts: 1 });
 
     await makeDue(job.id);
@@ -316,33 +376,52 @@ describe("drainBackgroundJobs", () => {
     });
   });
 
-  it("fails a run that outlives its lease and aborts the handler", async () => {
+  it("aborts a run that outlives its deadline and holds the lease until it expires", async () => {
     let aborted = false;
-    const registry = createBackgroundJobRegistry([
-      {
-        kind: "test.hang",
-        leaseMs: 50,
-        run: (job) =>
-          new Promise<void>((resolve) => {
-            job.signal.addEventListener("abort", () => {
-              aborted = true;
-              resolve();
-            });
-          }),
-      },
-    ]);
+    let release: () => void = () => undefined;
+    const hang: BackgroundJobHandler = {
+      kind: "test.hang",
+      leaseMs: 50,
+      // Ignores the abort, as a non-cooperative handler might.
+      run: (job) =>
+        new Promise<void>((resolve) => {
+          job.signal.addEventListener("abort", () => {
+            aborted = true;
+          });
+          release = resolve;
+        }),
+    };
     const { job } = await enqueueJob(pool, {
       workspaceId: workspace(),
       kind: "test.hang",
       idempotencyKey: "hang",
       payload: {},
     });
-    expect(await drain(registry)).toMatchObject({ failed: 1 });
-    expect(aborted).toBe(true);
-    expect(await row(job.id)).toMatchObject({
-      state: "failed",
-      last_error: "BackgroundJobTimeoutError: Job exceeded its lease",
-    });
+    try {
+      expect(await drain(createBackgroundJobRegistry([hang]))).toMatchObject({
+        timedOut: 1,
+        failed: 0,
+      });
+      expect(aborted).toBe(true);
+      // The handler may still be running, so its lease is not released and
+      // no drainer can start the retry before the stored lease expires.
+      const held = await pool.query<{ state: string; attempts: number; held: boolean }>(
+        `SELECT state, attempts, lease_expires_at > now() + interval '20 seconds' AS held
+           FROM background_jobs WHERE id = $1`,
+        [job.id],
+      );
+      expect(held.rows[0]).toEqual({ state: "running", attempts: 1, held: true });
+      const finish = createBackgroundJobRegistry([
+        { ...testEchoJobHandler, kind: "test.hang" },
+      ]);
+      expect(await drain(finish)).toMatchObject({ succeeded: 0, timedOut: 0 });
+
+      await makeDue(job.id);
+      expect(await drain(finish)).toMatchObject({ succeeded: 1 });
+      expect(await row(job.id)).toMatchObject({ state: "succeeded", attempts: 2 });
+    } finally {
+      release();
+    }
   });
 
   it("stops starting jobs when the tick budget is spent", async () => {

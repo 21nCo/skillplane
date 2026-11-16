@@ -3,6 +3,11 @@ import {
   PostgresWorkspaceMigrationOperations,
   type WorkspaceMigrationObjectStore,
 } from "@skillplane/control-plane";
+import {
+  createBackgroundJobRegistry,
+  drainBackgroundJobs,
+  enqueueJob,
+} from "@skillplane/domain";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migrateDatabase, resolveTestDatabaseUrl } from "../../src/index.js";
@@ -660,6 +665,107 @@ describe("concrete workspace migration rollback", () => {
       ],
     });
     await target.query("DELETE FROM workspaces WHERE id = $1", [publicWorkspace]);
+  });
+
+  it("keeps copied background jobs inert on the target until activation", async () => {
+    if (!source || !target) throw new Error("Migration fixture unavailable");
+    const targetCell = target;
+    const sourceObjects = new MemoryObjects();
+    const targetObjects = new MemoryObjects();
+    sourceObjects.objects.set(bundleKey, new Uint8Array([0]));
+    const operations = new PostgresWorkspaceMigrationOperations(
+      source,
+      target,
+      source,
+      sourceObjects,
+      targetObjects,
+    );
+    const context = {
+      namespace: workspaceId,
+      sourceRegionId: "legacy",
+      targetRegionId: "in-south",
+      sourceEpoch: 1,
+      movingEpoch: 2,
+      recoveryFence: 1,
+      recoveryOwnerId: `recovery:jobs-${suffix}`,
+      recoveryLeaseExpiresAt: Date.now() + 60_000,
+    };
+    // Earlier moves raised this workspace's generation, so enqueue the way a
+    // request does: pinned to the current routing epoch.
+    const writer = await source.connect();
+    let job: { readonly id: string };
+    try {
+      await writer.query("BEGIN");
+      await writer.query(
+        `SELECT set_config('skillplane.workspace_routing_epoch', active_epoch::text, true)
+           FROM regional_workspace_migration_fences WHERE workspace_id = $1`,
+        [workspaceId],
+      );
+      ({ job } = await enqueueJob(writer, {
+        workspaceId,
+        kind: "test.echo",
+        idempotencyKey: `move-${suffix}`,
+        payload: { ref: "main" },
+      }));
+      await writer.query("COMMIT");
+    } catch (error) {
+      await writer.query("ROLLBACK");
+      throw error;
+    } finally {
+      writer.release();
+    }
+    const runs: string[] = [];
+    const registry = createBackgroundJobRegistry([
+      {
+        kind: "test.echo",
+        run(run) {
+          runs.push(`${run.id}#${run.attempt}`);
+          return Promise.resolve();
+        },
+      },
+    ]);
+    const drainTarget = () =>
+      drainBackgroundJobs({
+        database: targetCell,
+        registry,
+        workerId: "target-cell",
+        maxDurationMs: 5_000,
+      });
+    try {
+      await operations.quiesceSource(context);
+      await operations.drainOutboxes(context);
+      await operations.copyDatabase(context);
+      await operations.copyBundles(context);
+
+      // The copied job is due, but this cell does not own the workspace yet.
+      expect(await drainTarget()).toMatchObject({ succeeded: 0, failed: 0, dead: 0 });
+      expect(runs).toEqual([]);
+      const checks = await operations.verifyDatabase(context);
+      expect(
+        checks.find((check) => check.name === "database:v2:background_jobs"),
+      ).toMatchObject({
+        source: expect.stringMatching(/^1:/u),
+        matched: true,
+      });
+      expect(checks.filter((check) => !check.matched)).toEqual([]);
+
+      await operations.resumeTarget(context);
+      expect(await drainTarget()).toMatchObject({ succeeded: 1 });
+      expect(runs).toEqual([`${job.id}#1`]);
+    } finally {
+      await operations
+        .rollbackSource({ ...context, cause: new Error("test cleanup") })
+        .catch(() => undefined);
+      const cleanup = await source.connect();
+      try {
+        await cleanup.query("BEGIN");
+        await cleanup.query("SET LOCAL session_replication_role = replica");
+        await cleanup.query("DELETE FROM background_jobs WHERE id = $1", [job.id]);
+        await cleanup.query("COMMIT");
+      } finally {
+        cleanup.release();
+      }
+    }
   });
 
   it("remaps compatibility placements when an existing database becomes control", async () => {

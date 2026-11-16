@@ -24,8 +24,10 @@ CREATE TABLE background_jobs (
     CHECK (kind ~ '^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)+$' AND char_length(kind) <= 64),
   CONSTRAINT background_jobs_idempotency_key_check
     CHECK (char_length(idempotency_key) BETWEEN 1 AND 200),
+  -- The application limits compact JSON to 16 KiB. jsonb text adds spaces
+  -- and expands exponent numbers, so this bound is only a storage backstop.
   CONSTRAINT background_jobs_payload_check
-    CHECK (jsonb_typeof(payload) = 'object' AND octet_length(payload::text) <= 16384),
+    CHECK (jsonb_typeof(payload) = 'object' AND octet_length(payload::text) <= 65536),
   CONSTRAINT background_jobs_state_check
     CHECK (state IN ('queued', 'running', 'succeeded', 'failed', 'dead')),
   CONSTRAINT background_jobs_attempts_check CHECK (attempts >= 0),

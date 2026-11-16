@@ -91,10 +91,57 @@ function assertKind(kind: string): void {
   }
 }
 
+const MAX_PAYLOAD_DEPTH = 8;
+const MAX_PAYLOAD_ENTRIES = 200;
+const MAX_PAYLOAD_KEY_LENGTH = 128;
+const MAX_PAYLOAD_STRING_LENGTH = 4_096;
+// Lone UTF-16 surrogates: in Unicode mode a valid pair is one code point.
+const LONE_SURROGATE = /[\uD800-\uDFFF]/u;
+
+function assertPayloadText(text: string): void {
+  if (text.includes("\u0000") || LONE_SURROGATE.test(text)) {
+    throw invalid("Background job payload contains an invalid character");
+  }
+  if (scrubSecrets(text) !== text) {
+    throw invalid("Background job payload must not contain secrets or personal data");
+  }
+}
+
+/**
+ * Checks every key and value. Over-limit input is rejected rather than
+ * truncated, so the audit redaction policy below sees every stored character.
+ */
+function assertPayloadValue(value: unknown, depth: number): void {
+  if (typeof value === "string") {
+    if (value.length > MAX_PAYLOAD_STRING_LENGTH) {
+      throw invalid("Background job payload value is too long");
+    }
+    assertPayloadText(value);
+    return;
+  }
+  if (value === null || typeof value !== "object") return;
+  if (depth >= MAX_PAYLOAD_DEPTH) {
+    throw invalid("Background job payload is nested too deeply");
+  }
+  const entries = Array.isArray(value)
+    ? value.map((item) => ["", item] as const)
+    : Object.entries(value as Record<string, unknown>);
+  if (entries.length > MAX_PAYLOAD_ENTRIES) {
+    throw invalid("Background job payload has too many entries");
+  }
+  for (const [key, item] of entries) {
+    if (key.length > MAX_PAYLOAD_KEY_LENGTH) {
+      throw invalid("Background job payload key is too long");
+    }
+    assertPayloadText(key);
+    assertPayloadValue(item, depth + 1);
+  }
+}
+
 /**
  * Validates a job payload. Payloads are stored in clear text and outlive the
- * request, so they carry identifiers only: any field the audit redaction
- * policy would drop (credentials, tokens, emails, prompts) is rejected.
+ * request, so they carry identifiers only: credentials, tokens, emails and
+ * prompts are rejected, whether under a sensitive key or inside any value.
  */
 function serializePayload(payload: Readonly<Record<string, unknown>>): string {
   let serialized: string;
@@ -103,6 +150,9 @@ function serializePayload(payload: Readonly<Record<string, unknown>>): string {
   } catch {
     throw invalid("Background job payload must be JSON");
   }
+  if (typeof serialized !== "string") {
+    throw invalid("Background job payload must be a JSON object");
+  }
   const parsed: unknown = JSON.parse(serialized);
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
     throw invalid("Background job payload must be a JSON object");
@@ -110,10 +160,26 @@ function serializePayload(payload: Readonly<Record<string, unknown>>): string {
   if (new TextEncoder().encode(serialized).byteLength > MAX_PAYLOAD_BYTES) {
     throw invalid("Background job payload is too large");
   }
+  assertPayloadValue(parsed, 0);
   if (redactAuditMetadata(parsed as Record<string, unknown>).removedFieldCount > 0) {
     throw invalid("Background job payload must not contain secrets or personal data");
   }
   return serialized;
+}
+
+/**
+ * The database is the final authority on what jsonb accepts and how large its
+ * text form is (numbers can expand); report its payload rejections as
+ * validation failures too.
+ */
+function isPayloadRejection(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const { code, constraint } = error as { code?: unknown; constraint?: unknown };
+  return (
+    code === "22P02" ||
+    code === "22P05" ||
+    (code === "23514" && constraint === "background_jobs_payload_check")
+  );
 }
 
 /**
@@ -134,21 +200,26 @@ export async function enqueueJob(
     throw invalid("Background job run time is invalid");
   }
   const payload = serializePayload(input.payload);
-  const inserted = await database.query<JobRow>(
-    `INSERT INTO background_jobs
-       (id, workspace_id, kind, idempotency_key, payload, run_after)
-     VALUES ($1, $2, $3, $4, $5::jsonb, COALESCE($6::timestamptz, now()))
-     ON CONFLICT (workspace_id, kind, idempotency_key) DO NOTHING
-     RETURNING ${JOB_COLUMNS}`,
-    [
-      `background-job:${crypto.randomUUID()}`,
-      input.workspaceId,
-      input.kind,
-      input.idempotencyKey,
-      payload,
-      input.runAfter?.toISOString() ?? null,
-    ],
-  );
+  const inserted = await database
+    .query<JobRow>(
+      `INSERT INTO background_jobs
+         (id, workspace_id, kind, idempotency_key, payload, run_after)
+       VALUES ($1, $2, $3, $4, $5::jsonb, COALESCE($6::timestamptz, now()))
+       ON CONFLICT (workspace_id, kind, idempotency_key) DO NOTHING
+       RETURNING ${JOB_COLUMNS}`,
+      [
+        `background-job:${crypto.randomUUID()}`,
+        input.workspaceId,
+        input.kind,
+        input.idempotencyKey,
+        payload,
+        input.runAfter?.toISOString() ?? null,
+      ],
+    )
+    .catch((error: unknown) => {
+      if (isPayloadRejection(error)) throw invalid("Background job payload is invalid");
+      throw error;
+    });
   if (inserted.rows[0]) return { job: toJob(inserted.rows[0]), created: true };
   const existing = await database.query<JobRow>(
     `SELECT ${JOB_COLUMNS} FROM background_jobs
@@ -166,7 +237,7 @@ export interface BackgroundJobRun {
   readonly payload: Readonly<Record<string, unknown>>;
   /** 1 for the first run; a reclaimed or retried job sees a later attempt. */
   readonly attempt: number;
-  /** Aborted when the lease expires; the handler should stop promptly. */
+  /** Aborted at the run deadline; the handler should stop promptly. */
   readonly signal: AbortSignal;
 }
 
@@ -175,8 +246,9 @@ export interface BackgroundJobHandler {
   /** Defaults to 8. */
   readonly maxAttempts?: number;
   /**
-   * How long one run may take before it is aborted and counted as failed.
-   * Defaults to 5 minutes; the stored lease adds a 30 second grace.
+   * How long one run may take before it is aborted and abandoned. Defaults to
+   * 5 minutes; the stored lease adds a 30 second grace, and the job is retried
+   * only once that lease expires.
    */
   readonly leaseMs?: number;
   run(job: BackgroundJobRun): Promise<void>;
@@ -240,15 +312,44 @@ export function backgroundJobRetryDelayMs(attempt: number): number {
   return Math.min(RETRY_CAP_MS, RETRY_BASE_MS * 2 ** exponent);
 }
 
+// Credential-like field names, optionally prefixed (githubToken, x-api-key).
+const CREDENTIAL_NAME =
+  "[a-z0-9_-]{0,40}?(?:token|secret|passw(?:or)?d|api[_-]?key|credentials?|private[_-]?key|authorization|cookie)";
+
 const SECRET_PATTERNS: readonly [RegExp, string][] = [
   [/([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/giu, "$1[redacted]@"],
-  [/\bbearer\s+[A-Z0-9._~+/-]+=*/giu, "Bearer [redacted]"],
-  [/\b(?:gh[pousr]|github_pat|spk)_[A-Z0-9_]{12,}/giu, "[redacted]"],
   [
-    /\b((?:access|refresh|id)[_-]?token|token|secret|password|api[_-]?key)(\s*[:=]\s*)\S+/giu,
-    "$1$2[redacted]",
+    /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/gu,
+    "[redacted]",
+  ],
+  [/\bbearer\s+[A-Z0-9._~+/-]+=*/giu, "Bearer [redacted]"],
+  [/\bbasic\s+[A-Z0-9+/]{8,}=*/giu, "Basic [redacted]"],
+  [
+    /\b(?:gh[pousr]_|github_pat_|spk_|glpat-|xox[abprs]-|sk[-_](?:live_|test_|proj-)?)[A-Z0-9_-]{12,}/giu,
+    "[redacted]",
+  ],
+  [/\bAKIA[0-9A-Z]{16}\b/gu, "[redacted]"],
+  [/\beyJ[A-Z0-9_-]{8,}\.[A-Z0-9_-]{8,}\.[A-Z0-9_-]+/giu, "[redacted]"],
+  // name=value, name: value and JSON "name":"value", plain or escaped quotes.
+  [
+    new RegExp(
+      `\\b(${CREDENTIAL_NAME}\\\\?["']?\\s*[:=]\\s*)` +
+        `(?!\\[redacted\\]|(?:bearer|basic) \\[redacted\\])` +
+        `(\\\\?"(?:[^"\\\\]|\\\\.)*?\\\\?"|'[^']*'|[^\\s"',;&}\\]\\\\]+)`,
+      "giu",
+    ),
+    "$1[redacted]",
   ],
 ];
+
+/** Replaces credentials embedded in free text. */
+function scrubSecrets(text: string): string {
+  let scrubbed = text;
+  for (const [pattern, replacement] of SECRET_PATTERNS) {
+    scrubbed = scrubbed.replace(pattern, replacement);
+  }
+  return scrubbed;
+}
 
 /** Bounds and scrubs a handler error before it is stored and shown to operators. */
 export function sanitizeBackgroundJobError(error: unknown): string {
@@ -258,11 +359,7 @@ export function sanitizeBackgroundJobError(error: unknown): string {
       : typeof error === "string"
         ? error
         : "Unknown error";
-  let message = raw;
-  for (const [pattern, replacement] of SECRET_PATTERNS) {
-    message = message.replace(pattern, replacement);
-  }
-  return message.slice(0, MAX_ERROR_LENGTH);
+  return scrubSecrets(raw).slice(0, MAX_ERROR_LENGTH);
 }
 
 export interface ClaimedBackgroundJob {
@@ -480,42 +577,46 @@ class BackgroundJobTimeoutError extends Error {
   }
 }
 
+type LeasedRunResult =
+  | { readonly type: "settled"; readonly error?: unknown }
+  | { readonly type: "timed_out" };
+
 async function runWithLease(
   handler: BackgroundJobHandler,
   job: ClaimedBackgroundJob,
-): Promise<unknown> {
+): Promise<LeasedRunResult> {
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_, reject) => {
+  const timeout = new Promise<"timed_out">((resolve) => {
     timer = setTimeout(() => {
-      const error = new BackgroundJobTimeoutError();
-      reject(error);
-      controller.abort(error);
+      resolve("timed_out");
+      controller.abort(new BackgroundJobTimeoutError());
     }, job.leaseMs);
   });
   try {
-    await Promise.race([
-      handler.run({
-        id: job.id,
-        workspaceId: job.workspaceId,
-        kind: job.kind,
-        payload: job.payload,
-        attempt: job.attempt,
-        signal: controller.signal,
-      }),
+    const result = await Promise.race([
+      handler
+        .run({
+          id: job.id,
+          workspaceId: job.workspaceId,
+          kind: job.kind,
+          payload: job.payload,
+          attempt: job.attempt,
+          signal: controller.signal,
+        })
+        .then(() => "succeeded" as const),
       timeout,
     ]);
-    // A handler that returns once aborted still ran out of lease.
-    return controller.signal.aborted ? controller.signal.reason : undefined;
+    return result === "timed_out" ? { type: "timed_out" } : { type: "settled" };
   } catch (error) {
-    return error ?? new Error("Job failed");
+    return { type: "settled", error: error ?? new Error("Job failed") };
   } finally {
     clearTimeout(timer);
   }
 }
 
 export interface BackgroundJobEvent {
-  readonly type: "succeeded" | "failed" | "dead" | "lost" | "fenced";
+  readonly type: "succeeded" | "failed" | "dead" | "lost" | "fenced" | "timed_out";
   readonly jobId: string;
   readonly kind?: string;
   readonly attempt?: number;
@@ -526,12 +627,21 @@ export interface BackgroundJobDrainResult {
   readonly failed: number;
   readonly dead: number;
   readonly lost: number;
+  /** Runs abandoned at their deadline; their jobs keep the lease until it expires. */
+  readonly timedOut: number;
 }
 
 /**
  * Runs due jobs one at a time until none are due, `limit` jobs have run, or
  * the time budget is spent. The budget bounds when new jobs start; a job that
  * is already running may finish later, bounded by its lease.
+ *
+ * A run that outlives its deadline is aborted and abandoned without releasing
+ * its stored lease: a handler that ignores the abort signal may still be
+ * running, so the job is retried only after the lease (the deadline plus a 30
+ * second grace) expires, and the reclaim counts the attempt. A handler that
+ * keeps running past that grace can still overlap its retry; handlers must
+ * honor the signal and be idempotent.
  */
 export async function drainBackgroundJobs(input: {
   readonly database: Pool;
@@ -548,7 +658,7 @@ export async function drainBackgroundJobs(input: {
   const clock = input.clock ?? (() => performance.now());
   const deadline = clock() + input.maxDurationMs;
   const limit = input.limit ?? 1_000;
-  const counts = { succeeded: 0, failed: 0, dead: 0, lost: 0 };
+  const counts = { succeeded: 0, failed: 0, dead: 0, lost: 0, timedOut: 0 };
   const exclude: string[] = [];
   let started = 0;
   while (started < limit && clock() < deadline) {
@@ -571,16 +681,26 @@ export async function drainBackgroundJobs(input: {
       continue;
     }
     const handler = input.registry.get(claim.job.kind);
-    const error = await runWithLease(handler, claim.job);
+    const run = await runWithLease(handler, claim.job);
+    // A lost, retried or abandoned job must not run twice in one tick.
+    exclude.push(claim.job.id);
+    if (run.type === "timed_out") {
+      counts.timedOut += 1;
+      input.onEvent?.({
+        type: "timed_out",
+        jobId: claim.job.id,
+        kind: claim.job.kind,
+        attempt: claim.job.attempt,
+      });
+      continue;
+    }
     const outcome = await completeBackgroundJob({
       database: input.database,
       job: claim.job,
       maxAttempts: handler.maxAttempts,
-      ...(error === undefined ? {} : { error }),
+      ...(run.error === undefined ? {} : { error: run.error }),
     });
     counts[outcome] += 1;
-    // A lost or retried job must not run twice in one tick.
-    exclude.push(claim.job.id);
     input.onEvent?.({
       type: outcome,
       jobId: claim.job.id,

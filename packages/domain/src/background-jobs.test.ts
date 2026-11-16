@@ -59,6 +59,27 @@ describe("background job payloads", () => {
     [{ nested: { apiSecret: "abc" } }],
     [{ header: "Bearer abcdefghijkl" }],
     [{ owner: "person@example.com" }],
+    // Token forms under neutral keys.
+    [{ ref: `ghs_${"a".repeat(36)}` }],
+    [{ remote: `github_pat_${"A1".repeat(20)}` }],
+    [{ url: "https://x-access-token:abc@github.com/a/b.git" }],
+    [{ note: "password=hunter2" }],
+    [{ note: '{"apiKey":"abc"}' }],
+    // A credential past the audit redactor's 4,096 character truncation.
+    [{ ref: `${"x".repeat(4_096)} Bearer abcdefghijkl` }],
+    [{ refs: [...Array.from({ length: 200 }, () => "main"), "Bearer abcdefghijkl"] }],
+    // Keys are checked too, including ones past the redactor's limits.
+    [{ [`ghp_${"b".repeat(36)}`]: 1 }],
+    [
+      Object.fromEntries([
+        ...Array.from({ length: 200 }, (_, i) => [`k${i}`, i]),
+        ["token", "x"],
+      ]),
+    ],
+    [{ [`${"k".repeat(129)}`]: 1 }],
+    // Text PostgreSQL jsonb cannot store.
+    [{ ref: "main\u0000" }],
+    [{ ref: "\ud800" }],
   ])("rejects secrets and personal data before storing %j", async (payload) => {
     await expect(
       enqueueJob(database, {
@@ -101,6 +122,25 @@ describe("background job errors", () => {
       "Error: push to https://[redacted]@github.com/a/b failed; " +
         "Authorization: Bearer [redacted] token=[redacted]",
     );
+    expect(
+      sanitizeBackgroundJobError(
+        new Error(
+          '{"token":"t1","refresh_token": "t2","client_secret":"t3",' +
+            '"password":"p w","githubToken":"t4","apiKey":"t5",' +
+            '"nested":"{\\"api_key\\":\\"t6\\"}"}',
+        ),
+      ),
+    ).toBe(
+      'Error: {"token":[redacted],"refresh_token": [redacted],' +
+        '"client_secret":[redacted],"password":[redacted],' +
+        '"githubToken":[redacted],"apiKey":[redacted],' +
+        '"nested":"{\\"api_key\\":[redacted]}"}',
+    );
+    expect(
+      sanitizeBackgroundJobError(
+        `remote rejected ghs_${"a".repeat(36)}; authorization: Basic dXNlcjpwYXNz`,
+      ),
+    ).toBe("remote rejected [redacted]; authorization: Basic [redacted]");
     expect(sanitizeBackgroundJobError(new Error("x".repeat(5_000)))).toHaveLength(
       2_000,
     );

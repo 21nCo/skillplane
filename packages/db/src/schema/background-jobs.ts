@@ -56,7 +56,7 @@ export const backgroundJobs = pgTable(
     ),
     check(
       "background_jobs_payload_check",
-      sql`jsonb_typeof(${t.payload}) = 'object' AND octet_length(${t.payload}::text) <= 16384`,
+      sql`jsonb_typeof(${t.payload}) = 'object' AND octet_length(${t.payload}::text) <= 65536`,
     ),
     check(
       "background_jobs_state_check",

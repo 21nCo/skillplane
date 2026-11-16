@@ -154,9 +154,19 @@ export async function drainProjectionCell(
           }),
         );
       },
-    });
+    }).then(
+      (result) => ({ ok: true as const, result }),
+      (error: unknown) => ({ ok: false as const, error }),
+    );
+    if (!projected.ok && !jobs.ok) {
+      throw new AggregateError(
+        [projected.error, jobs.error],
+        "PROJECTION_TICK_FAILED: projection and background jobs both failed",
+      );
+    }
     if (!projected.ok) throw projected.error;
-    return { ...projected.result, jobs };
+    if (!jobs.ok) throw jobs.error;
+    return { ...projected.result, jobs: jobs.result };
   } finally {
     await Promise.allSettled([regional.close(), control.close()]);
   }
