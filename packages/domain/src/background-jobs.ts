@@ -108,7 +108,7 @@ function assertPayloadText(text: string): void {
   if (!isStorableText(text)) {
     throw invalid("Background job payload contains an invalid character");
   }
-  if (secretSpans(text, SECRET_PATTERNS).length > 0) {
+  if (isSuspectText(text)) {
     throw invalid("Background job payload must not contain secrets or personal data");
   }
 }
@@ -148,9 +148,6 @@ function assertPayloadValue(value: unknown, depth: number): void {
       throw invalid("Background job payload key is too long");
     }
     assertPayloadText(key);
-    if (isCredentialName(key)) {
-      throw invalid("Background job payload must not contain secrets or personal data");
-    }
     assertPayloadValue(item, depth + 1);
   }
 }
@@ -339,500 +336,55 @@ export function backgroundJobRetryDelayMs(attempt: number): number {
   return Math.min(RETRY_CAP_MS, RETRY_BASE_MS * 2 ** exponent);
 }
 
-// Credential vocabulary shared by payload keys, payload strings and error
-// text, in compact form: lowercase with every non-alphanumeric character
-// removed, so api_key, api.key, "api  key", api\tkey and Api-Key are one name.
-const COMPACT_CREDENTIAL_TERM =
-  /token|secret|passw(?:or)?d|apikey|credential|privatekey|authorization|cookie/u;
-// The same vocabulary on canonical text, where the words of a compound name
-// may be joined by a separator run of any length. Matching an unbounded
-// [^a-z0-9]* run is the same as matching on a view with each such run
-// collapsed, and stays linear: a run ends at the next alphanumeric character.
-const NAME_SEPARATOR_RUN = "[^a-z0-9]*";
-const CREDENTIAL_TERM_SOURCE = [
-  "token",
-  "secret",
-  `pass${NAME_SEPARATOR_RUN}w(?:or)?d`,
-  `api${NAME_SEPARATOR_RUN}key`,
-  "credential",
-  `private${NAME_SEPARATOR_RUN}key`,
-  "authorization",
-  "cookie",
-].join("|");
-const CREDENTIAL_TERMS = new RegExp(CREDENTIAL_TERM_SOURCE, "giu");
-// Header-style names whose unquoted values (schemes, cookie lists) run to the end of the line.
-const HEADER_TERM = /^(?:authorization|cookie)$/iu;
+// Coarse, fail-closed credential rule (SKI-56 owner amendment, 2026-11-17).
+// It is a closed set on purpose: precise span-level redaction is SKI-63.
+// False positives are accepted (an identifier such as tokenizer-v2 is
+// rejected, and an error that mentions a credential word loses its text).
 
-/**
- * Text with JSON escapes decoded at every quoting level, plus the raw offsets
- * of each decoded character. A backslash run before u+4 hex digits, a quote or
- * a control escape decodes, whatever its length (a nested level doubles it);
- * any other backslash run is quoting noise and is dropped. Decoding repeats
- * while it uncovers new escapes, such as \.
- */
-interface CanonicalText {
-  readonly text: string;
-  /**
-   * Index in `text` of the first escape still decodable after the last
-   * decode pass, or -1. Text past it was not classified and fails closed.
-   */
-  readonly unresolved: number;
-  readonly rawStart: (index: number) => number;
-  readonly rawEnd: (index: number) => number;
-}
-
-const ESCAPED_CHARS = new Map([
-  ["b", " "],
-  ["f", " "],
-  ["n", "\n"],
-  ["r", "\r"],
-  ["t", "\t"],
-  ['"', '"'],
-  ["'", "'"],
-  ["/", "/"],
-]);
-const MAX_DECODE_PASSES = 4;
-// An escape decodeEscapes would still decode: a backslash run before u+4 hex
-// digits, a quote or a control escape.
-const DECODABLE_ESCAPE = /\\+(?:u[0-9a-fA-F]{4}|["'/bfnrt])/u;
-
-function decodeEscapes(text: string): {
-  readonly text: string;
-  readonly start: number[];
-  readonly end: number[];
-} {
-  let decoded = "";
-  const start: number[] = [];
-  const end: number[] = [];
-  let index = 0;
-  while (index < text.length) {
-    const from = index;
-    while (text[index] === "\\") index += 1;
-    const char = text[index] ?? "";
-    const hex = text.slice(index + 1, index + 5);
-    let next = index + 1;
-    if (index === from) decoded += char;
-    else if (char === "u" && /^[0-9a-f]{4}$/iu.test(hex)) {
-      decoded += String.fromCharCode(Number.parseInt(hex, 16));
-      next = index + 5;
-    } else if (ESCAPED_CHARS.has(char)) decoded += ESCAPED_CHARS.get(char) ?? "";
-    // Any other backslash run is dropped; the character after it is read next.
-    else continue;
-    start.push(from);
-    end.push(next);
-    index = next;
-  }
-  return { text: decoded, start, end };
-}
-
-function canonicalize(raw: string): CanonicalText {
-  let text = raw;
-  let start: number[] | null = null;
-  let end: number[] | null = null;
-  for (let pass = 0; pass < MAX_DECODE_PASSES && text.includes("\\"); pass += 1) {
-    const decoded = decodeEscapes(text);
-    const previousStart: number[] | null = start;
-    const previousEnd: number[] | null = end;
-    start = previousStart
-      ? decoded.start.map((offset) => previousStart[offset] ?? raw.length)
-      : decoded.start;
-    end = previousEnd
-      ? decoded.end.map((offset) => previousEnd[offset - 1] ?? raw.length)
-      : decoded.end;
-    text = decoded.text;
-  }
-  const starts = start;
-  const ends = end;
-  // Fail closed at the decode bound: an escape left after the last pass hides
-  // text the classifier never saw.
-  const unresolved = text.includes("\\")
-    ? (DECODABLE_ESCAPE.exec(text)?.index ?? -1)
-    : -1;
-  return {
-    text,
-    unresolved,
-    rawStart: (index) => (starts ? (starts[index] ?? raw.length) : index),
-    rawEnd: (index) => (ends ? (ends[index] ?? raw.length) : index + 1),
-  };
-}
-
-/**
- * True when a payload key names a credential: its canonical form, with every
- * non-alphanumeric character removed (no length bound), contains a term.
- */
-function isCredentialName(name: string): boolean {
-  const compact = canonicalize(name)
-    .text.toLowerCase()
-    .replace(/[^a-z0-9]+/gu, "");
-  return COMPACT_CREDENTIAL_TERM.test(compact);
-}
-
-// The first capture group of a pattern, when present, is context kept in
-// clear text; the rest of the match is the secret.
+// Credential terms, matched on the compact form: NFKC, lowercase, and every
+// character outside a-z0-9 removed, so Api-Key, api_key and "a p i k e y" match.
+const CREDENTIAL_TERM =
+  /token|secret|password|passwd|apikey|credential|privatekey|authorization|cookie|bearer/u;
+// Known secret shapes: URL userinfo, the Basic scheme, a PEM private key,
+// known token prefixes, an AWS access key id and a JWT.
 const SECRET_PATTERNS: readonly RegExp[] = [
   // A bounded scheme keeps the scan linear on long word runs.
-  /([a-z][a-z0-9+.-]{0,31}:\/\/)[^\s/@]+(?=@)/giu,
-  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/gu,
-  /(\bbearer\s+)[A-Z0-9._~+/-]+=*/giu,
-  /(\bbasic\s+)[A-Z0-9+/]{8,}=*/giu,
-  /\b(?:gh[pousr]_|github_pat_|spk_|glpat-|xox[abprs]-|sk[-_](?:live_|test_|proj-)?)[A-Z0-9_-]{12,}/giu,
-  /\bAKIA[0-9A-Z]{16}\b/gu,
-  /\beyJ[A-Z0-9_-]{8,}\.[A-Z0-9_-]{8,}\.[A-Z0-9_-]+/giu,
+  /[a-z][a-z0-9+.-]{0,31}:\/\/[^\s/@]+@/iu,
+  /\bbasic\s+[A-Z0-9+/]{8,}/iu,
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----/u,
+  /\b(?:gh[pousr]_|github_pat_|spk_|glpat-|xox[abprs]-|sk[-_](?:live_|test_|proj-)?)[A-Z0-9_-]{12,}/iu,
+  /\bAKIA[0-9A-Z]{16}\b/u,
+  /\beyJ[A-Z0-9_-]{8,}\.[A-Z0-9_-]{8,}\.[A-Z0-9_-]+/iu,
 ];
-// Error text only: a scheme://user:password cut off at the end of the text.
-const ERROR_PATTERNS: readonly RegExp[] = [
-  ...SECRET_PATTERNS,
-  /([a-z][a-z0-9+.-]{0,31}:\/\/)[^\s/@:]*:[^\s/@]*$/giu,
-];
+// An escape that could hide letters from the checks above: a backslash
+// before u or x, a percent-encoded byte, or an HTML character reference.
+const HIDING_ESCAPE = /\\[ux]|%[0-9a-f]{2}|&#/iu;
 
-const MAX_NAME_TAIL = 128;
-const MAX_NAME_WORDS = 3;
-// Anything that can continue a name before its [:=]: brackets, dots, quotes,
-// digits, and every other non-whitespace character.
-const NAME_CHAR = /[^\s:=]/u;
-const INLINE_SPACE = /[^\S\r\n]/u;
-const JSON_LITERAL = /(?:-?[0-9][0-9.eE+-]*|true|false|null)(?=\s*(?:[,}\]]|$))/uy;
-
-/**
- * End of a quoted value opened by `level` backslashes and a double quote. At
- * nesting depth n the delimiter is 2^n - 1 backslashes and a quote, and each
- * deeper level doubles the backslashes, so a run of r backslashes before a
- * quote closes the value only when r mod 2(level + 1) equals level; any other
- * run is an escaped quote inside the value. An unterminated value runs to the
- * end of the text.
- */
-function quotedValueEnd(text: string, start: number, level: number): number {
-  const unit = 2 * (level + 1);
-  let index = start;
-  while (index < text.length) {
-    let run = 0;
-    while (text[index] === "\\") {
-      run += 1;
-      index += 1;
-    }
-    if (index >= text.length) break;
-    if (text[index] === '"' && run % unit === level) return index + 1;
-    index += 1;
-  }
-  return text.length;
-}
-
-/** End of a single-quoted value; a backslash escapes the next character. */
-function singleQuotedValueEnd(text: string, start: number): number {
-  for (let index = start; index < text.length; index += 1) {
-    if (text[index] === "\\") index += 1;
-    else if (text[index] === "'") return index + 1;
-  }
-  return text.length;
-}
-
-/**
- * End of a JSON array or object value: its balanced close, skipping quoted
- * strings at any quoting level, or the end of the text when unbalanced.
- */
-function balancedValueEnd(text: string, start: number): number {
-  let depth = 1;
-  let index = start;
-  while (index < text.length) {
-    let run = 0;
-    while (text[index] === "\\") {
-      run += 1;
-      index += 1;
-    }
-    const char = text[index];
-    if (char === '"') {
-      index = quotedValueEnd(text, index + 1, run);
-      continue;
-    }
-    if (char === "[" || char === "{") depth += 1;
-    else if (char === "]" || char === "}") {
-      depth -= 1;
-      if (depth === 0) return index + 1;
-    }
-    index += 1;
-  }
-  return text.length;
-}
-
-function lineEnd(text: string, start: number): number {
-  for (let index = start; index < text.length; index += 1) {
-    if (text[index] === "\n" || text[index] === "\r") return index;
-  }
-  return text.length;
-}
-
-/** Where the value of an assignment starts, or why there is none. */
-type AssignmentName =
-  | { readonly type: "none" }
-  | { readonly type: "separator"; readonly index: number }
-  | { readonly type: "unbounded" };
-
-/**
- * The [:=] that makes the credential term ending at `from` an assignment name.
- * The name may continue with any non-whitespace characters (user[password],
- * token[0], "api key") and up to three more words before the separator. A name
- * still running at the bound is "unbounded" and fails closed.
- */
-function assignmentName(text: string, from: number): AssignmentName {
-  const limit = Math.min(text.length, from + MAX_NAME_TAIL);
-  const skip = (index: number, pattern: RegExp): number => {
-    let next = index;
-    while (next < limit && pattern.test(text[next] ?? "")) next += 1;
-    return next;
-  };
-  let index = skip(from, NAME_CHAR);
-  for (let words = 0; words < MAX_NAME_WORDS; words += 1) {
-    const word = skip(index, INLINE_SPACE);
-    if (word === index || !NAME_CHAR.test(text[word] ?? "")) break;
-    index = skip(word, NAME_CHAR);
-  }
-  index = skip(index, INLINE_SPACE);
-  if (index < text.length && (text[index] === ":" || text[index] === "=")) {
-    return { type: "separator", index };
-  }
-  return index >= limit && index < text.length && /\S/u.test(text[index] ?? "")
-    ? { type: "unbounded" }
-    : { type: "none" };
-}
-
-/**
- * End of a credential value in the raw text. Fail-closed: a value the scanner
- * cannot delimit exactly runs to the end of the line, never just one word.
- */
-function credentialValueEnd(text: string, start: number, literal: boolean): number {
-  let quote = start;
-  while (text[quote] === "\\") quote += 1;
-  if (text[quote] === '"') return quotedValueEnd(text, quote + 1, quote - start);
-  if (quote === start) {
-    const char = text[start];
-    if (char === "'") return singleQuotedValueEnd(text, start + 1);
-    if (char === "[" || char === "{") return balancedValueEnd(text, start + 1);
-    if (literal) {
-      JSON_LITERAL.lastIndex = start;
-      if (JSON_LITERAL.test(text)) return JSON_LITERAL.lastIndex;
-    }
-  }
-  return lineEnd(text, start);
-}
-
-/**
- * Raw end of a command-line option value starting at canonical `start`: a
- * quoted string, delimited in the raw text at its quoting level, or the
- * canonical token up to whitespace or a quote.
- */
-function optionValueEnd(raw: string, canonical: CanonicalText, start: number): number {
-  const first = canonical.text[start];
-  if (first === '"' || first === "'") {
-    return credentialValueEnd(raw, canonical.rawStart(start), false);
-  }
-  let end = start;
-  while (end < canonical.text.length && !/[\s"']/u.test(canonical.text[end] ?? ""))
-    end += 1;
-  return end > start ? canonical.rawEnd(end - 1) : canonical.rawStart(start);
-}
-
-type Span = readonly [number, number];
-
-function patternSpans(
-  text: string,
-  patterns: readonly RegExp[],
-  toRaw: (from: number, to: number) => Span,
-): Span[] {
-  const spans: Span[] = [];
-  for (const pattern of patterns) {
-    for (const match of text.matchAll(pattern)) {
-      const from = match.index + (match[1]?.length ?? 0);
-      const to = match.index + match[0].length;
-      if (to > from) spans.push(toRaw(from, to));
-    }
-  }
-  return spans;
-}
-
-// Characters an unresolved escape's word follows: whitespace, a quote or
-// [,{[]. Never : or =, which also sit inside one value (URL userinfo).
-const VALUE_START = /[\s"',{[]/u;
-
-/**
- * Raw spans of every secret in `raw`. Patterns run on the raw and canonical
- * text. Assignments are term-anchored on the canonical text: any credential
- * term followed by [:=] redacts its whole value, delimited in the raw text.
- */
-function secretSpans(raw: string, patterns: readonly RegExp[]): Span[] {
-  const canonical = canonicalize(raw);
-  const spans = patternSpans(raw, patterns, (from, to) => [from, to]);
-  if (canonical.text !== raw) {
-    spans.push(
-      ...patternSpans(canonical.text, patterns, (from, to) => [
-        canonical.rawStart(from),
-        canonical.rawEnd(to - 1),
-      ]),
-    );
-  }
-  if (canonical.unresolved >= 0) {
-    // Fail closed from the start of the word holding the escape, so no
-    // decoded prefix of a credential (or of URL userinfo) survives.
-    let from = canonical.unresolved;
-    while (from > 0 && !VALUE_START.test(canonical.text[from - 1] ?? "")) from -= 1;
-    spans.push([canonical.rawStart(from), raw.length]);
-  }
-  // A credential name inside URL userinfo (x-access-token:...@) is part of a
-  // userinfo span already redacted up to its "@".
-  const userinfo = spans.filter(([, to]) => raw[to] === "@");
-  let redactedTo = 0;
-  for (const assignment of credentialAssignments(canonical.text)) {
-    // A name inside a value already redacted whole adds nothing. An option
-    // is never skipped: its value is one token, and an earlier whole-name
-    // assignment (tool --token X --repo=a/b) may redact only a later value.
-    if (!assignment.option && canonical.rawStart(assignment.at) < redactedTo) continue;
-    if (assignment.separator === undefined) {
-      // A name the scanner cannot delimit is redacted from the name on.
-      const start = canonical.rawEnd(assignment.nameEnd - 1);
-      const end = lineEnd(raw, start);
-      spans.push([start, end]);
-      redactedTo = Math.max(redactedTo, end);
-      continue;
-    }
-    const at = canonical.rawStart(assignment.separator);
-    if (userinfo.some(([from, to]) => from <= at && at < to)) continue;
-    let start = canonical.rawEnd(assignment.separator);
-    while (start < raw.length && /\s/u.test(raw[start] ?? "")) start += 1;
-    const end = assignment.option
-      ? optionValueEnd(raw, canonical, assignment.separator + 1)
-      : credentialValueEnd(raw, start, assignment.literal);
-    if (end <= start) continue;
-    spans.push([start, end]);
-    if (!assignment.option) redactedTo = Math.max(redactedTo, end);
-  }
-  return spans;
-}
-
-/**
- * A credential-named assignment in canonical text. `at` is where its name
- * starts; `separator` is the index of its [:=], or undefined for a name the
- * scanner could not delimit (fail closed from `nameEnd`).
- */
-interface CredentialAssignment {
-  readonly at: number;
-  readonly nameEnd: number;
-  readonly separator?: number;
-  readonly literal: boolean;
-  /**
-   * A command-line option (--token X): the value after `separator` is the
-   * next quoted string or whitespace-delimited token.
-   */
-  readonly option?: boolean;
-}
-
-// Characters that end an unquoted name scanning back from its [:=]: a line
-// break, another assignment separator, or a pair delimiter (JSON, query
-// strings, cookie lists). Spaces, dots and quotes stay in the name.
-const NAME_BOUNDARY = /[\r\n:=,;&]/u;
-
-/**
- * The names before every [:=] in canonical text, each classified whole by
- * isCredentialName with no length bound. Whitespace before the separator is
- * skipped (any run, newlines too). The unquoted name is the text back to a
- * NAME_BOUNDARY or the start, spaces included, so "api k.e.y" and
- * "t o k e n" are one name (free text such as "the token count=5" fails
- * closed). A name ending in a quote is also read back to its opening
- * quote (any characters, newlines too), so "api key" and multi-line JSON names
- * are one name. Each scan stops at the previous separator or quote of its
- * kind, so all of them together stay linear.
- */
-function separatorAssignments(text: string): CredentialAssignment[] {
-  const found: CredentialAssignment[] = [];
-  for (let separator = 0; separator < text.length; separator += 1) {
-    if (text[separator] !== ":" && text[separator] !== "=") continue;
-    let nameEnd = separator;
-    while (nameEnd > 0 && /\s/u.test(text[nameEnd - 1] ?? "")) nameEnd -= 1;
-    let at = nameEnd;
-    while (at > 0 && !NAME_BOUNDARY.test(text[at - 1] ?? "")) at -= 1;
-    const quote = text[nameEnd - 1];
-    let quoted = false;
-    if (nameEnd > 1 && (quote === '"' || quote === "'")) {
-      const open = text.lastIndexOf(quote, nameEnd - 2);
-      if (open >= 0 && isCredentialName(text.slice(open + 1, nameEnd - 1))) {
-        at = Math.min(at, open);
-        quoted = true;
-      }
-    }
-    if (quoted || isCredentialName(text.slice(at, nameEnd))) {
-      found.push({ at, nameEnd, separator, literal: quote === '"' || quote === "'" });
-    }
-  }
-  return found;
-}
-
-// A command-line option -name or --name that starts a word (or an argv
-// string), followed by whitespace or an argv comma, then a value. The name
-// stops at whitespace, quotes, commas and [:=]; --name=value is a separator
-// assignment already.
-const OPTION = /(?<![^\s"'[,(])--?([^\s"',:=-][^\s"',:=]*)["']?(?:\s*,\s*|\s+)(?=\S)/gu;
-
-/** Options whose name the compact classifier recognizes (--token, --api-key). */
-function optionAssignments(text: string): CredentialAssignment[] {
-  const found: CredentialAssignment[] = [];
-  for (const match of text.matchAll(OPTION)) {
-    if (!isCredentialName(match[1] ?? "")) continue;
-    const valueStart = match.index + match[0].length;
-    found.push({
-      at: match.index,
-      nameEnd: valueStart,
-      separator: valueStart - 1,
-      literal: false,
-      option: true,
-    });
-  }
-  return found;
-}
-
-/**
- * Every credential-named assignment in canonical text, in text order: a name
- * before a [:=] the compact classifier recognizes, a credential-named
- * command-line option, or a credential term followed (after a bounded name
- * tail of up to three words) by [:=].
- */
-function credentialAssignments(text: string): CredentialAssignment[] {
-  const found = [...separatorAssignments(text), ...optionAssignments(text)];
-  for (const match of text.matchAll(CREDENTIAL_TERMS)) {
-    const termEnd = match.index + match[0].length;
-    const name = assignmentName(text, termEnd);
-    if (name.type === "none") continue;
-    if (name.type === "unbounded") {
-      found.push({ at: match.index, nameEnd: termEnd, literal: false });
-      continue;
-    }
-    let nameEnd = name.index;
-    while (nameEnd > 0 && INLINE_SPACE.test(text[nameEnd - 1] ?? "")) nameEnd -= 1;
-    const quoted = text[nameEnd - 1] === '"' || text[nameEnd - 1] === "'";
-    found.push({
-      at: match.index,
-      nameEnd,
-      separator: name.index,
-      literal: quoted && !HEADER_TERM.test(match[0]),
-    });
-  }
-  return found.sort((a, b) => a.at - b.at);
-}
-
-/** Replaces each secret span, merging overlapping and adjacent ones. */
-function redactSpans(raw: string, spans: readonly Span[]): string {
-  let redacted = "";
-  let copied = -1;
-  for (const [from, to] of [...spans].sort((a, b) => a[0] - b[0])) {
-    if (to <= copied) continue;
-    if (from > copied) redacted += `${raw.slice(Math.max(copied, 0), from)}[redacted]`;
-    copied = to;
-  }
-  return redacted + raw.slice(Math.max(copied, 0));
+/** True when text may carry a credential under the coarse rule above. */
+function isSuspectText(text: string): boolean {
+  const normalized = text.normalize("NFKC");
+  const compact = normalized.toLowerCase().replace(/[^a-z0-9]+/gu, "");
+  return (
+    CREDENTIAL_TERM.test(compact) ||
+    [text, normalized].some(
+      (form) =>
+        HIDING_ESCAPE.test(form) ||
+        SECRET_PATTERNS.some((pattern) => pattern.test(form)),
+    )
+  );
 }
 
 // In Unicode mode this matches only unpaired surrogates, which are not valid UTF-8.
 const LONE_SURROGATES = /[\uD800-\uDFFF]/gu;
-const TRUNCATED_MARK = " [truncated]";
+/** Stored instead of a handler error that may carry a credential. */
+export const WITHHELD_BACKGROUND_JOB_ERROR =
+  "Handler error withheld: it may contain a credential";
 
-/** Bounds and scrubs a handler error before it is stored and shown to operators. */
+/**
+ * Bounds a handler error before it is stored and shown to operators. Suspect
+ * text, or text longer than the scan bound, is replaced whole by a fixed
+ * message that keeps no part of the original, not even the error name.
+ */
 export function sanitizeBackgroundJobError(error: unknown): string {
   const raw =
     error instanceof Error
@@ -840,24 +392,14 @@ export function sanitizeBackgroundJobError(error: unknown): string {
       : typeof error === "string"
         ? error
         : "Unknown error";
-  // Scanning is bounded too. Fail closed at the boundary: cut only at
-  // whitespace and drop the whole segment the boundary splits, so no part of
-  // a credential the patterns can no longer recognize is kept.
-  let scanned = raw;
-  let truncated = false;
-  if (raw.length > MAX_ERROR_SCAN) {
-    let cut = MAX_ERROR_SCAN;
-    while (cut > 0 && !/\s/u.test(raw[cut] ?? "")) cut -= 1;
-    scanned = raw.slice(0, cut);
-    truncated = true;
-  }
-  const scrubbed = redactSpans(scanned, secretSpans(scanned, ERROR_PATTERNS));
-  const bounded = truncated
-    ? `${scrubbed.slice(0, MAX_ERROR_LENGTH - TRUNCATED_MARK.length)}${TRUNCATED_MARK}`
-    : scrubbed.slice(0, MAX_ERROR_LENGTH);
+  if (raw.length > MAX_ERROR_SCAN || isSuspectText(raw))
+    return WITHHELD_BACKGROUND_JOB_ERROR;
   // PostgreSQL text cannot hold NUL. Bounding can split a surrogate pair, so
   // replace unstorable text last.
-  return bounded.replaceAll("\u0000", "�").replace(LONE_SURROGATES, "�");
+  return raw
+    .slice(0, MAX_ERROR_LENGTH)
+    .replaceAll("\u0000", "�")
+    .replace(LONE_SURROGATES, "�");
 }
 
 export interface ClaimedBackgroundJob {

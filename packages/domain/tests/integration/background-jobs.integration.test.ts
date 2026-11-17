@@ -10,6 +10,7 @@ import {
   enqueueJob,
   listFailedBackgroundJobs,
   testEchoJobHandler,
+  WITHHELD_BACKGROUND_JOB_ERROR,
   type BackgroundJobHandler,
 } from "../../src/background-jobs.js";
 
@@ -313,7 +314,7 @@ describe("drainBackgroundJobs", () => {
       lease_owner: null,
       delay_seconds: 30,
       completed: false,
-      last_error: "Error: remote rejected push token=[redacted]",
+      last_error: WITHHELD_BACKGROUND_JOB_ERROR,
     });
     // Not due yet: a second tick leaves it alone.
     expect(await drain(registry)).toMatchObject({ failed: 0 });
@@ -332,7 +333,7 @@ describe("drainBackgroundJobs", () => {
       state: "dead",
       attempts: 3,
       completed: true,
-      last_error: "Error: remote rejected push token=[redacted]",
+      last_error: WITHHELD_BACKGROUND_JOB_ERROR,
     });
     await makeDue(job.id);
     expect(await drain(registry)).toMatchObject({ dead: 0, failed: 0 });
