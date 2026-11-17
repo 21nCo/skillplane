@@ -1,0 +1,23 @@
+packages/domain/src/background-jobs.test.ts
+  s_7526e0023eaae0::t_cc0df61117e8f9 1,76-78,95-97,99,115,125,140,160,181,199,217,220-223,226-266
+packages/domain/src/background-jobs.ts
+  s_7526e0023eaae0::t_37a97be77c4133 203-212,215,237-258,445-450,477-480,521,614,749-755,801-804,846-851
+packages/domain/tests/integration/background-jobs.integration.test.ts
+  s_7526e0023eaae0::t_11fba7c69da0e2 1,69-85,242-244,273-354,636-704
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ec3ca9ab9386caf05999241ec47578557f33672d",
+  "prompts": {},
+  "sessions": {
+    "s_7526e0023eaae0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_7526e0023eaae0",
+        "model": "unknown"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
