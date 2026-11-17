@@ -1,0 +1,21 @@
+docs/operations/global-control-plane.md
+  s_2b3c7bc2f5fd93::t_f9602fdb17fc08 22-23,43-51
+packages/domain/src/background-jobs.ts
+  s_2b3c7bc2f5fd93::t_bba3bf549b313a 157-159
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "03b4351ed6e6a7f7a6644f4c1949c85845089ac0",
+  "prompts": {},
+  "sessions": {
+    "s_2b3c7bc2f5fd93": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_2b3c7bc2f5fd93",
+        "model": "unknown"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
