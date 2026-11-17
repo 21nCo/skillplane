@@ -1,0 +1,19 @@
+packages/domain/src/background-jobs.ts
+  s_2e636bd3189398::t_6540f9677ec354 158-160
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ae6b22c4cae47334a4d82becb0dd1f6eac45726a",
+  "prompts": {},
+  "sessions": {
+    "s_2e636bd3189398": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6b6f5093-53d6-45b7-a380-c7dbbea82a2f",
+        "model": "unknown"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
