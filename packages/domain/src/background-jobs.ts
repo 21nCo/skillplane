@@ -200,11 +200,19 @@ function isPayloadRejection(error: unknown): boolean {
 
 /**
  * Enqueues a job, or returns the existing job when the workspace already has
- * one of this kind with the same idempotency key. Pass the caller's
- * transaction client to make the enqueue atomic with the write that needs it.
+ * one of this kind with the same idempotency key.
+ *
+ * Every write to background_jobs passes the regional migration fence, which
+ * needs the workspace routing epoch on the writing transaction. Given a Pool,
+ * the enqueue runs in its own transaction pinned to the workspace's current
+ * epoch, and throws WorkspaceMaintenanceFencedError while the workspace is
+ * fenced as a migration source. Given a client, it joins the caller's
+ * transaction, which must already carry the routing epoch (as request
+ * handlers set it from their fencing epoch); an unrouted client is refused,
+ * and a stale epoch is rejected by the fence with SQLSTATE 55000.
  */
 export async function enqueueJob(
-  database: Queryable,
+  database: Pool | PoolClient,
   input: EnqueueJobInput,
 ): Promise<{ readonly job: BackgroundJob; readonly created: boolean }> {
   if (!input.workspaceId.trim()) throw invalid("Workspace is required");
@@ -226,6 +234,28 @@ export async function enqueueJob(
     }
   }
   const payload = serializePayload(input.payload);
+  if (typeof (database as Partial<PoolClient>).release === "function") {
+    const client = database as PoolClient;
+    const routed = await client.query<{ routed: boolean }>(
+      `SELECT COALESCE(current_setting('skillplane.workspace_routing_epoch', true), '') <> ''
+                AS routed`,
+    );
+    if (routed.rows[0]?.routed !== true) {
+      throw new Error("BACKGROUND_JOB_ENQUEUE_UNROUTED");
+    }
+    return insertJob(client, input, payload);
+  }
+  return inTransaction(database as Pool, async (client) => {
+    await setCurrentWorkspaceRoutingEpoch(client, input.workspaceId);
+    return insertJob(client, input, payload);
+  });
+}
+
+async function insertJob(
+  database: Queryable,
+  input: EnqueueJobInput,
+  payload: string,
+): Promise<{ readonly job: BackgroundJob; readonly created: boolean }> {
   const inserted = await database
     .query<JobRow>(
       `INSERT INTO background_jobs
@@ -412,6 +442,12 @@ export interface ClaimedBackgroundJob {
   readonly attempt: number;
   readonly leaseOwner: string;
   readonly leaseMs: number;
+  /**
+   * When the run must stop, on the performance.now() clock: leaseMs after the
+   * claim began, which is no later than the start of the claim transaction
+   * whose now() the stored lease counts from.
+   */
+  readonly runDeadline: number;
 }
 
 interface ClaimedJobPrior {
@@ -438,8 +474,10 @@ class ClaimBudgetSpent extends Error {}
 
 const LEASE_EXPIRED_ERROR = "Lease expired before the job finished";
 const ATTEMPT_LIMIT_ERROR = "Attempt limit reached before the job ran";
-// The stored lease outlasts the handler's own timeout, so a live drainer gives
-// up on a run before another drainer can reclaim it.
+// The stored lease runs leaseMs plus this grace from the claim transaction's
+// start, and the handler's deadline is leaseMs from before that start, so a
+// live drainer gives up on a run at least the grace before another drainer can
+// reclaim it, however long the claim itself took.
 const LEASE_GRACE_MS = 30_000;
 
 async function inTransaction<T>(
@@ -480,6 +518,7 @@ export async function claimBackgroundJob(input: {
 }): Promise<BackgroundJobClaim> {
   if (input.registry.kinds.length === 0) return { type: "empty" };
   const leaseOwner = `${input.workerId}:${crypto.randomUUID()}`;
+  const claimStartedAt = performance.now();
   let candidateId: string | undefined;
   try {
     return await inTransaction(input.database, async (client) => {
@@ -572,6 +611,7 @@ export async function claimBackgroundJob(input: {
           attempt: updated.attempts,
           leaseOwner,
           leaseMs: handler.leaseMs,
+          runDeadline: claimStartedAt + handler.leaseMs,
         },
         prior: {
           state: row.state,
@@ -706,10 +746,13 @@ async function runWithLease(
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<"timed_out">((resolve) => {
-    timer = setTimeout(() => {
-      resolve("timed_out");
-      controller.abort(new BackgroundJobTimeoutError());
-    }, job.leaseMs);
+    timer = setTimeout(
+      () => {
+        resolve("timed_out");
+        controller.abort(new BackgroundJobTimeoutError());
+      },
+      Math.max(0, job.runDeadline - performance.now()),
+    );
   });
   try {
     const result = await Promise.race([
@@ -755,8 +798,10 @@ export interface BackgroundJobDrainResult {
  * checked again inside each claim transaction just before its COMMIT, so a
  * claim that outlasts the budget is rolled back, and once more after the claim
  * commits: a claim whose COMMIT crossed the deadline is released to its prior
- * state without using an attempt, and its handler never starts. A started
- * handler is bounded by its own run deadline and lease.
+ * state without using an attempt, and its handler never starts. A claim that
+ * took its job's whole run deadline is released the same way. A started
+ * handler is bounded by its run deadline: leaseMs from the start of its claim,
+ * at least 30 seconds before the stored lease expires.
  *
  * A run that outlives its deadline is aborted and abandoned without releasing
  * its stored lease: a handler that ignores the abort signal may still be
@@ -797,6 +842,12 @@ export async function drainBackgroundJobs(input: {
       // The COMMIT crossed the deadline: give the job back unrun.
       await releaseBackgroundJobClaim(input.database, claim.job, claim.prior);
       break;
+    }
+    if (claim.type === "claimed" && performance.now() >= claim.job.runDeadline) {
+      // The claim used up the run deadline: give the job back unrun.
+      await releaseBackgroundJobClaim(input.database, claim.job, claim.prior);
+      exclude.push(claim.job.id);
+      continue;
     }
     if (claim.type === "fenced") {
       exclude.push(claim.jobId);

@@ -1,4 +1,4 @@
-import { Pool } from "pg";
+import { Pool, type PoolClient } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { migrateDatabase } from "../../../db/src/migrate.js";
 import { resolveTestDatabaseUrl } from "../../../db/src/database-url.js";
@@ -64,6 +64,23 @@ async function makeDue(id: string) {
       WHERE id = $1`,
     [id],
   );
+}
+
+/** A pool whose transactions take `ms` of real time longer to commit. */
+function delayedCommitPool(ms: number): Pool {
+  return {
+    connect: async () => {
+      const client = await pool.connect();
+      return {
+        query: async (text: string, values?: unknown[]) => {
+          if (text === "COMMIT")
+            await new Promise((resolve) => setTimeout(resolve, ms));
+          return client.query(text, values);
+        },
+        release: () => client.release(),
+      };
+    },
+  } as unknown as Pool;
 }
 
 function drain(
@@ -222,6 +239,9 @@ describe("enqueueJob", () => {
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
+      await client.query(
+        "SELECT set_config('skillplane.workspace_routing_epoch', '1', true)",
+      );
       // Exponent numbers are small as JSON but expand in jsonb's text form.
       await expect(
         enqueueJob(client, {
@@ -247,6 +267,88 @@ describe("enqueueJob", () => {
       [workspaceId],
     );
     expect(keys.rows).toEqual([{ idempotency_key: "after" }]);
+  });
+});
+
+describe("enqueueJob routing", () => {
+  async function setFence(
+    workspaceId: string,
+    sourceEpoch: number,
+    activeEpoch: number,
+  ) {
+    await pool.query(
+      `INSERT INTO regional_workspace_migration_fences
+         (workspace_id, source_epoch, active_epoch)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (workspace_id)
+         DO UPDATE SET source_epoch = $2, active_epoch = $3`,
+      [workspaceId, sourceEpoch, activeEpoch],
+    );
+  }
+  const input = (workspaceId: string) => ({
+    workspaceId,
+    kind: "test.echo",
+    idempotencyKey: "routed",
+    payload: { ref: "main" },
+  });
+  async function inClientTransaction<T>(
+    epoch: string | null,
+    operation: (client: PoolClient) => Promise<T>,
+  ): Promise<T> {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      if (epoch !== null) {
+        await client.query(
+          "SELECT set_config('skillplane.workspace_routing_epoch', $1, true)",
+          [epoch],
+        );
+      }
+      const result = await operation(client);
+      await client.query("COMMIT");
+      return result;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  it("enqueues from a pool at the workspace's current epoch after a move", async () => {
+    const workspaceId = workspace();
+    await setFence(workspaceId, 0, 2);
+    const first = await enqueueJob(pool, input(workspaceId));
+    const second = await enqueueJob(pool, input(workspaceId));
+    expect(first.created).toBe(true);
+    expect(second).toEqual({ job: first.job, created: false });
+    const routed = await inClientTransaction("2", (client) =>
+      enqueueJob(client, input(workspaceId)),
+    );
+    expect(routed).toEqual({ job: first.job, created: false });
+  });
+
+  it("rejects a stale, unrouted or source-fenced enqueue without writing", async () => {
+    const workspaceId = workspace();
+    await setFence(workspaceId, 0, 2);
+    await expect(
+      inClientTransaction("1", (client) => enqueueJob(client, input(workspaceId))),
+    ).rejects.toMatchObject({ code: "55000" });
+    await expect(
+      inClientTransaction(null, (client) => enqueueJob(client, input(workspaceId))),
+    ).rejects.toThrow("BACKGROUND_JOB_ENQUEUE_UNROUTED");
+    await setFence(workspaceId, 3, 2);
+    await expect(enqueueJob(pool, input(workspaceId))).rejects.toThrow(
+      "WORKSPACE_MAINTENANCE_FENCED",
+    );
+    await expect(
+      inClientTransaction("2", (client) => enqueueJob(client, input(workspaceId))),
+    ).rejects.toMatchObject({ code: "55000" });
+    const count = await pool.query<{ count: string }>(
+      "SELECT count(*) FROM background_jobs WHERE workspace_id = $1",
+      [workspaceId],
+    );
+    expect(count.rows[0]?.count).toBe("0");
   });
 });
 
@@ -529,6 +631,75 @@ describe("drainBackgroundJobs", () => {
     } finally {
       release();
     }
+  });
+
+  it("releases a job unrun when its claim takes the whole run deadline", async () => {
+    const job = await enqueueEcho(workspace(), "slow-claim-deadline");
+    let runs = 0;
+    const result = await drainBackgroundJobs({
+      database: delayedCommitPool(200),
+      registry: createBackgroundJobRegistry([
+        {
+          kind: "test.echo",
+          leaseMs: 100,
+          async run() {
+            runs += 1;
+          },
+        },
+      ]),
+      workerId: "slow-claim-deadline",
+      maxDurationMs: 30_000,
+    });
+    expect(runs).toBe(0);
+    expect(result).toEqual({ succeeded: 0, failed: 0, dead: 0, lost: 0, timedOut: 0 });
+    expect(await row(job.id)).toMatchObject({
+      state: "queued",
+      attempts: 0,
+      lease_owner: null,
+    });
+  });
+
+  it("ends a slow claim's run at leaseMs from the claim start, not from its commit", async () => {
+    const job = await enqueueEcho(workspace(), "slow-claim-run");
+    let abortedAfter = Number.NaN;
+    let rival: Awaited<ReturnType<typeof drainBackgroundJobs>> | undefined;
+    let heldPastDeadline: boolean | undefined;
+    const startedAt = performance.now();
+    const result = await drainBackgroundJobs({
+      database: delayedCommitPool(400),
+      registry: createBackgroundJobRegistry([
+        {
+          kind: "test.echo",
+          leaseMs: 1_000,
+          run: async (run) => {
+            // A concurrent drainer cannot reclaim the job while it runs.
+            rival = await drain(echo, { workerId: "rival" });
+            await new Promise<void>((resolve) => {
+              run.signal.addEventListener("abort", () => {
+                abortedAfter = performance.now() - startedAt;
+                resolve();
+              });
+            });
+            const lease = await pool.query<{ held: boolean }>(
+              `SELECT lease_expires_at > now() + interval '25 seconds' AS held
+                 FROM background_jobs WHERE id = $1`,
+              [job.id],
+            );
+            heldPastDeadline = lease.rows[0]?.held;
+          },
+        },
+      ]),
+      workerId: "slow-claim-run",
+      maxDurationMs: 30_000,
+    });
+    expect(result).toMatchObject({ timedOut: 1, succeeded: 0 });
+    expect(rival).toEqual({ succeeded: 0, failed: 0, dead: 0, lost: 0, timedOut: 0 });
+    // The claim took 400 ms of the 1 s run deadline; the run gets the rest.
+    expect(abortedAfter).toBeGreaterThanOrEqual(900);
+    expect(abortedAfter).toBeLessThan(1_250);
+    // The stored lease still has its 30 s grace left at the run deadline.
+    await vi.waitFor(() => expect(heldPastDeadline).toBe(true));
+    expect(await row(job.id)).toMatchObject({ state: "running", attempts: 1 });
   });
 
   it("stops starting jobs when the tick budget is spent", async () => {
