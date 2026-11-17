@@ -154,8 +154,9 @@ function assertPayloadValue(value: unknown, depth: number): void {
 
 /**
  * Validates a job payload. Payloads are stored in clear text and outlive the
- * request, so they carry identifiers only: credentials, tokens, emails and
- * prompts are rejected, whether under a sensitive key or inside any value.
+ * request, so they carry identifiers only. Credential-shaped text (the coarse
+ * suspect-text rule) and emails are rejected in any key or value; prompts and
+ * other sensitive fields are rejected only under a sensitive key.
  */
 function serializePayload(payload: Readonly<Record<string, unknown>>): string {
   let serialized: string;

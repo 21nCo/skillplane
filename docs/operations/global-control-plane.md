@@ -19,7 +19,8 @@ DataFn permission-directory records, replay nonces, public skill projections,
 control-plane audit records, and topology/migration state.
 
 A regional database owns skills and versions, contexts and notes, amendments,
-regional audit and analytics, idempotency records, and its projection outbox.
+regional audit and analytics, idempotency records, background jobs, and its
+projection outbox.
 Its bundle store contains private and workspace-visible bundles. There are no
 cross-database foreign keys. A regional `workspace_id` or `user_id` is an
 opaque, service-validated reference to global state.
@@ -38,6 +39,15 @@ attempt count and a redacted error code remain operator-visible. Repeated
 publication is safe because global object keys are content-addressed and the
 metadata write is an upsert. A failed event blocks later events for the same
 workspace while unrelated workspaces continue.
+
+Each cell also drains its regional `background_jobs` queue (migration `0055`).
+On every projection tick, after projection and retention, the worker claims
+due jobs on its own time budget with `FOR UPDATE SKIP LOCKED` and a lease; an
+expired lease is reclaimed. Delivery is at least once, so handlers must be
+idempotent. A failed attempt is retried with exponential backoff capped at one
+hour, and a job becomes `dead` after its maximum attempts (8 by default,
+overridable per kind). Operators list a workspace's failed and dead jobs with
+`listFailedBackgroundJobs`, which never returns payloads.
 
 This design can state that new regional workspace data is written to the
 selected home cell. It must not be described as comprehensive legal data
