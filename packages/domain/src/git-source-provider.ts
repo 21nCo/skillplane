@@ -19,6 +19,7 @@ import {
   GitHubAuthFailedError,
   isGitHubAuthFailed,
   type GitHubApp,
+  type GitHubContentsAccess,
 } from "./github-app.js";
 export interface GitSourceConfig {
   repositoryUrl: string;
@@ -146,8 +147,13 @@ abstract class GitHubSnapshotProvider implements GitSourceProvider {
     url: string,
     init: RequestInit,
   ): Promise<Response>;
-  // Called when resolving the ref or pinned commit answers 404 or 422.
-  protected abstract missing(repository: string, deadline: number): Promise<never>;
+  // Called when GitHub answers 404 to any snapshot request, or 422 to
+  // resolving the ref or pinned commit.
+  protected abstract missing(
+    repository: string,
+    deadline: number,
+    stage: "resolve" | "content",
+  ): Promise<never>;
   async snapshot(input: GitSourceConfig, pinned?: string): Promise<GitSnapshot> {
     const config = gitSourceConfig({ ...input });
     if (pinned && !/^[a-f0-9]{40}$/i.test(pinned)) invalid("Invalid preview commit");
@@ -212,8 +218,8 @@ abstract class GitHubSnapshotProvider implements GitSourceProvider {
       }
       if (!response.ok) {
         await response.body?.cancel();
-        if (stage === "resolve" && (response.status === 404 || response.status === 422))
-          return this.missing(repository, deadline);
+        if (response.status === 404 || (stage === "resolve" && response.status === 422))
+          return this.missing(repository, deadline, stage);
         throw new DomainError(
           "SERVICE_UNAVAILABLE",
           "GitHub rejected the request; check its availability or rate limit",
@@ -488,6 +494,14 @@ abstract class GitHubSnapshotProvider implements GitSourceProvider {
   }
 }
 
+function rejected(): DomainError {
+  return new DomainError(
+    "SERVICE_UNAVAILABLE",
+    "GitHub rejected the request; check its availability or rate limit",
+    503,
+  );
+}
+
 function repositoryName(repositoryUrl: string): string {
   return repositoryUrl.slice("https://github.com/".length);
 }
@@ -506,9 +520,15 @@ export class PublicGitHubSourceProvider extends GitHubSnapshotProvider {
     return this.fetcher(url, init);
   }
   // GitHub answers an unknown repository with 404 and an unknown branch, tag
-  // or commit with 404 or 422.
-  protected missing(): Promise<never> {
-    invalid("Public repository or ref was not found");
+  // or commit with 404 or 422. A missing object after resolution is an
+  // incomplete snapshot.
+  protected missing(
+    _repository: string,
+    _deadline: number,
+    stage: "resolve" | "content",
+  ): Promise<never> {
+    if (stage === "resolve") invalid("Public repository or ref was not found");
+    throw rejected();
   }
 }
 
@@ -586,48 +606,59 @@ export class AuthenticatedGitHubSourceProvider extends GitHubSnapshotProvider {
       init,
     );
   }
-  // The token was minted for this repository, so a repository GitHub no
-  // longer shows means the installation lost access; otherwise the ref is
-  // unknown.
+  // GitHub answers 404 both for a missing object and for a repository the
+  // token no longer sees. The token was minted for this repository, so asking
+  // for the repository itself tells them apart: hidden means the installation
+  // lost access (auth_failed); visible returns its REST record, and the
+  // caller decides what the missing object means for its operation.
+  private async visibleRepository(
+    repository: string,
+    access: GitHubContentsAccess,
+    deadline: number,
+  ): Promise<Record<string, unknown>> {
+    const response = await this.call(
+      repository,
+      access,
+      "GET",
+      "",
+      undefined,
+      deadline,
+    );
+    if (response.data) return response.data;
+    if (response.status === 404) throw new GitHubAuthFailedError();
+    throw rejected();
+  }
+
   protected override async missing(
     repository: string,
     deadline: number,
+    stage: "resolve" | "content",
   ): Promise<never> {
-    const remaining = deadline - Date.now();
-    if (remaining <= 0)
-      throw new DomainError("SERVICE_UNAVAILABLE", "Git source fetch timed out", 503);
-    const response = await this.send(
-      repository,
-      `${this.apiBaseUrl}/repos/${repository}`,
-      {
-        headers: { accept: "application/vnd.github+json" },
-        signal: AbortSignal.timeout(Math.min(10000, remaining)),
-      },
-    );
-    await response.body?.cancel();
-    if (response.status === 404) throw new GitHubAuthFailedError();
-    if (response.ok) invalid("Repository ref was not found");
-    throw new DomainError(
-      "SERVICE_UNAVAILABLE",
-      "GitHub rejected the request; check its availability or rate limit",
-      503,
-    );
+    await this.visibleRepository(repository, "read", deadline);
+    if (stage === "resolve") invalid("Repository ref was not found");
+    throw rejected();
   }
 
-  private async write(
-    repositoryUrl: string,
-    method: "GET" | "POST" | "PATCH",
-    path: string,
+  // Sends one installation-authenticated JSON request to a path of the
+  // repository, or to the GraphQL endpoint for `{ graphql: true }`. A non-2xx
+  // answer other than 401/403/429 (classified by GitHubApp) is returned as its
+  // status without a body.
+  private async call(
+    repository: string,
+    access: GitHubContentsAccess,
+    method: "GET" | "POST",
+    path: string | { graphql: true },
     body?: unknown,
+    deadline = Date.now() + 10000,
   ): Promise<{ status: number; data: Record<string, unknown> | null }> {
-    const repository = repositoryName(gitSourceConfig({ repositoryUrl }).repositoryUrl);
+    const remaining = deadline - Date.now();
+    if (remaining <= 0)
+      throw new DomainError("SERVICE_UNAVAILABLE", "GitHub request timed out", 503);
     const response = await this.app.installationFetch(
-      {
-        installationId: this.installationId,
-        repositories: [repository],
-        access: "write",
-      },
-      `${this.apiBaseUrl}/repos/${repository}/${path}`,
+      { installationId: this.installationId, repositories: [repository], access },
+      typeof path === "object"
+        ? `${this.apiBaseUrl}/graphql`
+        : `${this.apiBaseUrl}/repos/${repository}${path ? `/${path}` : ""}`,
       {
         method,
         headers: {
@@ -635,7 +666,8 @@ export class AuthenticatedGitHubSourceProvider extends GitHubSnapshotProvider {
           ...(body === undefined ? {} : { "content-type": "application/json" }),
         },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-        signal: AbortSignal.timeout(10000),
+        redirect: "manual",
+        signal: AbortSignal.timeout(Math.min(10000, remaining)),
       },
     );
     if (
@@ -645,7 +677,7 @@ export class AuthenticatedGitHubSourceProvider extends GitHubSnapshotProvider {
       await response.body?.cancel();
       throw new DomainError(
         "SERVICE_UNAVAILABLE",
-        "GitHub redirected a write request; retry later",
+        "GitHub redirected a request; retry later",
         503,
       );
     }
@@ -694,16 +726,29 @@ export class AuthenticatedGitHubSourceProvider extends GitHubSnapshotProvider {
     }
   }
 
-  // A repository the write token covers but GitHub no longer shows means the
-  // installation lost access; other refusals are retryable outages.
-  private refused(status: number): never {
-    if (status === 404) throw new GitHubAuthFailedError();
+  private write(
+    repositoryUrl: string,
+    method: "GET" | "POST",
+    path: string,
+    body?: unknown,
+  ) {
+    const repository = repositoryName(gitSourceConfig({ repositoryUrl }).repositoryUrl);
+    return this.call(repository, "write", method, path, body);
+  }
+
+  // A write GitHub refused. 404 is either lost access (auth_failed) or a
+  // referenced object the repository does not have; 422 an invalid object;
+  // anything else a retryable outage.
+  private async refused(repositoryUrl: string, status: number): Promise<never> {
+    if (status === 404) {
+      const repository = repositoryName(
+        gitSourceConfig({ repositoryUrl }).repositoryUrl,
+      );
+      await this.visibleRepository(repository, "write", Date.now() + 10000);
+      invalid("GitHub could not find a referenced Git object");
+    }
     if (status === 422) invalid("GitHub refused the Git object");
-    throw new DomainError(
-      "SERVICE_UNAVAILABLE",
-      "GitHub rejected the request; check its availability or rate limit",
-      503,
-    );
+    throw rejected();
   }
 
   /** Stores file content as a blob and returns its verified Git SHA. */
@@ -723,7 +768,7 @@ export class AuthenticatedGitHubSourceProvider extends GitHubSnapshotProvider {
       content: btoa(binary),
       encoding: "base64",
     });
-    if (!result.data) this.refused(result.status);
+    if (!result.data) return this.refused(repositoryUrl, result.status);
     if (gitSha(result.data.sha) !== expected)
       invalid("GitHub returned a different blob");
     return expected;
@@ -756,7 +801,7 @@ export class AuthenticatedGitHubSourceProvider extends GitHubSnapshotProvider {
       ...(input.baseTree === null ? {} : { base_tree: input.baseTree }),
       tree,
     });
-    if (!result.data) this.refused(result.status);
+    if (!result.data) return this.refused(repositoryUrl, result.status);
     return gitSha(result.data.sha);
   }
 
@@ -780,7 +825,7 @@ export class AuthenticatedGitHubSourceProvider extends GitHubSnapshotProvider {
       tree: input.tree,
       parents: input.parents,
     });
-    if (!result.data) this.refused(result.status);
+    if (!result.data) return this.refused(repositoryUrl, result.status);
     const commit = gitSha(result.data.sha);
     if (text(object(result.data.tree).sha) !== input.tree)
       invalid("GitHub returned a different commit tree");
@@ -788,45 +833,96 @@ export class AuthenticatedGitHubSourceProvider extends GitHubSnapshotProvider {
   }
 
   /**
-   * Moves `branch` to `commit` only while it still points at `expectedSha`.
-   * The branch is read first, and the update is never forced, so GitHub's
-   * fast-forward check refuses a concurrent move after the read when the new
-   * commit's parent is `expectedSha`. A stale branch is GitHubRefConflictError.
+   * Moves `branch` to `commitSha` only while it points at `expectedSha`.
+   * GitHub's GraphQL `updateRefs` applies the move atomically with
+   * `beforeOid`, so a concurrent move of any kind, including a reset to an
+   * older commit, is refused instead of overwritten. A branch already at
+   * `commitSha` (a retry after a lost response) succeeds; a branch at any
+   * other commit is GitHubRefConflictError.
    */
   async updateRef(
     repositoryUrl: string,
     input: { branch: string; commitSha: string; expectedSha: string },
   ): Promise<void> {
-    const ref = `heads/${branchName(input.branch)}`
-      .split("/")
-      .map((part) => encodeURIComponent(part))
-      .join("/");
+    const branch = branchName(input.branch);
     const commit = gitSha(input.commitSha, "Invalid commit"),
       expected = gitSha(input.expectedSha, "Invalid expected commit");
-    const current = async () => {
-      const read = await this.write(repositoryUrl, "GET", `git/ref/${ref}`);
-      if (read.status === 404) return null;
-      if (!read.data) this.refused(read.status);
-      return gitSha(object(read.data.object).sha);
+    const repository = repositoryName(gitSourceConfig({ repositoryUrl }).repositoryUrl);
+    const refPath = `git/ref/heads/${branch
+      .split("/")
+      .map((part) => encodeURIComponent(part))
+      .join("/")}`;
+    // The branch's commit, or null when the visible repository has no such
+    // branch; a hidden repository is auth_failed.
+    const current = async (): Promise<string | null> => {
+      const read = await this.call(repository, "write", "GET", refPath);
+      if (read.data) return gitSha(object(read.data.object).sha);
+      if (read.status !== 404) throw rejected();
+      await this.visibleRepository(repository, "write", Date.now() + 10000);
+      return null;
     };
-    if ((await current()) !== expected) throw new GitHubRefConflictError();
-    const result = await this.write(repositoryUrl, "PATCH", `git/refs/${ref}`, {
-      sha: commit,
-      force: false,
-    });
-    if (!result.data) {
-      // 422 is a non-fast-forward or a protected branch refusal; 409 a
-      // concurrent ref update.
-      if (result.status === 422 || result.status === 409) {
-        if ((await current()) !== expected) throw new GitHubRefConflictError();
-        throw new DomainError("CONFLICT", "GitHub refused the branch update", 409, {
-          reason: "update_rejected",
-        });
-      }
-      this.refused(result.status);
+    const before = await current();
+    if (before === commit) return;
+    if (before !== expected) throw new GitHubRefConflictError();
+    const repositoryId = text(
+      (await this.visibleRepository(repository, "write", Date.now() + 10000)).node_id,
+    );
+    if (!repositoryId) invalid("GitHub returned an invalid repository");
+    let outcome: "applied" | "refused" | "rate_limited";
+    try {
+      const result = await this.call(
+        repository,
+        "write",
+        "POST",
+        { graphql: true },
+        {
+          query:
+            "mutation($input: UpdateRefsInput!) { updateRefs(input: $input) { clientMutationId } }",
+          variables: {
+            input: {
+              repositoryId,
+              refUpdates: [
+                {
+                  name: `refs/heads/${branch}`,
+                  beforeOid: expected,
+                  afterOid: commit,
+                  force: false,
+                },
+              ],
+            },
+          },
+        },
+      );
+      if (!result.data) throw rejected();
+      const errors = Array.isArray(result.data.errors) ? result.data.errors : [];
+      outcome =
+        errors.length === 0 && result.data.data
+          ? "applied"
+          : errors.some((error) => object(error).type === "RATE_LIMITED")
+            ? "rate_limited"
+            : "refused";
+    } catch (error) {
+      // A lost or failed response may hide an applied update: the branch at
+      // the new commit is success, anything else keeps the original error.
+      if (isGitHubAuthFailed(error) || !(error instanceof DomainError)) throw error;
+      if ((await current().catch(() => null)) === commit) return;
+      throw error;
     }
-    if (gitSha(object(result.data.object).sha) !== commit)
-      invalid("GitHub returned a different branch commit");
+    if (outcome === "applied") return;
+    // GitHub refused the update: decide by where the branch is now.
+    const after = await current();
+    if (after === commit) return;
+    if (after !== expected) throw new GitHubRefConflictError();
+    if (outcome === "rate_limited")
+      throw new DomainError(
+        "SERVICE_UNAVAILABLE",
+        "GitHub rate limit reached; retry later",
+        503,
+      );
+    // Still at the expected commit: a protected branch or a non-fast-forward.
+    throw new DomainError("CONFLICT", "GitHub refused the branch update", 409, {
+      reason: "update_rejected",
+    });
   }
 }
 

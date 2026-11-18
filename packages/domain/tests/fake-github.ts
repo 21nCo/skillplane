@@ -2,10 +2,12 @@ import { createHash, generateKeyPairSync, verify } from "node:crypto";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 
-// An in-process GitHub REST fake for one private repository and one App
-// installation. It verifies App JWTs against the App's public key, issues
-// installation tokens limited to the requested repositories and permission,
-// and keeps a tiny Git object store so writes create real commits.
+// An in-process GitHub REST and GraphQL fake for one private repository and
+// one App installation. It verifies App JWTs against the App's public key,
+// issues installation tokens limited to the requested repositories and
+// permission, and keeps a tiny Git object store so writes create real commits.
+// Branches move only through GraphQL `updateRefs`, which applies `beforeOid`
+// atomically as GitHub documents.
 
 export const appKeys = generateKeyPairSync("rsa", { modulusLength: 2048 });
 export const appPrivateKeyPem = appKeys.privateKey
@@ -31,8 +33,18 @@ export interface FakeGitHub {
   head(branch?: string): string;
   /** Move a branch outside Skillplane, as a concurrent push would. */
   pushExternal(branch?: string): string;
+  /** Point a branch at any commit outside Skillplane, as a force push would. */
+  resetExternal(sha: string, branch?: string): void;
   /** Run once just before the next ref update is applied. */
   beforeNextRefUpdate(fn: () => void): void;
+  /** Apply the next ref update but drop its response, as a lost connection would. */
+  loseNextRefUpdateResponse(): void;
+  /** Run once before the next repository request whose path matches. */
+  beforeNextRequest(path: RegExp, fn: () => void): void;
+  /** Answer the next repository or GraphQL request with a secondary rate limit. */
+  throttleNext(): void;
+  /** Every repository and GraphQL request as `METHOD path`. */
+  readonly requests: string[];
   blob(path: string, commit?: string): string | null;
   treeOf(commit: string): string;
   close(): Promise<void>;
@@ -95,7 +107,12 @@ export async function startFakeGitHub(
   let revoked = false,
     hidden = false,
     serial = 0,
-    beforeRefUpdate: (() => void) | null = null;
+    beforeRefUpdate: (() => void) | null = null,
+    loseRefUpdate = false,
+    throttle = false,
+    nextRequest: { path: RegExp; fn: () => void } | null = null;
+  const requests: string[] = [];
+  const nodeId = "R_kgDOfake0001";
 
   const putTree = (entries: Map<string, Entry>) => {
     const sha = gitSha(
@@ -190,10 +207,75 @@ export async function startFakeGitHub(
         });
       }
       const prefix = `/repos/${repository}`;
+      requests.push(`${request.method ?? ""} ${url.pathname}`);
+      if (nextRequest?.path.test(url.pathname)) {
+        const hook = nextRequest.fn;
+        nextRequest = null;
+        hook();
+      }
+      if (throttle) {
+        throttle = false;
+        // GitHub's secondary limits may arrive without any rate limit header.
+        return send(403, {
+          message:
+            "You have exceeded a secondary rate limit. Please wait a few minutes before you try again.",
+        });
+      }
       const grant = tokens.get(
         request.headers.authorization?.replace(/^Bearer /u, "") ?? "",
       );
       if (grant && revoked) return send(401, { message: "Bad credentials" });
+      if (url.pathname === "/graphql" && request.method === "POST") {
+        const input = (await body(request)) as {
+          query: string;
+          variables: {
+            input: {
+              repositoryId: string;
+              refUpdates: {
+                name: string;
+                beforeOid?: string;
+                afterOid: string;
+                force?: boolean;
+              }[];
+            };
+          };
+        };
+        const failure = (type: string, message: string) =>
+          send(200, { data: { updateRefs: null }, errors: [{ type, message }] });
+        if (!grant || hidden || input.variables.input.repositoryId !== nodeId)
+          return failure("NOT_FOUND", "Could not resolve to a node");
+        if (!/updateRefs\(/u.test(input.query))
+          return failure("UNSUPPORTED", "Only updateRefs is faked");
+        if (grant.access !== "write")
+          return failure("FORBIDDEN", "Resource not accessible by integration");
+        const run = beforeRefUpdate;
+        beforeRefUpdate = null;
+        run?.();
+        // All updates are checked before any is applied, as GitHub does.
+        const updates = input.variables.input.refUpdates.map((update) => ({
+          ...update,
+          branch: update.name.replace(/^refs\/heads\//u, ""),
+        }));
+        for (const update of updates) {
+          const current = refs.get(update.branch);
+          if (update.beforeOid !== undefined && current !== update.beforeOid)
+            return failure(
+              "STALE_DATA",
+              `Expected ${update.name} to point to ${update.beforeOid}`,
+            );
+          if (!current || !commits.has(update.afterOid))
+            return failure("UNPROCESSABLE", "Reference or object does not exist");
+          if (!update.force && !ancestors(update.afterOid).has(current))
+            return failure("UNPROCESSABLE", "Update is not a fast forward");
+        }
+        for (const update of updates) refs.set(update.branch, update.afterOid);
+        if (loseRefUpdate) {
+          loseRefUpdate = false;
+          request.socket.destroy();
+          return;
+        }
+        return send(200, { data: { updateRefs: { clientMutationId: null } } });
+      }
       // A private repository is invisible without a token that covers it.
       if (
         !grant ||
@@ -206,7 +288,8 @@ export async function startFakeGitHub(
       const write = request.method !== "GET";
       if (write && grant.access !== "write")
         return send(403, { message: "Resource not accessible by integration" });
-      if (path === "") return send(200, { full_name: repository, private: true });
+      if (path === "")
+        return send(200, { full_name: repository, node_id: nodeId, private: true });
       let match: RegExpExecArray | null;
       if ((match = /^\/commits\/(.+)$/.exec(path))) {
         const ref = decodeURIComponent(match[1] ?? "");
@@ -305,26 +388,6 @@ export async function startFakeGitHub(
             })
           : send(404, { message: "Not Found" });
       }
-      if (
-        (match = /^\/git\/refs\/heads\/(.+)$/.exec(path)) &&
-        request.method === "PATCH"
-      ) {
-        const branch = decodeURIComponent(match[1] ?? "");
-        const input = (await body(request)) as { sha: string; force: boolean };
-        const run = beforeRefUpdate;
-        beforeRefUpdate = null;
-        run?.();
-        const current = refs.get(branch);
-        if (!current || !commits.has(input.sha))
-          return send(422, { message: "Reference does not exist" });
-        if (!input.force && !ancestors(input.sha).has(current))
-          return send(422, { message: "Update is not a fast forward" });
-        refs.set(branch, input.sha);
-        return send(200, {
-          ref: `refs/heads/${branch}`,
-          object: { sha: input.sha, type: "commit" },
-        });
-      }
       return send(404, { message: "Not Found" });
     })().catch(() => {
       response.writeHead(500);
@@ -358,9 +421,22 @@ export async function startFakeGitHub(
       refs.set(branch, commit);
       return commit;
     },
+    resetExternal(sha, branch = "main") {
+      refs.set(branch, sha);
+    },
     beforeNextRefUpdate(fn) {
       beforeRefUpdate = fn;
     },
+    loseNextRefUpdateResponse() {
+      loseRefUpdate = true;
+    },
+    beforeNextRequest(path, fn) {
+      nextRequest = { path, fn };
+    },
+    throttleNext() {
+      throttle = true;
+    },
+    requests,
     blob(path, commit) {
       const tree = trees.get(commits.get(commit ?? refs.get("main") ?? "")?.tree ?? "");
       const entry = tree?.get(path);

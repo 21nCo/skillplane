@@ -48,6 +48,7 @@ function tokenServer(
   options: {
     status?: number;
     headers?: Record<string, string>;
+    message?: string;
     lifetimeMs?: number;
     grant?: (body: { repositories: string[]; permissions: { contents: string } }) => {
       contents: string;
@@ -69,7 +70,7 @@ function tokenServer(
       body,
     });
     if (options.status)
-      return new Response(JSON.stringify({ message: "nope" }), {
+      return new Response(JSON.stringify({ message: options.message ?? "nope" }), {
         status: options.status,
         headers: options.headers ?? {},
       });
@@ -216,6 +217,12 @@ describe("GitHub App installation tokens", () => {
   it("treats throttling and rejected App credentials as retryable outages, not auth_failed", async () => {
     for (const server of [
       tokenServer({ status: 403, headers: { "x-ratelimit-remaining": "0" } }),
+      // Secondary limits can arrive as a bare 403 that only says so in its body.
+      tokenServer({
+        status: 403,
+        message: "You have exceeded a secondary rate limit. Please wait.",
+      }),
+      tokenServer({ status: 403, message: "API rate limit exceeded for installation" }),
       tokenServer({ status: 429 }),
       tokenServer({ status: 401 }),
       tokenServer({ status: 502 }),
@@ -286,11 +293,19 @@ describe("installation-authenticated requests", () => {
     expect(minted).toBe(3);
   });
 
-  it("maps a permission refusal to auth_failed but leaves throttling to the caller", async () => {
+  it("maps a permission refusal to auth_failed and throttling to a retryable outage", async () => {
     const clock = Date.parse("2026-11-18T00:00:00Z");
     const responses = [
-      new Response("{}", { status: 403 }),
+      new Response(
+        JSON.stringify({ message: "Resource not accessible by integration" }),
+        { status: 403 },
+      ),
       new Response("{}", { status: 403, headers: { "retry-after": "60" } }),
+      new Response(
+        JSON.stringify({ message: "You have exceeded a secondary rate limit." }),
+        { status: 403 },
+      ),
+      new Response("{}", { status: 429 }),
     ];
     const fetcher: typeof fetch = async (input) =>
       String(input).endsWith("/access_tokens")
@@ -309,7 +324,11 @@ describe("installation-authenticated requests", () => {
     await expect(app.installationFetch(read, url, {})).rejects.toBeInstanceOf(
       GitHubAuthFailedError,
     );
-    expect((await app.installationFetch(read, url, {})).status).toBe(403);
+    for (let i = 0; i < 3; i += 1)
+      await expect(app.installationFetch(read, url, {})).rejects.toMatchObject({
+        code: "SERVICE_UNAVAILABLE",
+        status: 503,
+      });
     // Installation tokens never leave api.github.com.
     await expect(
       app.installationFetch(read, "https://example.test/repos/acme/skills", {}),

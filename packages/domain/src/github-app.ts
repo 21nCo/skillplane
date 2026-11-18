@@ -236,13 +236,65 @@ async function boundedJson(response: Response, maxBytes: number): Promise<unknow
   }
 }
 
-/** Whether a 403 or 429 is GitHub throttling rather than a permission refusal. */
-export function isGitHubRateLimited(response: Response): boolean {
-  return (
+// GitHub names primary ("API rate limit exceeded") and secondary ("You have
+// exceeded a secondary rate limit") limits in the error message; secondary
+// limits may come without any rate limit header.
+const RATE_LIMIT_MESSAGE = /rate limit|abuse detection/iu;
+const MAX_ERROR_BODY_BYTES = 64 * 1024;
+
+async function errorText(response: Response): Promise<string> {
+  const reader = response.body?.getReader();
+  if (!reader) return "";
+  const decoder = new TextDecoder();
+  let text = "",
+    size = 0;
+  try {
+    while (size < MAX_ERROR_BODY_BYTES) {
+      const next = await reader.read();
+      if (next.done) return text;
+      size += next.value.byteLength;
+      text += decoder.decode(next.value, { stream: true });
+    }
+    await reader.cancel();
+  } catch {
+    // An interrupted error body classifies on what arrived.
+  } finally {
+    reader.releaseLock();
+  }
+  return text;
+}
+
+/**
+ * Whether a refused response is GitHub throttling rather than a permission
+ * refusal: any 429, or a 403 with an exhausted rate limit, a `retry-after`
+ * header or a message naming a primary or secondary rate limit. Consumes the
+ * response body; the text is only matched, never echoed.
+ */
+export async function isGitHubRateLimited(response: Response): Promise<boolean> {
+  if (
     response.status === 429 ||
-    response.headers.get("x-ratelimit-remaining") === "0" ||
-    response.headers.has("retry-after")
-  );
+    (response.status === 403 &&
+      (response.headers.get("x-ratelimit-remaining") === "0" ||
+        response.headers.has("retry-after")))
+  ) {
+    await response.body?.cancel();
+    return true;
+  }
+  if (response.status !== 403) {
+    await response.body?.cancel();
+    return false;
+  }
+  return RATE_LIMIT_MESSAGE.test(await errorText(response));
+}
+
+/**
+ * Classifies a 403 or 429 from GitHub: throttling is a retryable outage and
+ * any other refusal means the installation does not grant the access.
+ */
+export async function throwGitHubRefusal(response: Response): Promise<never> {
+  if (await isGitHubRateLimited(response))
+    unavailable("GitHub rate limit reached; retry later");
+  throw new GitHubAuthFailedError();
 }
 
 /**
@@ -318,7 +370,8 @@ export class GitHubApp {
   /**
    * Sends an installation-authenticated request. A rejected (401) token is
    * replaced once with a fresh mint; a second rejection, or a permission
-   * refusal (403 that is not throttling), is `auth_failed`.
+   * refusal (403 that is not throttling), is `auth_failed`. Throttling (429,
+   * or a rate limited 403) is a retryable SERVICE_UNAVAILABLE.
    */
   async installationFetch(
     request: InstallationTokenRequest,
@@ -345,10 +398,8 @@ export class GitHubApp {
         if (attempt === 0) continue;
         throw new GitHubAuthFailedError();
       }
-      if (response.status === 403 && !isGitHubRateLimited(response)) {
-        await response.body?.cancel();
-        throw new GitHubAuthFailedError();
-      }
+      if (response.status === 403 || response.status === 429)
+        await throwGitHubRefusal(response);
       return response;
     }
   }
@@ -383,14 +434,13 @@ export class GitHubApp {
       unavailable("GitHub could not be reached; retry later");
     }
     if (!response.ok) {
+      // 403: suspended or not permitted, unless it is throttling.
+      if (response.status === 403 || response.status === 429)
+        await throwGitHubRefusal(response);
       await response.body?.cancel();
-      // 404: the installation was removed; 403: suspended or not permitted;
-      // 422: a repository or permission is outside the installation.
-      if (
-        response.status === 404 ||
-        response.status === 422 ||
-        (response.status === 403 && !isGitHubRateLimited(response))
-      )
+      // 404: the installation was removed; 422: a repository or permission is
+      // outside the installation.
+      if (response.status === 404 || response.status === 422)
         throw new GitHubAuthFailedError();
       if (response.status === 401)
         unavailable("GitHub rejected the Skillplane App credentials");

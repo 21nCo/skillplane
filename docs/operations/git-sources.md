@@ -138,6 +138,12 @@ until five minutes before they expire and never appear in errors, logs or audit
 rows. A removed, suspended or wrongly scoped installation fails the sync with
 `GIT_SOURCE_AUTH_FAILED` (`reason: auth_failed`) and keeps the source, its runs,
 bindings and versions; reconnecting the installation restores syncing.
+A 404 is `auth_failed` only when the repository itself is no longer visible to
+the installation; a missing ref or object in a visible repository is not.
+GitHub rate limits, including secondary limits reported without rate limit
+headers, are retryable outages. Branch writes move the branch with the GraphQL
+`updateRefs` mutation and the expected commit as `beforeOid`, so any concurrent
+move, including a reset to an older commit, is refused as `stale_ref`.
 Binding installations to workspaces is not part of this change.
 
 ## API

@@ -1,6 +1,11 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, generateKeyPairSync, randomBytes } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { gitSourceConfig, PublicGitHubSourceProvider } from "./git-source-provider.js";
+import {
+  AuthenticatedGitHubSourceProvider,
+  gitSourceConfig,
+  PublicGitHubSourceProvider,
+} from "./git-source-provider.js";
+import { GitHubApp, GitHubAuthFailedError } from "./github-app.js";
 const sha = "a".repeat(40),
   treeSha = "b".repeat(40);
 function fixture(
@@ -525,4 +530,131 @@ describe("public GitHub source provider", () => {
     ).rejects.toThrow("20 MiB");
     expect(f.calls.length).toBeLessThanOrEqual(12);
   }, 30000);
+});
+
+describe("authenticated GitHub source provider", () => {
+  const appKey = generateKeyPairSync("rsa", { modulusLength: 2048 })
+    .privateKey.export({ type: "pkcs1", format: "pem" })
+    .toString();
+  const repositoryUrl = "https://github.com/acme/skills";
+  const head = "c".repeat(40),
+    next = "d".repeat(40);
+
+  // Mints any requested token and answers repository requests through `route`
+  // (method and path after /repos/acme/skills, or "POST /graphql").
+  function provider(route: (request: string) => Response | undefined) {
+    const seen: string[] = [];
+    const fetcher: typeof fetch = async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/access_tokens")) {
+        const body = JSON.parse(String(init?.body)) as {
+          permissions: { contents: string };
+        };
+        return Response.json({
+          token: `ghs_${"1".repeat(36)}`,
+          expires_at: new Date(Date.now() + 3600_000).toISOString(),
+          permissions: body.permissions,
+          repositories: [{ full_name: "acme/skills" }],
+        });
+      }
+      const request = `${init?.method ?? "GET"} ${url.pathname.replace("/repos/acme/skills", "")}`;
+      seen.push(request);
+      return route(request) ?? new Response("{}", { status: 404 });
+    };
+    const app = new GitHubApp({ appId: "1", privateKeyPem: appKey }, { fetcher });
+    return { provider: new AuthenticatedGitHubSourceProvider(app, 7), seen };
+  }
+  const repo = () => Response.json({ full_name: "acme/skills", node_id: "R_1" });
+  const ref = (sha: string) => Response.json({ object: { sha, type: "commit" } });
+
+  it("tells a missing object from lost access by probing the repository", async () => {
+    // Visible repository: a 404 after resolution is an incomplete snapshot
+    // and a 404 write is a missing referenced object, neither auth_failed.
+    const visible = provider((request) =>
+      request === "GET "
+        ? repo()
+        : request.startsWith("GET /commits/")
+          ? new Response(head)
+          : undefined,
+    );
+    await expect(
+      visible.provider.snapshot(gitSourceConfig({ repositoryUrl, ref: "main" })),
+    ).rejects.toMatchObject({ code: "SERVICE_UNAVAILABLE" });
+    await expect(
+      visible.provider.createCommit(repositoryUrl, {
+        message: "m",
+        tree: head,
+        parents: [],
+      }),
+    ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+    // Hidden repository: the same 404s are auth_failed.
+    const hidden = provider((request) =>
+      request.startsWith("GET /commits/") ? new Response(head) : undefined,
+    );
+    await expect(
+      hidden.provider.snapshot(gitSourceConfig({ repositoryUrl, ref: "main" })),
+    ).rejects.toBeInstanceOf(GitHubAuthFailedError);
+    await expect(
+      hidden.provider.createCommit(repositoryUrl, {
+        message: "m",
+        tree: head,
+        parents: [],
+      }),
+    ).rejects.toBeInstanceOf(GitHubAuthFailedError);
+  });
+
+  it("decides a refused branch update by where the branch is afterwards", async () => {
+    const update = { branch: "main", commitSha: next, expectedSha: head };
+    const refused = (type: string) =>
+      Response.json({ data: { updateRefs: null }, errors: [{ type, message: "no" }] });
+    // Still at the expected commit: a protected branch or rule refusal.
+    const rule = provider((request) =>
+      request === "GET "
+        ? repo()
+        : request === "GET /git/ref/heads/main"
+          ? ref(head)
+          : request === "POST /graphql"
+            ? refused("UNPROCESSABLE")
+            : undefined,
+    );
+    await expect(rule.provider.updateRef(repositoryUrl, update)).rejects.toMatchObject({
+      code: "CONFLICT",
+      details: { reason: "update_rejected" },
+    });
+    // A GraphQL rate limit is retryable.
+    const limited = provider((request) =>
+      request === "GET "
+        ? repo()
+        : request === "GET /git/ref/heads/main"
+          ? ref(head)
+          : request === "POST /graphql"
+            ? refused("RATE_LIMITED")
+            : undefined,
+    );
+    await expect(
+      limited.provider.updateRef(repositoryUrl, update),
+    ).rejects.toMatchObject({
+      code: "SERVICE_UNAVAILABLE",
+    });
+    // The update reached GitHub although it answered with an error.
+    let reads = 0;
+    const landed = provider((request) =>
+      request === "GET "
+        ? repo()
+        : request === "GET /git/ref/heads/main"
+          ? ref(reads++ === 0 ? head : next)
+          : request === "POST /graphql"
+            ? new Response("{}", { status: 502 })
+            : undefined,
+    );
+    await expect(
+      landed.provider.updateRef(repositoryUrl, update),
+    ).resolves.toBeUndefined();
+    // A branch already at the new commit needs no mutation.
+    const done = provider((request) =>
+      request === "GET /git/ref/heads/main" ? ref(next) : undefined,
+    );
+    await done.provider.updateRef(repositoryUrl, update);
+    expect(done.seen).toEqual(["GET /git/ref/heads/main"]);
+  });
 });

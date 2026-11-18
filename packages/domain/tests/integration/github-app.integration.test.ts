@@ -121,15 +121,23 @@ describe("GitHub App installation against a fake GitHub", () => {
     );
   });
 
+  async function commitOn(
+    provider: AuthenticatedGitHubSourceProvider,
+    repositoryUrl: string,
+    parent: string,
+    message: string,
+  ) {
+    return provider.createCommit(repositoryUrl, {
+      message,
+      tree: github?.treeOf(parent) ?? "",
+      parents: [parent],
+    });
+  }
+
   it("refuses a stale expected SHA and a branch that moves during the update", async () => {
     const { github, provider, repositoryUrl } = await setup();
     const parent = github.head();
-    const parentTree = github.treeOf(parent);
-    const commit = await provider.createCommit(repositoryUrl, {
-      message: "Publish",
-      tree: parentTree,
-      parents: [parent],
-    });
+    const commit = await commitOn(provider, repositoryUrl, parent, "Publish");
 
     // Stale before the update: the branch already moved.
     const moved = github.pushExternal();
@@ -142,13 +150,9 @@ describe("GitHub App installation against a fake GitHub", () => {
     ).rejects.toBeInstanceOf(GitHubRefConflictError);
     expect(github.head()).toBe(moved);
 
-    // Stale during the update: the branch moves after the read; GitHub's
-    // fast-forward check refuses it and the branch keeps the other commit.
-    const next = await provider.createCommit(repositoryUrl, {
-      message: "Publish again",
-      tree: parentTree,
-      parents: [moved],
-    });
+    // Stale during the update: the branch moves after the read and the
+    // atomic beforeOid check refuses it; the branch keeps the other commit.
+    const next = await commitOn(provider, repositoryUrl, moved, "Publish again");
     let raced = "";
     github.beforeNextRefUpdate(() => {
       raced = github.pushExternal();
@@ -161,6 +165,124 @@ describe("GitHub App installation against a fake GitHub", () => {
       }),
     ).rejects.toMatchObject({ code: "CONFLICT", details: { reason: "stale_ref" } });
     expect(github.head()).toBe(raced);
+  });
+
+  it("refuses a branch reset to an older commit between the read and the update", async () => {
+    const { github, provider, repositoryUrl } = await setup();
+    // A <- B (expected) <- C (new). A reset back to A after the read would let
+    // a plain fast-forward update move A to C and silently undo the reset.
+    const a = github.head();
+    const b = github.pushExternal();
+    const c = await commitOn(provider, repositoryUrl, b, "Publish on B");
+    github.beforeNextRefUpdate(() => github.resetExternal(a));
+    await expect(
+      provider.updateRef(repositoryUrl, {
+        branch: "main",
+        commitSha: c,
+        expectedSha: b,
+      }),
+    ).rejects.toMatchObject({ code: "CONFLICT", details: { reason: "stale_ref" } });
+    expect(github.head()).toBe(a);
+  });
+
+  it("treats an update applied before its response was lost as success", async () => {
+    const { github, provider, repositoryUrl } = await setup();
+    const parent = github.head();
+    const commit = await commitOn(provider, repositoryUrl, parent, "Publish");
+    github.loseNextRefUpdateResponse();
+    await provider.updateRef(repositoryUrl, {
+      branch: "main",
+      commitSha: commit,
+      expectedSha: parent,
+    });
+    expect(github.head()).toBe(commit);
+    // A caller retrying the same update finds the branch already there and
+    // succeeds without another mutation.
+    const mutations = github.requests.filter((r) => r === "POST /graphql").length;
+    await provider.updateRef(repositoryUrl, {
+      branch: "main",
+      commitSha: commit,
+      expectedSha: parent,
+    });
+    expect(github.requests.filter((r) => r === "POST /graphql")).toHaveLength(
+      mutations,
+    );
+    expect(github.head()).toBe(commit);
+  });
+
+  it("reports a missing branch in a visible repository as a stale ref", async () => {
+    const { github, provider, repositoryUrl } = await setup();
+    const parent = github.head();
+    const commit = await commitOn(provider, repositoryUrl, parent, "Publish");
+    await expect(
+      provider.updateRef(repositoryUrl, {
+        branch: "gone",
+        commitSha: commit,
+        expectedSha: parent,
+      }),
+    ).rejects.toBeInstanceOf(GitHubRefConflictError);
+  });
+
+  it("maps a repository hidden after the token was minted to auth_failed on every path", async () => {
+    const { github, provider, repositoryUrl } = await setup();
+    const parent = github.head();
+    const commit = await commitOn(provider, repositoryUrl, parent, "Publish");
+    const config = gitSourceConfig({ repositoryUrl, ref: "main" });
+    await provider.snapshot(config);
+    github.hideRepository();
+    // Cached read and write tokens now see 404 for the branch, objects and
+    // writes; the repository probe tells lost access from a missing object.
+    await expect(
+      provider.updateRef(repositoryUrl, {
+        branch: "main",
+        commitSha: commit,
+        expectedSha: parent,
+      }),
+    ).rejects.toBeInstanceOf(GitHubAuthFailedError);
+    await expect(
+      provider.createTree(repositoryUrl, {
+        baseTree: github.treeOf(parent),
+        entries: [{ path: "README.md", mode: "100644", sha: null }],
+      }),
+    ).rejects.toBeInstanceOf(GitHubAuthFailedError);
+    await expect(provider.snapshot(config)).rejects.toBeInstanceOf(
+      GitHubAuthFailedError,
+    );
+    expect(github.head()).toBe(parent);
+  });
+
+  it("maps a repository hidden during a snapshot's content reads to auth_failed", async () => {
+    const { github, provider, repositoryUrl } = await setup();
+    github.beforeNextRequest(/\/git\/trees\//u, () => github.hideRepository());
+    await expect(
+      provider.snapshot(gitSourceConfig({ repositoryUrl, ref: "main" })),
+    ).rejects.toBeInstanceOf(GitHubAuthFailedError);
+  });
+
+  it("treats a secondary rate limit without headers as retryable, not auth_failed", async () => {
+    const { github, provider, repositoryUrl } = await setup();
+    const parent = github.head();
+    const commit = await commitOn(provider, repositoryUrl, parent, "Publish");
+    github.throttleNext();
+    await expect(
+      provider.snapshot(gitSourceConfig({ repositoryUrl, ref: "main" })),
+    ).rejects.toMatchObject({ code: "SERVICE_UNAVAILABLE" });
+    github.beforeNextRequest(/^\/graphql$/u, () => github.throttleNext());
+    await expect(
+      provider.updateRef(repositoryUrl, {
+        branch: "main",
+        commitSha: commit,
+        expectedSha: parent,
+      }),
+    ).rejects.toMatchObject({ code: "SERVICE_UNAVAILABLE" });
+    expect(github.head()).toBe(parent);
+    // Nothing was revoked: the same provider still reads and writes.
+    await provider.updateRef(repositoryUrl, {
+      branch: "main",
+      commitSha: commit,
+      expectedSha: parent,
+    });
+    expect(github.head()).toBe(commit);
   });
 
   it("validates write inputs before calling GitHub", async () => {
