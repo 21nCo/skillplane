@@ -1,0 +1,18 @@
+packages/config/src/index.test.ts
+  h_a39f9495f9ec1d 573-576,622-624
+packages/domain/src/github-app.test.ts
+  h_a39f9495f9ec1d 135-136,139
+packages/observability/src/redaction.test.ts
+  h_a39f9495f9ec1d 34-38
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0fe5b26c6b35ad92b6e25843a7e48aa1618dc43e",
+  "prompts": {},
+  "humans": {
+    "h_a39f9495f9ec1d": {
+      "author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
