@@ -841,8 +841,12 @@ export class AuthenticatedGitHubSourceProvider extends GitHubSnapshotProvider {
    * Outcomes, by where they arise:
    * - DomainError VALIDATION_FAILED 400 for an invalid `branch`, `commitSha`,
    *   `expectedSha` or `repositoryUrl` (before any request), or for a
-   *   malformed GitHub answer: a branch SHA that is not a commit SHA, a
-   *   repository without `node_id`, invalid JSON or an oversized body.
+   *   malformed GitHub answer to a read before the mutation or after a
+   *   refused or unconfirmed answer (a branch SHA that is not a commit SHA, a
+   *   repository without `node_id`, an empty body, invalid JSON or an
+   *   oversized body). A malformed mutation response follows the
+   *   lost-or-failed rule below, and a malformed recovery read keeps the
+   *   mutation error.
    * - Before the mutation, the branch is read: already at `commitSha` is
    *   success with no mutation (an idempotent retry); missing or at any
    *   commit other than `expectedSha` is GitHubRefConflictError (CONFLICT
@@ -860,18 +864,21 @@ export class AuthenticatedGitHubSourceProvider extends GitHubSnapshotProvider {
    *   `commitSha` is success; missing or at a third commit is `stale_ref`;
    *   still at `expectedSha` is SERVICE_UNAVAILABLE 503 (retry later).
    * - The mutation response is lost or fails (a transport error, timeout,
-   *   non-2xx status or malformed body): the branch is read again. At
-   *   `commitSha` is success (the update landed); a re-read that confirms
-   *   lost access (a revoked installation or a hidden repository) is
-   *   GitHubAuthFailedError; anything else, including a missing branch, a
-   *   third commit or a re-read that fails for another reason, rethrows the
-   *   original error, usually a retryable SERVICE_UNAVAILABLE 503. A retry
-   *   then reports `stale_ref` from its first read if the branch moved. An
-   *   auth failure of the mutation itself (or an unexpected non-domain
-   *   error) is rethrown without a re-read.
+   *   non-2xx status, or a malformed body: an empty body, invalid JSON, an
+   *   oversized body or a non-object GraphQL `errors` entry): the branch is
+   *   read again. At `commitSha` is success (the update landed); a re-read
+   *   that confirms lost access (a revoked installation or a hidden
+   *   repository) is GitHubAuthFailedError; anything else, including a
+   *   missing branch, a third commit or a re-read that fails for another
+   *   reason (a malformed re-read included), rethrows the original error:
+   *   usually a retryable SERVICE_UNAVAILABLE 503, or VALIDATION_FAILED 400
+   *   for a malformed mutation response. A retry then reports `stale_ref`
+   *   from its first read if the branch moved. An auth failure of the
+   *   mutation itself (or an unexpected non-domain error) is rethrown
+   *   without a re-read.
    * - Any other failure of a read before the mutation or after a refusal or
-   *   an unconfirmed answer,
-   *   including minting its token, is SERVICE_UNAVAILABLE 503 (rate limit,
+   *   an unconfirmed answer, including minting its token, is
+   *   SERVICE_UNAVAILABLE 503 (rate limit,
    *   outage, timeout, redirect or rejected request; retry later) or
    *   GitHubAuthFailedError (GIT_SOURCE_AUTH_FAILED) when the installation
    *   is revoked or the repository is no longer visible to it.
