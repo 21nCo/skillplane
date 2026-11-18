@@ -34,7 +34,14 @@ interface SourceRow {
   sync_expires_at: Date | null;
   created_at: Date;
   updated_at: Date;
+  auth_failed: boolean;
 }
+// GitHub authentication state of a source. Until SKI-57 adds a source state
+// column, it is derived from the latest of the source's auth_failed, previewed
+// and synced audit events: a revoked-access marker holds until the next
+// successful preview or apply.
+export type GitSourceAuthStatus = "ok" | "auth_failed";
+const SOURCE_COLUMNS = `s.*, COALESCE((SELECT e.event_type='skill_source.auth_failed' FROM audit_events e WHERE e.workspace_id=s.workspace_id AND e.resource_type='skill_source' AND e.resource_id=s.id AND e.event_type IN ('skill_source.auth_failed','skill_source.previewed','skill_source.synced') ORDER BY e.occurred_at DESC,e.id DESC LIMIT 1),false) AS auth_failed`;
 export interface GitSource {
   id: string;
   workspaceId: string;
@@ -45,6 +52,7 @@ export interface GitSource {
   revision: number;
   archivedAt: string | null;
   updatedAt: string;
+  authStatus: GitSourceAuthStatus;
 }
 // Active bindings per source; repository-wide discovery is bounded to the same
 // count, so a stored plan holds at most twice this many entries.
@@ -74,6 +82,7 @@ function record(r: SourceRow): GitSource {
     revision: r.revision,
     archivedAt: r.archived_at?.toISOString() ?? null,
     updatedAt: r.updated_at.toISOString(),
+    authStatus: r.auth_failed ? "auth_failed" : "ok",
   };
 }
 interface Binding {
@@ -173,8 +182,9 @@ export class GitSourceService {
   }
   // Revoked GitHub App access leaves one machine-readable, source-scoped
   // marker in its own transaction, without touching the source row, its
-  // bindings, versions or skills. The source's state column is SKI-57's. A
-  // failed marker write never masks the typed auth_failed error.
+  // bindings, versions or skills. get and list derive authStatus from it (see
+  // SOURCE_COLUMNS) until SKI-57's source state column replaces it. A failed
+  // marker write never masks the typed auth_failed error.
   private async markAuthFailed(m: Mutation, sourceId: string) {
     await this.transaction(m, (c) =>
       insertPrincipalAudit(c, m.principal, {
@@ -196,7 +206,7 @@ export class GitSourceService {
   ) {
     authorize(p, "skills:read");
     const r = await c.query<SourceRow>(
-      `SELECT * FROM skill_sources WHERE workspace_id=$1 AND id=$2 ${lock ? "FOR UPDATE" : ""}`,
+      `SELECT ${SOURCE_COLUMNS} FROM skill_sources s WHERE s.workspace_id=$1 AND s.id=$2 ${lock ? "FOR UPDATE OF s" : ""}`,
       [p.workspaceId, id],
     );
     if (!r.rows[0]) throw new DomainError("NOT_FOUND", "Source was not found", 404);
@@ -207,7 +217,7 @@ export class GitSourceService {
     if (cursor && cursor.length > 200)
       throw new DomainError("VALIDATION_FAILED", "Invalid source cursor", 400);
     const r = await this.pool.query<SourceRow>(
-      "SELECT * FROM skill_sources WHERE workspace_id=$1 AND ($2::text IS NULL OR id>$2) ORDER BY id LIMIT 51",
+      `SELECT ${SOURCE_COLUMNS} FROM skill_sources s WHERE s.workspace_id=$1 AND ($2::text IS NULL OR s.id>$2) ORDER BY s.id LIMIT 51`,
       [p.workspaceId, cursor],
     );
     return {
@@ -249,7 +259,7 @@ export class GitSourceService {
       id = `source:${await hashIdempotentRequest({ workspace: m.principal.workspaceId, actor: m.principal.actorId, key })}`;
     return this.transaction(m, async (c) => {
       const r = await c.query<SourceRow>(
-        "INSERT INTO skill_sources(id,workspace_id,repository_url,ref,ref_policy,skill_path,creation_hash) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(id) DO UPDATE SET id=skill_sources.id RETURNING *",
+        `WITH s AS (INSERT INTO skill_sources(id,workspace_id,repository_url,ref,ref_policy,skill_path,creation_hash) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(id) DO UPDATE SET id=skill_sources.id RETURNING *) SELECT ${SOURCE_COLUMNS} FROM s`,
         [
           id,
           m.principal.workspaceId,
@@ -311,7 +321,7 @@ export class GitSourceService {
           409,
         );
       const r = await c.query<SourceRow>(
-        "UPDATE skill_sources SET ref=$3,ref_policy=$4,archived_at=CASE WHEN $5::boolean THEN COALESCE(archived_at,now()) ELSE NULL END,revision=revision+1,updated_at=now() WHERE workspace_id=$1 AND id=$2 RETURNING *",
+        `WITH s AS (UPDATE skill_sources SET ref=$3,ref_policy=$4,archived_at=CASE WHEN $5::boolean THEN COALESCE(archived_at,now()) ELSE NULL END,revision=revision+1,updated_at=now() WHERE workspace_id=$1 AND id=$2 RETURNING *) SELECT ${SOURCE_COLUMNS} FROM s`,
         [m.principal.workspaceId, m.sourceId, config.ref, config.refPolicy, m.archived],
       );
       await this.audit(c, m, row.id, "updated", { archived: m.archived });

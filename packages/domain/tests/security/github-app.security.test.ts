@@ -230,6 +230,11 @@ describe("GitHub App source auth_failed marker", () => {
         "SELECT * FROM skill_sources WHERE workspace_id=$1",
         [owner.workspaceId],
       );
+      // Reading the source after revocation reports the state, nothing more.
+      const read = await sources.get(owner, source.id),
+        listed = await sources.list(owner);
+      expect(read.source.authStatus).toBe("auth_failed");
+      expect(listed.sources.map((x) => x.authStatus)).toEqual(["auth_failed"]);
       const tokens = [...github.tokens.keys(), ...bearers];
       expect(github.tokens.size).toBeGreaterThanOrEqual(1);
       expectNoSecrets(
@@ -239,6 +244,8 @@ describe("GitHub App source auth_failed marker", () => {
           JSON.stringify(audit.rows),
           JSON.stringify(runs.rows),
           JSON.stringify(sourceRows.rows),
+          JSON.stringify(read),
+          JSON.stringify(listed),
         ],
         tokens,
       );

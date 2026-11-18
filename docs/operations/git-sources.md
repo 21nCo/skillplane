@@ -139,7 +139,11 @@ rows. A removed, suspended or wrongly scoped installation fails the sync with
 `GIT_SOURCE_AUTH_FAILED` (`reason: auth_failed`) and keeps the source, its runs,
 bindings and versions; reconnecting the installation restores syncing. Each
 such preview or apply also writes one `skill_source.auth_failed` audit event
-(outcome `error`, metadata `reason: auth_failed`) for the source.
+(outcome `error`, metadata `reason: auth_failed`) for the source. Reading the
+source (get and list) reports `authStatus: auth_failed` from then until the
+next successful preview or apply, which sets it back to `ok`. The status is
+derived from those audit events; a source state column added with
+installation binding may replace it.
 A 404 is `auth_failed` only when the repository itself is no longer visible to
 the installation; a missing ref or object in a visible repository is not.
 GitHub rate limits, including secondary limits reported without rate limit
