@@ -50,6 +50,9 @@ function tokenServer(
     headers?: Record<string, string>;
     message?: string;
     lifetimeMs?: number;
+    token?: string;
+    // Pads each granted repository object to about this many bytes.
+    repositoryBytes?: number;
     grant?: (body: { repositories: string[]; permissions: { contents: string } }) => {
       contents: string;
       repositories: string[];
@@ -84,7 +87,7 @@ function tokenServer(
     serial += 1;
     return Response.json(
       {
-        token: `ghs_${String(serial).padStart(36, "0")}`,
+        token: options.token ?? `ghs_${String(serial).padStart(36, "0")}`,
         expires_at: new Date(clock + (options.lifetimeMs ?? 3600_000)).toISOString(),
         permissions: grant.permissions ?? {
           contents: grant.contents,
@@ -93,6 +96,7 @@ function tokenServer(
         repositories: grant.repositories.map((full_name) => ({
           full_name,
           name: full_name.split("/")[1],
+          description: "d".repeat(options.repositoryBytes ?? 0),
         })),
       },
       { status: 201 },
@@ -200,13 +204,17 @@ describe("GitHub App installation tokens", () => {
   });
 
   it.each([
-    [404, {}],
-    [403, {}],
-    [422, {}],
+    [404, "Not Found"],
+    [403, "Resource not accessible by integration"],
+    [
+      422,
+      "There is at least one repository that does not exist or is not accessible to the parent installation.",
+    ],
+    [422, "The permissions requested are not granted to this installation."],
   ])(
     "maps a %s from a revoked, suspended or wrongly scoped installation to auth_failed",
-    async (status, headers) => {
-      const server = tokenServer({ status, headers });
+    async (status, message) => {
+      const server = tokenServer({ status, message });
       const error = await server.app.installationToken(read).catch((e: unknown) => e);
       expect(error).toBeInstanceOf(GitHubAuthFailedError);
       expect(error).toMatchObject({
@@ -230,6 +238,10 @@ describe("GitHub App installation tokens", () => {
       }),
       tokenServer({ status: 403, message: "API rate limit exceeded for installation" }),
       tokenServer({ status: 429 }),
+      // A 422 that does not name the repository or permission is not a
+      // confirmed refusal.
+      tokenServer({ status: 422, message: "Spam protection triggered" }),
+      tokenServer({ status: 422, message: "Validation Failed" }),
       tokenServer({ status: 401 }),
       tokenServer({ status: 502 }),
     ])
@@ -297,6 +309,90 @@ describe("GitHub App installation tokens", () => {
     }
   });
 
+  it("accepts legacy and stateless token formats and refuses header-unsafe ones", async () => {
+    // Built at runtime: ghs_<app>_<JWT-shaped> stateless and long legacy forms.
+    const stateless = ["ghs", "123456", "test-header.test-payload.test-signature"].join(
+      "_",
+    );
+    for (const token of [stateless, `ghs_${"a".repeat(300)}`])
+      expect(await tokenServer({ token }).app.installationToken(read)).toBe(token);
+    for (const token of ["ghs_test token value", "ghs_test\r\nx-injected: 1", "short"])
+      await expect(
+        tokenServer({ token }).app.installationToken(read),
+      ).rejects.toMatchObject({ code: "SERVICE_UNAVAILABLE" });
+  });
+
+  it("budgets the token response for full repository objects of a 500-repository scope", async () => {
+    const repositories = Array.from({ length: 500 }, (_, i) => `acme/r${String(i)}`);
+    const full = tokenServer({ repositoryBytes: 8 * 1024 });
+    await expect(
+      full.app.installationToken({ ...read, repositories }),
+    ).resolves.toMatch(/^ghs_/u);
+    // The budget stays finite: one repository padded far beyond it is refused.
+    const oversized = tokenServer({ repositoryBytes: 512 * 1024 });
+    await expect(oversized.app.installationToken(read)).rejects.toMatchObject({
+      code: "SERVICE_UNAVAILABLE",
+      message: "GitHub returned an oversized response",
+    });
+  });
+
+  it("prunes expired tokens of every scope and bounds the cache, keeping recent ones", async () => {
+    const server = tokenServer();
+    const scope = (i: number) => ({ ...read, repositories: [`acme/s${String(i)}`] });
+    for (let i = 0; i < 3; i += 1) await server.app.installationToken(scope(i));
+    expect(server.app.cachedTokenCount).toBe(3);
+    // One-off scopes past the reuse cutoff are dropped when any scope is used.
+    server.advance(3600_000);
+    await server.app.installationToken(read);
+    expect(server.app.cachedTokenCount).toBe(1);
+    const first = await server.app.installationToken(scope(0));
+    for (let i = 1; i <= 256; i += 1) {
+      await server.app.installationToken(scope(i));
+      // scope(0) stays recently used, so it survives eviction.
+      expect(await server.app.installationToken(scope(0))).toBe(first);
+    }
+    expect(server.app.cachedTokenCount).toBe(256);
+    const mints = server.mints.length;
+    // read was the least recently used and was evicted; it mints again.
+    await server.app.installationToken(read);
+    expect(server.mints).toHaveLength(mints + 1);
+  });
+
+  it("mints, validates and caches the scope as it was when the request was made", async () => {
+    const server = tokenServer();
+    const request = {
+      installationId: 42,
+      repositories: ["acme/skills"],
+      access: "read",
+    };
+    const pending = server.app.installationToken(request as InstallationTokenRequest);
+    Object.assign(request, { installationId: 99, access: "write" });
+    request.repositories.push("acme/other");
+    const token = await pending;
+    expect(server.mints[0]?.url).toBe(
+      "https://api.github.com/app/installations/42/access_tokens",
+    );
+    expect(server.mints[0]?.body).toEqual({
+      repositories: ["skills"],
+      permissions: { contents: "read" },
+    });
+    expect(await server.app.installationToken(read)).toBe(token);
+    expect(server.mints).toHaveLength(1);
+  });
+
+  it("trims trailing slashes of the API base URL in linear time", () => {
+    const options = { apiBaseUrl: `https://example.test${"/".repeat(200_000)}x/` };
+    const started = performance.now();
+    expect(
+      new GitHubApp({ appId: "1", privateKeyPem: pkcs1 }, options).apiBaseUrl,
+    ).toBe(`https://example.test${"/".repeat(200_000)}x`);
+    const slashes = { apiBaseUrl: `https://example.test${"/".repeat(200_000)}` };
+    expect(
+      new GitHubApp({ appId: "1", privateKeyPem: pkcs1 }, slashes).apiBaseUrl,
+    ).toBe("https://example.test");
+    expect(performance.now() - started).toBeLessThan(1000);
+  });
+
   it("rejects malformed scopes before calling GitHub", async () => {
     const server = tokenServer();
     for (const request of [
@@ -358,6 +454,15 @@ describe("installation-authenticated requests", () => {
         { status: 403 },
       ),
       new Response("{}", { status: 429 }),
+      // A headerless 403 whose body breaks off before any text arrived.
+      new Response(
+        new ReadableStream({
+          pull(controller) {
+            controller.error(new TypeError("connection reset"));
+          },
+        }),
+        { status: 403 },
+      ),
     ];
     const fetcher: typeof fetch = async (input) =>
       String(input).endsWith("/access_tokens")
@@ -376,7 +481,7 @@ describe("installation-authenticated requests", () => {
     await expect(app.installationFetch(read, url, {})).rejects.toBeInstanceOf(
       GitHubAuthFailedError,
     );
-    for (let i = 0; i < 3; i += 1)
+    for (let i = 0; i < 4; i += 1)
       await expect(app.installationFetch(read, url, {})).rejects.toMatchObject({
         code: "SERVICE_UNAVAILABLE",
         status: 503,

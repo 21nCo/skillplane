@@ -14,10 +14,12 @@ import {
 } from "@skillplane/storage";
 import { DomainError } from "./errors.js";
 import {
+  discardBody,
   GITHUB_API_BASE_URL,
   GITHUB_API_VERSION,
   GitHubAuthFailedError,
   isGitHubAuthFailed,
+  isRateLimitMessage,
   type GitHubApp,
   type GitHubContentsAccess,
 } from "./github-app.js";
@@ -206,7 +208,7 @@ abstract class GitHubSnapshotProvider implements GitSourceProvider {
         response.type === "opaqueredirect" ||
         (response.status >= 300 && response.status < 400)
       ) {
-        await response.body?.cancel();
+        await discardBody(response);
         // A moved or renamed repository redirects its ref resolution.
         if (stage === "resolve")
           invalid("GitHub redirected the repository; use its current URL");
@@ -217,7 +219,7 @@ abstract class GitHubSnapshotProvider implements GitSourceProvider {
         );
       }
       if (!response.ok) {
-        await response.body?.cancel();
+        await discardBody(response);
         if (response.status === 404 || (stage === "resolve" && response.status === 422))
           return this.missing(repository, deadline, stage);
         throw new DomainError(
@@ -236,7 +238,7 @@ abstract class GitHubSnapshotProvider implements GitSourceProvider {
           if (next.done) break;
           size += next.value.byteLength;
           if (size > maxBytes) {
-            await reader.cancel();
+            await reader.cancel().catch(() => undefined);
             invalid("GitHub response exceeds the import limit");
           }
           parts.push(next.value);
@@ -634,7 +636,14 @@ export class AuthenticatedGitHubSourceProvider extends GitHubSnapshotProvider {
     deadline: number,
     stage: "resolve" | "content",
   ): Promise<never> {
-    await this.visibleRepository(repository, "read", deadline);
+    // An unreadable probe proves nothing: the snapshot aborts as retryable
+    // instead of reporting the missing object as one skill's error.
+    await this.visibleRepository(repository, "read", deadline).catch(
+      (error: unknown) => {
+        if (isGitHubAuthFailed(error) || !(error instanceof DomainError)) throw error;
+        throw error.status === 503 ? error : rejected();
+      },
+    );
     if (stage === "resolve") invalid("Repository ref was not found");
     throw rejected();
   }
@@ -674,7 +683,7 @@ export class AuthenticatedGitHubSourceProvider extends GitHubSnapshotProvider {
       response.type === "opaqueredirect" ||
       (response.status >= 300 && response.status < 400)
     ) {
-      await response.body?.cancel();
+      await discardBody(response);
       throw new DomainError(
         "SERVICE_UNAVAILABLE",
         "GitHub redirected a request; retry later",
@@ -682,7 +691,7 @@ export class AuthenticatedGitHubSourceProvider extends GitHubSnapshotProvider {
       );
     }
     if (!response.ok) {
-      await response.body?.cancel();
+      await discardBody(response);
       return { status: response.status, data: null };
     }
     const reader = response.body?.getReader();
@@ -695,7 +704,7 @@ export class AuthenticatedGitHubSourceProvider extends GitHubSnapshotProvider {
         if (next.done) break;
         size += next.value.byteLength;
         if (size > MAX_WRITE_RESPONSE_BYTES) {
-          await reader.cancel();
+          await reader.cancel().catch(() => undefined);
           invalid("GitHub response exceeds the size limit");
         }
         parts.push(next.value);
@@ -761,9 +770,11 @@ export class AuthenticatedGitHubSourceProvider extends GitHubSnapshotProvider {
     const expected = [...new Uint8Array(await crypto.subtle.digest("SHA-1", encoded))]
       .map((b) => b.toString(16).padStart(2, "0"))
       .join("");
+    // Upload the hashed copy: the caller's buffer may change meanwhile.
+    const stored = encoded.subarray(header.length);
     let binary = "";
-    for (let i = 0; i < content.length; i += 0x8000)
-      binary += String.fromCharCode(...content.subarray(i, i + 0x8000));
+    for (let i = 0; i < stored.length; i += 0x8000)
+      binary += String.fromCharCode(...stored.subarray(i, i + 0x8000));
     const result = await this.write(repositoryUrl, "POST", "git/blobs", {
       content: btoa(binary),
       encoding: "base64",
@@ -839,7 +850,8 @@ export class AuthenticatedGitHubSourceProvider extends GitHubSnapshotProvider {
    * older commit, is refused instead of overwritten.
    *
    * Outcomes, by where they arise:
-   * - DomainError VALIDATION_FAILED 400 for an invalid `branch`, `commitSha`,
+   * - DomainError VALIDATION_FAILED 400 for an invalid `branch`, `commitSha`
+   *   (including the all-zero ID, which would delete the branch),
    *   `expectedSha` or `repositoryUrl` (before any request), or for a
    *   malformed GitHub answer to a read before the mutation or after a
    *   refused or unconfirmed answer (a branch SHA that is not a commit SHA, a
@@ -852,16 +864,17 @@ export class AuthenticatedGitHubSourceProvider extends GitHubSnapshotProvider {
    *   commit other than `expectedSha` is GitHubRefConflictError (CONFLICT
    *   409, reason `stale_ref`); the caller refreshes and retries.
    * - The mutation applies (a 2xx answer whose GraphQL `errors` is absent,
-   *   null or empty and whose `data.updateRefs` is a non-null object):
-   *   success, with no re-read.
+   *   null or empty and whose `data.updateRefs` is a non-null object with a
+   *   `clientMutationId` that is null or a string): success, with no re-read.
    * - GitHub answers the mutation with GraphQL errors (refused): the branch
    *   is read again. At `commitSha` is success; missing or at a third commit
    *   is `stale_ref`; still at `expectedSha` is SERVICE_UNAVAILABLE 503 for a
-   *   `RATE_LIMITED` error (retry later), otherwise DomainError CONFLICT 409
+   *   `RATE_LIMITED` error or one whose message names a rate limit (retry
+   *   later), otherwise DomainError CONFLICT 409
    *   with reason `update_rejected` (for example a protected branch;
    *   refreshing does not help).
-   * - GitHub answers 2xx with no GraphQL errors but without a
-   *   `data.updateRefs` object (unconfirmed): the branch is read again. At
+   * - GitHub answers 2xx with no GraphQL errors but without that
+   *   `data.updateRefs` result (unconfirmed): the branch is read again. At
    *   `commitSha` is success; missing or at a third commit is `stale_ref`;
    *   still at `expectedSha` is SERVICE_UNAVAILABLE 503 (retry later).
    * - The mutation response is lost or fails (a transport error, timeout,
@@ -875,8 +888,9 @@ export class AuthenticatedGitHubSourceProvider extends GitHubSnapshotProvider {
    *   another reason (a malformed re-read included), rethrows the original
    *   error: usually a retryable SERVICE_UNAVAILABLE 503, or
    *   VALIDATION_FAILED 400 for a malformed mutation response. A retry then
-   *   reports `stale_ref` from its first read if the branch moved. An auth failure of the
-   *   mutation itself (or an unexpected non-domain error) is rethrown
+   *   reports `stale_ref` from its first read if the branch moved. A failure
+   *   to discard an error body never replaces this outcome. An auth failure
+   *   of the mutation itself (or an unexpected non-domain error) is rethrown
    *   without a re-read.
    * - Any other failure of a read before the mutation or after a refusal or
    *   an unconfirmed answer, including minting its token, is
@@ -892,6 +906,8 @@ export class AuthenticatedGitHubSourceProvider extends GitHubSnapshotProvider {
     const branch = branchName(input.branch);
     const commit = gitSha(input.commitSha, "Invalid commit"),
       expected = gitSha(input.expectedSha, "Invalid expected commit");
+    // The all-zero object ID as afterOid would delete the branch.
+    if (/^0{40}$/.test(commit)) invalid("Invalid commit");
     const repository = repositoryName(gitSourceConfig({ repositoryUrl }).repositoryUrl);
     const refPath = `git/ref/heads/${branch
       .split("/")
@@ -951,12 +967,21 @@ export class AuthenticatedGitHubSourceProvider extends GitHubSnapshotProvider {
       const payload = rawData == null ? null : object(rawData).updateRefs;
       // Only an error-free answer carrying the mutation's result confirms the
       // move; any other 200 envelope is reconciled by reading the branch.
+      const confirmed =
+        payload !== null &&
+        typeof payload === "object" &&
+        !Array.isArray(payload) &&
+        ((payload as Record<string, unknown>).clientMutationId === null ||
+          typeof (payload as Record<string, unknown>).clientMutationId === "string");
       outcome =
         errors.length > 0
-          ? errors.some((error) => error.type === "RATE_LIMITED")
+          ? errors.some(
+              (error) =>
+                error.type === "RATE_LIMITED" || isRateLimitMessage(error.message),
+            )
             ? "rate_limited"
             : "refused"
-          : payload && typeof payload === "object" && !Array.isArray(payload)
+          : confirmed
             ? "applied"
             : "unconfirmed";
     } catch (error) {

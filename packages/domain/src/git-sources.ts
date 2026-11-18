@@ -184,19 +184,23 @@ export class GitSourceService {
   // marker in its own transaction, without touching the source row, its
   // bindings, versions or skills. get and list derive authStatus from it (see
   // SOURCE_COLUMNS) until SKI-57's source state column replaces it. A failed
-  // marker write never masks the typed auth_failed error.
+  // marker write never masks the typed auth_failed error. An apply writes it
+  // only while it still holds its lease (see apply).
+  private authFailedAudit(c: PoolClient, m: Mutation, sourceId: string) {
+    return insertPrincipalAudit(c, m.principal, {
+      eventType: "skill_source.auth_failed",
+      action: "workspace:update",
+      outcome: "error",
+      requestId: m.requestId,
+      resourceType: "skill_source",
+      resourceId: sourceId,
+      metadata: { reason: "auth_failed" },
+    });
+  }
   private async markAuthFailed(m: Mutation, sourceId: string) {
-    await this.transaction(m, (c) =>
-      insertPrincipalAudit(c, m.principal, {
-        eventType: "skill_source.auth_failed",
-        action: "workspace:update",
-        outcome: "error",
-        requestId: m.requestId,
-        resourceType: "skill_source",
-        resourceId: sourceId,
-        metadata: { reason: "auth_failed" },
-      }),
-    ).catch(() => undefined);
+    await this.transaction(m, (c) => this.authFailedAudit(c, m, sourceId)).catch(
+      () => undefined,
+    );
   }
   private async row(
     p: Principal,
@@ -1161,7 +1165,12 @@ export class GitSourceService {
           ],
         );
       }).catch(() => undefined);
-      if (isGitHubAuthFailed(error)) await this.markAuthFailed(m, source.id);
+      // Fenced: an apply whose lease expired or was taken over never marks a
+      // source that a newer apply may have recovered.
+      if (isGitHubAuthFailed(error))
+        await fenced((c) => this.authFailedAudit(c, m, source.id)).catch(
+          () => undefined,
+        );
       throw error;
     } finally {
       await this.transaction(m, async (c) => {

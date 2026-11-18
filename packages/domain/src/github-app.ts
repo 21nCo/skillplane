@@ -7,9 +7,17 @@ export const GITHUB_API_BASE_URL = "https://api.github.com";
 export const INSTALLATION_TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000;
 const USER_AGENT = "Skillplane-github-app";
 const REQUEST_TIMEOUT_MS = 10000;
-const MAX_TOKEN_RESPONSE_BYTES = 256 * 1024;
+// A token response lists every granted repository as a full repository
+// object, so its budget grows with the requested scope.
+const TOKEN_RESPONSE_BASE_BYTES = 64 * 1024;
+const TOKEN_RESPONSE_BYTES_PER_REPOSITORY = 32 * 1024;
 // GitHub accepts at most 500 repositories in one installation token request.
 const MAX_TOKEN_REPOSITORIES = 500;
+// At most this many unexpired tokens are kept; the least recently used goes.
+const MAX_CACHED_TOKENS = 256;
+// Legacy (ghs_ plus 36 characters) and stateless (ghs_<app>_<JWT>) tokens:
+// only characters that are safe in an Authorization header.
+const INSTALLATION_TOKEN = /^[A-Za-z0-9_.-]{20,32768}$/u;
 
 /** Installation token scope: sources read contents, linked sync writes them. */
 export type GitHubContentsAccess = "read" | "write";
@@ -194,8 +202,12 @@ function tokenScope(request: InstallationTokenRequest) {
       400,
     );
   const fullNames = [...names.keys()].sort();
+  // A snapshot of the request: later changes to the caller's object never
+  // change what is minted, validated or cached under this key.
   return {
-    key: `${String(request.installationId)}:${request.access}:${fullNames.join(",")}`,
+    installationId: request.installationId,
+    access: request.access,
+    key: `${String(request.installationId)}:${access}:${fullNames.join(",")}`,
     fullNames,
     names: fullNames.map((fullName) => names.get(fullName) ?? ""),
   };
@@ -212,7 +224,7 @@ async function boundedJson(response: Response, maxBytes: number): Promise<unknow
       if (next.done) break;
       size += next.value.byteLength;
       if (size > maxBytes) {
-        await reader.cancel();
+        await reader.cancel().catch(() => undefined);
         unavailable("GitHub returned an oversized response");
       }
       parts.push(next.value);
@@ -239,10 +251,21 @@ async function boundedJson(response: Response, maxBytes: number): Promise<unknow
 // GitHub names primary ("API rate limit exceeded") and secondary ("You have
 // exceeded a secondary rate limit") limits in the error message; secondary
 // limits may come without any rate limit header.
-const RATE_LIMIT_MESSAGE = /rate limit|abuse detection/iu;
+const RATE_LIMIT_MESSAGE = /rate limit|abuse detection|spam/iu;
 const MAX_ERROR_BODY_BYTES = 64 * 1024;
 
-async function errorText(response: Response): Promise<string> {
+/** Whether a GitHub error message names a rate limit or abuse protection. */
+export function isRateLimitMessage(message: unknown): boolean {
+  return typeof message === "string" && RATE_LIMIT_MESSAGE.test(message);
+}
+
+/** Releases an unread body; a failure to do so never replaces the outcome. */
+export async function discardBody(response: Response): Promise<void> {
+  await response.body?.cancel().catch(() => undefined);
+}
+
+// The error body's text, or null when it could not be read to the end.
+async function errorText(response: Response): Promise<string | null> {
   const reader = response.body?.getReader();
   if (!reader) return "";
   const decoder = new TextDecoder();
@@ -255,9 +278,9 @@ async function errorText(response: Response): Promise<string> {
       size += next.value.byteLength;
       text += decoder.decode(next.value, { stream: true });
     }
-    await reader.cancel();
+    await reader.cancel().catch(() => undefined);
   } catch {
-    // An interrupted error body classifies on what arrived.
+    return null;
   } finally {
     reader.releaseLock();
   }
@@ -267,8 +290,10 @@ async function errorText(response: Response): Promise<string> {
 /**
  * Whether a refused response is GitHub throttling rather than a permission
  * refusal: any 429, or a 403 with an exhausted rate limit, a `retry-after`
- * header or a message naming a primary or secondary rate limit. Consumes the
- * response body; the text is only matched, never echoed.
+ * header or a message naming a primary or secondary rate limit. A 403 whose
+ * body could not be read is not a confirmed refusal and counts as throttling
+ * (retryable). Consumes the response body; the text is only matched, never
+ * echoed.
  */
 export async function isGitHubRateLimited(response: Response): Promise<boolean> {
   if (
@@ -277,14 +302,15 @@ export async function isGitHubRateLimited(response: Response): Promise<boolean> 
       (response.headers.get("x-ratelimit-remaining") === "0" ||
         response.headers.has("retry-after")))
   ) {
-    await response.body?.cancel();
+    await discardBody(response);
     return true;
   }
   if (response.status !== 403) {
-    await response.body?.cancel();
+    await discardBody(response);
     return false;
   }
-  return RATE_LIMIT_MESSAGE.test(await errorText(response));
+  const text = await errorText(response);
+  return text === null || RATE_LIMIT_MESSAGE.test(text);
 }
 
 /**
@@ -300,8 +326,9 @@ export async function throwGitHubRefusal(response: Response): Promise<never> {
 /**
  * Acts as the Skillplane GitHub App: signs App JWTs and mints installation
  * tokens limited to the requested repositories and contents permission.
- * Tokens live only in this in-memory cache until five minutes before they
- * expire; they are never persisted, logged or placed in an error.
+ * A token is reused until five minutes before it expires; the in-memory cache
+ * drops it then (or earlier, beyond its most recent 256 scopes). Tokens are
+ * never persisted, logged or placed in an error.
  */
 export class GitHubApp {
   readonly apiBaseUrl: string;
@@ -322,7 +349,15 @@ export class GitHubApp {
     // workerd rejects fetch called with a receiver other than the global scope.
     this.fetcher = options.fetcher ?? ((input, init) => fetch(input, init));
     this.now = options.now ?? (() => Date.now());
-    this.apiBaseUrl = (options.apiBaseUrl ?? GITHUB_API_BASE_URL).replace(/\/+$/u, "");
+    const base = options.apiBaseUrl ?? GITHUB_API_BASE_URL;
+    let end = base.length;
+    while (end > 0 && base[end - 1] === "/") end -= 1;
+    this.apiBaseUrl = base.slice(0, end);
+  }
+
+  /** How many installation tokens the cache holds (never their values). */
+  get cachedTokenCount(): number {
+    return this.#tokens.size;
   }
 
   /** A freshly signed App JWT for App-level endpoints. */
@@ -342,15 +377,28 @@ export class GitHubApp {
    */
   async installationToken(request: InstallationTokenRequest): Promise<string> {
     const scope = tokenScope(request);
+    const now = this.now();
+    for (const [key, entry] of this.#tokens)
+      if (now >= entry.expiresAt - INSTALLATION_TOKEN_REFRESH_MARGIN_MS)
+        this.#tokens.delete(key);
     const cached = this.#tokens.get(scope.key);
-    if (cached && this.now() < cached.expiresAt - INSTALLATION_TOKEN_REFRESH_MARGIN_MS)
+    if (cached) {
+      // Most recently used last, so eviction drops the least recently used.
+      this.#tokens.delete(scope.key);
+      this.#tokens.set(scope.key, cached);
       return cached.token;
-    if (cached) this.#tokens.delete(scope.key);
+    }
     let pending = this.#pending.get(scope.key);
     if (!pending) {
-      const minting = this.mint(request, scope).then((minted) => {
-        if (this.now() < minted.expiresAt - INSTALLATION_TOKEN_REFRESH_MARGIN_MS)
+      const minting = this.mint(scope).then((minted) => {
+        if (this.now() < minted.expiresAt - INSTALLATION_TOKEN_REFRESH_MARGIN_MS) {
+          this.#tokens.delete(scope.key);
           this.#tokens.set(scope.key, minted);
+          for (const key of this.#tokens.keys()) {
+            if (this.#tokens.size <= MAX_CACHED_TOKENS) break;
+            this.#tokens.delete(key);
+          }
+        }
         return minted;
       });
       pending = minting.finally(() => {
@@ -380,6 +428,12 @@ export class GitHubApp {
   ): Promise<Response> {
     if (!url.startsWith(`${this.apiBaseUrl}/`))
       throw new DomainError("VALIDATION_FAILED", "Invalid GitHub API request", 400);
+    // Mint and invalidate for the request as it was when this call began.
+    request = {
+      installationId: request.installationId,
+      repositories: [...request.repositories],
+      access: request.access,
+    };
     for (let attempt = 0; ; attempt += 1) {
       const token = await this.installationToken(request);
       const headers = new Headers(init.headers);
@@ -393,7 +447,7 @@ export class GitHubApp {
         unavailable("GitHub could not be reached; retry later");
       }
       if (response.status === 401) {
-        await response.body?.cancel();
+        await discardBody(response);
         this.invalidate(request, token);
         if (attempt === 0) continue;
         throw new GitHubAuthFailedError();
@@ -404,15 +458,12 @@ export class GitHubApp {
     }
   }
 
-  private async mint(
-    request: InstallationTokenRequest,
-    scope: ReturnType<typeof tokenScope>,
-  ): Promise<CachedToken> {
+  private async mint(scope: ReturnType<typeof tokenScope>): Promise<CachedToken> {
     const jwt = await this.appJwt();
     let response: Response;
     try {
       response = await this.fetcher(
-        `${this.apiBaseUrl}/app/installations/${String(request.installationId)}/access_tokens`,
+        `${this.apiBaseUrl}/app/installations/${String(scope.installationId)}/access_tokens`,
         {
           method: "POST",
           headers: {
@@ -424,7 +475,7 @@ export class GitHubApp {
           },
           body: JSON.stringify({
             repositories: scope.names,
-            permissions: { contents: request.access },
+            permissions: { contents: scope.access },
           }),
           redirect: "manual",
           signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
@@ -437,16 +488,31 @@ export class GitHubApp {
       // 403: suspended or not permitted, unless it is throttling.
       if (response.status === 403 || response.status === 429)
         await throwGitHubRefusal(response);
-      await response.body?.cancel();
-      // 404: the installation was removed; 422: a repository or permission is
-      // outside the installation.
-      if (response.status === 404 || response.status === 422)
-        throw new GitHubAuthFailedError();
+      // 422: a repository or permission outside the installation, but only
+      // when GitHub says so; spam protection, throttling or an unreadable body
+      // is retryable.
+      if (response.status === 422) {
+        const text = await errorText(response);
+        if (
+          text !== null &&
+          !RATE_LIMIT_MESSAGE.test(text) &&
+          /not accessible|not granted|does not exist/iu.test(text)
+        )
+          throw new GitHubAuthFailedError();
+        unavailable("GitHub could not issue an installation token; retry later");
+      }
+      await discardBody(response);
+      // 404: the installation was removed.
+      if (response.status === 404) throw new GitHubAuthFailedError();
       if (response.status === 401)
         unavailable("GitHub rejected the Skillplane App credentials");
       unavailable("GitHub could not issue an installation token; retry later");
     }
-    const body = await boundedJson(response, MAX_TOKEN_RESPONSE_BYTES);
+    const body = await boundedJson(
+      response,
+      TOKEN_RESPONSE_BASE_BYTES +
+        scope.fullNames.length * TOKEN_RESPONSE_BYTES_PER_REPOSITORY,
+    );
     const row =
       body && typeof body === "object" && !Array.isArray(body)
         ? (body as Record<string, unknown>)
@@ -456,7 +522,7 @@ export class GitHubApp {
         typeof row.expires_at === "string" ? Date.parse(row.expires_at) : Number.NaN;
     if (
       typeof token !== "string" ||
-      !/^[A-Za-z0-9_]{20,255}$/u.test(token) ||
+      !INSTALLATION_TOKEN.test(token) ||
       !Number.isFinite(expiresAt) ||
       expiresAt <= this.now()
     )
@@ -474,10 +540,10 @@ export class GitHubApp {
       !Array.isArray(permissions) &&
       Object.entries(permissions as Record<string, unknown>).every(([name, value]) =>
         name === "contents"
-          ? value === request.access
+          ? value === scope.access
           : name === "metadata" && value === "read",
       ) &&
-      (permissions as Record<string, unknown>).contents === request.access;
+      (permissions as Record<string, unknown>).contents === scope.access;
     const repositories = Array.isArray(row.repositories)
       ? row.repositories.map((repository: unknown) =>
           typeof repository === "object" && repository !== null

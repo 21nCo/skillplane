@@ -547,7 +547,7 @@ describe("authenticated GitHub source provider", () => {
   // transport failure. `seen` lists repository requests and "MINT" for each
   // token mint.
   function provider(
-    route: (request: string) => Response | null | undefined,
+    route: (request: string, body: string) => Response | null | undefined,
     mint?: (count: number) => Response | undefined,
   ) {
     const seen: string[] = [];
@@ -570,7 +570,7 @@ describe("authenticated GitHub source provider", () => {
       }
       const request = `${init?.method ?? "GET"} ${url.pathname.replace("/repos/acme/skills", "")}`;
       seen.push(request);
-      const answer = route(request);
+      const answer = route(request, typeof init?.body === "string" ? init.body : "");
       if (answer === null) throw new TypeError("network failure");
       return answer ?? new Response("{}", { status: 404 });
     };
@@ -649,6 +649,25 @@ describe("authenticated GitHub source provider", () => {
     ).rejects.toMatchObject({
       code: "SERVICE_UNAVAILABLE",
     });
+    // So is one that names a rate limit only in its message.
+    const named = provider((request) =>
+      request === "GET "
+        ? repo()
+        : request === "GET /git/ref/heads/main"
+          ? ref(head)
+          : request === "POST /graphql"
+            ? Response.json({
+                data: { updateRefs: null },
+                errors: [{ type: "FORBIDDEN", message: "API rate limit exceeded" }],
+              })
+            : undefined,
+    );
+    await expect(named.provider.updateRef(repositoryUrl, update)).rejects.toMatchObject(
+      {
+        code: "SERVICE_UNAVAILABLE",
+        status: 503,
+      },
+    );
     // The update reached GitHub although it answered with an error.
     let reads = 0;
     const landed = provider((request) =>
@@ -841,6 +860,21 @@ describe("authenticated GitHub source provider", () => {
       "POST /graphql",
       "GET /git/ref/heads/main",
     ]);
+    // A result without the selected clientMutationId, or with a non-string
+    // one, does not confirm the move either.
+    for (const updateRefs of [{}, { clientMutationId: 5 }]) {
+      const missing = provider((request) =>
+        request === "POST /graphql"
+          ? Response.json({ data: { updateRefs } })
+          : request === "GET "
+            ? repo()
+            : ref(head),
+      );
+      await expect(
+        missing.provider.updateRef(repositoryUrl, update),
+      ).rejects.toMatchObject({ code: "SERVICE_UNAVAILABLE", status: 503 });
+      expect(missing.seen.at(-1)).toBe("GET /git/ref/heads/main");
+    }
     // The re-read finds the new commit: the update landed.
     let reads = 0;
     const landed = provider((request) =>
@@ -965,6 +999,101 @@ describe("authenticated GitHub source provider", () => {
       applied.provider.updateRef(repositoryUrl, update),
     ).resolves.toBeUndefined();
     expect(applied.seen).toEqual(sequence.slice(0, 4));
+  });
+
+  it("refuses the all-zero commit, which would delete the branch, before calling GitHub", async () => {
+    const none = provider(() => undefined);
+    await expect(
+      none.provider.updateRef(repositoryUrl, {
+        branch: "main",
+        commitSha: "0".repeat(40),
+        expectedSha: head,
+      }),
+    ).rejects.toMatchObject({ code: "VALIDATION_FAILED", message: "Invalid commit" });
+    expect(none.seen).toEqual([]);
+  });
+
+  it("reconciles an applied update whose 502 answer body cannot be discarded", async () => {
+    const update = { branch: "main", commitSha: next, expectedSha: head };
+    let reads = 0;
+    const landed = provider((request) =>
+      request === "GET "
+        ? repo()
+        : request === "GET /git/ref/heads/main"
+          ? ref(reads++ === 0 ? head : next)
+          : request === "POST /graphql"
+            ? new Response(
+                new ReadableStream({
+                  start(controller) {
+                    controller.error(new TypeError("connection reset"));
+                  },
+                }),
+                { status: 502 },
+              )
+            : undefined,
+    );
+    await expect(
+      landed.provider.updateRef(repositoryUrl, update),
+    ).resolves.toBeUndefined();
+    expect(landed.seen.at(-1)).toBe("GET /git/ref/heads/main");
+  });
+
+  it("uploads the bytes it hashed even if the caller changes its buffer meanwhile", async () => {
+    const content = new TextEncoder().encode("# Skill\n");
+    const blob = provider((request, body) => {
+      if (request !== "POST /git/blobs") return undefined;
+      const bytes = Buffer.from(
+        (JSON.parse(body) as { content: string }).content,
+        "base64",
+      );
+      const id = createHash("sha1")
+        .update(`blob ${String(bytes.length)}\0`)
+        .update(bytes)
+        .digest("hex");
+      return Response.json({ sha: id });
+    });
+    const created = blob.provider.createBlob(repositoryUrl, content);
+    content.fill(0x41);
+    const expected = createHash("sha1").update(`blob 8\0# Skill\n`).digest("hex");
+    await expect(created).resolves.toBe(expected);
+  });
+
+  it("aborts a snapshot as retryable when the probe after a missing blob is unreadable", async () => {
+    const files = fixture(
+      { "SKILL.md": markdown("probe") },
+      { fail: { url: /\/git\/blobs\//u, status: 404 } },
+    );
+    const outcome = (probe: () => Response) => {
+      const fetcher: typeof fetch = async (input, init) => {
+        const url = String(input);
+        if (url.endsWith("/access_tokens"))
+          return Response.json({
+            token: `ghs_${"1".repeat(36)}`,
+            expires_at: new Date(Date.now() + 3600_000).toISOString(),
+            permissions: { contents: "read" },
+            repositories: [{ full_name: "acme/skills" }],
+          });
+        return url.endsWith("/repos/acme/skills")
+          ? probe()
+          : files.fetcher(input, init);
+      };
+      const app = new GitHubApp({ appId: "1", privateKeyPem: appKey }, { fetcher });
+      return new AuthenticatedGitHubSourceProvider(app, 7)
+        .snapshot(gitSourceConfig({ repositoryUrl, ref: "main" }))
+        .catch((error: unknown) => error);
+    };
+    // Unreadable: the whole snapshot fails retryably, no skill is reported.
+    for (const probe of [() => new Response("not json"), () => Response.json([])])
+      expect(await outcome(probe)).toMatchObject({
+        code: "SERVICE_UNAVAILABLE",
+        status: 503,
+      });
+    // Hidden repository: revoked access.
+    expect(await outcome(() => new Response("{}", { status: 404 }))).toBeInstanceOf(
+      GitHubAuthFailedError,
+    );
+    // Visible repository: an incomplete snapshot, also retryable.
+    expect(await outcome(repo)).toMatchObject({ code: "SERVICE_UNAVAILABLE" });
   });
 
   it("rejects an invalid expected commit before calling GitHub", async () => {

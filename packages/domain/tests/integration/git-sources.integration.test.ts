@@ -728,6 +728,38 @@ describe("Git source persistence and recovery", () => {
     expect(await status(applied.id)).toBe("ok");
     expect(await status(sibling.id)).toBe("ok");
   });
+  it("never marks a source auth_failed from an apply a newer apply took over", async () => {
+    snapshot = { commitSha: "e".repeat(40), skills: [] };
+    const source = await sources.create({
+      ...m(),
+      config: { repositoryUrl: "https://github.com/a/auth-stale-apply" },
+      idempotencyKey: crypto.randomUUID(),
+    });
+    const run = await sources.preview({ ...m(), sourceId: source.id });
+    // The stale apply's lease expires while it reads GitHub; a newer apply of
+    // the same run then completes before the stale one fails with auth_failed.
+    const stale = new GitSourceService(pool, skills, versions, {
+      snapshot: async () => {
+        await pool.query(
+          "UPDATE skill_sources SET sync_expires_at=clock_timestamp()-interval '1 second' WHERE id=$1",
+          [source.id],
+        );
+        const newer = await sources.apply({
+          ...m(),
+          sourceId: source.id,
+          runId: run.id,
+        });
+        expect(newer.status).toBe("complete");
+        throw new GitHubAuthFailedError();
+      },
+    });
+    await expect(
+      stale.apply({ ...m(), sourceId: source.id, runId: run.id }),
+    ).rejects.toBeInstanceOf(GitHubAuthFailedError);
+    const detail = await sources.get(owner, source.id);
+    expect(detail.source.authStatus).toBe("ok");
+    expect(detail.runs[0]).toMatchObject({ id: run.id, status: "complete" });
+  });
   it("fences stalled version writes and run mutations after source lease expiry or takeover", async () => {
     for (const mode of ["archive", "takeover"] as const) {
       const source = await sources.create({

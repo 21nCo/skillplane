@@ -29,14 +29,19 @@ describe("audit redaction", () => {
 
   it("removes GitHub tokens and private keys under innocuous keys", () => {
     const installationToken = `ghs_${"A1b2".repeat(9)}`;
+    // A stateless installation token: ghs_<app id>_<JWT-shaped value>.
+    const stateless = ["ghs", "123456", "test-header.test-payload.test-signature"].join(
+      "_",
+    );
     const armor = (edge: "BEGIN" | "END") => `-----${edge} RSA ` + "PRIVATE KEY-----";
     const result = redactAuditMetadata({
       githubError: `GitHub rejected ${installationToken}`,
+      detail: `GitHub rejected ${stateless}`,
       key: [armor("BEGIN"), "testkeybody", armor("END")].join("\n"),
       repository: "acme/skills",
     });
     expect(result.value).toEqual({ repository: "acme/skills" });
-    expect(result.removedFieldCount).toBe(2);
+    expect(result.removedFieldCount).toBe(3);
   });
 
   it("keeps controlled caller fields and labels them as caller-declared", () => {

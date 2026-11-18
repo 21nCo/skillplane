@@ -141,8 +141,10 @@ The primitives are:
   repository with `contents: read` (writes use a separate `contents: write`
   token). A token GitHub returns with any other permission (other than the
   implicit `metadata: read`) or another repository set is refused as
-  `auth_failed` and never cached. Tokens are kept only in Worker memory until five minutes before they
-  expire and never appear in errors, logs or audit rows.
+  `auth_failed` and never cached. A token is reused until five minutes before
+  it expires and then dropped from Worker memory; the cache keeps at most 256
+  scopes, dropping the least recently used. Tokens never appear in errors,
+  logs or audit rows.
 - An authenticated source provider with the same snapshot interface as the
   public one, plus write primitives (create blob, tree and commit, and move a
   branch). Branch writes use the GraphQL `updateRefs` mutation with the
@@ -152,8 +154,9 @@ The primitives are:
   `GIT_SOURCE_AUTH_FAILED` (`reason: auth_failed`). A 404 is `auth_failed` only
   when the repository itself is no longer visible to the installation; a
   missing ref or object in a visible repository is not. GitHub rate limits,
-  including secondary limits reported without rate limit headers, are
-  retryable outages.
+  including secondary limits reported without rate limit headers, a refusal
+  whose body cannot be read and a token refusal that does not name the
+  repository or permission, are retryable outages.
 
 When a preview or apply fails with `auth_failed`, the source, its runs,
 bindings and versions are kept, and one `skill_source.auth_failed` audit event
