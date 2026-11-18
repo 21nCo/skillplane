@@ -104,6 +104,8 @@ function closeHttpServer(server: Server): Promise<void> {
 export interface WorkspaceBrowserHarnessOptions {
   /** Serve the real MCP app at `/mcp`, which is the OAuth resource. */
   readonly mcp?: boolean;
+  /** Extra runtime bindings, such as a fake GitHub App's settings. */
+  readonly bindings?: Readonly<Record<string, string>>;
 }
 
 function isMcpPath(url: string | undefined): boolean {
@@ -200,7 +202,8 @@ export async function startWorkspaceBrowserHarness(
       if (
         incoming.url?.startsWith("/api/") ||
         incoming.url?.startsWith("/auth/") ||
-        incoming.url?.startsWith("/datafn/")
+        incoming.url?.startsWith("/datafn/") ||
+        incoming.url?.startsWith("/github/setup")
       ) {
         if (!apiState.value) {
           outgoing.statusCode = 503;
@@ -245,6 +248,7 @@ export async function startWorkspaceBrowserHarness(
         TURNSTILE_ALLOWED_HOSTNAMES: "localhost",
         PUBLIC_TURNSTILE_SITE_KEY: "workspace-browser-site-key",
         SKILLPLANE_OTP_FROM: "Skillplane Local <no-reply@auth-dev.skillplane.dev>",
+        ...options.bindings,
         SEND_EMAIL: {
           send(message) {
             messages.push(message);

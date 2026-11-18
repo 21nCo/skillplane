@@ -7,7 +7,8 @@ export const handle: Handle = async ({ event, resolve }) => {
   if (
     pathname.startsWith("/auth/") ||
     pathname.startsWith("/datafn/") ||
-    pathname.startsWith("/.well-known/")
+    pathname.startsWith("/.well-known/") ||
+    pathname === "/github/setup"
   ) {
     return api.fetch(event.request, runtimeBindings(event.platform));
   }

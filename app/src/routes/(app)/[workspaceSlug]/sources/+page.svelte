@@ -11,6 +11,12 @@
     type SourceDetail,
     type Run,
   } from "$lib/sources/api.js";
+  import {
+    listGitHubInstallations,
+    listGitHubRepositories,
+    type GitHubInstallation,
+    type GitHubRepository,
+  } from "$lib/github/api.js";
   const store = useWorkspaceStore();
   const workspace = $derived(
     store.workspaces.find((w) => w.slug === page.params.workspaceSlug) ?? null,
@@ -32,6 +38,13 @@
     error = $state("");
   let bindPath = $state(""),
     bindSkillId = $state("");
+  // Private repositories come from the workspace's active GitHub App
+  // installations; "" reads a public repository anonymously.
+  let installations = $state<GitHubInstallation[]>([]),
+    installationId = $state(""),
+    repositories = $state<GitHubRepository[]>([]),
+    repositoryChoice = $state(""),
+    repositoryError = $state("");
   let available = $state<{ id: string; name: string; slug: string }[]>([]),
     bindQuery = $state("");
   // Each workspace keeps one creation key until the page has selected the source
@@ -112,7 +125,48 @@
     }
   }
   function config() {
-    return { repositoryUrl, ref, refPolicy, path: singlePath ? path : null };
+    return {
+      repositoryUrl,
+      ref,
+      refPolicy,
+      path: singlePath ? path : null,
+      ...(installationId && !selected
+        ? { installationId: Number(installationId) }
+        : {}),
+    };
+  }
+  async function loadInstallations(id: string, g: number) {
+    try {
+      const r = await listGitHubInstallations(id);
+      if (current(id, g))
+        installations = r.installations.filter((i) => i.status === "active");
+    } catch {
+      if (current(id, g)) installations = [];
+    }
+  }
+  async function chooseInstallation(value: string) {
+    installationId = value;
+    repositories = [];
+    repositoryChoice = "";
+    repositoryError = "";
+    if (!workspace || !value) return;
+    const id = workspace.id,
+      g = generation;
+    try {
+      const r = await listGitHubRepositories(id, Number(value));
+      if (current(id, g) && installationId === value) repositories = r.repositories;
+    } catch (e) {
+      if (current(id, g) && installationId === value)
+        repositoryError =
+          e instanceof Error ? e.message : "Repositories could not be loaded";
+    }
+  }
+  function chooseRepository(fullName: string) {
+    repositoryChoice = fullName;
+    const repository = repositories.find((r) => r.fullName === fullName);
+    if (!repository) return;
+    repositoryUrl = repository.url;
+    if (repository.defaultBranch && ref === "HEAD") ref = repository.defaultBranch;
   }
   async function save(
     archived = Boolean(selected?.source.archivedAt),
@@ -229,8 +283,14 @@
       bindPath = "";
       bindSkillId = "";
       available = [];
+      installations = [];
+      installationId = "";
+      repositories = [];
+      repositoryChoice = "";
+      repositoryError = "";
       const id = workspace.id,
         g = generation;
+      if (canManage) void loadInstallations(id, g);
       void load().catch((e: unknown) => {
         if (current(id, g))
           error = e instanceof Error ? e.message : "Sources could not be loaded";
@@ -245,8 +305,9 @@
 <main class="sources-page">
   <h1>Git sources</h1>
   <p>
-    Connect public GitHub repositories to import one skill directory or every discovered
-    skill. Preview the commit before applying changes.
+    Connect public GitHub repositories, or private ones through a connected GitHub App
+    installation, to import one skill directory or every discovered skill. Preview the
+    commit before applying changes.
   </p>
   {#if error}<p role="alert">{error}</p>{/if}
   {#if canManage}<Button
@@ -260,6 +321,7 @@
         refPolicy = "track";
         path = "";
         singlePath = false;
+        void chooseInstallation("");
         if (workspace) creationKeys[workspace.id] = undefined;
       }}>New source</Button
     >{/if}
@@ -286,6 +348,30 @@
       }}
     >
       <h2>{selected ? "Source settings" : "Add source"}</h2>
+      {#if !selected && installations.length}<Select
+          label="Repository access"
+          value={installationId}
+          onchange={(e: Event) =>
+            void chooseInstallation((e.currentTarget as HTMLSelectElement).value)}
+          options={[
+            { value: "", label: "Public repository" },
+            ...installations.map((i) => ({
+              value: String(i.installationId),
+              label: `GitHub App · ${i.accountLogin}`,
+            })),
+          ]}
+        />{/if}
+      {#if !selected && installationId}<Select
+          label="Repository"
+          value={repositoryChoice}
+          placeholder="Choose a repository"
+          onchange={(e: Event) =>
+            chooseRepository((e.currentTarget as HTMLSelectElement).value)}
+          options={repositories.map((r) => ({
+            value: r.fullName,
+            label: `${r.fullName}${r.private ? " (private)" : ""}`,
+          }))}
+        />{#if repositoryError}<p role="alert">{repositoryError}</p>{/if}{/if}
       <Input
         label="Repository URL"
         bind:value={repositoryUrl}
@@ -331,7 +417,12 @@
           >{selected.source.repositoryUrl}</a
         >
         · {selected.source.refPolicy} · {selected.source.ref}
+        {#if selected.source.installationId}· private via GitHub App{/if}
       </p>
+      {#if selected.source.authStatus === "auth_failed"}<p role="alert">
+          GitHub App access to this repository was revoked (auth_failed). Reconnect the
+          installation in GitHub settings, then preview again.
+        </p>{/if}
       {#if canManage && !selected.source.archivedAt}<Button
           disabled={busy}
           onclick={() => void run(previewSource)}>Preview sync</Button

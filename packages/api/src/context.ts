@@ -2,7 +2,7 @@ import type { AuthFnSession } from "authfn";
 import type { SkillplaneAuthServer } from "@skillplane/auth";
 import type { RuntimeBindings } from "@skillplane/config";
 import type { DatabaseClient } from "@skillplane/db";
-import type { Principal } from "@skillplane/domain";
+import type { GitHubApp, GitHubInstallSettings, Principal } from "@skillplane/domain";
 import type {
   VersionLifecycleService,
   CompositionService,
@@ -42,6 +42,10 @@ export interface ApiServices {
   readonly datafn: DatafnServer<SkillplaneDatafnContext>;
   readonly datafnBootstrap?: ((request: Request) => Promise<Response>) | null;
   readonly tenancySecret: string;
+  /** The Skillplane GitHub App, when its Worker secrets are set. */
+  readonly githubApp?: GitHubApp | null;
+  /** Installing the App from workspace settings, when configured. */
+  readonly githubInstallSettings?: GitHubInstallSettings | null;
   readonly bundleStorage: R2BundleRepository;
   readonly publicProjectionService: PublicSkillProjectionService | null;
   readonly skillService: SkillService;

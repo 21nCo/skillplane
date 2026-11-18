@@ -34,5 +34,6 @@ export * from "./skill-groups.js";
 export * from "./git-sources.js";
 export * from "./git-source-provider.js";
 export * from "./github-app.js";
+export * from "./github-installations.js";
 export * from "./background-jobs.js";
 export type { GitVersionProvenance } from "./git-provenance.js";

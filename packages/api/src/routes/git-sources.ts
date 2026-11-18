@@ -1,5 +1,10 @@
 import { registerResourceRoutes } from "../resource-routing.js";
-import { DomainError, GitSourceService } from "@skillplane/domain";
+import {
+  AuthenticatedGitHubSourceProvider,
+  DomainError,
+  GitSourceService,
+  PublicGitHubSourceProvider,
+} from "@skillplane/domain";
 import type { Hono, Context } from "hono";
 import type { ApiEnvironment } from "../context.js";
 import { success } from "../envelopes.js";
@@ -13,7 +18,14 @@ function service(c: Context<ApiEnvironment>) {
   const s = c.get("services");
   if (!s)
     throw new DomainError("AUTHENTICATION_REQUIRED", "Authentication is required", 401);
-  return new GitSourceService(s.database.pool, s.skillService, s.skillVersionService);
+  const app = s.githubApp ?? null;
+  return new GitSourceService(
+    s.database.pool,
+    s.skillService,
+    s.skillVersionService,
+    new PublicGitHubSourceProvider(),
+    app ? (id) => new AuthenticatedGitHubSourceProvider(app, id) : null,
+  );
 }
 export function registerGitSourceRoutes(app: Hono<ApiEnvironment>) {
   const base = "/api/v1/workspaces/:workspaceId/sources";

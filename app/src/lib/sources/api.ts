@@ -9,6 +9,8 @@ export interface Source {
   revision: number;
   archivedAt: string | null;
   updatedAt: string;
+  authStatus?: "ok" | "auth_failed";
+  installationId?: number | null;
 }
 export interface Plan {
   path: string;

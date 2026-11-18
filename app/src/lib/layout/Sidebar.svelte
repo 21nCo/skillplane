@@ -2,6 +2,7 @@
   import {
     BookOpenTextIcon,
     ChartLineUpIcon,
+    GithubLogoIcon,
     RobotIcon,
     ScrollIcon,
     ShieldCheckIcon,
@@ -36,6 +37,7 @@
     { href: "/workspaces", label: "Workspaces", icon: SquaresFourIcon },
     { href: "/settings/members", label: "Members", icon: UsersThreeIcon },
     { href: "/settings/agents", label: "Agent credentials", icon: RobotIcon },
+    { href: "/settings/github", label: "GitHub", icon: GithubLogoIcon },
   ] as const satisfies readonly NavigationItem[];
 </script>
 

@@ -14,7 +14,7 @@ import {
   type GitSourceConfig,
   type GitSourceProvider,
 } from "./git-source-provider.js";
-import { isGitHubAuthFailed } from "./github-app.js";
+import { GitHubAuthFailedError, isGitHubAuthFailed } from "./github-app.js";
 interface Mutation {
   principal: Principal;
   requestId: string;
@@ -35,11 +35,12 @@ interface SourceRow {
   created_at: Date;
   updated_at: Date;
   auth_failed: boolean;
+  github_installation_id: string | null;
 }
-// GitHub authentication state of a source. Until SKI-57 adds a source state
-// column, it is derived from the latest of the source's auth_failed, previewed
-// and synced audit events: a revoked-access marker holds until the next
-// successful preview or apply.
+// GitHub authentication state of a source, derived from the latest of the
+// source's auth_failed, previewed and synced audit events: a revoked-access
+// marker (from a preview or apply, or from unbinding the source's GitHub App
+// installation) holds until the next successful preview or apply.
 export type GitSourceAuthStatus = "ok" | "auth_failed";
 const SOURCE_COLUMNS = `s.*, COALESCE((SELECT e.event_type='skill_source.auth_failed' FROM audit_events e WHERE e.workspace_id=s.workspace_id AND e.resource_type='skill_source' AND e.resource_id=s.id AND e.event_type IN ('skill_source.auth_failed','skill_source.previewed','skill_source.synced') ORDER BY e.occurred_at DESC,e.id DESC LIMIT 1),false) AS auth_failed`;
 export interface GitSource {
@@ -53,6 +54,8 @@ export interface GitSource {
   archivedAt: string | null;
   updatedAt: string;
   authStatus: GitSourceAuthStatus;
+  /** The bound GitHub App installation a private source reads through. */
+  installationId: number | null;
 }
 // Active bindings per source; repository-wide discovery is bounded to the same
 // count, so a stored plan holds at most twice this many entries.
@@ -71,6 +74,15 @@ function bindingPath(path: string) {
     throw new DomainError("VALIDATION_FAILED", "Binding path is required", 400);
   return normalized;
 }
+// Absent or null reads a public repository anonymously.
+function sourceInstallationId(value: unknown): number | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0)
+    throw new DomainError("VALIDATION_FAILED", "Invalid GitHub App installation", 400, {
+      field: "installationId",
+    });
+  return value;
+}
 function record(r: SourceRow): GitSource {
   return {
     id: r.id,
@@ -83,6 +95,8 @@ function record(r: SourceRow): GitSource {
     archivedAt: r.archived_at?.toISOString() ?? null,
     updatedAt: r.updated_at.toISOString(),
     authStatus: r.auth_failed ? "auth_failed" : "ok",
+    installationId:
+      r.github_installation_id === null ? null : Number(r.github_installation_id),
   };
 }
 interface Binding {
@@ -158,7 +172,28 @@ export class GitSourceService {
     private readonly skills: SkillService,
     private readonly versions: SkillVersionService,
     private readonly provider: GitSourceProvider = new PublicGitHubSourceProvider(),
+    // Reads a private source through its installation; null when the GitHub
+    // App is not configured in this deployment.
+    private readonly installationProvider:
+      ((installationId: number) => GitSourceProvider) | null = null,
   ) {}
+  // A source with an installation reads only while that installation is
+  // bound to the workspace and neither removed nor suspended on GitHub.
+  private async providerFor(s: GitSource): Promise<GitSourceProvider> {
+    if (s.installationId === null) return this.provider;
+    const bound = await this.pool.query(
+      "SELECT 1 FROM github_installations WHERE workspace_id=$1 AND installation_id=$2 AND removed_at IS NULL AND suspended_at IS NULL",
+      [s.workspaceId, s.installationId],
+    );
+    if (!bound.rowCount) throw new GitHubAuthFailedError();
+    if (!this.installationProvider)
+      throw new DomainError(
+        "SERVICE_UNAVAILABLE",
+        "The GitHub App is not configured for this deployment",
+        503,
+      );
+    return this.installationProvider(s.installationId);
+  }
   private transaction<T>(m: Mutation, fn: (client: PoolClient) => Promise<T>) {
     return withDomainTransaction(this.pool, m.requestId, ({ client }) => fn(client), {
       fencingEpoch: m.fencingEpoch,
@@ -183,7 +218,7 @@ export class GitSourceService {
   // Revoked GitHub App access leaves one machine-readable, source-scoped
   // marker in its own transaction, without touching the source row, its
   // bindings, versions or skills. get and list derive authStatus from it (see
-  // SOURCE_COLUMNS) until SKI-57's source state column replaces it. A failed
+  // SOURCE_COLUMNS). A failed
   // marker write never masks the typed auth_failed error. An apply writes it
   // only while it still holds its lease (see apply).
   private authFailedAudit(c: PoolClient, m: Mutation, sourceId: string) {
@@ -258,12 +293,37 @@ export class GitSourceService {
   ) {
     authorize(m.principal, "workspace:update");
     const config = gitSourceConfig(m.config),
+      installationId = sourceInstallationId(m.config.installationId),
       key = validateIdempotencyKey(m.idempotencyKey),
-      hash = await hashIdempotentRequest(config),
+      // Public sources keep the hash they had before installations existed.
+      hash = await hashIdempotentRequest(
+        installationId === null ? config : { ...config, installationId },
+      ),
       id = `source:${await hashIdempotentRequest({ workspace: m.principal.workspaceId, actor: m.principal.actorId, key })}`;
     return this.transaction(m, async (c) => {
+      if (installationId !== null) {
+        const installation = await c.query<{ account_login: string }>(
+          "SELECT account_login FROM github_installations WHERE workspace_id=$1 AND installation_id=$2 AND removed_at IS NULL AND suspended_at IS NULL FOR SHARE",
+          [m.principal.workspaceId, installationId],
+        );
+        const owner = new URL(config.repositoryUrl).pathname.split("/")[1] ?? "";
+        if (!installation.rows[0])
+          throw new DomainError(
+            "VALIDATION_FAILED",
+            "Choose a connected, active GitHub App installation",
+            400,
+            { field: "installationId" },
+          );
+        if (installation.rows[0].account_login.toLowerCase() !== owner.toLowerCase())
+          throw new DomainError(
+            "VALIDATION_FAILED",
+            "The repository does not belong to the installation's account",
+            400,
+            { field: "repositoryUrl" },
+          );
+      }
       const r = await c.query<SourceRow>(
-        `WITH s AS (INSERT INTO skill_sources(id,workspace_id,repository_url,ref,ref_policy,skill_path,creation_hash) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(id) DO UPDATE SET id=skill_sources.id RETURNING *) SELECT ${SOURCE_COLUMNS} FROM s`,
+        `WITH s AS (INSERT INTO skill_sources(id,workspace_id,repository_url,ref,ref_policy,skill_path,creation_hash,github_installation_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(id) DO UPDATE SET id=skill_sources.id RETURNING *) SELECT ${SOURCE_COLUMNS} FROM s`,
         [
           id,
           m.principal.workspaceId,
@@ -272,6 +332,7 @@ export class GitSourceService {
           config.refPolicy,
           config.path,
           hash,
+          installationId,
         ],
       );
       const row = r.rows[0];
@@ -442,8 +503,8 @@ export class GitSourceService {
     const source = record(await this.row(m.principal, m.sourceId));
     if (source.archivedAt)
       throw new DomainError("CONFLICT", "Restore the source before syncing", 409);
-    const snapshot = await this.provider
-        .snapshot(this.config(source))
+    const snapshot = await this.providerFor(source)
+        .then((provider) => provider.snapshot(this.config(source)))
         .catch(async (error: unknown) => {
           if (isGitHubAuthFailed(error)) await this.markAuthFailed(m, source.id);
           throw error;
@@ -778,10 +839,9 @@ export class GitSourceService {
     const adopt = (committed: GitApplyResult[]) =>
       results.splice(0, results.length, ...committed);
     try {
-      const snapshot = await this.provider.snapshot(
-        this.config(source),
-        run.commit_sha,
-      );
+      const snapshot = await (
+        await this.providerFor(source)
+      ).snapshot(this.config(source), run.commit_sha);
       if (snapshot.commitSha !== run.commit_sha)
         throw new DomainError("CONFLICT", "Preview commit changed", 409);
       for (const entry of run.plan) {
