@@ -1,0 +1,23 @@
+docs/operations/git-sources.md
+  s_8e57ef7d7ca0a4::t_92b71ef66a2680 142-144
+packages/domain/src/github-app.test.ts
+  s_8e57ef7d7ca0a4::t_8819ca63a98e18 56-58,89-92,254-299
+packages/domain/src/github-app.ts
+  s_8e57ef7d7ca0a4::t_ca4a4159d0e1c7 464-469,471-480,489
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "dad453239c49bec0803f1029332e1e84e48f43f3",
+  "prompts": {},
+  "sessions": {
+    "s_8e57ef7d7ca0a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_8e57ef7d7ca0a4",
+        "model": "unknown"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
