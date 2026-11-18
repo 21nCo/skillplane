@@ -1,0 +1,438 @@
+import { DomainError } from "./errors.js";
+
+/** The REST API version every Skillplane GitHub request pins. */
+export const GITHUB_API_VERSION = "2026-03-10";
+export const GITHUB_API_BASE_URL = "https://api.github.com";
+/** A cached installation token is replaced this long before GitHub expires it. */
+export const INSTALLATION_TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000;
+const USER_AGENT = "Skillplane-github-app";
+const REQUEST_TIMEOUT_MS = 10000;
+const MAX_TOKEN_RESPONSE_BYTES = 256 * 1024;
+// GitHub accepts at most 500 repositories in one installation token request.
+const MAX_TOKEN_REPOSITORIES = 500;
+
+/** Installation token scope: sources read contents, linked sync writes them. */
+export type GitHubContentsAccess = "read" | "write";
+
+/**
+ * GitHub refused the App installation's access: the installation was removed
+ * or suspended, or it no longer covers the repository or permission. Callers
+ * mark the source `auth_failed` and keep its data; reconnecting restores it.
+ */
+export class GitHubAuthFailedError extends DomainError {
+  readonly reason = "auth_failed" as const;
+  constructor(
+    message = "GitHub App installation access to this repository was revoked; reconnect the installation and retry",
+  ) {
+    super("GIT_SOURCE_AUTH_FAILED", message, 409, { reason: "auth_failed" });
+    this.name = "GitHubAuthFailedError";
+  }
+}
+
+export function isGitHubAuthFailed(error: unknown): error is GitHubAuthFailedError {
+  return error instanceof DomainError && error.code === "GIT_SOURCE_AUTH_FAILED";
+}
+
+/** The App identity from the Worker secrets named in `@skillplane/config`. */
+export interface GitHubAppCredentials {
+  readonly appId: string;
+  readonly privateKeyPem: string;
+}
+
+export interface GitHubAppOptions {
+  readonly fetcher?: typeof fetch;
+  readonly now?: () => number;
+  /** Test seam for a fake GitHub server; production uses api.github.com. */
+  readonly apiBaseUrl?: string;
+}
+
+export interface InstallationTokenRequest {
+  readonly installationId: number;
+  /** `owner/name` of every repository the token may access; one owner. */
+  readonly repositories: readonly string[];
+  readonly access: GitHubContentsAccess;
+}
+
+interface CachedToken {
+  readonly token: string;
+  readonly expiresAt: number;
+}
+
+function unavailable(message: string): never {
+  throw new DomainError("SERVICE_UNAVAILABLE", message, 503);
+}
+
+function base64Decode(value: string): Uint8Array<ArrayBuffer> {
+  return Uint8Array.from(atob(value), (c) => c.charCodeAt(0));
+}
+
+function base64Url(bytes: Uint8Array): string {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/u, "");
+}
+
+function derLength(length: number): number[] {
+  if (length < 0x80) return [length];
+  const bytes: number[] = [];
+  for (let n = length; n > 0; n = Math.floor(n / 256)) bytes.unshift(n % 256);
+  return [0x80 | bytes.length, ...bytes];
+}
+
+// GitHub issues App keys as PKCS#1 ("BEGIN RSA PRIVATE KEY"); Web Crypto
+// imports only PKCS#8, so wrap the key in a PrivateKeyInfo for rsaEncryption.
+function pkcs1ToPkcs8(pkcs1: Uint8Array): Uint8Array<ArrayBuffer> {
+  const body = [
+    0x02,
+    0x01,
+    0x00,
+    0x30,
+    0x0d,
+    0x06,
+    0x09,
+    0x2a,
+    0x86,
+    0x48,
+    0x86,
+    0xf7,
+    0x0d,
+    0x01,
+    0x01,
+    0x01,
+    0x05,
+    0x00,
+    0x04,
+    ...derLength(pkcs1.length),
+  ];
+  const header = [0x30, ...derLength(body.length + pkcs1.length)];
+  const out = new Uint8Array(header.length + body.length + pkcs1.length);
+  out.set(header);
+  out.set(body, header.length);
+  out.set(pkcs1, header.length + body.length);
+  return out;
+}
+
+/**
+ * Imports the App private key for RS256 signing with Web Crypto, which works
+ * in Workers and Node alike. Errors never include key material.
+ */
+export async function importGitHubAppPrivateKey(pem: string): Promise<CryptoKey> {
+  const normalized = pem.replaceAll("\\n", "\n").replaceAll("\r\n", "\n").trim();
+  const match =
+    /^-----BEGIN (RSA )?PRIVATE KEY-----\n([A-Za-z0-9+/=\n]+)\n-----END \1PRIVATE KEY-----$/u.exec(
+      normalized,
+    );
+  try {
+    if (!match) throw new Error("not a PEM private key");
+    const der = base64Decode((match[2] ?? "").replaceAll("\n", ""));
+    return await crypto.subtle.importKey(
+      "pkcs8",
+      match[1] ? pkcs1ToPkcs8(der) : der,
+      { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+      false,
+      ["sign"],
+    );
+  } catch {
+    unavailable("The GitHub App private key is invalid");
+  }
+}
+
+/**
+ * Signs a GitHub App JWT. `iat` is backdated 60 seconds for clock drift and
+ * `exp` stays inside GitHub's 10 minute maximum.
+ */
+export async function signGitHubAppJwt(
+  appId: string,
+  key: CryptoKey,
+  nowMs: number = Date.now(),
+): Promise<string> {
+  const now = Math.floor(nowMs / 1000);
+  const encoder = new TextEncoder();
+  const header = base64Url(
+    encoder.encode(JSON.stringify({ alg: "RS256", typ: "JWT" })),
+  );
+  const payload = base64Url(
+    encoder.encode(JSON.stringify({ iat: now - 60, exp: now + 540, iss: appId })),
+  );
+  const signature = await crypto.subtle.sign(
+    "RSASSA-PKCS1-v1_5",
+    key,
+    encoder.encode(`${header}.${payload}`),
+  );
+  return `${header}.${payload}.${base64Url(new Uint8Array(signature))}`;
+}
+
+const REPOSITORY = /^([A-Za-z0-9][A-Za-z0-9-]{0,38})\/([A-Za-z0-9_.-]{1,100})$/u;
+
+function tokenScope(request: InstallationTokenRequest) {
+  if (!Number.isSafeInteger(request.installationId) || request.installationId <= 0)
+    throw new DomainError("VALIDATION_FAILED", "Invalid GitHub App installation", 400);
+  // Callers outside TypeScript can pass any access string.
+  const access: string = request.access;
+  if (access !== "read" && access !== "write")
+    throw new DomainError("VALIDATION_FAILED", "Invalid GitHub contents access", 400);
+  const names = new Map<string, string>();
+  let owner: string | null = null;
+  for (const repository of request.repositories) {
+    const match = REPOSITORY.exec(repository);
+    if (!match || match[2] === "." || match[2] === "..")
+      throw new DomainError("VALIDATION_FAILED", "Invalid GitHub repository", 400);
+    const login = (match[1] ?? "").toLowerCase();
+    if (owner !== null && owner !== login)
+      throw new DomainError(
+        "VALIDATION_FAILED",
+        "An installation token covers repositories of one owner",
+        400,
+      );
+    owner = login;
+    names.set(repository.toLowerCase(), match[2] ?? "");
+  }
+  if (names.size === 0 || names.size > MAX_TOKEN_REPOSITORIES)
+    throw new DomainError(
+      "VALIDATION_FAILED",
+      "An installation token needs between 1 and 500 repositories",
+      400,
+    );
+  const fullNames = [...names.keys()].sort();
+  return {
+    key: `${String(request.installationId)}:${request.access}:${fullNames.join(",")}`,
+    fullNames,
+    names: fullNames.map((fullName) => names.get(fullName) ?? ""),
+  };
+}
+
+async function boundedJson(response: Response, maxBytes: number): Promise<unknown> {
+  const reader = response.body?.getReader();
+  if (!reader) unavailable("GitHub returned an empty response");
+  const parts: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const next = await reader.read();
+      if (next.done) break;
+      size += next.value.byteLength;
+      if (size > maxBytes) {
+        await reader.cancel();
+        unavailable("GitHub returned an oversized response");
+      }
+      parts.push(next.value);
+    }
+  } catch (error) {
+    if (error instanceof DomainError) throw error;
+    unavailable("GitHub response was interrupted; retry later");
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const part of parts) {
+    bytes.set(part, offset);
+    offset += part.byteLength;
+  }
+  try {
+    return JSON.parse(new TextDecoder().decode(bytes)) as unknown;
+  } catch {
+    unavailable("GitHub returned invalid JSON");
+  }
+}
+
+/** Whether a 403 or 429 is GitHub throttling rather than a permission refusal. */
+export function isGitHubRateLimited(response: Response): boolean {
+  return (
+    response.status === 429 ||
+    response.headers.get("x-ratelimit-remaining") === "0" ||
+    response.headers.has("retry-after")
+  );
+}
+
+/**
+ * Acts as the Skillplane GitHub App: signs App JWTs and mints installation
+ * tokens limited to the requested repositories and contents permission.
+ * Tokens live only in this in-memory cache until five minutes before they
+ * expire; they are never persisted, logged or placed in an error.
+ */
+export class GitHubApp {
+  readonly apiBaseUrl: string;
+  private readonly fetcher: typeof fetch;
+  private readonly now: () => number;
+  // Secrets and tokens live in private fields, so neither JSON nor an
+  // inspected or logged GitHubApp exposes them.
+  readonly #credentials: GitHubAppCredentials;
+  #key: Promise<CryptoKey> | null = null;
+  readonly #tokens = new Map<string, CachedToken>();
+  readonly #pending = new Map<string, Promise<CachedToken>>();
+
+  constructor(credentials: GitHubAppCredentials, options: GitHubAppOptions = {}) {
+    this.#credentials = {
+      appId: credentials.appId,
+      privateKeyPem: credentials.privateKeyPem,
+    };
+    // workerd rejects fetch called with a receiver other than the global scope.
+    this.fetcher = options.fetcher ?? ((input, init) => fetch(input, init));
+    this.now = options.now ?? (() => Date.now());
+    this.apiBaseUrl = (options.apiBaseUrl ?? GITHUB_API_BASE_URL).replace(/\/+$/u, "");
+  }
+
+  /** A freshly signed App JWT for App-level endpoints. */
+  async appJwt(): Promise<string> {
+    this.#key ??= importGitHubAppPrivateKey(this.#credentials.privateKeyPem).catch(
+      (error: unknown) => {
+        this.#key = null;
+        throw error;
+      },
+    );
+    return signGitHubAppJwt(this.#credentials.appId, await this.#key, this.now());
+  }
+
+  /**
+   * An installation token for exactly the requested repositories and
+   * contents access. Concurrent callers for the same scope share one mint.
+   */
+  async installationToken(request: InstallationTokenRequest): Promise<string> {
+    const scope = tokenScope(request);
+    const cached = this.#tokens.get(scope.key);
+    if (cached && this.now() < cached.expiresAt - INSTALLATION_TOKEN_REFRESH_MARGIN_MS)
+      return cached.token;
+    if (cached) this.#tokens.delete(scope.key);
+    let pending = this.#pending.get(scope.key);
+    if (!pending) {
+      const minting = this.mint(request, scope).then((minted) => {
+        if (this.now() < minted.expiresAt - INSTALLATION_TOKEN_REFRESH_MARGIN_MS)
+          this.#tokens.set(scope.key, minted);
+        return minted;
+      });
+      pending = minting.finally(() => {
+        if (this.#pending.get(scope.key) === pending) this.#pending.delete(scope.key);
+      });
+      this.#pending.set(scope.key, pending);
+    }
+    return (await pending).token;
+  }
+
+  /** Drops a cached token GitHub rejected, unless a newer one replaced it. */
+  invalidate(request: InstallationTokenRequest, token: string): void {
+    const scope = tokenScope(request);
+    if (this.#tokens.get(scope.key)?.token === token) this.#tokens.delete(scope.key);
+  }
+
+  /**
+   * Sends an installation-authenticated request. A rejected (401) token is
+   * replaced once with a fresh mint; a second rejection, or a permission
+   * refusal (403 that is not throttling), is `auth_failed`.
+   */
+  async installationFetch(
+    request: InstallationTokenRequest,
+    url: string,
+    init: RequestInit,
+  ): Promise<Response> {
+    if (!url.startsWith(`${this.apiBaseUrl}/`))
+      throw new DomainError("VALIDATION_FAILED", "Invalid GitHub API request", 400);
+    for (let attempt = 0; ; attempt += 1) {
+      const token = await this.installationToken(request);
+      const headers = new Headers(init.headers);
+      headers.set("authorization", `Bearer ${token}`);
+      headers.set("x-github-api-version", GITHUB_API_VERSION);
+      if (!headers.has("user-agent")) headers.set("user-agent", USER_AGENT);
+      let response: Response;
+      try {
+        response = await this.fetcher(url, { ...init, headers, redirect: "manual" });
+      } catch {
+        unavailable("GitHub could not be reached; retry later");
+      }
+      if (response.status === 401) {
+        await response.body?.cancel();
+        this.invalidate(request, token);
+        if (attempt === 0) continue;
+        throw new GitHubAuthFailedError();
+      }
+      if (response.status === 403 && !isGitHubRateLimited(response)) {
+        await response.body?.cancel();
+        throw new GitHubAuthFailedError();
+      }
+      return response;
+    }
+  }
+
+  private async mint(
+    request: InstallationTokenRequest,
+    scope: ReturnType<typeof tokenScope>,
+  ): Promise<CachedToken> {
+    const jwt = await this.appJwt();
+    let response: Response;
+    try {
+      response = await this.fetcher(
+        `${this.apiBaseUrl}/app/installations/${String(request.installationId)}/access_tokens`,
+        {
+          method: "POST",
+          headers: {
+            accept: "application/vnd.github+json",
+            authorization: `Bearer ${jwt}`,
+            "content-type": "application/json",
+            "user-agent": USER_AGENT,
+            "x-github-api-version": GITHUB_API_VERSION,
+          },
+          body: JSON.stringify({
+            repositories: scope.names,
+            permissions: { contents: request.access },
+          }),
+          redirect: "manual",
+          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        },
+      );
+    } catch {
+      unavailable("GitHub could not be reached; retry later");
+    }
+    if (!response.ok) {
+      await response.body?.cancel();
+      // 404: the installation was removed; 403: suspended or not permitted;
+      // 422: a repository or permission is outside the installation.
+      if (
+        response.status === 404 ||
+        response.status === 422 ||
+        (response.status === 403 && !isGitHubRateLimited(response))
+      )
+        throw new GitHubAuthFailedError();
+      if (response.status === 401)
+        unavailable("GitHub rejected the Skillplane App credentials");
+      unavailable("GitHub could not issue an installation token; retry later");
+    }
+    const body = await boundedJson(response, MAX_TOKEN_RESPONSE_BYTES);
+    const row =
+      body && typeof body === "object" && !Array.isArray(body)
+        ? (body as Record<string, unknown>)
+        : {};
+    const token = row.token,
+      expiresAt =
+        typeof row.expires_at === "string" ? Date.parse(row.expires_at) : Number.NaN;
+    if (
+      typeof token !== "string" ||
+      !/^[A-Za-z0-9_]{20,255}$/u.test(token) ||
+      !Number.isFinite(expiresAt) ||
+      expiresAt <= this.now()
+    )
+      unavailable("GitHub returned an invalid installation token");
+    // Refuse a token whose grant differs from the request: a different
+    // contents permission or repository set is a wrongly scoped token.
+    const permissions = row.permissions;
+    const contents =
+      permissions && typeof permissions === "object"
+        ? (permissions as Record<string, unknown>).contents
+        : undefined;
+    const repositories = Array.isArray(row.repositories)
+      ? row.repositories.map((repository: unknown) =>
+          typeof repository === "object" && repository !== null
+            ? String((repository as Record<string, unknown>).full_name).toLowerCase()
+            : "",
+        )
+      : [];
+    if (
+      contents !== request.access ||
+      repositories.length !== scope.fullNames.length ||
+      [...repositories].sort().some((name, index) => name !== scope.fullNames[index])
+    )
+      throw new GitHubAuthFailedError(
+        "The GitHub App installation does not grant the requested repository access",
+      );
+    return { token, expiresAt };
+  }
+}

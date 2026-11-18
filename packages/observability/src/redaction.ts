@@ -19,8 +19,10 @@ const PROHIBITED_KEYS = new Set([
 ]);
 
 const EMAIL_VALUE = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/iu;
+// GitHub App installation tokens (ghs_) and the other GitHub token prefixes,
+// and PEM private keys, are removed wherever they appear in a value.
 const CREDENTIAL_VALUE =
-  /(?:\bbearer\s+[A-Z0-9._~+/-]+=*|\bspk_[A-Z0-9_-]{12,}|\b(?:access|refresh|id)[_-]?token\s*[:=])/iu;
+  /(?:\bbearer\s+[A-Z0-9._~+/-]+=*|\bspk_[A-Z0-9_-]{12,}|\b(?:access|refresh|id)[_-]?token\s*[:=]|\bgh[pousr]_[A-Z0-9]{20,}|\bgithub_pat_[A-Z0-9_]{20,}|-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----)/iu;
 
 export interface RedactionResult {
   readonly value: Readonly<Record<string, unknown>>;

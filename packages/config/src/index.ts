@@ -59,6 +59,9 @@ export interface RuntimeBindings {
   readonly POSTHOG_HOST?: string;
   readonly POSTHOG_PROJECT_TOKEN?: string;
   readonly TURNSTILE_SECRET_KEY?: string;
+  readonly GITHUB_APP_ID?: string;
+  readonly GITHUB_APP_PRIVATE_KEY?: string;
+  readonly GITHUB_APP_WEBHOOK_SECRET?: string;
   readonly TURNSTILE_ALLOWED_HOSTNAMES?: string;
   readonly PUBLIC_TURNSTILE_SITE_KEY?: string;
   readonly SKILLPLANE_OTP_FROM?: string;
@@ -977,4 +980,67 @@ export function safeConfigDiagnostic(error: unknown): {
     return { code: error.code, fields: error.fields };
   }
   return { code: "CONFIG_UNKNOWN", fields: [] };
+}
+
+/**
+ * Worker secret names of the Skillplane GitHub App. Set them only as Worker
+ * secrets (`wrangler secret put`), never as `vars`, in a committed Wrangler
+ * configuration or in the database.
+ */
+export const GITHUB_APP_SECRET_NAMES = {
+  appId: "GITHUB_APP_ID",
+  privateKey: "GITHUB_APP_PRIVATE_KEY",
+  webhookSecret: "GITHUB_APP_WEBHOOK_SECRET",
+} as const;
+
+export interface GitHubAppConfig {
+  /** The numeric App ID or the App's client ID, used as the App JWT issuer. */
+  readonly appId: string;
+  /** The App private key as PEM (PKCS#1 as GitHub issues it, or PKCS#8). */
+  readonly privateKeyPem: string;
+  /** The secret GitHub signs webhook deliveries with. */
+  readonly webhookSecret: string;
+}
+
+const GITHUB_APP_ID = /^(?:[1-9][0-9]{0,19}|Iv[0-9A-Za-z._-]{2,64})$/u;
+const GITHUB_APP_PRIVATE_KEY =
+  /^-----BEGIN (RSA )?PRIVATE KEY-----\n[A-Za-z0-9+/=\n]+\n-----END \1PRIVATE KEY-----\n?$/u;
+
+/**
+ * The GitHub App configuration, or null when none of its secrets is set, so
+ * public Git sources keep working without an App. A partial or malformed set
+ * is a configuration error that names only the offending secret names.
+ */
+export function parseGitHubAppConfig(
+  bindings: RuntimeBindings,
+): GitHubAppConfig | null {
+  const names = Object.values(GITHUB_APP_SECRET_NAMES);
+  const values = names.map((name) => bindings[name]);
+  if (values.every((value) => value === undefined || value === "")) return null;
+  const invalid: string[] = [];
+  const appId = bindings[GITHUB_APP_SECRET_NAMES.appId];
+  if (typeof appId !== "string" || !GITHUB_APP_ID.test(appId.trim()))
+    invalid.push(GITHUB_APP_SECRET_NAMES.appId);
+  const rawKey = bindings[GITHUB_APP_SECRET_NAMES.privateKey];
+  // Secret stores often keep a PEM on one line with escaped newlines.
+  const privateKeyPem =
+    typeof rawKey === "string"
+      ? rawKey.replaceAll("\\n", "\n").replaceAll("\r\n", "\n").trim()
+      : "";
+  if (!GITHUB_APP_PRIVATE_KEY.test(privateKeyPem))
+    invalid.push(GITHUB_APP_SECRET_NAMES.privateKey);
+  const webhookSecret = bindings[GITHUB_APP_SECRET_NAMES.webhookSecret];
+  if (typeof webhookSecret !== "string" || webhookSecret.length < 32)
+    invalid.push(GITHUB_APP_SECRET_NAMES.webhookSecret);
+  if (
+    invalid.length > 0 ||
+    typeof appId !== "string" ||
+    typeof webhookSecret !== "string"
+  )
+    throw new ConfigError(
+      "CONFIG_INVALID",
+      "GitHub App secrets are incomplete or invalid",
+      invalid,
+    );
+  return { appId: appId.trim(), privateKeyPem, webhookSecret };
 }

@@ -20,6 +20,7 @@ import { SkillSearchService } from "../../src/search.js";
 import { GitSourceService } from "../../src/git-sources.js";
 import { createSkillBundle } from "../../src/skill-input.js";
 import type { GitSnapshot } from "../../src/git-source-provider.js";
+import { GitHubAuthFailedError } from "../../src/github-app.js";
 import type { Principal } from "../../src/principal.js";
 // This acceptance suite must fail, never skip, when no test database resolves.
 describe("Git source persistence and recovery", () => {
@@ -31,9 +32,11 @@ describe("Git source persistence and recovery", () => {
   const objects = new TestObjectStorage(),
     storage = new R2BundleRepository(objects);
   let snapshot: GitSnapshot = { commitSha: "a".repeat(40), skills: [] },
-    failProvider = false;
+    failProvider = false,
+    providerFailure: Error | null = null;
   const provider = {
     snapshot: async (_config: unknown, commit?: string) => {
+      if (providerFailure) throw providerFailure;
       if (failProvider) throw new Error("provider unavailable");
       expect(commit ?? snapshot.commitSha).toBe(snapshot.commitSha);
       return snapshot;
@@ -487,6 +490,40 @@ describe("Git source persistence and recovery", () => {
       status: "partial",
       failureMessage: "Source sync could not complete; retry this preview",
     });
+    // Revoked GitHub App access is a typed auth_failed outcome that keeps the
+    // source, its run and the workspace's skills for a retry after reconnecting.
+    const before = await sources.get(owner, s.id);
+    const skillCount = await pool.query(
+      "SELECT count(*)::int AS n FROM skills WHERE workspace_id=$1",
+      [owner.workspaceId],
+    );
+    providerFailure = new GitHubAuthFailedError();
+    try {
+      await expect(
+        sources.apply({ ...m(), sourceId: s.id, runId: retryPreview.id }),
+      ).rejects.toMatchObject({
+        code: "GIT_SOURCE_AUTH_FAILED",
+        details: { reason: "auth_failed" },
+      });
+    } finally {
+      providerFailure = null;
+    }
+    const revoked = await sources.get(owner, s.id);
+    expect(revoked.source).toEqual(before.source);
+    expect(revoked.runs[0]).toMatchObject({
+      id: retryPreview.id,
+      status: "partial",
+      failureMessage:
+        "GitHub App access to the repository was revoked; reconnect the installation and retry",
+    });
+    expect(
+      (
+        await pool.query(
+          "SELECT count(*)::int AS n FROM skills WHERE workspace_id=$1",
+          [owner.workspaceId],
+        )
+      ).rows,
+    ).toEqual(skillCount.rows);
     expect(
       (await sources.apply({ ...m(), sourceId: s.id, runId: retryPreview.id })).status,
     ).toBe("complete");

@@ -14,6 +14,7 @@ import {
   type GitSourceConfig,
   type GitSourceProvider,
 } from "./git-source-provider.js";
+import { isGitHubAuthFailed } from "./github-app.js";
 interface Mutation {
   principal: Principal;
   requestId: string;
@@ -1120,7 +1121,11 @@ export class GitSourceService {
             m.principal.workspaceId,
             source.id,
             run.id,
-            "Source sync could not complete; retry this preview",
+            // Revoked App access keeps the run, bindings and versions; the
+            // source works again once the installation is reconnected.
+            isGitHubAuthFailed(error)
+              ? "GitHub App access to the repository was revoked; reconnect the installation and retry"
+              : "Source sync could not complete; retry this preview",
           ],
         );
       }).catch(() => undefined);

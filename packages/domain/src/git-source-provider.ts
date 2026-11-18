@@ -13,6 +13,13 @@ import {
   type CanonicalBundle,
 } from "@skillplane/storage";
 import { DomainError } from "./errors.js";
+import {
+  GITHUB_API_BASE_URL,
+  GITHUB_API_VERSION,
+  GitHubAuthFailedError,
+  isGitHubAuthFailed,
+  type GitHubApp,
+} from "./github-app.js";
 export interface GitSourceConfig {
   repositoryUrl: string;
   ref: string;
@@ -129,16 +136,22 @@ const MAX_SNAPSHOT_BYTES = GIT_IMPORT_LIMITS.snapshotBytes,
   MAX_REQUESTS = GIT_IMPORT_LIMITS.requests,
   // Ref, commit and tree requests leave this many distinct blob fetches for one skill.
   MAX_SKILL_FILES = GIT_IMPORT_LIMITS.skillFiles;
-export class PublicGitHubSourceProvider implements GitSourceProvider {
-  // workerd rejects fetch called with a receiver other than the global scope,
-  // so the default looks up and calls the global fetch on each request.
-  constructor(
-    private readonly fetcher: typeof fetch = (input, init) => fetch(input, init),
-  ) {}
+// Reads a repository snapshot through the GitHub REST API. Subclasses decide
+// how a request is sent (anonymously or with an installation token) and what
+// an unknown repository or ref means for them.
+abstract class GitHubSnapshotProvider implements GitSourceProvider {
+  protected abstract readonly apiBaseUrl: string;
+  protected abstract send(
+    repository: string,
+    url: string,
+    init: RequestInit,
+  ): Promise<Response>;
+  // Called when resolving the ref or pinned commit answers 404 or 422.
+  protected abstract missing(repository: string, deadline: number): Promise<never>;
   async snapshot(input: GitSourceConfig, pinned?: string): Promise<GitSnapshot> {
     const config = gitSourceConfig({ ...input });
     if (pinned && !/^[a-f0-9]{40}$/i.test(pinned)) invalid("Invalid preview commit");
-    const repository = config.repositoryUrl.slice("https://github.com/".length);
+    const repository = repositoryName(config.repositoryUrl);
     let requests = 0,
       totalBytes = 0;
     const deadline = Date.now() + 90000;
@@ -160,12 +173,13 @@ export class PublicGitHubSourceProvider implements GitSourceProvider {
         );
       let response: Response;
       try {
-        response = await this.fetcher(
-          `https://api.github.com/repos/${repository}/${path}`,
+        response = await this.send(
+          repository,
+          `${this.apiBaseUrl}/repos/${repository}/${path}`,
           {
             headers: {
               accept,
-              "x-github-api-version": "2026-03-10",
+              "x-github-api-version": GITHUB_API_VERSION,
               "user-agent": "Skillplane-public-source-import",
             },
             // workerd supports only "follow" and "manual"; redirects are
@@ -174,7 +188,8 @@ export class PublicGitHubSourceProvider implements GitSourceProvider {
             signal: AbortSignal.timeout(Math.min(10000, remaining)),
           },
         );
-      } catch {
+      } catch (e) {
+        if (e instanceof DomainError) throw e;
         throw new DomainError(
           "SERVICE_UNAVAILABLE",
           "GitHub could not be reached; retry later",
@@ -197,10 +212,8 @@ export class PublicGitHubSourceProvider implements GitSourceProvider {
       }
       if (!response.ok) {
         await response.body?.cancel();
-        // GitHub answers an unknown repository with 404 and an unknown
-        // branch, tag or commit with 404 or 422.
         if (stage === "resolve" && (response.status === 404 || response.status === 422))
-          invalid("Public repository or ref was not found");
+          return this.missing(repository, deadline);
         throw new DomainError(
           "SERVICE_UNAVAILABLE",
           "GitHub rejected the request; check its availability or rate limit",
@@ -453,8 +466,11 @@ export class PublicGitHubSourceProvider implements GitSourceProvider {
         const bundle = await canonicalizeBundleFiles({ skill: result.data, files });
         skills.push({ path: root, bundle, error: null });
       } catch (error) {
+        // Limits, outages and revoked access abort the whole snapshot rather
+        // than reporting one skill as invalid.
         if (
           error instanceof SnapshotLimitError ||
+          isGitHubAuthFailed(error) ||
           (error instanceof DomainError && error.status === 503)
         )
           throw error;
@@ -470,4 +486,365 @@ export class PublicGitHubSourceProvider implements GitSourceProvider {
     }
     return { commitSha: sha, skills };
   }
+}
+
+function repositoryName(repositoryUrl: string): string {
+  return repositoryUrl.slice("https://github.com/".length);
+}
+
+/** Reads public repositories anonymously. */
+export class PublicGitHubSourceProvider extends GitHubSnapshotProvider {
+  protected readonly apiBaseUrl = GITHUB_API_BASE_URL;
+  // workerd rejects fetch called with a receiver other than the global scope,
+  // so the default looks up and calls the global fetch on each request.
+  constructor(
+    private readonly fetcher: typeof fetch = (input, init) => fetch(input, init),
+  ) {
+    super();
+  }
+  protected send(_repository: string, url: string, init: RequestInit) {
+    return this.fetcher(url, init);
+  }
+  // GitHub answers an unknown repository with 404 and an unknown branch, tag
+  // or commit with 404 or 422.
+  protected missing(): Promise<never> {
+    invalid("Public repository or ref was not found");
+  }
+}
+
+/** One entry of a tree written on top of a base tree; a null SHA deletes the path. */
+export interface GitTreeChange {
+  path: string;
+  mode: "100644" | "100755";
+  sha: string | null;
+}
+
+const SHA = /^[a-f0-9]{40}$/;
+const MAX_WRITE_RESPONSE_BYTES = 1024 * 1024;
+const MAX_COMMIT_MESSAGE_BYTES = 64 * 1024;
+
+/** The branch no longer points at the commit the caller based its write on. */
+export class GitHubRefConflictError extends DomainError {
+  constructor() {
+    super(
+      "CONFLICT",
+      "The branch moved since the expected commit; refresh and retry",
+      409,
+      { reason: "stale_ref" },
+    );
+    this.name = "GitHubRefConflictError";
+  }
+}
+
+// A Git branch name as `git check-ref-format --branch` accepts it, restricted
+// to printable ASCII without shell- or URL-significant characters.
+function branchName(branch: string): string {
+  if (
+    typeof branch !== "string" ||
+    branch.length === 0 ||
+    branch.length > 200 ||
+    !/^[A-Za-z0-9._/-]+$/.test(branch) ||
+    branch.startsWith("/") ||
+    branch.endsWith("/") ||
+    branch.endsWith(".") ||
+    branch.startsWith("-") ||
+    branch.includes("..") ||
+    branch.includes("//") ||
+    branch.split("/").some((part) => part.startsWith(".") || part.endsWith(".lock"))
+  )
+    invalid("Invalid branch name");
+  return branch;
+}
+
+function gitSha(value: unknown, message = "GitHub returned an invalid object"): string {
+  if (typeof value !== "string" || !SHA.test(value)) invalid(message);
+  return value;
+}
+
+/**
+ * Reads private repositories and writes contents with installation tokens of
+ * the Skillplane GitHub App. Snapshots use `contents: read` tokens and the
+ * write primitives `contents: write` tokens, each limited to the repository.
+ */
+export class AuthenticatedGitHubSourceProvider extends GitHubSnapshotProvider {
+  protected readonly apiBaseUrl: string;
+  constructor(
+    private readonly app: GitHubApp,
+    readonly installationId: number,
+  ) {
+    super();
+    this.apiBaseUrl = app.apiBaseUrl;
+  }
+  protected send(repository: string, url: string, init: RequestInit) {
+    return this.app.installationFetch(
+      {
+        installationId: this.installationId,
+        repositories: [repository],
+        access: "read",
+      },
+      url,
+      init,
+    );
+  }
+  // The token was minted for this repository, so a repository GitHub no
+  // longer shows means the installation lost access; otherwise the ref is
+  // unknown.
+  protected override async missing(
+    repository: string,
+    deadline: number,
+  ): Promise<never> {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0)
+      throw new DomainError("SERVICE_UNAVAILABLE", "Git source fetch timed out", 503);
+    const response = await this.send(
+      repository,
+      `${this.apiBaseUrl}/repos/${repository}`,
+      {
+        headers: { accept: "application/vnd.github+json" },
+        signal: AbortSignal.timeout(Math.min(10000, remaining)),
+      },
+    );
+    await response.body?.cancel();
+    if (response.status === 404) throw new GitHubAuthFailedError();
+    if (response.ok) invalid("Repository ref was not found");
+    throw new DomainError(
+      "SERVICE_UNAVAILABLE",
+      "GitHub rejected the request; check its availability or rate limit",
+      503,
+    );
+  }
+
+  private async write(
+    repositoryUrl: string,
+    method: "GET" | "POST" | "PATCH",
+    path: string,
+    body?: unknown,
+  ): Promise<{ status: number; data: Record<string, unknown> | null }> {
+    const repository = repositoryName(gitSourceConfig({ repositoryUrl }).repositoryUrl);
+    const response = await this.app.installationFetch(
+      {
+        installationId: this.installationId,
+        repositories: [repository],
+        access: "write",
+      },
+      `${this.apiBaseUrl}/repos/${repository}/${path}`,
+      {
+        method,
+        headers: {
+          accept: "application/vnd.github+json",
+          ...(body === undefined ? {} : { "content-type": "application/json" }),
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        signal: AbortSignal.timeout(10000),
+      },
+    );
+    if (
+      response.type === "opaqueredirect" ||
+      (response.status >= 300 && response.status < 400)
+    ) {
+      await response.body?.cancel();
+      throw new DomainError(
+        "SERVICE_UNAVAILABLE",
+        "GitHub redirected a write request; retry later",
+        503,
+      );
+    }
+    if (!response.ok) {
+      await response.body?.cancel();
+      return { status: response.status, data: null };
+    }
+    const reader = response.body?.getReader();
+    if (!reader) invalid("GitHub returned an empty response");
+    const parts: Uint8Array[] = [];
+    let size = 0;
+    try {
+      for (;;) {
+        const next = await reader.read();
+        if (next.done) break;
+        size += next.value.byteLength;
+        if (size > MAX_WRITE_RESPONSE_BYTES) {
+          await reader.cancel();
+          invalid("GitHub response exceeds the size limit");
+        }
+        parts.push(next.value);
+      }
+    } catch (e) {
+      if (e instanceof DomainError) throw e;
+      throw new DomainError(
+        "SERVICE_UNAVAILABLE",
+        "GitHub response was interrupted; retry later",
+        503,
+      );
+    } finally {
+      reader.releaseLock();
+    }
+    const bytes = new Uint8Array(size);
+    let offset = 0;
+    for (const part of parts) {
+      bytes.set(part, offset);
+      offset += part.byteLength;
+    }
+    try {
+      return {
+        status: response.status,
+        data: object(JSON.parse(new TextDecoder().decode(bytes)) as unknown),
+      };
+    } catch {
+      invalid("GitHub returned invalid JSON");
+    }
+  }
+
+  // A repository the write token covers but GitHub no longer shows means the
+  // installation lost access; other refusals are retryable outages.
+  private refused(status: number): never {
+    if (status === 404) throw new GitHubAuthFailedError();
+    if (status === 422) invalid("GitHub refused the Git object");
+    throw new DomainError(
+      "SERVICE_UNAVAILABLE",
+      "GitHub rejected the request; check its availability or rate limit",
+      503,
+    );
+  }
+
+  /** Stores file content as a blob and returns its verified Git SHA. */
+  async createBlob(repositoryUrl: string, content: Uint8Array): Promise<string> {
+    if (content.byteLength > MAX_BLOB_BYTES) invalid("File exceeds the size limit");
+    const header = new TextEncoder().encode(`blob ${String(content.byteLength)}\0`),
+      encoded = new Uint8Array(header.length + content.length);
+    encoded.set(header);
+    encoded.set(content, header.length);
+    const expected = [...new Uint8Array(await crypto.subtle.digest("SHA-1", encoded))]
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+    let binary = "";
+    for (let i = 0; i < content.length; i += 0x8000)
+      binary += String.fromCharCode(...content.subarray(i, i + 0x8000));
+    const result = await this.write(repositoryUrl, "POST", "git/blobs", {
+      content: btoa(binary),
+      encoding: "base64",
+    });
+    if (!result.data) this.refused(result.status);
+    if (gitSha(result.data.sha) !== expected)
+      invalid("GitHub returned a different blob");
+    return expected;
+  }
+
+  /** Writes a tree of file changes on top of `baseTree` (or from empty). */
+  async createTree(
+    repositoryUrl: string,
+    input: { baseTree: string | null; entries: readonly GitTreeChange[] },
+  ): Promise<string> {
+    if (input.baseTree !== null) gitSha(input.baseTree, "Invalid base tree");
+    if (
+      input.entries.length === 0 ||
+      input.entries.length > GIT_IMPORT_LIMITS.treeEntries
+    )
+      invalid("A tree write needs between 1 and 10000 entries");
+    const paths = new Set<string>();
+    const tree = input.entries.map((entry) => {
+      if (!entry.path || !safePath(entry.path) || paths.has(entry.path))
+        invalid("Invalid or duplicate tree path");
+      paths.add(entry.path);
+      // Callers outside TypeScript can pass any mode string.
+      const mode: string = entry.mode;
+      if (mode !== "100644" && mode !== "100755")
+        invalid("Unsupported tree entry mode");
+      if (entry.sha !== null) gitSha(entry.sha, "Invalid blob identity");
+      return { path: entry.path, mode: entry.mode, type: "blob", sha: entry.sha };
+    });
+    const result = await this.write(repositoryUrl, "POST", "git/trees", {
+      ...(input.baseTree === null ? {} : { base_tree: input.baseTree }),
+      tree,
+    });
+    if (!result.data) this.refused(result.status);
+    return gitSha(result.data.sha);
+  }
+
+  /** Creates a commit of `tree` with the given parents, authored by the App. */
+  async createCommit(
+    repositoryUrl: string,
+    input: { message: string; tree: string; parents: readonly string[] },
+  ): Promise<string> {
+    if (
+      typeof input.message !== "string" ||
+      !input.message.trim() ||
+      input.message.includes("\0") ||
+      new TextEncoder().encode(input.message).byteLength > MAX_COMMIT_MESSAGE_BYTES
+    )
+      invalid("Invalid commit message");
+    gitSha(input.tree, "Invalid tree identity");
+    if (input.parents.length > 1) invalid("A sync commit has at most one parent");
+    for (const parent of input.parents) gitSha(parent, "Invalid parent commit");
+    const result = await this.write(repositoryUrl, "POST", "git/commits", {
+      message: input.message,
+      tree: input.tree,
+      parents: input.parents,
+    });
+    if (!result.data) this.refused(result.status);
+    const commit = gitSha(result.data.sha);
+    if (text(object(result.data.tree).sha) !== input.tree)
+      invalid("GitHub returned a different commit tree");
+    return commit;
+  }
+
+  /**
+   * Moves `branch` to `commit` only while it still points at `expectedSha`.
+   * The branch is read first, and the update is never forced, so GitHub's
+   * fast-forward check refuses a concurrent move after the read when the new
+   * commit's parent is `expectedSha`. A stale branch is GitHubRefConflictError.
+   */
+  async updateRef(
+    repositoryUrl: string,
+    input: { branch: string; commitSha: string; expectedSha: string },
+  ): Promise<void> {
+    const ref = `heads/${branchName(input.branch)}`
+      .split("/")
+      .map((part) => encodeURIComponent(part))
+      .join("/");
+    const commit = gitSha(input.commitSha, "Invalid commit"),
+      expected = gitSha(input.expectedSha, "Invalid expected commit");
+    const current = async () => {
+      const read = await this.write(repositoryUrl, "GET", `git/ref/${ref}`);
+      if (read.status === 404) return null;
+      if (!read.data) this.refused(read.status);
+      return gitSha(object(read.data.object).sha);
+    };
+    if ((await current()) !== expected) throw new GitHubRefConflictError();
+    const result = await this.write(repositoryUrl, "PATCH", `git/refs/${ref}`, {
+      sha: commit,
+      force: false,
+    });
+    if (!result.data) {
+      // 422 is a non-fast-forward or a protected branch refusal; 409 a
+      // concurrent ref update.
+      if (result.status === 422 || result.status === 409) {
+        if ((await current()) !== expected) throw new GitHubRefConflictError();
+        throw new DomainError("CONFLICT", "GitHub refused the branch update", 409, {
+          reason: "update_rejected",
+        });
+      }
+      this.refused(result.status);
+    }
+    if (gitSha(object(result.data.object).sha) !== commit)
+      invalid("GitHub returned a different branch commit");
+  }
+}
+
+/**
+ * The provider for a source: an installation-authenticated one when the source
+ * has a GitHub App installation, otherwise anonymous public access.
+ */
+export function selectGitSourceProvider(
+  source: { installationId: number | null },
+  options: { app: GitHubApp | null; fetcher?: typeof fetch },
+): GitSourceProvider {
+  if (source.installationId === null)
+    return new PublicGitHubSourceProvider(options.fetcher);
+  if (!options.app)
+    throw new DomainError(
+      "SERVICE_UNAVAILABLE",
+      "The GitHub App is not configured for this deployment",
+      503,
+    );
+  return new AuthenticatedGitHubSourceProvider(options.app, source.installationId);
 }
