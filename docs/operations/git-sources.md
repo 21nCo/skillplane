@@ -113,9 +113,32 @@ snapshots over 20 MiB expanded, and fetches exceeding 90 seconds. Individual mal
 Credential detection is a bounded check for known patterns, not a complete secret
 scanner; only public repositories are accepted and source bytes remain private.
 
-Private Git credentials, webhooks, automatic schedules, and non-GitHub providers
-are later extensions. No credentials or repository contents are stored in source
-configuration or preview records.
+Webhooks, automatic schedules, and non-GitHub providers are later extensions.
+No credentials or repository contents are stored in source configuration or
+preview records.
+
+## GitHub App authentication
+
+Private repositories are read through the Skillplane GitHub App, never with
+personal access tokens. A deployment that uses the App sets three Worker
+secrets with `wrangler secret put`, never as `vars`, in a committed Wrangler
+file or in the database (`GITHUB_APP_SECRET_NAMES` in `@skillplane/config`):
+
+| Secret                      | Value                                                       |
+| --------------------------- | ----------------------------------------------------------- |
+| `GITHUB_APP_ID`             | The App ID (or client ID) used as the App JWT issuer        |
+| `GITHUB_APP_PRIVATE_KEY`    | The App private key PEM; escaped `\n` newlines are accepted |
+| `GITHUB_APP_WEBHOOK_SECRET` | The webhook signing secret, at least 32 characters          |
+
+Without them, public sources keep working anonymously. With an installation,
+Skillplane signs a short-lived RS256 App JWT and mints an installation token
+limited to the source's repository with `contents: read` (linked sync writes
+use a separate `contents: write` token). Tokens are kept only in Worker memory
+until five minutes before they expire and never appear in errors, logs or audit
+rows. A removed, suspended or wrongly scoped installation fails the sync with
+`GIT_SOURCE_AUTH_FAILED` (`reason: auth_failed`) and keeps the source, its runs,
+bindings and versions; reconnecting the installation restores syncing.
+Binding installations to workspaces is not part of this change.
 
 ## API
 

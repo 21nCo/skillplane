@@ -509,7 +509,13 @@ describe("Git source persistence and recovery", () => {
       providerFailure = null;
     }
     const revoked = await sources.get(owner, s.id);
-    expect(revoked.source).toEqual(before.source);
+    // Apply takes a sync lease, which advances the revision; the source's
+    // configuration and archive state are unchanged.
+    expect(revoked.source).toEqual({
+      ...before.source,
+      revision: expect.any(Number) as number,
+      updatedAt: expect.any(String) as string,
+    });
     expect(revoked.runs[0]).toMatchObject({
       id: retryPreview.id,
       status: "partial",
