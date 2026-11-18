@@ -2,6 +2,7 @@ import { createHash, generateKeyPairSync, randomBytes } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   AuthenticatedGitHubSourceProvider,
+  GitHubRefConflictError,
   gitSourceConfig,
   PublicGitHubSourceProvider,
 } from "./git-source-provider.js";
@@ -656,5 +657,75 @@ describe("authenticated GitHub source provider", () => {
     );
     await done.provider.updateRef(repositoryUrl, update);
     expect(done.seen).toEqual(["GET /git/ref/heads/main"]);
+  });
+
+  it("keeps the original error after a lost update response unless the branch landed", async () => {
+    const update = { branch: "main", commitSha: next, expectedSha: head };
+    const other = "e".repeat(40);
+    // The mutation response is lost (502) and the branch then sits at a third
+    // commit: the original retryable 503, not stale_ref.
+    let reads = 0;
+    const moved = provider((request) =>
+      request === "GET "
+        ? repo()
+        : request === "GET /git/ref/heads/main"
+          ? ref(reads++ === 0 ? head : other)
+          : request === "POST /graphql"
+            ? new Response("{}", { status: 502 })
+            : undefined,
+    );
+    const lost = moved.provider.updateRef(repositoryUrl, update);
+    await expect(lost).rejects.toMatchObject({
+      code: "SERVICE_UNAVAILABLE",
+      status: 503,
+    });
+    await expect(lost).rejects.not.toBeInstanceOf(GitHubRefConflictError);
+    // The retry's first read reports the move as stale_ref.
+    await expect(
+      moved.provider.updateRef(repositoryUrl, update),
+    ).rejects.toBeInstanceOf(GitHubRefConflictError);
+    // A re-read that fails, here with lost access, is folded into the original
+    // error instead of replacing it.
+    let probes = 0,
+      hiddenReads = 0;
+    const hidden = provider((request) =>
+      request === "GET "
+        ? probes++ === 0
+          ? repo()
+          : undefined
+        : request === "GET /git/ref/heads/main"
+          ? hiddenReads++ === 0
+            ? ref(head)
+            : undefined
+          : request === "POST /graphql"
+            ? new Response("{}", { status: 502 })
+            : undefined,
+    );
+    const folded = hidden.provider.updateRef(repositoryUrl, update);
+    await expect(folded).rejects.toMatchObject({ code: "SERVICE_UNAVAILABLE" });
+    await expect(folded).rejects.not.toBeInstanceOf(GitHubAuthFailedError);
+    expect(hidden.seen).toEqual([
+      "GET /git/ref/heads/main",
+      "GET ",
+      "POST /graphql",
+      "GET /git/ref/heads/main",
+      "GET ",
+    ]);
+  });
+
+  it("rejects an invalid expected commit before calling GitHub", async () => {
+    const none = provider(() => undefined);
+    await expect(
+      none.provider.updateRef(repositoryUrl, {
+        branch: "main",
+        commitSha: next,
+        expectedSha: "not-a-commit",
+      }),
+    ).rejects.toMatchObject({
+      code: "VALIDATION_FAILED",
+      status: 400,
+      message: "Invalid expected commit",
+    });
+    expect(none.seen).toEqual([]);
   });
 });

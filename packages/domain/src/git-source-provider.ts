@@ -838,20 +838,35 @@ export class AuthenticatedGitHubSourceProvider extends GitHubSnapshotProvider {
    * `beforeOid`, so a concurrent move of any kind, including a reset to an
    * older commit, is refused instead of overwritten.
    *
-   * Outcomes:
-   * - Success when the update applies, or when the branch is already at
-   *   `commitSha` before the mutation or after a lost or refused response (a
-   *   retry after a lost response is idempotent).
-   * - GitHubRefConflictError (CONFLICT 409, reason `stale_ref`) when the
-   *   branch is missing or points at any commit other than `expectedSha` or
-   *   `commitSha`; the caller refreshes and retries.
-   * - DomainError CONFLICT 409 with reason `update_rejected` when GitHub
-   *   refuses the update and the branch is still at `expectedSha` (for
-   *   example a protected branch); refreshing does not help.
-   * - DomainError SERVICE_UNAVAILABLE 503 on a rate limit or a GitHub outage
-   *   or rejected request; retry later.
-   * - GitHubAuthFailedError (GIT_SOURCE_AUTH_FAILED) when the installation is
-   *   revoked or the repository is no longer visible to it.
+   * Outcomes, by where they arise:
+   * - DomainError VALIDATION_FAILED 400 for an invalid `branch`, `commitSha`,
+   *   `expectedSha` or `repositoryUrl` (before any request), or for a
+   *   malformed GitHub answer: a branch SHA that is not a commit SHA, a
+   *   repository without `node_id`, invalid JSON or an oversized body.
+   * - Before the mutation, the branch is read: already at `commitSha` is
+   *   success with no mutation (an idempotent retry); missing or at any
+   *   commit other than `expectedSha` is GitHubRefConflictError (CONFLICT
+   *   409, reason `stale_ref`); the caller refreshes and retries.
+   * - The mutation applies: success.
+   * - GitHub answers the mutation with GraphQL errors (refused): the branch
+   *   is read again. At `commitSha` is success; missing or at a third commit
+   *   is `stale_ref`; still at `expectedSha` is SERVICE_UNAVAILABLE 503 for a
+   *   `RATE_LIMITED` error (retry later), otherwise DomainError CONFLICT 409
+   *   with reason `update_rejected` (for example a protected branch;
+   *   refreshing does not help).
+   * - The mutation response is lost or fails (a transport error, timeout,
+   *   non-2xx status or malformed body): the branch is read again. At
+   *   `commitSha` is success (the update landed); anything else, including a
+   *   missing branch or a third commit, rethrows the original error, usually
+   *   a retryable SERVICE_UNAVAILABLE 503, and a failed re-read is folded
+   *   into that error. A retry then reports `stale_ref` from its first read
+   *   if the branch moved. An auth failure of the mutation itself (or an
+   *   unexpected non-domain error) is rethrown without a re-read.
+   * - Any other failure of a read before the mutation or after a refusal,
+   *   including minting its token, is SERVICE_UNAVAILABLE 503 (rate limit,
+   *   outage, timeout, redirect or rejected request; retry later) or
+   *   GitHubAuthFailedError (GIT_SOURCE_AUTH_FAILED) when the installation
+   *   is revoked or the repository is no longer visible to it.
    */
   async updateRef(
     repositoryUrl: string,
