@@ -1,0 +1,19 @@
+packages/domain/src/git-source-provider.ts
+  s_004180eea98a2e::t_1c6a59f93b21fa 839-854
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d25665e2009d65b505e2e3b813ab4be2df91795d",
+  "prompts": {},
+  "sessions": {
+    "s_004180eea98a2e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8c237e41-cefd-4de3-8446-39034c83830c",
+        "model": "unknown"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
