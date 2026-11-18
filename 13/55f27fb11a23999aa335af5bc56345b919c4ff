@@ -1,0 +1,19 @@
+docs/operations/git-sources.md
+  s_e4c49eb82b5b4f::t_0b5963282223b3 122-164
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1355f27fb11a23999aa335af5bc56345b919c4ff",
+  "prompts": {},
+  "sessions": {
+    "s_e4c49eb82b5b4f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_e4c49eb82b5b4f",
+        "model": "unknown"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
