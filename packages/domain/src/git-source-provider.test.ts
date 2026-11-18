@@ -904,6 +904,69 @@ describe("authenticated GitHub source provider", () => {
     expect(landed.seen.at(-1)).toBe("GET /git/ref/heads/main");
   });
 
+  it("treats a malformed GraphQL envelope as a malformed update response", async () => {
+    const update = { branch: "main", commitSha: next, expectedSha: head };
+    const sequence = [
+      "MINT",
+      "GET /git/ref/heads/main",
+      "GET ",
+      "POST /graphql",
+      "GET /git/ref/heads/main",
+    ];
+    const updateRefs = { updateRefs: { clientMutationId: null } };
+    // (a) errors is a string, (b) errors is an object, (d) data is not an
+    // object: each is malformed even beside a valid updateRefs result, so
+    // the branch is re-read and, still at expectedSha, VALIDATION_FAILED.
+    for (const body of [
+      { errors: "unexpected error", data: updateRefs },
+      { errors: {}, data: updateRefs },
+      { data: "x" },
+    ]) {
+      const unchanged = provider((request) =>
+        request === "GET "
+          ? repo()
+          : request === "GET /git/ref/heads/main"
+            ? ref(head)
+            : request === "POST /graphql"
+              ? Response.json(body)
+              : undefined,
+      );
+      await expect(
+        unchanged.provider.updateRef(repositoryUrl, update),
+      ).rejects.toMatchObject({ code: "VALIDATION_FAILED", status: 400 });
+      expect(unchanged.seen).toEqual(sequence);
+    }
+    // (c) The recovery re-read finds the new commit: the update landed.
+    let reads = 0;
+    const landed = provider((request) =>
+      request === "GET "
+        ? repo()
+        : request === "GET /git/ref/heads/main"
+          ? ref(reads++ === 0 ? head : next)
+          : request === "POST /graphql"
+            ? Response.json({ errors: "unexpected error", data: updateRefs })
+            : undefined,
+    );
+    await expect(
+      landed.provider.updateRef(repositoryUrl, update),
+    ).resolves.toBeUndefined();
+    expect(landed.seen).toEqual(sequence);
+    // (e) errors: null with a valid updateRefs result applies, no re-read.
+    const applied = provider((request) =>
+      request === "GET "
+        ? repo()
+        : request === "GET /git/ref/heads/main"
+          ? ref(head)
+          : request === "POST /graphql"
+            ? Response.json({ errors: null, data: updateRefs })
+            : undefined,
+    );
+    await expect(
+      applied.provider.updateRef(repositoryUrl, update),
+    ).resolves.toBeUndefined();
+    expect(applied.seen).toEqual(sequence.slice(0, 4));
+  });
+
   it("rejects an invalid expected commit before calling GitHub", async () => {
     const none = provider(() => undefined);
     await expect(

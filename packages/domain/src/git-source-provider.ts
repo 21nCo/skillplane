@@ -851,8 +851,9 @@ export class AuthenticatedGitHubSourceProvider extends GitHubSnapshotProvider {
    *   success with no mutation (an idempotent retry); missing or at any
    *   commit other than `expectedSha` is GitHubRefConflictError (CONFLICT
    *   409, reason `stale_ref`); the caller refreshes and retries.
-   * - The mutation applies (a 2xx answer with no GraphQL errors and a
-   *   non-null `data.updateRefs` object): success, with no re-read.
+   * - The mutation applies (a 2xx answer whose GraphQL `errors` is absent,
+   *   null or empty and whose `data.updateRefs` is a non-null object):
+   *   success, with no re-read.
    * - GitHub answers the mutation with GraphQL errors (refused): the branch
    *   is read again. At `commitSha` is success; missing or at a third commit
    *   is `stale_ref`; still at `expectedSha` is SERVICE_UNAVAILABLE 503 for a
@@ -865,15 +866,16 @@ export class AuthenticatedGitHubSourceProvider extends GitHubSnapshotProvider {
    *   still at `expectedSha` is SERVICE_UNAVAILABLE 503 (retry later).
    * - The mutation response is lost or fails (a transport error, timeout,
    *   non-2xx status, or a malformed body: an empty body, invalid JSON, an
-   *   oversized body or a non-object GraphQL `errors` entry): the branch is
-   *   read again. At `commitSha` is success (the update landed); a re-read
-   *   that confirms lost access (a revoked installation or a hidden
-   *   repository) is GitHubAuthFailedError; anything else, including a
-   *   missing branch, a third commit or a re-read that fails for another
-   *   reason (a malformed re-read included), rethrows the original error:
-   *   usually a retryable SERVICE_UNAVAILABLE 503, or VALIDATION_FAILED 400
-   *   for a malformed mutation response. A retry then reports `stale_ref`
-   *   from its first read if the branch moved. An auth failure of the
+   *   oversized body, a GraphQL `errors` member that is not an array, a
+   *   non-object `errors` entry or a `data` member that is not an object):
+   *   the branch is read again. At `commitSha` is success (the update
+   *   landed); a re-read that confirms lost access (a revoked installation
+   *   or a hidden repository) is GitHubAuthFailedError; anything else,
+   *   including a missing branch, a third commit or a re-read that fails for
+   *   another reason (a malformed re-read included), rethrows the original
+   *   error: usually a retryable SERVICE_UNAVAILABLE 503, or
+   *   VALIDATION_FAILED 400 for a malformed mutation response. A retry then
+   *   reports `stale_ref` from its first read if the branch moved. An auth failure of the
    *   mutation itself (or an unexpected non-domain error) is rethrown
    *   without a re-read.
    * - Any other failure of a read before the mutation or after a refusal or
@@ -937,16 +939,16 @@ export class AuthenticatedGitHubSourceProvider extends GitHubSnapshotProvider {
         },
       );
       if (!result.data) throw rejected();
-      // Every GraphQL errors entry must be an object; a malformed entry is a
-      // malformed response even after a RATE_LIMITED one.
-      const errors = Array.isArray(result.data.errors)
-        ? result.data.errors.map(object)
-        : [];
-      const data = result.data.data;
-      const payload =
-        data && typeof data === "object" && !Array.isArray(data)
-          ? (data as Record<string, unknown>).updateRefs
-          : null;
+      // Validate the whole GraphQL envelope before classifying: `errors` is
+      // absent, null or an array of objects (a malformed entry is malformed
+      // even after a RATE_LIMITED one), and `data` is absent, null or an
+      // object. Anything else is a malformed response.
+      const rawErrors = result.data.errors,
+        rawData = result.data.data;
+      if (rawErrors != null && !Array.isArray(rawErrors))
+        invalid("GitHub returned invalid data");
+      const errors = rawErrors == null ? [] : (rawErrors as unknown[]).map(object);
+      const payload = rawData == null ? null : object(rawData).updateRefs;
       // Only an error-free answer carrying the mutation's result confirms the
       // move; any other 200 envelope is reconciled by reading the branch.
       outcome =
