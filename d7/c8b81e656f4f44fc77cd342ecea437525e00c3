@@ -1,0 +1,21 @@
+packages/domain/src/git-source-provider.test.ts
+  s_694bc67c52c24d::t_9206297d5c22d3 907-969
+packages/domain/src/git-source-provider.ts
+  s_694bc67c52c24d::t_d87d20b545b6dd 854-856,869-878,942-951
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d7c8b81e656f4f44fc77cd342ecea437525e00c3",
+  "prompts": {},
+  "sessions": {
+    "s_694bc67c52c24d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4b2099ab-bbe2-4f69-bd06-ef06ce8ae29a",
+        "model": "unknown"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
