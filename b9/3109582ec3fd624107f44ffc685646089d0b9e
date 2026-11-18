@@ -1,0 +1,55 @@
+packages/domain/src/git-source-provider.ts
+  s_0b0647615a23f7::t_a9e41d513d35f5 16-22,139-150,154,176-178,182,191-192,216,469-470,473,490-850
+packages/domain/tests/fake-github.ts
+  s_0b0647615a23f7::t_f6844d629d983d 1-374
+packages/observability/src/redaction.ts
+  s_e16066b88d23c0::t_06c9105b9a85c5 22-23,25
+packages/config/src/index.test.ts
+  s_0b0647615a23f7::t_17180fe8e28b39 1-2,6-7,571-640
+packages/config/src/index.ts
+  s_0b0647615a23f7::t_3fc1aff79f1a28 62-64,984-1046
+packages/domain/src/errors.ts
+  s_0b0647615a23f7::t_3894c25661196f 10
+packages/domain/src/git-sources.ts
+  s_0b0647615a23f7::t_134543ad05febb 17,1124-1128
+packages/domain/src/github-app.test.ts
+  s_0b0647615a23f7::t_04ee1debf4ccaa 1-318
+packages/domain/src/github-app.ts
+  s_0b0647615a23f7::t_0790d4ede64599 1-438
+packages/domain/src/index.ts
+  s_0b0647615a23f7::t_54aded945cf259 36
+packages/domain/tests/integration/git-sources.integration.test.ts
+  s_0b0647615a23f7::t_81c4164a5c4282 23,35-36,39,493-526
+packages/domain/tests/integration/github-app.integration.test.ts
+  s_0b0647615a23f7::t_538d6df2ca0c72 1-207
+packages/domain/tests/security/github-app.security.test.ts
+  s_0b0647615a23f7::t_567d17373ccfdf 1-137
+packages/observability/src/redaction.test.ts
+  s_0b0647615a23f7::t_aed43872f4a6f9 30-40
+scripts/worker-runtime-smoke.mjs
+  s_0b0647615a23f7::t_f0af9f7bcdb4e9 2-3,8,186-306,310
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b93109582ec3fd624107f44ffc685646089d0b9e",
+  "prompts": {},
+  "sessions": {
+    "s_0b0647615a23f7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0aafa1b2-a7f2-4512-9059-2cef1b423535",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    },
+    "s_e16066b88d23c0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1ee08-d352-72e1-843b-08751a4aac21",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
