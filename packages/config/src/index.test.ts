@@ -1,6 +1,10 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   ConfigError,
+  GITHUB_APP_SECRET_NAMES,
+  parseGitHubAppConfig,
   parseRuntimeConfig,
   safeConfigDiagnostic,
   type RuntimeBindings,
@@ -562,5 +566,79 @@ describe("parseRuntimeConfig", () => {
       code: "CONFIG_INVALID",
       fields: ["RUNTIME_ENV"],
     });
+  });
+});
+
+describe("GitHub App secrets", () => {
+  // Armor is assembled at runtime and the body is a readable placeholder, so no
+  // committed literal looks like a key; the parser only checks the PEM shape.
+  const armor = (edge: "BEGIN" | "END") => `-----${edge} RSA ` + "PRIVATE KEY-----";
+  const pem = [armor("BEGIN"), "testkeybody", armor("END"), ""].join("\n");
+  const valid = {
+    GITHUB_APP_ID: "123456",
+    GITHUB_APP_PRIVATE_KEY: pem,
+    GITHUB_APP_WEBHOOK_SECRET: "w".repeat(40),
+  };
+
+  it("is optional so public Git sources work without an App", () => {
+    expect(parseGitHubAppConfig({})).toBeNull();
+    expect(parseGitHubAppConfig({ GITHUB_APP_ID: "" })).toBeNull();
+  });
+
+  it("parses the three Worker secrets and normalizes an escaped-newline key", () => {
+    expect(
+      parseGitHubAppConfig({
+        ...valid,
+        GITHUB_APP_PRIVATE_KEY: pem.replaceAll("\n", "\\n"),
+      }),
+    ).toEqual({
+      appId: "123456",
+      privateKeyPem: pem.trim(),
+      webhookSecret: "w".repeat(40),
+    });
+  });
+
+  it("rejects a partial or malformed set naming only the secret names", () => {
+    for (const [bindings, fields] of [
+      [
+        { GITHUB_APP_ID: "123456" },
+        ["GITHUB_APP_PRIVATE_KEY", "GITHUB_APP_WEBHOOK_SECRET"],
+      ],
+      [{ ...valid, GITHUB_APP_ID: "12 34" }, ["GITHUB_APP_ID"]],
+      [
+        { ...valid, GITHUB_APP_PRIVATE_KEY: "ghs_not-a-key" },
+        ["GITHUB_APP_PRIVATE_KEY"],
+      ],
+      [{ ...valid, GITHUB_APP_WEBHOOK_SECRET: "short" }, ["GITHUB_APP_WEBHOOK_SECRET"]],
+    ] as const) {
+      let error: unknown;
+      try {
+        parseGitHubAppConfig(bindings);
+      } catch (caught) {
+        error = caught;
+      }
+      expect(error).toBeInstanceOf(ConfigError);
+      expect(safeConfigDiagnostic(error)).toEqual({ code: "CONFIG_INVALID", fields });
+      expect(JSON.stringify(error) + String(error)).not.toMatch(
+        /ghs_|testkeybody|w{40}/u,
+      );
+    }
+  });
+
+  it("is never declared as a var in a committed Wrangler configuration", () => {
+    const root = fileURLToPath(new URL("../../../", import.meta.url));
+    const files = [
+      "app/wrangler.jsonc",
+      "app/wrangler.auth.jsonc",
+      "mcp/wrangler.jsonc",
+      "docs/wrangler.jsonc",
+      "deployment/wrangler/app.development.json",
+      "deployment/wrangler/mcp.development.json",
+    ];
+    for (const file of files) {
+      const text = readFileSync(`${root}${file}`, "utf8");
+      for (const name of Object.values(GITHUB_APP_SECRET_NAMES))
+        expect(text, `${file} declares ${name}`).not.toContain(name);
+    }
   });
 });

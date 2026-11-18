@@ -14,6 +14,7 @@ import {
   type GitSourceConfig,
   type GitSourceProvider,
 } from "./git-source-provider.js";
+import { isGitHubAuthFailed } from "./github-app.js";
 interface Mutation {
   principal: Principal;
   requestId: string;
@@ -33,7 +34,14 @@ interface SourceRow {
   sync_expires_at: Date | null;
   created_at: Date;
   updated_at: Date;
+  auth_failed: boolean;
 }
+// GitHub authentication state of a source. Until SKI-57 adds a source state
+// column, it is derived from the latest of the source's auth_failed, previewed
+// and synced audit events: a revoked-access marker holds until the next
+// successful preview or apply.
+export type GitSourceAuthStatus = "ok" | "auth_failed";
+const SOURCE_COLUMNS = `s.*, COALESCE((SELECT e.event_type='skill_source.auth_failed' FROM audit_events e WHERE e.workspace_id=s.workspace_id AND e.resource_type='skill_source' AND e.resource_id=s.id AND e.event_type IN ('skill_source.auth_failed','skill_source.previewed','skill_source.synced') ORDER BY e.occurred_at DESC,e.id DESC LIMIT 1),false) AS auth_failed`;
 export interface GitSource {
   id: string;
   workspaceId: string;
@@ -44,6 +52,7 @@ export interface GitSource {
   revision: number;
   archivedAt: string | null;
   updatedAt: string;
+  authStatus: GitSourceAuthStatus;
 }
 // Active bindings per source; repository-wide discovery is bounded to the same
 // count, so a stored plan holds at most twice this many entries.
@@ -73,6 +82,7 @@ function record(r: SourceRow): GitSource {
     revision: r.revision,
     archivedAt: r.archived_at?.toISOString() ?? null,
     updatedAt: r.updated_at.toISOString(),
+    authStatus: r.auth_failed ? "auth_failed" : "ok",
   };
 }
 interface Binding {
@@ -170,6 +180,28 @@ export class GitSourceService {
       metadata,
     });
   }
+  // Revoked GitHub App access leaves one machine-readable, source-scoped
+  // marker in its own transaction, without touching the source row, its
+  // bindings, versions or skills. get and list derive authStatus from it (see
+  // SOURCE_COLUMNS) until SKI-57's source state column replaces it. A failed
+  // marker write never masks the typed auth_failed error. An apply writes it
+  // only while it still holds its lease (see apply).
+  private authFailedAudit(c: PoolClient, m: Mutation, sourceId: string) {
+    return insertPrincipalAudit(c, m.principal, {
+      eventType: "skill_source.auth_failed",
+      action: "workspace:update",
+      outcome: "error",
+      requestId: m.requestId,
+      resourceType: "skill_source",
+      resourceId: sourceId,
+      metadata: { reason: "auth_failed" },
+    });
+  }
+  private async markAuthFailed(m: Mutation, sourceId: string) {
+    await this.transaction(m, (c) => this.authFailedAudit(c, m, sourceId)).catch(
+      () => undefined,
+    );
+  }
   private async row(
     p: Principal,
     id: string,
@@ -178,7 +210,7 @@ export class GitSourceService {
   ) {
     authorize(p, "skills:read");
     const r = await c.query<SourceRow>(
-      `SELECT * FROM skill_sources WHERE workspace_id=$1 AND id=$2 ${lock ? "FOR UPDATE" : ""}`,
+      `SELECT ${SOURCE_COLUMNS} FROM skill_sources s WHERE s.workspace_id=$1 AND s.id=$2 ${lock ? "FOR UPDATE OF s" : ""}`,
       [p.workspaceId, id],
     );
     if (!r.rows[0]) throw new DomainError("NOT_FOUND", "Source was not found", 404);
@@ -189,7 +221,7 @@ export class GitSourceService {
     if (cursor && cursor.length > 200)
       throw new DomainError("VALIDATION_FAILED", "Invalid source cursor", 400);
     const r = await this.pool.query<SourceRow>(
-      "SELECT * FROM skill_sources WHERE workspace_id=$1 AND ($2::text IS NULL OR id>$2) ORDER BY id LIMIT 51",
+      `SELECT ${SOURCE_COLUMNS} FROM skill_sources s WHERE s.workspace_id=$1 AND ($2::text IS NULL OR s.id>$2) ORDER BY s.id LIMIT 51`,
       [p.workspaceId, cursor],
     );
     return {
@@ -231,7 +263,7 @@ export class GitSourceService {
       id = `source:${await hashIdempotentRequest({ workspace: m.principal.workspaceId, actor: m.principal.actorId, key })}`;
     return this.transaction(m, async (c) => {
       const r = await c.query<SourceRow>(
-        "INSERT INTO skill_sources(id,workspace_id,repository_url,ref,ref_policy,skill_path,creation_hash) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(id) DO UPDATE SET id=skill_sources.id RETURNING *",
+        `WITH s AS (INSERT INTO skill_sources(id,workspace_id,repository_url,ref,ref_policy,skill_path,creation_hash) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(id) DO UPDATE SET id=skill_sources.id RETURNING *) SELECT ${SOURCE_COLUMNS} FROM s`,
         [
           id,
           m.principal.workspaceId,
@@ -293,7 +325,7 @@ export class GitSourceService {
           409,
         );
       const r = await c.query<SourceRow>(
-        "UPDATE skill_sources SET ref=$3,ref_policy=$4,archived_at=CASE WHEN $5::boolean THEN COALESCE(archived_at,now()) ELSE NULL END,revision=revision+1,updated_at=now() WHERE workspace_id=$1 AND id=$2 RETURNING *",
+        `WITH s AS (UPDATE skill_sources SET ref=$3,ref_policy=$4,archived_at=CASE WHEN $5::boolean THEN COALESCE(archived_at,now()) ELSE NULL END,revision=revision+1,updated_at=now() WHERE workspace_id=$1 AND id=$2 RETURNING *) SELECT ${SOURCE_COLUMNS} FROM s`,
         [m.principal.workspaceId, m.sourceId, config.ref, config.refPolicy, m.archived],
       );
       await this.audit(c, m, row.id, "updated", { archived: m.archived });
@@ -410,7 +442,12 @@ export class GitSourceService {
     const source = record(await this.row(m.principal, m.sourceId));
     if (source.archivedAt)
       throw new DomainError("CONFLICT", "Restore the source before syncing", 409);
-    const snapshot = await this.provider.snapshot(this.config(source)),
+    const snapshot = await this.provider
+        .snapshot(this.config(source))
+        .catch(async (error: unknown) => {
+          if (isGitHubAuthFailed(error)) await this.markAuthFailed(m, source.id);
+          throw error;
+        }),
       bindings = await this.bindings(m.principal, source.id);
     // Slugs are unique across kinds, so instructions stay in the catalog as conflicts.
     const catalog = await this.pool.query<{ slug: string; id: string; kind: string }>(
@@ -1120,10 +1157,20 @@ export class GitSourceService {
             m.principal.workspaceId,
             source.id,
             run.id,
-            "Source sync could not complete; retry this preview",
+            // Revoked App access keeps the run, bindings and versions; the
+            // source works again once the installation is reconnected.
+            isGitHubAuthFailed(error)
+              ? "GitHub App access to the repository was revoked; reconnect the installation and retry"
+              : "Source sync could not complete; retry this preview",
           ],
         );
       }).catch(() => undefined);
+      // Fenced: an apply whose lease expired or was taken over never marks a
+      // source that a newer apply may have recovered.
+      if (isGitHubAuthFailed(error))
+        await fenced((c) => this.authFailedAudit(c, m, source.id)).catch(
+          () => undefined,
+        );
       throw error;
     } finally {
       await this.transaction(m, async (c) => {

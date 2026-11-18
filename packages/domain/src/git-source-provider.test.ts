@@ -1,6 +1,12 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, generateKeyPairSync, randomBytes } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { gitSourceConfig, PublicGitHubSourceProvider } from "./git-source-provider.js";
+import {
+  AuthenticatedGitHubSourceProvider,
+  GitHubRefConflictError,
+  gitSourceConfig,
+  PublicGitHubSourceProvider,
+} from "./git-source-provider.js";
+import { GitHubApp, GitHubAuthFailedError } from "./github-app.js";
 const sha = "a".repeat(40),
   treeSha = "b".repeat(40);
 function fixture(
@@ -525,4 +531,584 @@ describe("public GitHub source provider", () => {
     ).rejects.toThrow("20 MiB");
     expect(f.calls.length).toBeLessThanOrEqual(12);
   }, 30000);
+});
+
+describe("authenticated GitHub source provider", () => {
+  const appKey = generateKeyPairSync("rsa", { modulusLength: 2048 })
+    .privateKey.export({ type: "pkcs1", format: "pem" })
+    .toString();
+  const repositoryUrl = "https://github.com/acme/skills";
+  const head = "c".repeat(40),
+    next = "d".repeat(40);
+
+  // Mints any requested token (unless `mint` answers the nth mint itself) and
+  // answers repository requests through `route` (method and path after
+  // /repos/acme/skills, or "POST /graphql"); a null route answer is a
+  // transport failure. `seen` lists repository requests and "MINT" for each
+  // token mint.
+  function provider(
+    route: (request: string, body: string) => Response | null | undefined,
+    mint?: (count: number) => Response | undefined,
+  ) {
+    const seen: string[] = [];
+    let mints = 0;
+    const fetcher: typeof fetch = async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/access_tokens")) {
+        seen.push("MINT");
+        const answer = mint?.(++mints);
+        if (answer) return answer;
+        const body = JSON.parse(String(init?.body)) as {
+          permissions: { contents: string };
+        };
+        return Response.json({
+          token: `ghs_${"1".repeat(36)}`,
+          expires_at: new Date(Date.now() + 3600_000).toISOString(),
+          permissions: body.permissions,
+          repositories: [{ full_name: "acme/skills" }],
+        });
+      }
+      const request = `${init?.method ?? "GET"} ${url.pathname.replace("/repos/acme/skills", "")}`;
+      seen.push(request);
+      const answer = route(request, typeof init?.body === "string" ? init.body : "");
+      if (answer === null) throw new TypeError("network failure");
+      return answer ?? new Response("{}", { status: 404 });
+    };
+    const app = new GitHubApp({ appId: "1", privateKeyPem: appKey }, { fetcher });
+    return { provider: new AuthenticatedGitHubSourceProvider(app, 7), seen };
+  }
+  const repo = () => Response.json({ full_name: "acme/skills", node_id: "R_1" });
+  const ref = (sha: string) => Response.json({ object: { sha, type: "commit" } });
+
+  it("tells a missing object from lost access by probing the repository", async () => {
+    // Visible repository: a 404 after resolution is an incomplete snapshot
+    // and a 404 write is a missing referenced object, neither auth_failed.
+    const visible = provider((request) =>
+      request === "GET "
+        ? repo()
+        : request.startsWith("GET /commits/")
+          ? new Response(head)
+          : undefined,
+    );
+    await expect(
+      visible.provider.snapshot(gitSourceConfig({ repositoryUrl, ref: "main" })),
+    ).rejects.toMatchObject({ code: "SERVICE_UNAVAILABLE" });
+    await expect(
+      visible.provider.createCommit(repositoryUrl, {
+        message: "m",
+        tree: head,
+        parents: [],
+      }),
+    ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+    // Hidden repository: the same 404s are auth_failed.
+    const hidden = provider((request) =>
+      request.startsWith("GET /commits/") ? new Response(head) : undefined,
+    );
+    await expect(
+      hidden.provider.snapshot(gitSourceConfig({ repositoryUrl, ref: "main" })),
+    ).rejects.toBeInstanceOf(GitHubAuthFailedError);
+    await expect(
+      hidden.provider.createCommit(repositoryUrl, {
+        message: "m",
+        tree: head,
+        parents: [],
+      }),
+    ).rejects.toBeInstanceOf(GitHubAuthFailedError);
+  });
+
+  it("decides a refused branch update by where the branch is afterwards", async () => {
+    const update = { branch: "main", commitSha: next, expectedSha: head };
+    const refused = (type: string) =>
+      Response.json({ data: { updateRefs: null }, errors: [{ type, message: "no" }] });
+    // Still at the expected commit: a protected branch or rule refusal.
+    const rule = provider((request) =>
+      request === "GET "
+        ? repo()
+        : request === "GET /git/ref/heads/main"
+          ? ref(head)
+          : request === "POST /graphql"
+            ? refused("UNPROCESSABLE")
+            : undefined,
+    );
+    await expect(rule.provider.updateRef(repositoryUrl, update)).rejects.toMatchObject({
+      code: "CONFLICT",
+      details: { reason: "update_rejected" },
+    });
+    // A GraphQL rate limit is retryable.
+    const limited = provider((request) =>
+      request === "GET "
+        ? repo()
+        : request === "GET /git/ref/heads/main"
+          ? ref(head)
+          : request === "POST /graphql"
+            ? refused("RATE_LIMITED")
+            : undefined,
+    );
+    await expect(
+      limited.provider.updateRef(repositoryUrl, update),
+    ).rejects.toMatchObject({
+      code: "SERVICE_UNAVAILABLE",
+    });
+    // So is one that names a rate limit only in its message.
+    const named = provider((request) =>
+      request === "GET "
+        ? repo()
+        : request === "GET /git/ref/heads/main"
+          ? ref(head)
+          : request === "POST /graphql"
+            ? Response.json({
+                data: { updateRefs: null },
+                errors: [{ type: "FORBIDDEN", message: "API rate limit exceeded" }],
+              })
+            : undefined,
+    );
+    await expect(named.provider.updateRef(repositoryUrl, update)).rejects.toMatchObject(
+      {
+        code: "SERVICE_UNAVAILABLE",
+        status: 503,
+      },
+    );
+    // The update reached GitHub although it answered with an error.
+    let reads = 0;
+    const landed = provider((request) =>
+      request === "GET "
+        ? repo()
+        : request === "GET /git/ref/heads/main"
+          ? ref(reads++ === 0 ? head : next)
+          : request === "POST /graphql"
+            ? new Response("{}", { status: 502 })
+            : undefined,
+    );
+    await expect(
+      landed.provider.updateRef(repositoryUrl, update),
+    ).resolves.toBeUndefined();
+    // A branch already at the new commit needs no mutation.
+    const done = provider((request) =>
+      request === "GET /git/ref/heads/main" ? ref(next) : undefined,
+    );
+    await done.provider.updateRef(repositoryUrl, update);
+    expect(done.seen).toEqual(["MINT", "GET /git/ref/heads/main"]);
+  });
+
+  it("keeps the original error after a lost update response unless the branch landed", async () => {
+    const update = { branch: "main", commitSha: next, expectedSha: head };
+    const other = "e".repeat(40);
+    // The mutation response is lost (502) and the branch then sits at a third
+    // commit: the original retryable 503, not stale_ref.
+    let reads = 0;
+    const moved = provider((request) =>
+      request === "GET "
+        ? repo()
+        : request === "GET /git/ref/heads/main"
+          ? ref(reads++ === 0 ? head : other)
+          : request === "POST /graphql"
+            ? new Response("{}", { status: 502 })
+            : undefined,
+    );
+    const lost = moved.provider.updateRef(repositoryUrl, update);
+    await expect(lost).rejects.toMatchObject({
+      code: "SERVICE_UNAVAILABLE",
+      status: 503,
+    });
+    await expect(lost).rejects.not.toBeInstanceOf(GitHubRefConflictError);
+    // The retry's first read reports the move as stale_ref.
+    await expect(
+      moved.provider.updateRef(repositoryUrl, update),
+    ).rejects.toBeInstanceOf(GitHubRefConflictError);
+  });
+
+  it("reports lost access confirmed by the read after a lost update response", async () => {
+    const update = { branch: "main", commitSha: next, expectedSha: head };
+    // (a) Mutation 502; the recovery read finds no branch and no repository:
+    // the installation lost access, so auth_failed rather than the 502.
+    let probes = 0,
+      hiddenReads = 0;
+    const hidden = provider((request) =>
+      request === "GET "
+        ? probes++ === 0
+          ? repo()
+          : undefined
+        : request === "GET /git/ref/heads/main"
+          ? hiddenReads++ === 0
+            ? ref(head)
+            : undefined
+          : request === "POST /graphql"
+            ? new Response("{}", { status: 502 })
+            : undefined,
+    );
+    await expect(
+      hidden.provider.updateRef(repositoryUrl, update),
+    ).rejects.toBeInstanceOf(GitHubAuthFailedError);
+    expect(hidden.seen).toEqual([
+      "MINT",
+      "GET /git/ref/heads/main",
+      "GET ",
+      "POST /graphql",
+      "GET /git/ref/heads/main",
+      "GET ",
+    ]);
+    // (b) Mutation 502; the recovery read is refused with 401 and the
+    // replacement token cannot be minted (installation removed: 404).
+    let revokedReads = 0;
+    const revoked = provider(
+      (request) =>
+        request === "GET "
+          ? repo()
+          : request === "GET /git/ref/heads/main"
+            ? revokedReads++ === 0
+              ? ref(head)
+              : new Response("{}", { status: 401 })
+            : request === "POST /graphql"
+              ? new Response("{}", { status: 502 })
+              : undefined,
+      (count) => (count > 1 ? new Response("{}", { status: 404 }) : undefined),
+    );
+    await expect(
+      revoked.provider.updateRef(repositoryUrl, update),
+    ).rejects.toBeInstanceOf(GitHubAuthFailedError);
+    expect(revoked.seen).toEqual([
+      "MINT",
+      "GET /git/ref/heads/main",
+      "GET ",
+      "POST /graphql",
+      "GET /git/ref/heads/main",
+      "MINT",
+    ]);
+  });
+
+  it("keeps the original error when the read after a lost update response fails", async () => {
+    const update = { branch: "main", commitSha: next, expectedSha: head };
+    // (c) Mutation 502, recovery read fails in transport: the mutation's 503.
+    let reads = 0;
+    const unreachable = provider((request) =>
+      request === "GET "
+        ? repo()
+        : request === "GET /git/ref/heads/main"
+          ? reads++ === 0
+            ? ref(head)
+            : null
+          : request === "POST /graphql"
+            ? new Response("{}", { status: 502 })
+            : undefined,
+    );
+    await expect(
+      unreachable.provider.updateRef(repositoryUrl, update),
+    ).rejects.toMatchObject({
+      code: "SERVICE_UNAVAILABLE",
+      status: 503,
+      message: "GitHub rejected the request; check its availability or rate limit",
+    });
+    expect(unreachable.seen).toEqual([
+      "MINT",
+      "GET /git/ref/heads/main",
+      "GET ",
+      "POST /graphql",
+      "GET /git/ref/heads/main",
+    ]);
+    // (c) Mutation lost in transport, recovery read answers 503: the
+    // mutation's transport error, not the read's.
+    let outageReads = 0;
+    const outage = provider((request) =>
+      request === "GET "
+        ? repo()
+        : request === "GET /git/ref/heads/main"
+          ? outageReads++ === 0
+            ? ref(head)
+            : new Response("{}", { status: 503 })
+          : request === "POST /graphql"
+            ? null
+            : undefined,
+    );
+    const failed = outage.provider.updateRef(repositoryUrl, update);
+    await expect(failed).rejects.toMatchObject({
+      code: "SERVICE_UNAVAILABLE",
+      status: 503,
+    });
+    await expect(failed).rejects.not.toMatchObject({
+      message: "GitHub rejected the request; check its availability or rate limit",
+    });
+    await expect(failed).rejects.not.toBeInstanceOf(GitHubAuthFailedError);
+    expect(outage.seen).toEqual([
+      "MINT",
+      "GET /git/ref/heads/main",
+      "GET ",
+      "POST /graphql",
+      "GET /git/ref/heads/main",
+    ]);
+  });
+
+  it("reconciles an update answer without an updateRefs result by reading the branch", async () => {
+    const update = { branch: "main", commitSha: next, expectedSha: head };
+    const unconfirmed = () => Response.json({ data: { updateRefs: null } });
+    // The branch did not move: a retryable failure, never success.
+    const unchanged = provider((request) =>
+      request === "GET "
+        ? repo()
+        : request === "GET /git/ref/heads/main"
+          ? ref(head)
+          : request === "POST /graphql"
+            ? unconfirmed()
+            : undefined,
+    );
+    await expect(
+      unchanged.provider.updateRef(repositoryUrl, update),
+    ).rejects.toMatchObject({ code: "SERVICE_UNAVAILABLE", status: 503 });
+    expect(unchanged.seen).toEqual([
+      "MINT",
+      "GET /git/ref/heads/main",
+      "GET ",
+      "POST /graphql",
+      "GET /git/ref/heads/main",
+    ]);
+    // A result without the selected clientMutationId, or with a non-string
+    // one, does not confirm the move either.
+    for (const updateRefs of [{}, { clientMutationId: 5 }]) {
+      const missing = provider((request) =>
+        request === "POST /graphql"
+          ? Response.json({ data: { updateRefs } })
+          : request === "GET "
+            ? repo()
+            : ref(head),
+      );
+      await expect(
+        missing.provider.updateRef(repositoryUrl, update),
+      ).rejects.toMatchObject({ code: "SERVICE_UNAVAILABLE", status: 503 });
+      expect(missing.seen.at(-1)).toBe("GET /git/ref/heads/main");
+    }
+    // The re-read finds the new commit: the update landed.
+    let reads = 0;
+    const landed = provider((request) =>
+      request === "GET "
+        ? repo()
+        : request === "GET /git/ref/heads/main"
+          ? ref(reads++ === 0 ? head : next)
+          : request === "POST /graphql"
+            ? unconfirmed()
+            : undefined,
+    );
+    await expect(
+      landed.provider.updateRef(repositoryUrl, update),
+    ).resolves.toBeUndefined();
+    expect(landed.seen.at(-1)).toBe("GET /git/ref/heads/main");
+  });
+
+  it("treats a non-object GraphQL errors entry as a malformed update response", async () => {
+    const update = { branch: "main", commitSha: next, expectedSha: head };
+    // A RATE_LIMITED entry first must not hide the malformed entry after it.
+    const malformed = () =>
+      Response.json({
+        data: { updateRefs: null },
+        errors: [{ type: "RATE_LIMITED", message: "slow down" }, "oops"],
+      });
+    // The branch did not move: the malformed response's VALIDATION_FAILED,
+    // not the rate limit's 503.
+    const unchanged = provider((request) =>
+      request === "GET "
+        ? repo()
+        : request === "GET /git/ref/heads/main"
+          ? ref(head)
+          : request === "POST /graphql"
+            ? malformed()
+            : undefined,
+    );
+    await expect(
+      unchanged.provider.updateRef(repositoryUrl, update),
+    ).rejects.toMatchObject({ code: "VALIDATION_FAILED", status: 400 });
+    expect(unchanged.seen).toEqual([
+      "MINT",
+      "GET /git/ref/heads/main",
+      "GET ",
+      "POST /graphql",
+      "GET /git/ref/heads/main",
+    ]);
+    // The recovery re-read finds the new commit: the update landed.
+    let reads = 0;
+    const landed = provider((request) =>
+      request === "GET "
+        ? repo()
+        : request === "GET /git/ref/heads/main"
+          ? ref(reads++ === 0 ? head : next)
+          : request === "POST /graphql"
+            ? malformed()
+            : undefined,
+    );
+    await expect(
+      landed.provider.updateRef(repositoryUrl, update),
+    ).resolves.toBeUndefined();
+    expect(landed.seen.at(-1)).toBe("GET /git/ref/heads/main");
+  });
+
+  it("treats a malformed GraphQL envelope as a malformed update response", async () => {
+    const update = { branch: "main", commitSha: next, expectedSha: head };
+    const sequence = [
+      "MINT",
+      "GET /git/ref/heads/main",
+      "GET ",
+      "POST /graphql",
+      "GET /git/ref/heads/main",
+    ];
+    const updateRefs = { updateRefs: { clientMutationId: null } };
+    // (a) errors is a string, (b) errors is an object, (d) data is not an
+    // object: each is malformed even beside a valid updateRefs result, so
+    // the branch is re-read and, still at expectedSha, VALIDATION_FAILED.
+    for (const body of [
+      { errors: "unexpected error", data: updateRefs },
+      { errors: {}, data: updateRefs },
+      { data: "x" },
+    ]) {
+      const unchanged = provider((request) =>
+        request === "GET "
+          ? repo()
+          : request === "GET /git/ref/heads/main"
+            ? ref(head)
+            : request === "POST /graphql"
+              ? Response.json(body)
+              : undefined,
+      );
+      await expect(
+        unchanged.provider.updateRef(repositoryUrl, update),
+      ).rejects.toMatchObject({ code: "VALIDATION_FAILED", status: 400 });
+      expect(unchanged.seen).toEqual(sequence);
+    }
+    // (c) The recovery re-read finds the new commit: the update landed.
+    let reads = 0;
+    const landed = provider((request) =>
+      request === "GET "
+        ? repo()
+        : request === "GET /git/ref/heads/main"
+          ? ref(reads++ === 0 ? head : next)
+          : request === "POST /graphql"
+            ? Response.json({ errors: "unexpected error", data: updateRefs })
+            : undefined,
+    );
+    await expect(
+      landed.provider.updateRef(repositoryUrl, update),
+    ).resolves.toBeUndefined();
+    expect(landed.seen).toEqual(sequence);
+    // (e) errors: null with a valid updateRefs result applies, no re-read.
+    const applied = provider((request) =>
+      request === "GET "
+        ? repo()
+        : request === "GET /git/ref/heads/main"
+          ? ref(head)
+          : request === "POST /graphql"
+            ? Response.json({ errors: null, data: updateRefs })
+            : undefined,
+    );
+    await expect(
+      applied.provider.updateRef(repositoryUrl, update),
+    ).resolves.toBeUndefined();
+    expect(applied.seen).toEqual(sequence.slice(0, 4));
+  });
+
+  it("refuses the all-zero commit, which would delete the branch, before calling GitHub", async () => {
+    const none = provider(() => undefined);
+    await expect(
+      none.provider.updateRef(repositoryUrl, {
+        branch: "main",
+        commitSha: "0".repeat(40),
+        expectedSha: head,
+      }),
+    ).rejects.toMatchObject({ code: "VALIDATION_FAILED", message: "Invalid commit" });
+    expect(none.seen).toEqual([]);
+  });
+
+  it("reconciles an applied update whose 502 answer body cannot be discarded", async () => {
+    const update = { branch: "main", commitSha: next, expectedSha: head };
+    let reads = 0;
+    const landed = provider((request) =>
+      request === "GET "
+        ? repo()
+        : request === "GET /git/ref/heads/main"
+          ? ref(reads++ === 0 ? head : next)
+          : request === "POST /graphql"
+            ? new Response(
+                new ReadableStream({
+                  start(controller) {
+                    controller.error(new TypeError("connection reset"));
+                  },
+                }),
+                { status: 502 },
+              )
+            : undefined,
+    );
+    await expect(
+      landed.provider.updateRef(repositoryUrl, update),
+    ).resolves.toBeUndefined();
+    expect(landed.seen.at(-1)).toBe("GET /git/ref/heads/main");
+  });
+
+  it("uploads the bytes it hashed even if the caller changes its buffer meanwhile", async () => {
+    const content = new TextEncoder().encode("# Skill\n");
+    const blob = provider((request, body) => {
+      if (request !== "POST /git/blobs") return undefined;
+      const bytes = Buffer.from(
+        (JSON.parse(body) as { content: string }).content,
+        "base64",
+      );
+      const id = createHash("sha1")
+        .update(`blob ${String(bytes.length)}\0`)
+        .update(bytes)
+        .digest("hex");
+      return Response.json({ sha: id });
+    });
+    const created = blob.provider.createBlob(repositoryUrl, content);
+    content.fill(0x41);
+    const expected = createHash("sha1").update(`blob 8\0# Skill\n`).digest("hex");
+    await expect(created).resolves.toBe(expected);
+  });
+
+  it("aborts a snapshot as retryable when the probe after a missing blob is unreadable", async () => {
+    const files = fixture(
+      { "SKILL.md": markdown("probe") },
+      { fail: { url: /\/git\/blobs\//u, status: 404 } },
+    );
+    const outcome = (probe: () => Response) => {
+      const fetcher: typeof fetch = async (input, init) => {
+        const url = String(input);
+        if (url.endsWith("/access_tokens"))
+          return Response.json({
+            token: `ghs_${"1".repeat(36)}`,
+            expires_at: new Date(Date.now() + 3600_000).toISOString(),
+            permissions: { contents: "read" },
+            repositories: [{ full_name: "acme/skills" }],
+          });
+        return url.endsWith("/repos/acme/skills")
+          ? probe()
+          : files.fetcher(input, init);
+      };
+      const app = new GitHubApp({ appId: "1", privateKeyPem: appKey }, { fetcher });
+      return new AuthenticatedGitHubSourceProvider(app, 7)
+        .snapshot(gitSourceConfig({ repositoryUrl, ref: "main" }))
+        .catch((error: unknown) => error);
+    };
+    // Unreadable: the whole snapshot fails retryably, no skill is reported.
+    for (const probe of [() => new Response("not json"), () => Response.json([])])
+      expect(await outcome(probe)).toMatchObject({
+        code: "SERVICE_UNAVAILABLE",
+        status: 503,
+      });
+    // Hidden repository: revoked access.
+    expect(await outcome(() => new Response("{}", { status: 404 }))).toBeInstanceOf(
+      GitHubAuthFailedError,
+    );
+    // Visible repository: an incomplete snapshot, also retryable.
+    expect(await outcome(repo)).toMatchObject({ code: "SERVICE_UNAVAILABLE" });
+  });
+
+  it("rejects an invalid expected commit before calling GitHub", async () => {
+    const none = provider(() => undefined);
+    await expect(
+      none.provider.updateRef(repositoryUrl, {
+        branch: "main",
+        commitSha: next,
+        expectedSha: "not-a-commit",
+      }),
+    ).rejects.toMatchObject({
+      code: "VALIDATION_FAILED",
+      status: 400,
+      message: "Invalid expected commit",
+    });
+    expect(none.seen).toEqual([]);
+  });
 });

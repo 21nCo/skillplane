@@ -30,6 +30,7 @@ const focusedSecuritySuites = new Map([
     ["@skillplane/mcp", "tests/security/mcp-mutations.security.test.ts"],
   ],
   ["redaction", ["@skillplane/api", "tests/security/redaction.security.test.ts"]],
+  ["github-app", ["@skillplane/domain", "tests/security/github-app.security.test.ts"]],
   [
     "public-visibility",
     ["@skillplane/api", "tests/security/public-visibility.security.test.ts"],
@@ -43,7 +44,7 @@ if (
   )
 ) {
   process.stderr.write(
-    `Unknown security suite "${filter}". Available suites: amendment-policy, auth, bundle, context-isolation, mcp-mutations, mcp-read, oauth, public-visibility, redaction, tenancy, tenant-foundation, tenant-search\n`,
+    `Unknown security suite "${filter}". Available suites: amendment-policy, auth, bundle, context-isolation, github-app, mcp-mutations, mcp-read, oauth, public-visibility, redaction, tenancy, tenant-foundation, tenant-search\n`,
   );
   process.exit(2);
 }
@@ -108,6 +109,7 @@ const packages =
           "@skillplane/datafn",
           "@skillplane/api",
           "@skillplane/storage",
+          "@skillplane/domain",
           "@skillplane/mcp",
         ];
 

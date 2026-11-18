@@ -20,6 +20,7 @@ import { SkillSearchService } from "../../src/search.js";
 import { GitSourceService } from "../../src/git-sources.js";
 import { createSkillBundle } from "../../src/skill-input.js";
 import type { GitSnapshot } from "../../src/git-source-provider.js";
+import { GitHubAuthFailedError } from "../../src/github-app.js";
 import type { Principal } from "../../src/principal.js";
 // This acceptance suite must fail, never skip, when no test database resolves.
 describe("Git source persistence and recovery", () => {
@@ -31,9 +32,11 @@ describe("Git source persistence and recovery", () => {
   const objects = new TestObjectStorage(),
     storage = new R2BundleRepository(objects);
   let snapshot: GitSnapshot = { commitSha: "a".repeat(40), skills: [] },
-    failProvider = false;
+    failProvider = false,
+    providerFailure: Error | null = null;
   const provider = {
     snapshot: async (_config: unknown, commit?: string) => {
+      if (providerFailure) throw providerFailure;
       if (failProvider) throw new Error("provider unavailable");
       expect(commit ?? snapshot.commitSha).toBe(snapshot.commitSha);
       return snapshot;
@@ -487,10 +490,275 @@ describe("Git source persistence and recovery", () => {
       status: "partial",
       failureMessage: "Source sync could not complete; retry this preview",
     });
+    // Revoked GitHub App access is a typed auth_failed outcome that keeps the
+    // source, its run and the workspace's skills for a retry after reconnecting.
+    const before = await sources.get(owner, s.id);
+    const skillCount = await pool.query(
+      "SELECT count(*)::int AS n FROM skills WHERE workspace_id=$1",
+      [owner.workspaceId],
+    );
+    const counts = async () =>
+      (
+        await pool.query(
+          `SELECT (SELECT count(*)::int FROM skills WHERE workspace_id=$1) AS skills,
+            (SELECT count(*)::int FROM skill_versions WHERE workspace_id=$1) AS versions,
+            (SELECT count(*)::int FROM skill_source_bindings WHERE workspace_id=$1) AS bindings,
+            (SELECT count(*)::int FROM skill_source_runs WHERE workspace_id=$1 AND source_id=$2) AS runs`,
+          [owner.workspaceId, s.id],
+        )
+      ).rows[0];
+    const markers = async () =>
+      (
+        await pool.query<{ outcome: string; metadata: unknown; request_id: string }>(
+          "SELECT outcome,metadata,request_id FROM audit_events WHERE workspace_id=$1 AND resource_type='skill_source' AND resource_id=$2 AND event_type='skill_source.auth_failed' ORDER BY occurred_at,id",
+          [owner.workspaceId, s.id],
+        )
+      ).rows;
+    const countsBefore = await counts();
+    expect(await markers()).toEqual([]);
+    providerFailure = new GitHubAuthFailedError();
+    const previewRequest = m(),
+      applyRequest = m();
+    try {
+      // Preview fails before any write and still leaves one source marker.
+      await expect(
+        sources.preview({ ...previewRequest, sourceId: s.id }),
+      ).rejects.toMatchObject({
+        code: "GIT_SOURCE_AUTH_FAILED",
+        status: 409,
+        details: { reason: "auth_failed" },
+      });
+      expect(await markers()).toEqual([
+        {
+          outcome: "error",
+          metadata: { channel: "app", reason: "auth_failed" },
+          request_id: previewRequest.requestId,
+        },
+      ]);
+      expect((await sources.get(owner, s.id)).source).toEqual({
+        ...before.source,
+        authStatus: "auth_failed",
+      });
+      await expect(
+        sources.apply({ ...applyRequest, sourceId: s.id, runId: retryPreview.id }),
+      ).rejects.toMatchObject({
+        code: "GIT_SOURCE_AUTH_FAILED",
+        status: 409,
+        details: { reason: "auth_failed" },
+      });
+      // A marker that cannot be written never masks the typed error.
+      const auditUnavailable = {
+        query: pool.query.bind(pool),
+        connect: async () => {
+          const client = await pool.connect();
+          return new Proxy(client, {
+            get(target, key) {
+              if (key === "query")
+                return (text: unknown, ...rest: unknown[]) =>
+                  /INSERT INTO audit_events/u.test(
+                    typeof text === "string" ? text : (text as { text: string }).text,
+                  )
+                    ? Promise.reject(new Error("audit store unavailable"))
+                    : (target.query as (...args: unknown[]) => unknown)(text, ...rest);
+              const value: unknown = Reflect.get(target, key, target);
+              return typeof value === "function"
+                ? (value as (...args: unknown[]) => unknown).bind(target)
+                : value;
+            },
+          });
+        },
+      } as unknown as Pool;
+      await expect(
+        new GitSourceService(auditUnavailable, skills, versions, provider).preview({
+          ...m(),
+          sourceId: s.id,
+        }),
+      ).rejects.toMatchObject({ code: "GIT_SOURCE_AUTH_FAILED" });
+    } finally {
+      providerFailure = null;
+    }
+    expect((await markers()).map((row) => row.request_id)).toEqual([
+      previewRequest.requestId,
+      applyRequest.requestId,
+    ]);
+    expect(await counts()).toEqual(countsBefore);
+    const revoked = await sources.get(owner, s.id);
+    // Apply takes a sync lease, which advances the revision; the source's
+    // configuration and archive state are unchanged.
+    expect(revoked.source).toEqual({
+      ...before.source,
+      authStatus: "auth_failed",
+      revision: expect.any(Number) as number,
+      updatedAt: expect.any(String) as string,
+    });
+    expect(revoked.runs[0]).toMatchObject({
+      id: retryPreview.id,
+      status: "partial",
+      failureMessage:
+        "GitHub App access to the repository was revoked; reconnect the installation and retry",
+    });
+    expect(
+      (
+        await pool.query(
+          "SELECT count(*)::int AS n FROM skills WHERE workspace_id=$1",
+          [owner.workspaceId],
+        )
+      ).rows,
+    ).toEqual(skillCount.rows);
     expect(
       (await sources.apply({ ...m(), sourceId: s.id, runId: retryPreview.id })).status,
     ).toBe("complete");
     expect((await sources.get(owner, s.id)).bindings).toHaveLength(0);
+  });
+  it("reports a source's GitHub auth status from its latest preview, apply or auth_failed outcome", async () => {
+    const create = (name: string) =>
+      sources.create({
+        ...m(),
+        config: { repositoryUrl: `https://github.com/a/${name}` },
+        idempotencyKey: crypto.randomUUID(),
+      });
+    // get and list must agree; list pages through the shared test workspace.
+    const status = async (id: string) => {
+      const fromGet = (await sources.get(owner, id)).source.authStatus;
+      let cursor: string | null = null,
+        fromList: string | undefined;
+      do {
+        const page = await sources.list(owner, cursor);
+        fromList ??= page.sources.find((x) => x.id === id)?.authStatus;
+        cursor = page.nextCursor;
+      } while (cursor && fromList === undefined);
+      expect(fromList).toBe(fromGet);
+      return fromGet;
+    };
+    const counts = async () =>
+      (
+        await pool.query(
+          `SELECT (SELECT count(*)::int FROM skills WHERE workspace_id=$1) AS skills,
+            (SELECT count(*)::int FROM skill_versions WHERE workspace_id=$1) AS versions,
+            (SELECT count(*)::int FROM skill_source_bindings WHERE workspace_id=$1) AS bindings,
+            (SELECT count(*)::int FROM skill_source_runs WHERE workspace_id=$1) AS runs`,
+          [owner.workspaceId],
+        )
+      ).rows[0];
+    const revoked = async (run: () => Promise<unknown>) => {
+      providerFailure = new GitHubAuthFailedError();
+      try {
+        await expect(run()).rejects.toMatchObject({
+          code: "GIT_SOURCE_AUTH_FAILED",
+          status: 409,
+          details: { reason: "auth_failed" },
+        });
+      } finally {
+        providerFailure = null;
+      }
+    };
+    snapshot = { commitSha: "e".repeat(40), skills: [] };
+    const recovered = await create("auth-preview"),
+      applied = await create("auth-apply"),
+      sibling = await create("auth-sibling");
+    expect(recovered.authStatus).toBe("ok");
+    for (const x of [recovered, applied, sibling])
+      expect(await status(x.id)).toBe("ok");
+    const pending = await sources.preview({ ...m(), sourceId: recovered.id }),
+      pendingApply = await sources.preview({ ...m(), sourceId: applied.id });
+    const before = await counts(),
+      configBefore = (await sources.get(owner, recovered.id)).source;
+
+    // A preview-only failure marks the source; an apply failure keeps it marked.
+    await revoked(() => sources.preview({ ...m(), sourceId: recovered.id }));
+    expect(await status(recovered.id)).toBe("auth_failed");
+    expect((await sources.get(owner, recovered.id)).source).toEqual({
+      ...configBefore,
+      authStatus: "auth_failed",
+    });
+    await revoked(() =>
+      sources.apply({ ...m(), sourceId: recovered.id, runId: pending.id }),
+    );
+    expect(await status(recovered.id)).toBe("auth_failed");
+    expect((await sources.get(owner, recovered.id)).runs[0]).toMatchObject({
+      id: pending.id,
+      status: "partial",
+      failureMessage:
+        "GitHub App access to the repository was revoked; reconnect the installation and retry",
+    });
+    // A marker that cannot be written still yields the typed error.
+    const auditUnavailable = {
+      query: pool.query.bind(pool),
+      connect: async () => {
+        const client = await pool.connect();
+        return new Proxy(client, {
+          get(target, key) {
+            if (key === "query")
+              return (text: unknown, ...rest: unknown[]) =>
+                /INSERT INTO audit_events/u.test(
+                  typeof text === "string" ? text : (text as { text: string }).text,
+                )
+                  ? Promise.reject(new Error("audit store unavailable"))
+                  : (target.query as (...args: unknown[]) => unknown)(text, ...rest);
+            const value: unknown = Reflect.get(target, key, target);
+            return typeof value === "function"
+              ? (value as (...args: unknown[]) => unknown).bind(target)
+              : value;
+          },
+        });
+      },
+    } as unknown as Pool;
+    await revoked(() =>
+      new GitSourceService(auditUnavailable, skills, versions, provider).preview({
+        ...m(),
+        sourceId: applied.id,
+      }),
+    );
+    expect(await status(applied.id)).toBe("ok");
+    await revoked(() => sources.preview({ ...m(), sourceId: applied.id }));
+    expect(await status(applied.id)).toBe("auth_failed");
+    // Failures change no configuration, binding, version, skill or run count,
+    // and never touch another source in the workspace.
+    expect(await counts()).toEqual(before);
+    expect(await status(sibling.id)).toBe("ok");
+
+    // The next successful preview clears it.
+    await sources.preview({ ...m(), sourceId: recovered.id });
+    expect(await status(recovered.id)).toBe("ok");
+    // So does the next successful apply, without a new preview.
+    expect(
+      (await sources.apply({ ...m(), sourceId: applied.id, runId: pendingApply.id }))
+        .status,
+    ).toBe("complete");
+    expect(await status(applied.id)).toBe("ok");
+    expect(await status(sibling.id)).toBe("ok");
+  });
+  it("never marks a source auth_failed from an apply a newer apply took over", async () => {
+    snapshot = { commitSha: "e".repeat(40), skills: [] };
+    const source = await sources.create({
+      ...m(),
+      config: { repositoryUrl: "https://github.com/a/auth-stale-apply" },
+      idempotencyKey: crypto.randomUUID(),
+    });
+    const run = await sources.preview({ ...m(), sourceId: source.id });
+    // The stale apply's lease expires while it reads GitHub; a newer apply of
+    // the same run then completes before the stale one fails with auth_failed.
+    const stale = new GitSourceService(pool, skills, versions, {
+      snapshot: async () => {
+        await pool.query(
+          "UPDATE skill_sources SET sync_expires_at=clock_timestamp()-interval '1 second' WHERE id=$1",
+          [source.id],
+        );
+        const newer = await sources.apply({
+          ...m(),
+          sourceId: source.id,
+          runId: run.id,
+        });
+        expect(newer.status).toBe("complete");
+        throw new GitHubAuthFailedError();
+      },
+    });
+    await expect(
+      stale.apply({ ...m(), sourceId: source.id, runId: run.id }),
+    ).rejects.toBeInstanceOf(GitHubAuthFailedError);
+    const detail = await sources.get(owner, source.id);
+    expect(detail.source.authStatus).toBe("ok");
+    expect(detail.runs[0]).toMatchObject({ id: run.id, status: "complete" });
   });
   it("fences stalled version writes and run mutations after source lease expiry or takeover", async () => {
     for (const mode of ["archive", "takeover"] as const) {
