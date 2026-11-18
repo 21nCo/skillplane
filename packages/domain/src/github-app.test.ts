@@ -53,6 +53,9 @@ function tokenServer(
     grant?: (body: { repositories: string[]; permissions: { contents: string } }) => {
       contents: string;
       repositories: string[];
+      // The whole permissions object to return; defaults to contents plus
+      // the implicit metadata: read.
+      permissions?: Record<string, string>;
     };
   } = {},
 ) {
@@ -83,7 +86,10 @@ function tokenServer(
       {
         token: `ghs_${String(serial).padStart(36, "0")}`,
         expires_at: new Date(clock + (options.lifetimeMs ?? 3600_000)).toISOString(),
-        permissions: { contents: grant.contents, metadata: "read" },
+        permissions: grant.permissions ?? {
+          contents: grant.contents,
+          metadata: "read",
+        },
         repositories: grant.repositories.map((full_name) => ({
           full_name,
           name: full_name.split("/")[1],
@@ -242,6 +248,52 @@ describe("GitHub App installation tokens", () => {
       await expect(
         server.app.installationToken({ ...read, access: "write" }),
       ).rejects.toBeInstanceOf(GitHubAuthFailedError);
+    }
+  });
+
+  it("refuses a token granted any permission beyond the requested contents access", async () => {
+    for (const [access, permissions] of [
+      ["read", { contents: "read", metadata: "read", administration: "write" }],
+      ["write", { contents: "write", metadata: "read", issues: "write" }],
+      ["read", { contents: "read", metadata: "write" }],
+      ["read", {}],
+    ] as const) {
+      const server = tokenServer({
+        grant: (body) => ({
+          contents: body.permissions.contents,
+          repositories: body.repositories.map((name) => `acme/${name}`),
+          permissions,
+        }),
+      });
+      const request = { ...read, access };
+      await expect(server.app.installationToken(request)).rejects.toThrow(
+        new GitHubAuthFailedError(
+          "The GitHub App installation does not grant the requested repository access",
+        ),
+      );
+      // Nothing was cached: the next call mints again.
+      await expect(server.app.installationToken(request)).rejects.toBeInstanceOf(
+        GitHubAuthFailedError,
+      );
+      expect(server.mints).toHaveLength(2);
+    }
+  });
+
+  it("accepts a grant of the requested contents access with or without metadata: read", async () => {
+    for (const permissions of [
+      { contents: "read", metadata: "read" },
+      { contents: "read" },
+    ]) {
+      const server = tokenServer({
+        grant: (body) => ({
+          contents: body.permissions.contents,
+          repositories: body.repositories.map((name) => `acme/${name}`),
+          permissions,
+        }),
+      });
+      const first = await server.app.installationToken(read);
+      await expect(server.app.installationToken(read)).resolves.toBe(first);
+      expect(server.mints).toHaveLength(1);
     }
   });
 

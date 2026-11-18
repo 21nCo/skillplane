@@ -461,13 +461,23 @@ export class GitHubApp {
       expiresAt <= this.now()
     )
       unavailable("GitHub returned an invalid installation token");
-    // Refuse a token whose grant differs from the request: a different
-    // contents permission or repository set is a wrongly scoped token.
+    // Refuse a token whose grant differs from the request: the permissions must
+    // be exactly the requested contents access plus, optionally, the
+    // metadata: read that GitHub adds implicitly, and the repository set must
+    // match. Anything else (another permission, a different contents access or
+    // repository set) is a wrongly scoped token and is neither returned nor
+    // cached.
     const permissions = row.permissions;
-    const contents =
-      permissions && typeof permissions === "object"
-        ? (permissions as Record<string, unknown>).contents
-        : undefined;
+    const grantMatches =
+      permissions !== null &&
+      typeof permissions === "object" &&
+      !Array.isArray(permissions) &&
+      Object.entries(permissions as Record<string, unknown>).every(([name, value]) =>
+        name === "contents"
+          ? value === request.access
+          : name === "metadata" && value === "read",
+      ) &&
+      (permissions as Record<string, unknown>).contents === request.access;
     const repositories = Array.isArray(row.repositories)
       ? row.repositories.map((repository: unknown) =>
           typeof repository === "object" && repository !== null
@@ -476,7 +486,7 @@ export class GitHubApp {
         )
       : [];
     if (
-      contents !== request.access ||
+      !grantMatches ||
       repositories.length !== scope.fullNames.length ||
       [...repositories].sort().some((name, index) => name !== scope.fullNames[index])
     )

@@ -139,7 +139,9 @@ The primitives are:
 
 - A short-lived RS256 App JWT and installation tokens limited to the source's
   repository with `contents: read` (writes use a separate `contents: write`
-  token). Tokens are kept only in Worker memory until five minutes before they
+  token). A token GitHub returns with any other permission (other than the
+  implicit `metadata: read`) or another repository set is refused as
+  `auth_failed` and never cached. Tokens are kept only in Worker memory until five minutes before they
   expire and never appear in errors, logs or audit rows.
 - An authenticated source provider with the same snapshot interface as the
   public one, plus write primitives (create blob, tree and commit, and move a
