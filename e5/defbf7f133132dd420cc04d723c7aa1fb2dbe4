@@ -1,0 +1,43 @@
+docs/operations/git-sources.md
+  s_ace82070dcb8c7::t_a388713bba4935 3-4,12-17,120-121,129-134,139-140,172-229,240-249
+docs/operations/global-control-plane.md
+  s_ace82070dcb8c7::t_3fdc982d643f06 22-23
+packages/control-plane/src/concrete-migration.ts
+  s_ace82070dcb8c7::t_4e2f8ef93d4c95 63-64
+packages/control-plane/src/table-ownership.ts
+  s_ace82070dcb8c7::t_facc6c5dd56dbd 68-69
+packages/db/migrations/0056_regional_github_installations.sql
+  s_ace82070dcb8c7::t_b59e256b025efd 1-55
+packages/db/src/migrate.test.ts
+  s_ace82070dcb8c7::t_473b26543c5fe8 70
+packages/db/src/schema/git-sources.ts
+  s_ace82070dcb8c7::t_e8e538ea766e00 4,32,37-43
+packages/db/src/schema/github-installations.ts
+  s_ace82070dcb8c7::t_6ba2b4d5d58fa0 1-70
+packages/db/src/schema/index.ts
+  s_ace82070dcb8c7::t_a0d3a70b96ca59 4,57,84,112
+packages/db/tests/integration/background-jobs-migration.integration.test.ts
+  s_ace82070dcb8c7::t_8d76e29bc11c4e 45
+packages/db/tests/integration/development-topology-migration.integration.test.mjs
+  s_ace82070dcb8c7::t_695b818e45edb5 40,59,148-151
+packages/db/tests/integration/git-source-schema.integration.test.ts
+  s_ace82070dcb8c7::t_dbe187a7f1560e 8,25-52,54-55,59-78,80-103,105-109
+packages/testing/src/fixtures.ts
+  s_ace82070dcb8c7::t_0fe56042e014c7 170-171
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e5defbf7f133132dd420cc04d723c7aa1fb2dbe4",
+  "prompts": {},
+  "sessions": {
+    "s_ace82070dcb8c7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "32377d70-4569-4b72-b877-f60e4a5990c1",
+        "model": "unknown"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
