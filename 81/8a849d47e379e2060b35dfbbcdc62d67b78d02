@@ -1,0 +1,21 @@
+packages/domain/src/git-source-provider.test.ts
+  s_ace82070dcb8c7::t_7ec5f9b246a6b4 544-552,554,558-560,573-575,671,699-704,720-722,724,731-858
+packages/domain/src/git-source-provider.ts
+  s_ace82070dcb8c7::t_f60521aaa013c6 850-851,858-861,864-873,907,934-940,942-943,945-948,951-952,954-958,962-963,973-978
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "818a849d47e379e2060b35dfbbcdc62d67b78d02",
+  "prompts": {},
+  "sessions": {
+    "s_ace82070dcb8c7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "32377d70-4569-4b72-b877-f60e4a5990c1",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
