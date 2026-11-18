@@ -1,0 +1,35 @@
+docs/operations/git-sources.md
+  s_a310124cecabc3::t_00636079b74d49 144-147,157-159
+packages/domain/src/git-source-provider.test.ts
+  s_a310124cecabc3::t_56c2b73fcd7148 550,573,652-670,863-877,1004-1098
+packages/domain/src/git-source-provider.ts
+  s_a310124cecabc3::t_fbca159d0410c4 17,22,211,222,241,639-646,686,694,707,773-774,776-777,853-854,867-868,872-873,876-877,891-893,909-910,970-975,978-981,984
+packages/domain/src/git-sources.ts
+  s_a310124cecabc3::t_0271cea42a4528 187-199,201-203,1168-1173
+packages/domain/src/github-app.test.ts
+  s_a310124cecabc3::t_60232e176f2d4d 53-55,90,99,207-213,216-217,241-244,312-395,457-465,484
+packages/domain/src/github-app.ts
+  s_a310124cecabc3::t_f622bb1faabb53 10-13,16-20,205-206,208-210,227,254,257-268,281,283,293-296,305,309,312-313,329-331,352-360,380-383,385-388,390,393-395,397-401,431-436,450,461,466,478,491-506,511-515,525,543,546
+packages/domain/tests/integration/git-sources.integration.test.ts
+  s_a310124cecabc3::t_91720f703eb411 731-762
+packages/observability/src/redaction.test.ts
+  s_a310124cecabc3::t_77ea34b3a2eae1 32-35,39,44
+packages/observability/src/redaction.ts
+  s_a310124cecabc3::t_bf414bc3d02ff5 22-24,26
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "486be58d0202ab7af8e15062047f89a44221788b",
+  "prompts": {},
+  "sessions": {
+    "s_a310124cecabc3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_a310124cecabc3",
+        "model": "unknown"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
