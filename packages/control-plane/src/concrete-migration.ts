@@ -60,6 +60,8 @@ const regionalTables = [
   "regional_projection_sequences",
   "regional_projection_outbox",
   "background_jobs",
+  "github_installations",
+  "github_installation_states",
 ] as const;
 
 type NamespaceColumn = "workspace_id" | "__ns" | "namespace";
