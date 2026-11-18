@@ -847,22 +847,30 @@ export class AuthenticatedGitHubSourceProvider extends GitHubSnapshotProvider {
    *   success with no mutation (an idempotent retry); missing or at any
    *   commit other than `expectedSha` is GitHubRefConflictError (CONFLICT
    *   409, reason `stale_ref`); the caller refreshes and retries.
-   * - The mutation applies: success.
+   * - The mutation applies (a 2xx answer with no GraphQL errors and a
+   *   non-null `data.updateRefs` object): success, with no re-read.
    * - GitHub answers the mutation with GraphQL errors (refused): the branch
    *   is read again. At `commitSha` is success; missing or at a third commit
    *   is `stale_ref`; still at `expectedSha` is SERVICE_UNAVAILABLE 503 for a
    *   `RATE_LIMITED` error (retry later), otherwise DomainError CONFLICT 409
    *   with reason `update_rejected` (for example a protected branch;
    *   refreshing does not help).
+   * - GitHub answers 2xx with no GraphQL errors but without a
+   *   `data.updateRefs` object (unconfirmed): the branch is read again. At
+   *   `commitSha` is success; missing or at a third commit is `stale_ref`;
+   *   still at `expectedSha` is SERVICE_UNAVAILABLE 503 (retry later).
    * - The mutation response is lost or fails (a transport error, timeout,
    *   non-2xx status or malformed body): the branch is read again. At
-   *   `commitSha` is success (the update landed); anything else, including a
-   *   missing branch or a third commit, rethrows the original error, usually
-   *   a retryable SERVICE_UNAVAILABLE 503, and a failed re-read is folded
-   *   into that error. A retry then reports `stale_ref` from its first read
-   *   if the branch moved. An auth failure of the mutation itself (or an
-   *   unexpected non-domain error) is rethrown without a re-read.
-   * - Any other failure of a read before the mutation or after a refusal,
+   *   `commitSha` is success (the update landed); a re-read that confirms
+   *   lost access (a revoked installation or a hidden repository) is
+   *   GitHubAuthFailedError; anything else, including a missing branch, a
+   *   third commit or a re-read that fails for another reason, rethrows the
+   *   original error, usually a retryable SERVICE_UNAVAILABLE 503. A retry
+   *   then reports `stale_ref` from its first read if the branch moved. An
+   *   auth failure of the mutation itself (or an unexpected non-domain
+   *   error) is rethrown without a re-read.
+   * - Any other failure of a read before the mutation or after a refusal or
+   *   an unconfirmed answer,
    *   including minting its token, is SERVICE_UNAVAILABLE 503 (rate limit,
    *   outage, timeout, redirect or rejected request; retry later) or
    *   GitHubAuthFailedError (GIT_SOURCE_AUTH_FAILED) when the installation
@@ -896,7 +904,7 @@ export class AuthenticatedGitHubSourceProvider extends GitHubSnapshotProvider {
       (await this.visibleRepository(repository, "write", Date.now() + 10000)).node_id,
     );
     if (!repositoryId) invalid("GitHub returned an invalid repository");
-    let outcome: "applied" | "refused" | "rate_limited";
+    let outcome: "applied" | "refused" | "rate_limited" | "unconfirmed";
     try {
       const result = await this.call(
         repository,
@@ -923,21 +931,36 @@ export class AuthenticatedGitHubSourceProvider extends GitHubSnapshotProvider {
       );
       if (!result.data) throw rejected();
       const errors = Array.isArray(result.data.errors) ? result.data.errors : [];
+      const data = result.data.data;
+      const payload =
+        data && typeof data === "object" && !Array.isArray(data)
+          ? (data as Record<string, unknown>).updateRefs
+          : null;
+      // Only an error-free answer carrying the mutation's result confirms the
+      // move; any other 200 envelope is reconciled by reading the branch.
       outcome =
-        errors.length === 0 && result.data.data
-          ? "applied"
-          : errors.some((error) => object(error).type === "RATE_LIMITED")
+        errors.length > 0
+          ? errors.some((error) => object(error).type === "RATE_LIMITED")
             ? "rate_limited"
-            : "refused";
+            : "refused"
+          : payload && typeof payload === "object" && !Array.isArray(payload)
+            ? "applied"
+            : "unconfirmed";
     } catch (error) {
       // A lost or failed response may hide an applied update: the branch at
-      // the new commit is success, anything else keeps the original error.
+      // the new commit is success. A re-read that confirms lost access is
+      // auth_failed; anything else keeps the original error.
       if (isGitHubAuthFailed(error) || !(error instanceof DomainError)) throw error;
-      if ((await current().catch(() => null)) === commit) return;
+      const landed = await current().catch((readError: unknown) => {
+        if (isGitHubAuthFailed(readError)) throw readError;
+        return null;
+      });
+      if (landed === commit) return;
       throw error;
     }
     if (outcome === "applied") return;
-    // GitHub refused the update: decide by where the branch is now.
+    // GitHub refused or did not confirm the update: decide by where the
+    // branch is now.
     const after = await current();
     if (after === commit) return;
     if (after !== expected) throw new GitHubRefConflictError();
@@ -945,6 +968,12 @@ export class AuthenticatedGitHubSourceProvider extends GitHubSnapshotProvider {
       throw new DomainError(
         "SERVICE_UNAVAILABLE",
         "GitHub rate limit reached; retry later",
+        503,
+      );
+    if (outcome === "unconfirmed")
+      throw new DomainError(
+        "SERVICE_UNAVAILABLE",
+        "GitHub did not confirm the branch update; retry later",
         503,
       );
     // Still at the expected commit: a protected branch or a non-fast-forward.

@@ -541,13 +541,23 @@ describe("authenticated GitHub source provider", () => {
   const head = "c".repeat(40),
     next = "d".repeat(40);
 
-  // Mints any requested token and answers repository requests through `route`
-  // (method and path after /repos/acme/skills, or "POST /graphql").
-  function provider(route: (request: string) => Response | undefined) {
+  // Mints any requested token (unless `mint` answers the nth mint itself) and
+  // answers repository requests through `route` (method and path after
+  // /repos/acme/skills, or "POST /graphql"); a null route answer is a
+  // transport failure. `seen` lists repository requests and "MINT" for each
+  // token mint.
+  function provider(
+    route: (request: string) => Response | null | undefined,
+    mint?: (count: number) => Response | undefined,
+  ) {
     const seen: string[] = [];
+    let mints = 0;
     const fetcher: typeof fetch = async (input, init) => {
       const url = new URL(String(input));
       if (url.pathname.endsWith("/access_tokens")) {
+        seen.push("MINT");
+        const answer = mint?.(++mints);
+        if (answer) return answer;
         const body = JSON.parse(String(init?.body)) as {
           permissions: { contents: string };
         };
@@ -560,7 +570,9 @@ describe("authenticated GitHub source provider", () => {
       }
       const request = `${init?.method ?? "GET"} ${url.pathname.replace("/repos/acme/skills", "")}`;
       seen.push(request);
-      return route(request) ?? new Response("{}", { status: 404 });
+      const answer = route(request);
+      if (answer === null) throw new TypeError("network failure");
+      return answer ?? new Response("{}", { status: 404 });
     };
     const app = new GitHubApp({ appId: "1", privateKeyPem: appKey }, { fetcher });
     return { provider: new AuthenticatedGitHubSourceProvider(app, 7), seen };
@@ -656,7 +668,7 @@ describe("authenticated GitHub source provider", () => {
       request === "GET /git/ref/heads/main" ? ref(next) : undefined,
     );
     await done.provider.updateRef(repositoryUrl, update);
-    expect(done.seen).toEqual(["GET /git/ref/heads/main"]);
+    expect(done.seen).toEqual(["MINT", "GET /git/ref/heads/main"]);
   });
 
   it("keeps the original error after a lost update response unless the branch landed", async () => {
@@ -684,8 +696,12 @@ describe("authenticated GitHub source provider", () => {
     await expect(
       moved.provider.updateRef(repositoryUrl, update),
     ).rejects.toBeInstanceOf(GitHubRefConflictError);
-    // A re-read that fails, here with lost access, is folded into the original
-    // error instead of replacing it.
+  });
+
+  it("reports lost access confirmed by the read after a lost update response", async () => {
+    const update = { branch: "main", commitSha: next, expectedSha: head };
+    // (a) Mutation 502; the recovery read finds no branch and no repository:
+    // the installation lost access, so auth_failed rather than the 502.
     let probes = 0,
       hiddenReads = 0;
     const hidden = provider((request) =>
@@ -701,16 +717,145 @@ describe("authenticated GitHub source provider", () => {
             ? new Response("{}", { status: 502 })
             : undefined,
     );
-    const folded = hidden.provider.updateRef(repositoryUrl, update);
-    await expect(folded).rejects.toMatchObject({ code: "SERVICE_UNAVAILABLE" });
-    await expect(folded).rejects.not.toBeInstanceOf(GitHubAuthFailedError);
+    await expect(
+      hidden.provider.updateRef(repositoryUrl, update),
+    ).rejects.toBeInstanceOf(GitHubAuthFailedError);
     expect(hidden.seen).toEqual([
+      "MINT",
       "GET /git/ref/heads/main",
       "GET ",
       "POST /graphql",
       "GET /git/ref/heads/main",
       "GET ",
     ]);
+    // (b) Mutation 502; the recovery read is refused with 401 and the
+    // replacement token cannot be minted (installation removed: 404).
+    let revokedReads = 0;
+    const revoked = provider(
+      (request) =>
+        request === "GET "
+          ? repo()
+          : request === "GET /git/ref/heads/main"
+            ? revokedReads++ === 0
+              ? ref(head)
+              : new Response("{}", { status: 401 })
+            : request === "POST /graphql"
+              ? new Response("{}", { status: 502 })
+              : undefined,
+      (count) => (count > 1 ? new Response("{}", { status: 404 }) : undefined),
+    );
+    await expect(
+      revoked.provider.updateRef(repositoryUrl, update),
+    ).rejects.toBeInstanceOf(GitHubAuthFailedError);
+    expect(revoked.seen).toEqual([
+      "MINT",
+      "GET /git/ref/heads/main",
+      "GET ",
+      "POST /graphql",
+      "GET /git/ref/heads/main",
+      "MINT",
+    ]);
+  });
+
+  it("keeps the original error when the read after a lost update response fails", async () => {
+    const update = { branch: "main", commitSha: next, expectedSha: head };
+    // (c) Mutation 502, recovery read fails in transport: the mutation's 503.
+    let reads = 0;
+    const unreachable = provider((request) =>
+      request === "GET "
+        ? repo()
+        : request === "GET /git/ref/heads/main"
+          ? reads++ === 0
+            ? ref(head)
+            : null
+          : request === "POST /graphql"
+            ? new Response("{}", { status: 502 })
+            : undefined,
+    );
+    await expect(
+      unreachable.provider.updateRef(repositoryUrl, update),
+    ).rejects.toMatchObject({
+      code: "SERVICE_UNAVAILABLE",
+      status: 503,
+      message: "GitHub rejected the request; check its availability or rate limit",
+    });
+    expect(unreachable.seen).toEqual([
+      "MINT",
+      "GET /git/ref/heads/main",
+      "GET ",
+      "POST /graphql",
+      "GET /git/ref/heads/main",
+    ]);
+    // (c) Mutation lost in transport, recovery read answers 503: the
+    // mutation's transport error, not the read's.
+    let outageReads = 0;
+    const outage = provider((request) =>
+      request === "GET "
+        ? repo()
+        : request === "GET /git/ref/heads/main"
+          ? outageReads++ === 0
+            ? ref(head)
+            : new Response("{}", { status: 503 })
+          : request === "POST /graphql"
+            ? null
+            : undefined,
+    );
+    const failed = outage.provider.updateRef(repositoryUrl, update);
+    await expect(failed).rejects.toMatchObject({
+      code: "SERVICE_UNAVAILABLE",
+      status: 503,
+    });
+    await expect(failed).rejects.not.toMatchObject({
+      message: "GitHub rejected the request; check its availability or rate limit",
+    });
+    await expect(failed).rejects.not.toBeInstanceOf(GitHubAuthFailedError);
+    expect(outage.seen).toEqual([
+      "MINT",
+      "GET /git/ref/heads/main",
+      "GET ",
+      "POST /graphql",
+      "GET /git/ref/heads/main",
+    ]);
+  });
+
+  it("reconciles an update answer without an updateRefs result by reading the branch", async () => {
+    const update = { branch: "main", commitSha: next, expectedSha: head };
+    const unconfirmed = () => Response.json({ data: { updateRefs: null } });
+    // The branch did not move: a retryable failure, never success.
+    const unchanged = provider((request) =>
+      request === "GET "
+        ? repo()
+        : request === "GET /git/ref/heads/main"
+          ? ref(head)
+          : request === "POST /graphql"
+            ? unconfirmed()
+            : undefined,
+    );
+    await expect(
+      unchanged.provider.updateRef(repositoryUrl, update),
+    ).rejects.toMatchObject({ code: "SERVICE_UNAVAILABLE", status: 503 });
+    expect(unchanged.seen).toEqual([
+      "MINT",
+      "GET /git/ref/heads/main",
+      "GET ",
+      "POST /graphql",
+      "GET /git/ref/heads/main",
+    ]);
+    // The re-read finds the new commit: the update landed.
+    let reads = 0;
+    const landed = provider((request) =>
+      request === "GET "
+        ? repo()
+        : request === "GET /git/ref/heads/main"
+          ? ref(reads++ === 0 ? head : next)
+          : request === "POST /graphql"
+            ? unconfirmed()
+            : undefined,
+    );
+    await expect(
+      landed.provider.updateRef(repositoryUrl, update),
+    ).resolves.toBeUndefined();
+    expect(landed.seen.at(-1)).toBe("GET /git/ref/heads/main");
   });
 
   it("rejects an invalid expected commit before calling GitHub", async () => {
