@@ -858,6 +858,52 @@ describe("authenticated GitHub source provider", () => {
     expect(landed.seen.at(-1)).toBe("GET /git/ref/heads/main");
   });
 
+  it("treats a non-object GraphQL errors entry as a malformed update response", async () => {
+    const update = { branch: "main", commitSha: next, expectedSha: head };
+    // A RATE_LIMITED entry first must not hide the malformed entry after it.
+    const malformed = () =>
+      Response.json({
+        data: { updateRefs: null },
+        errors: [{ type: "RATE_LIMITED", message: "slow down" }, "oops"],
+      });
+    // The branch did not move: the malformed response's VALIDATION_FAILED,
+    // not the rate limit's 503.
+    const unchanged = provider((request) =>
+      request === "GET "
+        ? repo()
+        : request === "GET /git/ref/heads/main"
+          ? ref(head)
+          : request === "POST /graphql"
+            ? malformed()
+            : undefined,
+    );
+    await expect(
+      unchanged.provider.updateRef(repositoryUrl, update),
+    ).rejects.toMatchObject({ code: "VALIDATION_FAILED", status: 400 });
+    expect(unchanged.seen).toEqual([
+      "MINT",
+      "GET /git/ref/heads/main",
+      "GET ",
+      "POST /graphql",
+      "GET /git/ref/heads/main",
+    ]);
+    // The recovery re-read finds the new commit: the update landed.
+    let reads = 0;
+    const landed = provider((request) =>
+      request === "GET "
+        ? repo()
+        : request === "GET /git/ref/heads/main"
+          ? ref(reads++ === 0 ? head : next)
+          : request === "POST /graphql"
+            ? malformed()
+            : undefined,
+    );
+    await expect(
+      landed.provider.updateRef(repositoryUrl, update),
+    ).resolves.toBeUndefined();
+    expect(landed.seen.at(-1)).toBe("GET /git/ref/heads/main");
+  });
+
   it("rejects an invalid expected commit before calling GitHub", async () => {
     const none = provider(() => undefined);
     await expect(

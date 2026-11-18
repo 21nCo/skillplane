@@ -937,7 +937,11 @@ export class AuthenticatedGitHubSourceProvider extends GitHubSnapshotProvider {
         },
       );
       if (!result.data) throw rejected();
-      const errors = Array.isArray(result.data.errors) ? result.data.errors : [];
+      // Every GraphQL errors entry must be an object; a malformed entry is a
+      // malformed response even after a RATE_LIMITED one.
+      const errors = Array.isArray(result.data.errors)
+        ? result.data.errors.map(object)
+        : [];
       const data = result.data.data;
       const payload =
         data && typeof data === "object" && !Array.isArray(data)
@@ -947,7 +951,7 @@ export class AuthenticatedGitHubSourceProvider extends GitHubSnapshotProvider {
       // move; any other 200 envelope is reconciled by reading the branch.
       outcome =
         errors.length > 0
-          ? errors.some((error) => object(error).type === "RATE_LIMITED")
+          ? errors.some((error) => error.type === "RATE_LIMITED")
             ? "rate_limited"
             : "refused"
           : payload && typeof payload === "object" && !Array.isArray(payload)
