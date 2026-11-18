@@ -7,7 +7,18 @@ import {
   gitSourceConfig,
 } from "../../src/git-source-provider.js";
 import { GitHubApp } from "../../src/github-app.js";
+import { GitSourceService } from "../../src/git-sources.js";
+import { IdempotencyStore } from "../../src/idempotency.js";
+import type { Principal } from "../../src/principal.js";
+import { SkillService } from "../../src/skills.js";
+import { SkillVersionService } from "../../src/skill-versions.js";
 import { appPrivateKeyPem, startFakeGitHub, type FakeGitHub } from "../fake-github.js";
+import { Pool } from "pg";
+import { R2BundleRepository } from "@skillplane/storage";
+import { migrateDatabase } from "../../../db/src/migrate.js";
+import { resolveTestDatabaseUrl } from "../../../db/src/database-url.js";
+import { seedTenantFixture } from "../../../testing/src/fixtures.js";
+import { TestObjectStorage } from "../../../testing/src/runtime.js";
 
 // Installation tokens and the App private key must never reach a log line, an
 // error (message, details or stack), an API error body or an audit row, even
@@ -133,5 +144,106 @@ describe("GitHub App secret handling", () => {
       ],
       tokens,
     );
+  });
+});
+
+describe("GitHub App source auth_failed marker", () => {
+  it("records revoked access without a token, JWT or key in audit or run rows", async () => {
+    github = await startFakeGitHub({
+      "skills/review/SKILL.md": "---\nname: R\ndescription: D\n---\n# R\n",
+    });
+    // GitHub echoes every bearer it receives (App JWT or installation token)
+    // in its failure bodies.
+    const bearers = new Set<string>();
+    const fetcher: typeof fetch = async (input, init) => {
+      const authorization = new Headers(init?.headers).get("authorization") ?? "";
+      if (authorization) bearers.add(authorization.replace(/^\S+\s+/u, ""));
+      const response = await fetch(input, init);
+      if (response.ok) return response;
+      return new Response(JSON.stringify({ message: `refused ${authorization}` }), {
+        status: response.status,
+        headers: { "content-type": "application/json" },
+      });
+    };
+    const app = new GitHubApp(
+      { appId: "123456", privateKeyPem: appPrivateKeyPem },
+      { apiBaseUrl: github.baseUrl, fetcher },
+    );
+    const url = await resolveTestDatabaseUrl();
+    await migrateDatabase(url);
+    const pool = new Pool({ connectionString: url, max: 2 });
+    try {
+      const storage = new R2BundleRepository(new TestObjectStorage());
+      const skills = new SkillService(pool, storage);
+      const sources = new GitSourceService(
+        pool,
+        skills,
+        new SkillVersionService(pool, storage, new IdempotencyStore(pool)),
+        new AuthenticatedGitHubSourceProvider(app, github.installationId),
+      );
+      const tenant = await seedTenantFixture(url, `gh-sec-${crypto.randomUUID()}`);
+      const owner: Principal = {
+        kind: "user",
+        role: "owner",
+        actorId: tenant.userId,
+        userId: tenant.userId,
+        sessionId: "s",
+        workspaceId: tenant.workspaceId,
+      };
+      const m = () => ({
+        principal: owner,
+        requestId: crypto.randomUUID(),
+        fencingEpoch: 1,
+      });
+      const source = await sources.create({
+        ...m(),
+        config: {
+          repositoryUrl: `https://github.com/${github.repository}`,
+          ref: "main",
+        },
+        idempotencyKey: crypto.randomUUID(),
+      });
+      const run = await sources.preview({ ...m(), sourceId: source.id });
+      github.revoke();
+      const errors = [
+        await sources.preview({ ...m(), sourceId: source.id }).catch((e: unknown) => e),
+        await sources
+          .apply({ ...m(), sourceId: source.id, runId: run.id })
+          .catch((e: unknown) => e),
+      ];
+      expect(errors.map((e) => (e as DomainError).code)).toEqual([
+        "GIT_SOURCE_AUTH_FAILED",
+        "GIT_SOURCE_AUTH_FAILED",
+      ]);
+      const audit = await pool.query<{ event_type: string; metadata: unknown }>(
+        "SELECT * FROM audit_events WHERE workspace_id=$1 ORDER BY occurred_at,id",
+        [owner.workspaceId],
+      );
+      expect(
+        audit.rows.filter((row) => row.event_type === "skill_source.auth_failed"),
+      ).toHaveLength(2);
+      const runs = await pool.query(
+        "SELECT * FROM skill_source_runs WHERE workspace_id=$1",
+        [owner.workspaceId],
+      );
+      const sourceRows = await pool.query(
+        "SELECT * FROM skill_sources WHERE workspace_id=$1",
+        [owner.workspaceId],
+      );
+      const tokens = [...github.tokens.keys(), ...bearers];
+      expect(github.tokens.size).toBeGreaterThanOrEqual(1);
+      expectNoSecrets(
+        [
+          ...errors.flatMap(surfaces),
+          ...logged,
+          JSON.stringify(audit.rows),
+          JSON.stringify(runs.rows),
+          JSON.stringify(sourceRows.rows),
+        ],
+        tokens,
+      );
+    } finally {
+      await pool.end();
+    }
   });
 });

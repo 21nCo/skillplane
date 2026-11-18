@@ -171,6 +171,23 @@ export class GitSourceService {
       metadata,
     });
   }
+  // Revoked GitHub App access leaves one machine-readable, source-scoped
+  // marker in its own transaction, without touching the source row, its
+  // bindings, versions or skills. The source's state column is SKI-57's. A
+  // failed marker write never masks the typed auth_failed error.
+  private async markAuthFailed(m: Mutation, sourceId: string) {
+    await this.transaction(m, (c) =>
+      insertPrincipalAudit(c, m.principal, {
+        eventType: "skill_source.auth_failed",
+        action: "workspace:update",
+        outcome: "error",
+        requestId: m.requestId,
+        resourceType: "skill_source",
+        resourceId: sourceId,
+        metadata: { reason: "auth_failed" },
+      }),
+    ).catch(() => undefined);
+  }
   private async row(
     p: Principal,
     id: string,
@@ -411,7 +428,12 @@ export class GitSourceService {
     const source = record(await this.row(m.principal, m.sourceId));
     if (source.archivedAt)
       throw new DomainError("CONFLICT", "Restore the source before syncing", 409);
-    const snapshot = await this.provider.snapshot(this.config(source)),
+    const snapshot = await this.provider
+        .snapshot(this.config(source))
+        .catch(async (error: unknown) => {
+          if (isGitHubAuthFailed(error)) await this.markAuthFailed(m, source.id);
+          throw error;
+        }),
       bindings = await this.bindings(m.principal, source.id);
     // Slugs are unique across kinds, so instructions stay in the catalog as conflicts.
     const catalog = await this.pool.query<{ slug: string; id: string; kind: string }>(
@@ -1129,6 +1151,7 @@ export class GitSourceService {
           ],
         );
       }).catch(() => undefined);
+      if (isGitHubAuthFailed(error)) await this.markAuthFailed(m, source.id);
       throw error;
     } finally {
       await this.transaction(m, async (c) => {

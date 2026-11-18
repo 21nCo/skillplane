@@ -497,17 +497,88 @@ describe("Git source persistence and recovery", () => {
       "SELECT count(*)::int AS n FROM skills WHERE workspace_id=$1",
       [owner.workspaceId],
     );
+    const counts = async () =>
+      (
+        await pool.query(
+          `SELECT (SELECT count(*)::int FROM skills WHERE workspace_id=$1) AS skills,
+            (SELECT count(*)::int FROM skill_versions WHERE workspace_id=$1) AS versions,
+            (SELECT count(*)::int FROM skill_source_bindings WHERE workspace_id=$1) AS bindings,
+            (SELECT count(*)::int FROM skill_source_runs WHERE workspace_id=$1 AND source_id=$2) AS runs`,
+          [owner.workspaceId, s.id],
+        )
+      ).rows[0];
+    const markers = async () =>
+      (
+        await pool.query<{ outcome: string; metadata: unknown; request_id: string }>(
+          "SELECT outcome,metadata,request_id FROM audit_events WHERE workspace_id=$1 AND resource_type='skill_source' AND resource_id=$2 AND event_type='skill_source.auth_failed' ORDER BY occurred_at,id",
+          [owner.workspaceId, s.id],
+        )
+      ).rows;
+    const countsBefore = await counts();
+    expect(await markers()).toEqual([]);
     providerFailure = new GitHubAuthFailedError();
+    const previewRequest = m(),
+      applyRequest = m();
     try {
+      // Preview fails before any write and still leaves one source marker.
       await expect(
-        sources.apply({ ...m(), sourceId: s.id, runId: retryPreview.id }),
+        sources.preview({ ...previewRequest, sourceId: s.id }),
       ).rejects.toMatchObject({
         code: "GIT_SOURCE_AUTH_FAILED",
+        status: 409,
         details: { reason: "auth_failed" },
       });
+      expect(await markers()).toEqual([
+        {
+          outcome: "error",
+          metadata: { channel: "app", reason: "auth_failed" },
+          request_id: previewRequest.requestId,
+        },
+      ]);
+      expect((await sources.get(owner, s.id)).source).toEqual(before.source);
+      await expect(
+        sources.apply({ ...applyRequest, sourceId: s.id, runId: retryPreview.id }),
+      ).rejects.toMatchObject({
+        code: "GIT_SOURCE_AUTH_FAILED",
+        status: 409,
+        details: { reason: "auth_failed" },
+      });
+      // A marker that cannot be written never masks the typed error.
+      const auditUnavailable = {
+        query: pool.query.bind(pool),
+        connect: async () => {
+          const client = await pool.connect();
+          return new Proxy(client, {
+            get(target, key) {
+              if (key === "query")
+                return (text: unknown, ...rest: unknown[]) =>
+                  /INSERT INTO audit_events/u.test(
+                    typeof text === "string" ? text : (text as { text: string }).text,
+                  )
+                    ? Promise.reject(new Error("audit store unavailable"))
+                    : (target.query as (...args: unknown[]) => unknown)(text, ...rest);
+              const value: unknown = Reflect.get(target, key, target);
+              return typeof value === "function"
+                ? (value as (...args: unknown[]) => unknown).bind(target)
+                : value;
+            },
+          });
+        },
+      } as unknown as Pool;
+      await expect(
+        new GitSourceService(auditUnavailable, skills, versions, provider).preview({
+          ...m(),
+          sourceId: s.id,
+        }),
+      ).rejects.toMatchObject({ code: "GIT_SOURCE_AUTH_FAILED" });
     } finally {
       providerFailure = null;
     }
+    expect((await markers()).map((row) => row.request_id)).toEqual([
+      previewRequest.requestId,
+      applyRequest.requestId,
+    ]);
+    expect(await counts()).toEqual(countsBefore);
     const revoked = await sources.get(owner, s.id);
     // Apply takes a sync lease, which advances the revision; the source's
     // configuration and archive state are unchanged.

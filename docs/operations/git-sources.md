@@ -137,7 +137,9 @@ use a separate `contents: write` token). Tokens are kept only in Worker memory
 until five minutes before they expire and never appear in errors, logs or audit
 rows. A removed, suspended or wrongly scoped installation fails the sync with
 `GIT_SOURCE_AUTH_FAILED` (`reason: auth_failed`) and keeps the source, its runs,
-bindings and versions; reconnecting the installation restores syncing.
+bindings and versions; reconnecting the installation restores syncing. Each
+such preview or apply also writes one `skill_source.auth_failed` audit event
+(outcome `error`, metadata `reason: auth_failed`) for the source.
 A 404 is `auth_failed` only when the repository itself is no longer visible to
 the installation; a missing ref or object in a visible repository is not.
 GitHub rate limits, including secondary limits reported without rate limit
