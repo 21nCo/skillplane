@@ -836,9 +836,22 @@ export class AuthenticatedGitHubSourceProvider extends GitHubSnapshotProvider {
    * Moves `branch` to `commitSha` only while it points at `expectedSha`.
    * GitHub's GraphQL `updateRefs` applies the move atomically with
    * `beforeOid`, so a concurrent move of any kind, including a reset to an
-   * older commit, is refused instead of overwritten. A branch already at
-   * `commitSha` (a retry after a lost response) succeeds; a branch at any
-   * other commit is GitHubRefConflictError.
+   * older commit, is refused instead of overwritten.
+   *
+   * Outcomes:
+   * - Success when the update applies, or when the branch is already at
+   *   `commitSha` before the mutation or after a lost or refused response (a
+   *   retry after a lost response is idempotent).
+   * - GitHubRefConflictError (CONFLICT 409, reason `stale_ref`) when the
+   *   branch is missing or points at any commit other than `expectedSha` or
+   *   `commitSha`; the caller refreshes and retries.
+   * - DomainError CONFLICT 409 with reason `update_rejected` when GitHub
+   *   refuses the update and the branch is still at `expectedSha` (for
+   *   example a protected branch); refreshing does not help.
+   * - DomainError SERVICE_UNAVAILABLE 503 on a rate limit or a GitHub outage
+   *   or rejected request; retry later.
+   * - GitHubAuthFailedError (GIT_SOURCE_AUTH_FAILED) when the installation is
+   *   revoked or the repository is no longer visible to it.
    */
   async updateRef(
     repositoryUrl: string,
