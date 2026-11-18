@@ -119,38 +119,49 @@ preview records.
 
 ## GitHub App authentication
 
-Private repositories are read through the Skillplane GitHub App, never with
-personal access tokens. A deployment that uses the App sets three Worker
-secrets with `wrangler secret put`, never as `vars`, in a committed Wrangler
-file or in the database (`GITHUB_APP_SECRET_NAMES` in `@skillplane/config`):
+Private repositories are **not yet supported**: every source is still read
+anonymously as a public repository. This release adds the GitHub App
+primitives that installation binding (SKI-57) will select at runtime, but
+nothing selects them yet, so setting the App secrets does not enable private
+sources. Personal access tokens are not supported.
 
-| Secret                      | Value                                                       |
-| --------------------------- | ----------------------------------------------------------- |
-| `GITHUB_APP_ID`             | The App ID (or client ID) used as the App JWT issuer        |
-| `GITHUB_APP_PRIVATE_KEY`    | The App private key PEM; escaped `\n` newlines are accepted |
-| `GITHUB_APP_WEBHOOK_SECRET` | The webhook signing secret, at least 32 characters          |
+The primitives are:
 
-Without them, public sources keep working anonymously. With an installation,
-Skillplane signs a short-lived RS256 App JWT and mints an installation token
-limited to the source's repository with `contents: read` (linked sync writes
-use a separate `contents: write` token). Tokens are kept only in Worker memory
-until five minutes before they expire and never appear in errors, logs or audit
-rows. A removed, suspended or wrongly scoped installation fails the sync with
-`GIT_SOURCE_AUTH_FAILED` (`reason: auth_failed`) and keeps the source, its runs,
-bindings and versions; reconnecting the installation restores syncing. Each
-such preview or apply also writes one `skill_source.auth_failed` audit event
-(outcome `error`, metadata `reason: auth_failed`) for the source. Reading the
-source (get and list) reports `authStatus: auth_failed` from then until the
-next successful preview or apply, which sets it back to `ok`. The status is
-derived from those audit events; a source state column added with
-installation binding may replace it.
-A 404 is `auth_failed` only when the repository itself is no longer visible to
-the installation; a missing ref or object in a visible repository is not.
-GitHub rate limits, including secondary limits reported without rate limit
-headers, are retryable outages. Branch writes move the branch with the GraphQL
-`updateRefs` mutation and the expected commit as `beforeOid`, so any concurrent
-move, including a reset to an older commit, is refused as `stale_ref`.
-Binding installations to workspaces is not part of this change.
+- The Worker secret names in `GITHUB_APP_SECRET_NAMES` (`@skillplane/config`).
+  When installation binding ships they are set with `wrangler secret put`,
+  never as `vars`, in a committed Wrangler file or in the database:
+
+  | Secret                      | Value                                                       |
+  | --------------------------- | ----------------------------------------------------------- |
+  | `GITHUB_APP_ID`             | The App ID (or client ID) used as the App JWT issuer        |
+  | `GITHUB_APP_PRIVATE_KEY`    | The App private key PEM; escaped `\n` newlines are accepted |
+  | `GITHUB_APP_WEBHOOK_SECRET` | The webhook signing secret, at least 32 characters          |
+
+- A short-lived RS256 App JWT and installation tokens limited to the source's
+  repository with `contents: read` (writes use a separate `contents: write`
+  token). Tokens are kept only in Worker memory until five minutes before they
+  expire and never appear in errors, logs or audit rows.
+- An authenticated source provider with the same snapshot interface as the
+  public one, plus write primitives (create blob, tree and commit, and move a
+  branch). Branch writes use the GraphQL `updateRefs` mutation with the
+  expected commit as `beforeOid`, so any concurrent move, including a reset to
+  an older commit, is refused as `stale_ref`.
+- Classification of a removed, suspended or wrongly scoped installation as
+  `GIT_SOURCE_AUTH_FAILED` (`reason: auth_failed`). A 404 is `auth_failed` only
+  when the repository itself is no longer visible to the installation; a
+  missing ref or object in a visible repository is not. GitHub rate limits,
+  including secondary limits reported without rate limit headers, are
+  retryable outages.
+
+When a preview or apply fails with `auth_failed`, the source, its runs,
+bindings and versions are kept, and one `skill_source.auth_failed` audit event
+(outcome `error`, metadata `reason: auth_failed`) is written for the source.
+Reading the source (get and list) then reports `authStatus: auth_failed` until
+the next preview or apply that completes, including an apply that finishes as
+`partial` because some skills failed, which sets it back to `ok`. The status is
+derived from those audit events; the source state column added with
+installation binding (SKI-57) may replace it. Because no source is read with
+an installation yet, sources report `ok` in practice until SKI-57 ships.
 
 ## API
 
