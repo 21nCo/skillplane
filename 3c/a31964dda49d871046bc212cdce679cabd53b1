@@ -1,0 +1,25 @@
+docs/operations/git-sources.md
+  s_ace82070dcb8c7::t_4e5d220fbd43af 140-142
+packages/domain/src/git-sources.ts
+  s_ace82070dcb8c7::t_9bff6a409cced8 174-190,431-436,1154
+packages/domain/tests/integration/git-sources.integration.test.ts
+  s_ace82070dcb8c7::t_f461150e977078 500-518,520-521,523,525,528,531-573,577-581
+packages/domain/tests/security/github-app.security.test.ts
+  s_ace82070dcb8c7::t_703f7a8ffcdfc9 10-14,16-21,149-249
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3ca31964dda49d871046bc212cdce679cabd53b1",
+  "prompts": {},
+  "sessions": {
+    "s_ace82070dcb8c7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "32377d70-4569-4b72-b877-f60e4a5990c1",
+        "model": "unknown"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
