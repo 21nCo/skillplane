@@ -321,12 +321,22 @@ describe("workspace migration key matrix", () => {
           expect(relationships.rows.every((row) => row.shared_key)).toBe(true);
         }
         if (scenario === "tampered") {
-          await target.query(
-            `UPDATE "${child}" SET parent_id =
-            (SELECT id FROM "${parent}" WHERE __ns = $1 AND value = 'second')
-            WHERE __ns = $1 AND value = 'first child'`,
-            [workspace],
-          );
+          // The copy stays fenced until activation, so tamper beneath the
+          // fence triggers, as a direct database edit would.
+          const tamper = await target.connect();
+          try {
+            await tamper.query("BEGIN");
+            await tamper.query("SET LOCAL session_replication_role = replica");
+            await tamper.query(
+              `UPDATE "${child}" SET parent_id =
+              (SELECT id FROM "${parent}" WHERE __ns = $1 AND value = 'second')
+              WHERE __ns = $1 AND value = 'first child'`,
+              [workspace],
+            );
+            await tamper.query("COMMIT");
+          } finally {
+            tamper.release();
+          }
           expect(
             (await operations.verifyDatabase(context)).some((check) => !check.matched),
           ).toBe(true);

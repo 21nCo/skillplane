@@ -59,6 +59,7 @@ const regionalTables = [
   "idempotency_records",
   "regional_projection_sequences",
   "regional_projection_outbox",
+  "background_jobs",
 ] as const;
 
 type NamespaceColumn = "workspace_id" | "__ns" | "namespace";
@@ -967,6 +968,18 @@ export class PostgresWorkspaceMigrationOperations implements WorkspaceMigrationO
     try {
       await target.query("BEGIN ISOLATION LEVEL READ COMMITTED");
       this.expectedDatabaseChecks.clear();
+      // The copied rows must stay inert until resumeTarget activates this
+      // generation. A pending source fence keeps target-cell maintenance, such
+      // as the background job drainer, from acting on (and changing) them
+      // before the move verifies; it is committed atomically with the copy.
+      await target.query(
+        `INSERT INTO regional_workspace_migration_fences
+           (workspace_id, source_epoch, fenced_at)
+         VALUES ($1, $2, now())
+         ON CONFLICT (workspace_id)
+         DO UPDATE SET source_epoch = EXCLUDED.source_epoch, fenced_at = now()`,
+        [context.namespace, context.movingEpoch],
+      );
       // Take table locks before sequence DDL. READ COMMITTED observes writers
       // that committed while these locks were being acquired.
       for (const table of [...dynamic].sort((a, b) =>

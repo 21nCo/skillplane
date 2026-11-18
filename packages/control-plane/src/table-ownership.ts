@@ -64,6 +64,7 @@ export const REGIONAL_WORKSPACE_TABLES = [
   "regional_projection_sequences",
   "regional_projection_outbox",
   "regional_workspace_migration_fences",
+  "background_jobs",
 ] as const;
 
 export function physicalOwnershipPlan(

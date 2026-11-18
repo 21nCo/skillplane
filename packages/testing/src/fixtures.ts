@@ -166,6 +166,7 @@ export async function purgeTenantFixture(
     // another integration file that is still writing an unrelated tenant.
     await client.query("SET LOCAL session_replication_role = replica");
     for (const table of [
+      "background_jobs",
       "skill_version_git_provenance",
       "skill_source_bindings",
       "skill_source_runs",

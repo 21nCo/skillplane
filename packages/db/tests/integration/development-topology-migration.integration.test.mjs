@@ -37,7 +37,7 @@ function migrateDevelopmentTopology(options) {
 
 // One control and two cell databases stand in for the development topology.
 // The fixture rewinds them to the state observed on 2026-11-05: control before
-// 0051 and cells at 0050, with the 0052-0054 regional objects absent.
+// 0051 and cells at 0050, with the 0052-0055 regional objects absent.
 const suffix = crypto.randomUUID().replaceAll("-", "").slice(0, 12);
 const names = {
   control: `skillplane_devtopo_control_${suffix}_test`,
@@ -55,6 +55,7 @@ const cellsRewound = [
   "0052_regional_skill_groups.sql",
   "0053_regional_git_sources.sql",
   "0054_regional_artifact_kind.sql",
+  "0055_regional_background_jobs.sql",
 ];
 
 function database(label) {
@@ -142,6 +143,11 @@ async function rewind() {
   );
   for (const label of ["in-south", "us-east"]) {
     await withPool(label, async (pool) => {
+      await pool.query(`BEGIN;
+        DROP TABLE background_jobs;
+        DELETE FROM skillplane_schema_migrations
+         WHERE id = '0055_regional_background_jobs.sql';
+        COMMIT;`);
       await pool.query(artifactKindRollback);
       await pool.query(`BEGIN;
         DROP TABLE skill_version_git_provenance, skill_source_bindings,
