@@ -1,0 +1,23 @@
+docs/operations/git-sources.md
+  s_d2d1aecaf6f8a1::t_aab46f849f2c0c 3-4,114,122-126,131-132,164-197
+packages/control-plane/src/concrete-migration.ts
+  s_d2d1aecaf6f8a1::t_4b4ac7b5413068 865-892,935-936,1030-1033
+packages/db/tests/integration/concrete-migration.integration.test.ts
+  s_d2d1aecaf6f8a1::t_a417f4f95e8338 771-852
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ccf58dd867b02983d70876a57826390aa9ece693",
+  "prompts": {},
+  "sessions": {
+    "s_d2d1aecaf6f8a1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_d2d1aecaf6f8a1",
+        "model": "unknown"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
