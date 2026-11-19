@@ -1,0 +1,41 @@
+docs/operations/git-sources.md
+  s_7cde10fd9466eb::t_87f8d486be9987 3-4,12-17,120-121,129-134,139-140,172-229,240-249
+docs/operations/global-control-plane.md
+  s_7cde10fd9466eb::t_730ce7098eaf47 22-23
+packages/control-plane/src/concrete-migration.ts
+  s_7cde10fd9466eb::t_d41450228d3aa2 63-64
+packages/control-plane/src/table-ownership.ts
+  s_7cde10fd9466eb::t_522ead9f2128ab 68-69
+packages/db/migrations/0056_regional_github_installations.sql
+  s_7cde10fd9466eb::t_63e9336e197b73 1-55
+packages/db/src/migrate.test.ts
+  s_7cde10fd9466eb::t_721803a1c2384f 70
+packages/db/src/schema/git-sources.ts
+  s_7cde10fd9466eb::t_e61110520addd5 4,32,37-43
+packages/db/src/schema/github-installations.ts
+  s_7cde10fd9466eb::t_eb2ba895b2d1b2 1-70
+packages/db/src/schema/index.ts
+  s_7cde10fd9466eb::t_f81210831812cb 4,57,84,112
+packages/db/tests/integration/background-jobs-migration.integration.test.ts
+  s_7cde10fd9466eb::t_6c9870b9bcb83c 45
+packages/db/tests/integration/development-topology-migration.integration.test.mjs
+  s_7cde10fd9466eb::t_38f6fa55aae200 40,59,148-151
+packages/db/tests/integration/git-source-schema.integration.test.ts
+  s_7cde10fd9466eb::t_a5ab0de0f3c287 8,25-52,54-55,59-78,80-103,105-109
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "31efaaff50dfd895c570aebeadee6edf0ff12381",
+  "prompts": {},
+  "sessions": {
+    "s_7cde10fd9466eb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_7cde10fd9466eb",
+        "model": "unknown"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
