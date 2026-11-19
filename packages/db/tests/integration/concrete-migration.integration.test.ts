@@ -768,6 +768,88 @@ describe("concrete workspace migration rollback", () => {
     }
   });
 
+  it("refuses a move into a cell that binds the same GitHub installation elsewhere", async () => {
+    if (!source || !target) throw new Error("Migration fixture unavailable");
+    const installationId = 1_000_000 + Number.parseInt(suffix.slice(0, 6), 16);
+    const otherWorkspace = `workspace:installation-${suffix}`;
+    // Fixture writes bypass the workspace fence triggers.
+    const asReplica = async (pool: Pool, text: string, values: unknown[]) => {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        await client.query("SET LOCAL session_replication_role = replica");
+        await client.query(text, values);
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+    };
+    const bind = (pool: Pool, workspace: string) =>
+      asReplica(
+        pool,
+        `INSERT INTO github_installations
+           (installation_id, workspace_id, account_login, account_type,
+            repository_selection, bound_by)
+         VALUES ($1, $2, 'example-org', 'Organization', 'all', 'user:test')`,
+        [installationId, workspace],
+      );
+    const bindings = (pool: Pool) =>
+      pool.query<{ workspace_id: string }>(
+        "SELECT workspace_id FROM github_installations WHERE installation_id = $1",
+        [installationId],
+      );
+    const operations = new PostgresWorkspaceMigrationOperations(
+      source,
+      target,
+      source,
+      new MemoryObjects(),
+      new MemoryObjects(),
+    );
+    const context = {
+      namespace: workspaceId,
+      sourceRegionId: "legacy",
+      targetRegionId: "in-south",
+      sourceEpoch: 1,
+      movingEpoch: 2,
+      recoveryFence: 1,
+      recoveryOwnerId: `recovery:installation-${suffix}`,
+      recoveryLeaseExpiresAt: Date.now() + 60_000,
+    };
+    const conflict = { message: "WORKSPACE_MIGRATION_GITHUB_INSTALLATION_CONFLICT" };
+    await bind(source, workspaceId);
+    await bind(target, otherWorkspace);
+    try {
+      // Refused before the source is fenced.
+      await expect(operations.prepareSource(workspaceId)).rejects.toMatchObject(
+        conflict,
+      );
+      // A target bind racing past that check fails the copy with the same
+      // code, not a primary key violation, and the copy leaves no rows.
+      await operations.quiesceSource(context);
+      await operations.drainOutboxes(context);
+      await expect(operations.copyDatabase(context)).rejects.toMatchObject(conflict);
+      await expect(bindings(target)).resolves.toMatchObject({
+        rows: [{ workspace_id: otherWorkspace }],
+      });
+      await expect(
+        target.query("SELECT 1 FROM skills WHERE workspace_id = $1", [workspaceId]),
+      ).resolves.toMatchObject({ rows: [] });
+      await expect(bindings(source)).resolves.toMatchObject({
+        rows: [{ workspace_id: workspaceId }],
+      });
+    } finally {
+      await operations
+        .rollbackSource({ ...context, cause: new Error("test cleanup") })
+        .catch(() => undefined);
+      const unbind = "DELETE FROM github_installations WHERE installation_id = $1";
+      await asReplica(source, unbind, [installationId]);
+      await asReplica(target, unbind, [installationId]);
+    }
+  });
+
   it("remaps compatibility placements when an existing database becomes control", async () => {
     if (!target) throw new Error("Migration fixture unavailable");
     const placedWorkspace = `workspace:placement-${suffix}`;

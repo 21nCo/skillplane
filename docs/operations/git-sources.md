@@ -1,19 +1,13 @@
 # Git skill sources
 
-Workspace owners and admins can connect **public GitHub repositories**, and
-private ones through a connected GitHub App installation, from **Git sources**. A source imports either all discovered `SKILL.md` directories or
+Workspace owners and admins can connect **public GitHub repositories** from
+**Git sources**. A source imports either all discovered `SKILL.md` directories or
 one repository-relative `SKILL.md` path or directory (including an empty
 directory for repository root). File paths are normalized to their containing
 skill directory before storing configuration and provenance. No particular parent folder name is required. Choose a tracked branch/tag
 for manual updates, or pin a full 40-character commit SHA. Repository and path
 scope stay fixed after creation; archive a source and create another to change
 scope. Ref policy and ref can be edited with an expected revision.
-
-> **Rollout status:** this release adds only the storage for installation
-> bindings (migration `0056_regional_github_installations.sql`). Connecting
-> GitHub, the `/github` API routes and private source reads described below
-> ship with the remaining SKI-57 changes; until then every source is still read
-> anonymously as a public repository.
 
 ## Preview and apply
 
@@ -117,8 +111,7 @@ files share one blob; the 200-request budget is shared by every skill in the
 snapshot, so a repository-wide source can reach it sooner), blobs over 5 MiB,
 snapshots over 20 MiB expanded, and fetches exceeding 90 seconds. Individual malformed skills remain explicit errors.
 Credential detection is a bounded check for known patterns, not a complete secret
-scanner; private repositories are read only through a bound GitHub App
-installation, and source bytes remain private.
+scanner; only public repositories are accepted and source bytes remain private.
 
 Webhooks, automatic schedules, and non-GitHub providers are later extensions.
 No credentials or repository contents are stored in source configuration or
@@ -126,18 +119,17 @@ preview records.
 
 ## GitHub App authentication
 
-Private repositories are read through the Skillplane GitHub App. A workspace
-owner or admin connects it from **Settings → GitHub** (see
-[Connecting GitHub](#connecting-github)); a source created with one of the
-workspace's active installations reads its repository with installation
-tokens, and every other source is still read anonymously as a public
-repository. Personal access tokens are not supported.
+Private repositories are **not yet supported**: every source is still read
+anonymously as a public repository. This release adds the GitHub App
+primitives that installation binding (SKI-57) will select at runtime, but
+nothing selects them yet, so setting the App secrets does not enable private
+sources. Personal access tokens are not supported.
 
 The primitives are:
 
 - The Worker secret names in `GITHUB_APP_SECRET_NAMES` (`@skillplane/config`).
-  They are set with `wrangler secret put`, never as `vars`, in a committed
-  Wrangler file or in the database:
+  When installation binding ships they are set with `wrangler secret put`,
+  never as `vars`, in a committed Wrangler file or in the database:
 
   | Secret                      | Value                                                       |
   | --------------------------- | ----------------------------------------------------------- |
@@ -169,64 +161,40 @@ The primitives are:
 When a preview or apply fails with `auth_failed`, the source, its runs,
 bindings and versions are kept, and one `skill_source.auth_failed` audit event
 (outcome `error`, metadata `reason: auth_failed`) is written for the source.
-Unbinding an installation writes the same event for every source that reads
-through it. Reading the source (get and list) then reports
-`authStatus: auth_failed` until the next preview or apply that completes,
-including an apply that finishes as `partial` because some skills failed,
-which sets it back to `ok`. A source whose installation is unbound, or
-removed or suspended on GitHub, fails its preview and apply with
-`auth_failed` without contacting GitHub.
+Reading the source (get and list) then reports `authStatus: auth_failed` until
+the next preview or apply that completes, including an apply that finishes as
+`partial` because some skills failed, which sets it back to `ok`. The status is
+derived from those audit events; the source state column added with
+installation binding (SKI-57) may replace it. Because no source is read with
+an installation yet, sources report `ok` in practice until SKI-57 ships.
 
-## Connecting GitHub
+## GitHub App installation storage
 
-Owners and admins choose **Connect GitHub** in **Settings → GitHub**. Skillplane
-redirects to the App's install page with a signed `state` bound to the
-workspace and user; it expires after ten minutes and is accepted once. GitHub
-returns the browser to the App's callback URL, `/github/setup`, where
-Skillplane:
+Migration `0056_regional_github_installations.sql` adds the regional storage
+that installation binding (SKI-57) will use. Apply it to regional and combined
+databases; it is additive. Nothing in this release writes or reads it, so
+sources keep reading public repositories as described above.
 
-1. verifies the state's signature and expiry and that the signed-in user is the
-   one it was issued to and is still an owner or admin of its workspace;
-2. records the state as used, so a replayed callback is refused;
-3. exchanges GitHub's user authorization `code` and checks that the
-   installation is listed in that user's `GET /user/installations`, so an
-   `installation_id` the user cannot access on GitHub is refused;
-4. fetches the installation with the App JWT and checks its account; and
-5. binds it to the workspace. An installation bound to another workspace is
-   refused, including when two workspaces bind it at the same moment.
+- `github_installations` holds one row per GitHub App installation bound to a
+  workspace: account login and type, repository selection, `suspended_at` and
+  `removed_at` as last observed on GitHub, and who bound it. `installation_id`
+  is the primary key, so within one regional database an installation is bound
+  to at most one workspace.
+- `github_installation_states` records consumed install-callback nonces so a
+  callback state is accepted once. Nothing purges expired rows yet.
+- `skill_sources.github_installation_id` is a nullable reference to the
+  installation a private source will read through.
 
-Every outcome returns to **Settings → GitHub** with a `github_connected` or
-`github_error` code. Members see the installations read-only.
-
-Listing installations checks each one with GitHub, so an installation
-uninstalled or suspended on GitHub shows as such (webhook updates are a later
-extension). **Disconnect** unbinds the installation from the workspace only:
-the App stays installed on GitHub, and sources that read through it are kept
-and marked `auth_failed` until it is connected again. **Add source** offers the
-repositories of each active installation; the repository must belong to the
-installation's account.
-
-The installation binding is unique per regional database. Two workspaces in
-different regional cells are not prevented from binding the same
-installation.
-
-### App and deployment settings
-
-Enable **Request user authorization (OAuth) during installation** on the App
-and set its callback URL to `https://<app host>/github/setup`. Besides the
-Worker secrets below, set:
-
-| Setting                    | Value                                                 |
-| -------------------------- | ----------------------------------------------------- |
-| `GITHUB_APP_SLUG`          | The App's URL name (`https://github.com/apps/<slug>`) |
-| `GITHUB_APP_CLIENT_ID`     | The App's client ID                                   |
-| `GITHUB_APP_CLIENT_SECRET` | The App's client secret (a Worker secret)             |
-
-`GITHUB_API_URL` and `GITHUB_WEB_URL` point at a fake GitHub in tests and are
-accepted only when `RUNTIME_ENV` is `local`. Apply migration
-`0056_regional_github_installations.sql` (tables `github_installations` and
-`github_installation_states`, and `skill_sources.github_installation_id`) to
-regional and combined databases before running this application.
+The binding is unique per regional database only: workspaces in different
+regional cells are not prevented from binding the same installation. A
+workspace move copies the workspace's bindings, so it cannot enter a cell where
+another workspace binds one of the same installations. The move fails with
+`WORKSPACE_MIGRATION_GITHUB_INSTALLATION_CONFLICT` before the source is fenced,
+or, if the target binding appears during the move, when the copy rechecks it,
+and the move rolls back. Either way the workspace stays active in its source
+cell with its data unchanged. To move it, remove one of the two
+`github_installations` rows (the moving workspace's row in the source cell or
+the other workspace's row in the target cell), then retry the move.
 
 ## API
 
@@ -237,16 +205,6 @@ Under `/api/v1/workspaces/:workspaceId/sources`:
 - `PATCH /:sourceId` replaces ref/policy/archive configuration. Include `repositoryUrl`, `path`, `archived`, and `expectedRevision`, plus the existing `ref` and `refPolicy` values to retain them.
 - `POST /:sourceId/bindings` explicitly binds `path` and `skillId` (JSON body `{ "path", "skillId" }`); `DELETE` disconnects the path given in the JSON body `{ "path": "skills/review" }`.
 - `POST /:sourceId/preview` creates a plan; `POST /:sourceId/apply` confirms `runId`.
-- `POST` accepts an optional `installationId` to read a private repository
-  through an active installation bound to the workspace.
-
-Under `/api/v1/workspaces/:workspaceId/github`:
-
-- `GET /install` redirects an owner or admin to the App install page.
-- `GET /installations` lists installations with their status (`active`,
-  `suspended` or `removed`); `DELETE /installations/:installationId` unbinds one.
-- `GET /installations/:installationId/repositories` lists the repositories an
-  active installation grants.
 
 Workspace members may read; owner/admin human sessions may write. Existing CSRF
 and workspace routing guards apply. Version provenance is available at
