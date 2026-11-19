@@ -19,8 +19,8 @@ DataFn permission-directory records, replay nonces, public skill projections,
 control-plane audit records, and topology/migration state.
 
 A regional database owns skills and versions, contexts and notes, amendments,
-regional audit and analytics, idempotency records, background jobs, and its
-projection outbox.
+regional audit and analytics, idempotency records, background jobs, GitHub
+App installation bindings, and its projection outbox.
 Its bundle store contains private and workspace-visible bundles. There are no
 cross-database foreign keys. A regional `workspace_id` or `user_id` is an
 opaque, service-validated reference to global state.
