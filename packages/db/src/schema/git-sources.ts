@@ -1,6 +1,7 @@
 import {
   pgTable,
   text,
+  bigint,
   integer,
   timestamp,
   jsonb,
@@ -28,10 +29,18 @@ export const skillSources = pgTable(
     creationHash: text("creation_hash").notNull(),
     createdAt: utc("created_at").notNull().defaultNow(),
     updatedAt: utc("updated_at").notNull().defaultNow(),
+    githubInstallationId: bigint("github_installation_id", { mode: "number" }),
   },
   (t) => [
     uniqueIndex("skill_sources_workspace_id_unique").on(t.workspaceId, t.id),
     check("skill_sources_ref_policy_check", sql`${t.refPolicy} IN ('track','pin')`),
+    check(
+      "skill_sources_github_installation_id_check",
+      sql`${t.githubInstallationId} > 0`,
+    ),
+    index("skill_sources_github_installation_idx")
+      .on(t.workspaceId, t.githubInstallationId)
+      .where(sql`${t.githubInstallationId} IS NOT NULL`),
   ],
 );
 export const skillSourceRuns = pgTable(
