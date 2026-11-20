@@ -1,5 +1,6 @@
 import {
   GitHubApp,
+  GitHubAuthFailedError,
   GitHubInstallationService,
   GitSourceService,
   type GitSnapshot,
@@ -526,25 +527,21 @@ it("unbinding keeps private sources and marks them auth_failed", async () => {
   expect(again.status).toBe(404);
 });
 
-it("unbinding fences a private source's in-flight preview and apply", async () => {
-  const id = base + 8;
-  installation(id, "acme-fence", ["octo-owner"]);
-  await callback(owner, {
-    state: await installState(owner),
-    installationId: id,
-    code: github.issueCode("octo-owner"),
-  });
-  // A snapshot that waits until released, read through the bound installation.
-  let release: () => void = () => undefined;
-  let reached = Promise.resolve();
-  const snapshots: number[] = [];
-  const hold = () => {
-    let entered: () => void = () => undefined;
-    reached = new Promise((resolve) => (entered = resolve));
-    const gate = new Promise<void>((resolve) => (release = resolve));
-    return { entered, gate };
+// A source service whose installation snapshots wait while `held` is set and
+// then succeed, or fail as revoked access when `held.fail` is set.
+function heldSources() {
+  const control = {
+    held: null as null | { entered: () => void; gate: Promise<void>; fail: boolean },
+    release: (() => undefined) as () => void,
+    reached: Promise.resolve(),
+    snapshots: [] as number[],
+    hold(fail = false) {
+      let entered: () => void = () => undefined;
+      control.reached = new Promise((resolve) => (entered = resolve));
+      const gate = new Promise<void>((resolve) => (control.release = resolve));
+      control.held = { entered, gate, fail };
+    },
   };
-  let held: ReturnType<typeof hold> | null = null;
   const sources = new GitSourceService(
     services.database.pool,
     services.skillService,
@@ -552,14 +549,46 @@ it("unbinding fences a private source's in-flight preview and apply", async () =
     { snapshot: () => Promise.reject(new Error("public provider used")) },
     (installationId) => ({
       snapshot: async (): Promise<GitSnapshot> => {
-        snapshots.push(installationId);
+        control.snapshots.push(installationId);
+        const held = control.held;
         held?.entered();
         await held?.gate;
+        if (held?.fail) throw new GitHubAuthFailedError();
         return { commitSha: "a".repeat(40), skills: [] };
       },
     }),
   );
-  const m = () => ({ principal: ownerPrincipal(), requestId: crypto.randomUUID() });
+  return { control, sources };
+}
+
+const m = () => ({ principal: ownerPrincipal(), requestId: crypto.randomUUID() });
+
+async function bind(id: number) {
+  expect(
+    await callback(owner, {
+      state: await installState(owner),
+      installationId: id,
+      code: github.issueCode("octo-owner"),
+    }),
+  ).toEqual({ connected: String(id), error: null });
+}
+
+const unbind = (id: number) =>
+  app.request(`${api(owner.workspaceId)}/installations/${String(id)}`, {
+    method: "DELETE",
+    headers: auth(owner),
+  });
+
+const status = async (id: number) =>
+  (await list(owner)).installations.find((i) => i.installationId === id)?.status;
+
+it("unbinding fences a private source's in-flight preview and apply", async () => {
+  const id = base + 8;
+  installation(id, "acme-fence", ["octo-owner"]);
+  await bind(id);
+  const { control, sources } = heldSources();
+  const authStatus = async () =>
+    (await sources.get(ownerPrincipal(), source.id)).source.authStatus;
   const creation = {
     idempotencyKey: crypto.randomUUID(),
     config: {
@@ -570,46 +599,220 @@ it("unbinding fences a private source's in-flight preview and apply", async () =
   };
   const source = await sources.create({ ...m(), ...creation });
   const run = await sources.preview({ ...m(), sourceId: source.id });
-  expect(snapshots).toEqual([id]);
-  const unbind = () =>
-    app.request(`${api(owner.workspaceId)}/installations/${String(id)}`, {
-      method: "DELETE",
-      headers: auth(owner),
-    });
-  const rebind = async () =>
-    expect(
-      await callback(owner, {
-        state: await installState(owner),
-        installationId: id,
-        code: github.issueCode("octo-owner"),
-      }),
-    ).toEqual({ connected: String(id), error: null });
+  expect(control.snapshots).toEqual([id]);
 
-  held = hold();
+  control.hold();
   const applying = sources.apply({ ...m(), sourceId: source.id, runId: run.id });
-  await reached;
-  expect((await unbind()).status).toBe(200);
-  release();
+  await control.reached;
+  expect((await unbind(id)).status).toBe(200);
+  control.release();
   await expect(applying).rejects.toMatchObject({ code: "GIT_SOURCE_LEASE_LOST" });
-  expect((await sources.get(ownerPrincipal(), source.id)).source.authStatus).toBe(
-    "auth_failed",
-  );
+  expect(await authStatus()).toBe("auth_failed");
 
-  await rebind();
-  held = hold();
+  await bind(id);
+  control.hold();
   const previewing = sources.preview({ ...m(), sourceId: source.id });
-  await reached;
-  expect((await unbind()).status).toBe(200);
-  release();
+  await control.reached;
+  expect((await unbind(id)).status).toBe(200);
+  control.release();
   await expect(previewing).rejects.toMatchObject({ code: "CONFLICT" });
-  expect((await sources.get(ownerPrincipal(), source.id)).source.authStatus).toBe(
-    "auth_failed",
-  );
+  expect(await authStatus()).toBe("auth_failed");
+
+  // A preview that fails as revoked after the source was unbound, bound again
+  // and synced does not mark the recovered source.
+  await bind(id);
+  control.hold(true);
+  const failing = sources.preview({ ...m(), sourceId: source.id });
+  await control.reached;
+  control.held = null;
+  expect((await unbind(id)).status).toBe(200);
+  await bind(id);
+  await sources.preview({ ...m(), sourceId: source.id });
+  expect(await authStatus()).toBe("ok");
+  control.release();
+  await expect(failing).rejects.toMatchObject({ code: "GIT_SOURCE_AUTH_FAILED" });
+  expect(await authStatus()).toBe("ok");
+  expect((await unbind(id)).status).toBe(200);
   // A replay of the creation returns the stored source while unbound.
   expect(await sources.create({ ...m(), ...creation })).toMatchObject({
     id: source.id,
     authStatus: "auth_failed",
   });
+});
+
+it("suspension or removal seen when listing fences in-flight preview and apply", async () => {
+  const id = base + 9;
+  const fake = installation(id, "acme-list-fence", ["octo-owner"]);
+  await bind(id);
+  const { control, sources } = heldSources();
+  const source = await sources.create({
+    ...m(),
+    idempotencyKey: crypto.randomUUID(),
+    config: {
+      repositoryUrl: "https://github.com/acme-list-fence/private-skills",
+      ref: "main",
+      installationId: id,
+    },
+  });
+  const run = await sources.preview({ ...m(), sourceId: source.id });
+
+  control.hold();
+  const applying = sources.apply({ ...m(), sourceId: source.id, runId: run.id });
+  await control.reached;
+  fake.suspendedAt = new Date().toISOString();
+  expect(await status(id)).toBe("suspended");
+  control.release();
+  await expect(applying).rejects.toMatchObject({ code: "GIT_SOURCE_LEASE_LOST" });
+  expect((await sources.get(ownerPrincipal(), source.id)).source.authStatus).toBe(
+    "auth_failed",
+  );
+
+  fake.suspendedAt = null;
+  expect(await status(id)).toBe("active");
+  control.hold();
+  const previewing = sources.preview({ ...m(), sourceId: source.id });
+  await control.reached;
+  fake.removed = true;
+  expect(await status(id)).toBe("removed");
+  control.release();
+  await expect(previewing).rejects.toMatchObject({ code: "CONFLICT" });
+});
+
+it("keeps the newest GitHub observation when refreshes and binds overlap", async () => {
+  const id = base + 10;
+  const fake = installation(id, "acme-stale", ["octo-owner"]);
+  await bind(id);
+  // A service whose next installation fetch from GitHub, once answered,
+  // waits until released.
+  let release: () => void = () => undefined;
+  let reached = Promise.resolve();
+  let pending: { entered: () => void; gate: Promise<void> } | null = null;
+  const holdNext = () => {
+    let entered: () => void = () => undefined;
+    reached = new Promise((resolve) => (entered = resolve));
+    pending = { entered, gate: new Promise<void>((resolve) => (release = resolve)) };
+  };
+  const held = new GitHubInstallationService(services.database.pool, {
+    app: services.githubApp ?? null,
+    settings: services.githubInstallSettings ?? null,
+    stateSecret: services.tenancySecret,
+    fetcher: async (input, init) => {
+      const response = await fetch(input, init);
+      const hold = pending;
+      if (hold && String(input).endsWith(`/app/installations/${String(id)}`)) {
+        pending = null;
+        hold.entered();
+        await hold.gate;
+      }
+      return response;
+    },
+  });
+  const statusIn = (rows: { installationId: number; status: string }[]) =>
+    rows.find((i) => i.installationId === id)?.status;
+
+  // An older suspended observation does not overwrite a newer active one.
+  fake.suspendedAt = new Date().toISOString();
+  holdNext();
+  const stale = held.list(m());
+  await reached;
+  fake.suspendedAt = null;
+  expect(await status(id)).toBe("active");
+  release();
+  expect(statusIn(await stale)).toBe("active");
+  expect(await status(id)).toBe("active");
+
+  // Nor does it land on the row an unbind and a new bind created meanwhile.
+  fake.suspendedAt = new Date().toISOString();
+  holdNext();
+  const across = held.list(m());
+  await reached;
+  expect((await unbind(id)).status).toBe(200);
+  fake.suspendedAt = null;
+  await bind(id);
+  release();
+  expect(statusIn(await across)).toBe("active");
+
+  // A bind whose observation is older than a refresh keeps the refresh.
+  const state = await installState(owner);
+  fake.suspendedAt = new Date().toISOString();
+  holdNext();
+  const binding = held.completeSetup({
+    ...m(),
+    state,
+    installationId: id,
+    code: github.issueCode("octo-owner"),
+  });
+  await reached;
+  fake.suspendedAt = null;
+  expect(await status(id)).toBe("active");
+  release();
+  expect((await binding).status).toBe("active");
+  expect(await status(id)).toBe("active");
+});
+
+it("caps a workspace's installations and flags a truncated repository list", async () => {
+  // Fill another workspace up to the cap directly.
+  const bound = await services.database.pool.query<{ count: string }>(
+    "SELECT count(*) AS count FROM github_installations WHERE workspace_id=$1",
+    [other.workspaceId],
+  );
+  for (let i = Number(bound.rows[0]?.count ?? 0); i < 20; i += 1)
+    await services.database.pool.query(
+      "INSERT INTO github_installations(installation_id,workspace_id,account_login,account_type,repository_selection,bound_by) VALUES($1,$2,$3,'Organization','all',$4)",
+      [base + 100 + i, other.workspaceId, `acme-filler-${String(i)}`, other.userId],
+    );
+  const id = base + 11;
+  const fake = github.addInstallation({
+    id,
+    account: { login: "acme-cap", type: "Organization" },
+    repositorySelection: "all",
+    repositories: [],
+    users: ["octo-other", "octo-owner"],
+  });
+  expect(
+    await callback(other, {
+      state: await installState(other),
+      installationId: id,
+      code: github.issueCode("octo-other"),
+    }),
+  ).toEqual({ connected: null, error: "GITHUB_INSTALLATION_LIMIT_REACHED" });
+  expect((await list(other)).installations).toHaveLength(20);
+
+  // A repository list longer than the listing reads says it is truncated.
+  fake.repositories = Array.from({ length: 501 }, (_, i) => ({
+    fullName: `acme-cap/skills-${String(i)}`,
+    private: true,
+    defaultBranch: "main",
+  }));
+  await bind(id);
+  const repositories = await app.request(
+    `${api(owner.workspaceId)}/installations/${String(id)}/repositories`,
+    { headers: auth(owner) },
+  );
+  expect(repositories.status).toBe(200);
+  const listing = (
+    (await repositories.json()) as {
+      data: { repositories: unknown[]; truncated: boolean };
+    }
+  ).data;
+  expect(listing.repositories).toHaveLength(500);
+  expect(listing.truncated).toBe(true);
+});
+
+it("keeps consumed install states until well past their expiry", async () => {
+  const nonce = (label: string) => `test-consumed-nonce-${label}-${String(base)}`;
+  await services.database.pool.query(
+    "INSERT INTO github_installation_states(nonce,workspace_id,expires_at) VALUES($1,$3,now()-interval '1 minute'),($2,$3,now()-interval '2 days')",
+    [nonce("recent"), nonce("old"), owner.workspaceId],
+  );
+  const id = base + 12;
+  installation(id, "acme-retention", ["octo-owner"]);
+  await bind(id);
+  const kept = await services.database.pool.query<{ nonce: string }>(
+    "SELECT nonce FROM github_installation_states WHERE nonce = ANY($1)",
+    [[nonce("recent"), nonce("old")]],
+  );
+  expect(kept.rows.map((row) => row.nonce)).toEqual([nonce("recent")]);
 });
 
 it("reports an unconfigured GitHub App without reaching GitHub", async () => {
@@ -633,4 +836,47 @@ it("reports an unconfigured GitHub App without reaching GitHub", async () => {
     "GITHUB_APP_NOT_CONFIGURED",
   );
   expect(github.requests.slice(before)).toEqual([]);
+});
+
+it("reads bound installations when only the App is configured", async () => {
+  const id = base + 13;
+  const fake = installation(id, "acme-app-only", ["octo-owner"]);
+  await bind(id);
+  const appOnly = createApiApp({
+    getServices: async () =>
+      ({ ...services, githubInstallSettings: null }) as ApiServices,
+  });
+  fake.suspendedAt = new Date().toISOString();
+  const listed = await appOnly.request(`${api(owner.workspaceId)}/installations`, {
+    headers: auth(owner),
+  });
+  expect(listed.status).toBe(200);
+  const data = (
+    (await listed.json()) as {
+      data: {
+        installable: boolean;
+        installations: { installationId: number; status: string }[];
+      };
+    }
+  ).data;
+  expect(data.installable).toBe(false);
+  expect(data.installations.find((i) => i.installationId === id)?.status).toBe(
+    "suspended",
+  );
+  fake.suspendedAt = null;
+  expect(
+    (await list(owner)).installations.find((i) => i.installationId === id)?.status,
+  ).toBe("active");
+  const repositories = await appOnly.request(
+    `${api(owner.workspaceId)}/installations/${String(id)}/repositories`,
+    { headers: auth(owner) },
+  );
+  expect(repositories.status).toBe(200);
+  const install = await appOnly.request(`${api(owner.workspaceId)}/install`, {
+    headers: auth(owner),
+  });
+  expect(install.status).toBe(503);
+  expect(((await install.json()) as { error: { code: string } }).error.code).toBe(
+    "GITHUB_APP_NOT_CONFIGURED",
+  );
 });

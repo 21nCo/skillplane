@@ -21,6 +21,8 @@ const MAX_INSTALLATIONS = 20;
 const MAX_REPOSITORY_PAGES = 5;
 const MAX_USER_INSTALLATION_PAGES = 10;
 const STATE_PURPOSE = "github-install-state";
+// Consumed nonces are kept this long past their state's expiry.
+const STATE_RETENTION = "1 day";
 const NONCE = /^[A-Za-z0-9_-]{22,64}$/u;
 const INSTALLATION_ID = /^[1-9][0-9]{0,15}$/u;
 const OAUTH_CODE = /^[A-Za-z0-9_.-]{1,256}$/u;
@@ -249,6 +251,36 @@ function observedInstallation(value: unknown): ObservedInstallation | null {
     repositorySelection: selection,
     suspendedAt,
   };
+}
+
+function boundElsewhere(): never {
+  throw new DomainError(
+    "GITHUB_INSTALLATION_BOUND_ELSEWHERE",
+    "This GitHub App installation is already connected to another workspace",
+    409,
+  );
+}
+
+/**
+ * Fences in-flight previews and applies of the sources reading through an
+ * installation that stops being usable (unbound, suspended or removed): a new
+ * revision voids their previews and clearing the lease voids their applies,
+ * so none of them records a sync afterwards. Sources are locked in id order.
+ */
+async function fenceInstallationSources(
+  client: PoolClient,
+  workspaceId: string,
+  installationId: number,
+): Promise<{ id: string }[]> {
+  const sources = await client.query<{ id: string }>(
+    "SELECT id FROM skill_sources WHERE workspace_id=$1 AND github_installation_id=$2 ORDER BY id FOR UPDATE",
+    [workspaceId, installationId],
+  );
+  await client.query(
+    "UPDATE skill_sources SET revision=revision+1,sync_token=NULL,sync_expires_at=NULL,updated_at=now() WHERE workspace_id=$1 AND github_installation_id=$2",
+    [workspaceId, installationId],
+  );
+  return sources.rows;
 }
 
 /**
@@ -514,25 +546,31 @@ export class GitHubInstallationService {
       this.pool,
       m.requestId,
       async ({ client }) => {
-        // Expiry is judged by the same clock that prunes consumed nonces, so a
-        // pruned nonce is always an expired state and never claimable again.
-        const fresh = await client.query("SELECT 1 WHERE $1::timestamptz > now()", [
-          new Date(claims.e),
-        ]);
-        if (!fresh.rowCount) return null;
+        // Expiry is judged by the database clock. A consumed nonce is pruned
+        // only long after its state expired, so no claim that saw the state
+        // fresh can still be running and insert the nonce a second time.
+        const fresh = await client.query<{ observed_from: string }>(
+          "SELECT clock_timestamp()::text AS observed_from WHERE $1::timestamptz > now()",
+          [new Date(claims.e)],
+        );
+        if (!fresh.rows[0]) return null;
         await client.query(
-          "DELETE FROM github_installation_states WHERE workspace_id=$1 AND expires_at <= now()",
+          `DELETE FROM github_installation_states WHERE workspace_id=$1 AND expires_at < now() - interval '${STATE_RETENTION}'`,
           [claims.w],
         );
-        return client.query(
+        const inserted = await client.query(
           "INSERT INTO github_installation_states(nonce,workspace_id,expires_at) VALUES($1,$2,$3) ON CONFLICT (nonce) DO NOTHING",
           [claims.n, claims.w, new Date(claims.e)],
         );
+        return {
+          claimed: Boolean(inserted.rowCount),
+          observedFrom: fresh.rows[0].observed_from,
+        };
       },
       { fencingEpoch: m.fencingEpoch },
     );
     if (!consumed) invalidState();
-    if (!consumed.rowCount)
+    if (!consumed.claimed)
       throw new DomainError(
         "GITHUB_INSTALL_STATE_REPLAYED",
         "The GitHub install link was already used; start again",
@@ -561,33 +599,57 @@ export class GitHubInstallationService {
       this.pool,
       m.requestId,
       async ({ client }) => {
-        const bound = await client.query<InstallationRow>(
-          `INSERT INTO github_installations
-             (installation_id,workspace_id,account_login,account_type,repository_selection,suspended_at,bound_by)
-           VALUES ($1,$2,$3,$4,$5,$6,$7)
-           ON CONFLICT (installation_id) DO UPDATE SET
-             account_login=EXCLUDED.account_login, account_type=EXCLUDED.account_type,
-             repository_selection=EXCLUDED.repository_selection, suspended_at=EXCLUDED.suspended_at,
-             removed_at=NULL, checked_at=now(), updated_at=now()
-           WHERE github_installations.workspace_id=EXCLUDED.workspace_id
-           RETURNING *`,
-          [
-            installationId,
-            m.principal.workspaceId,
-            observed.accountLogin,
-            observed.accountType,
-            observed.repositorySelection,
-            observed.suspendedAt,
-            m.principal.actorId,
-          ],
-        );
-        const row = bound.rows[0];
-        if (!row)
-          throw new DomainError(
-            "GITHUB_INSTALLATION_BOUND_ELSEWHERE",
-            "This GitHub App installation is already connected to another workspace",
-            409,
+        const workspaceId = m.principal.workspaceId;
+        // Serializes this workspace's binds so the installation cap holds.
+        await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [
+          `github-installations:${workspaceId}`,
+        ]);
+        const existing = (
+          await client.query<InstallationRow>(
+            "SELECT * FROM github_installations WHERE installation_id=$1 FOR UPDATE",
+            [installationId],
+          )
+        ).rows[0];
+        let row: InstallationRow | undefined;
+        if (existing) {
+          if (existing.workspace_id !== workspaceId) boundElsewhere();
+          // Binding again records this observation unless a newer one landed.
+          row =
+            (await this.observe(client, existing, consumed.observedFrom, observed)) ??
+            existing;
+        } else {
+          const count = await client.query<{ count: string }>(
+            "SELECT count(*) AS count FROM github_installations WHERE workspace_id=$1",
+            [workspaceId],
           );
+          if (Number(count.rows[0]?.count ?? 0) >= MAX_INSTALLATIONS)
+            throw new DomainError(
+              "GITHUB_INSTALLATION_LIMIT_REACHED",
+              `A workspace can connect at most ${String(MAX_INSTALLATIONS)} GitHub App installations; disconnect one first`,
+              409,
+            );
+          row = (
+            await client.query<InstallationRow>(
+              `INSERT INTO github_installations
+                 (installation_id,workspace_id,account_login,account_type,repository_selection,suspended_at,bound_by,checked_at)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8::timestamptz)
+               ON CONFLICT (installation_id) DO NOTHING
+               RETURNING *`,
+              [
+                installationId,
+                workspaceId,
+                observed.accountLogin,
+                observed.accountType,
+                observed.repositorySelection,
+                observed.suspendedAt,
+                m.principal.actorId,
+                consumed.observedFrom,
+              ],
+            )
+          ).rows[0];
+          // Another workspace bound it concurrently.
+          if (!row) boundElsewhere();
+        }
         await this.audit(client, m, installationId, "bound", {
           accountLogin: observed.accountLogin,
         });
@@ -595,6 +657,54 @@ export class GitHubInstallationService {
       },
       { fencingEpoch: m.fencingEpoch },
     );
+  }
+
+  /**
+   * Records what GitHub reported about a locked installation row (null when
+   * it was removed) if no newer observation was recorded since
+   * `observedFrom`, the database time the observation started. An active
+   * installation becoming suspended or removed fences its sources. Returns
+   * the updated row, or null when the observation is stale.
+   */
+  private async observe(
+    client: PoolClient,
+    current: InstallationRow,
+    observedFrom: string,
+    observed: ObservedInstallation | null,
+  ): Promise<InstallationRow | null> {
+    const updated = (
+      await client.query<InstallationRow>(
+        observed
+          ? `UPDATE github_installations SET account_login=$4, account_type=$5, repository_selection=$6,
+               suspended_at=$7, removed_at=NULL, checked_at=$3::timestamptz, updated_at=now()
+             WHERE workspace_id=$1 AND installation_id=$2 AND checked_at < $3::timestamptz RETURNING *`
+          : `UPDATE github_installations SET removed_at=COALESCE(removed_at, now()), checked_at=$3::timestamptz, updated_at=now()
+             WHERE workspace_id=$1 AND installation_id=$2 AND checked_at < $3::timestamptz RETURNING *`,
+        observed
+          ? [
+              current.workspace_id,
+              current.installation_id,
+              observedFrom,
+              observed.accountLogin,
+              observed.accountType,
+              observed.repositorySelection,
+              observed.suspendedAt,
+            ]
+          : [current.workspace_id, current.installation_id, observedFrom],
+      )
+    ).rows[0];
+    if (!updated) return null;
+    if (
+      !current.removed_at &&
+      !current.suspended_at &&
+      (updated.removed_at || updated.suspended_at)
+    )
+      await fenceInstallationSources(
+        client,
+        current.workspace_id,
+        Number(current.installation_id),
+      );
+    return updated;
   }
 
   private audit(
@@ -621,12 +731,12 @@ export class GitHubInstallationService {
    */
   async list(m: Mutation): Promise<GitHubInstallation[]> {
     authorize(m.principal, "workspace:read");
-    const rows = (
-      await this.pool.query<InstallationRow>(
-        "SELECT * FROM github_installations WHERE workspace_id=$1 ORDER BY created_at, installation_id LIMIT $2",
+    const select = (client: Pool | PoolClient) =>
+      client.query<InstallationRow & { created_key: string; observed_from: string }>(
+        "SELECT *, created_at::text AS created_key, clock_timestamp()::text AS observed_from FROM github_installations WHERE workspace_id=$1 ORDER BY created_at, installation_id LIMIT $2",
         [m.principal.workspaceId, MAX_INSTALLATIONS],
-      )
-    ).rows;
+      );
+    const rows = (await select(this.pool)).rows;
     if (!this.#options.app || rows.length === 0) return rows.map(record);
     const observed = await Promise.all(
       rows.map((row) =>
@@ -638,42 +748,25 @@ export class GitHubInstallationService {
     );
     const checked = observed.filter((entry) => entry.ok);
     if (checked.length === 0) return rows.map(record);
-    const refreshed = await withDomainTransaction(
+    return withDomainTransaction(
       this.pool,
       m.requestId,
       async ({ client }) => {
-        const out = new Map<string, InstallationRow>();
         for (const { row, value } of checked) {
-          const updated = await client.query<InstallationRow>(
-            value
-              ? `UPDATE github_installations SET account_login=$3, account_type=$4, repository_selection=$5,
-                   suspended_at=$6, removed_at=NULL, checked_at=now(), updated_at=now()
-                 WHERE workspace_id=$1 AND installation_id=$2 RETURNING *`
-              : `UPDATE github_installations SET removed_at=COALESCE(removed_at, now()), checked_at=now(), updated_at=now()
-                 WHERE workspace_id=$1 AND installation_id=$2 RETURNING *`,
-            value
-              ? [
-                  m.principal.workspaceId,
-                  row.installation_id,
-                  value.accountLogin,
-                  value.accountType,
-                  value.repositorySelection,
-                  value.suspendedAt,
-                ]
-              : [m.principal.workspaceId, row.installation_id],
-          );
-          if (updated.rows[0]) out.set(row.installation_id, updated.rows[0]);
+          // Only the row that was observed: an installation unbound and bound
+          // again meanwhile is a new row and keeps its own observation.
+          const current = (
+            await client.query<InstallationRow>(
+              "SELECT * FROM github_installations WHERE workspace_id=$1 AND installation_id=$2 AND created_at=$3::timestamptz FOR UPDATE",
+              [m.principal.workspaceId, row.installation_id, row.created_key],
+            )
+          ).rows[0];
+          if (current) await this.observe(client, current, row.observed_from, value);
         }
-        return out;
+        return (await select(client)).rows.map(record);
       },
       { fencingEpoch: m.fencingEpoch, isolation: "read committed" },
     );
-    return rows
-      .filter(
-        (row) =>
-          !checked.some((c) => c.row === row) || refreshed.has(row.installation_id),
-      )
-      .map((row) => record(refreshed.get(row.installation_id) ?? row));
   }
 
   /**
@@ -700,18 +793,12 @@ export class GitHubInstallationService {
             "GitHub App installation was not found",
             404,
           );
-        // Fence in-flight previews and applies of the affected sources: a new
-        // revision voids their previews and clearing the lease voids their
-        // applies, so none of them records a sync after the unbind.
-        const sources = await client.query<{ id: string }>(
-          "SELECT id FROM skill_sources WHERE workspace_id=$1 AND github_installation_id=$2 ORDER BY id FOR UPDATE",
-          [m.principal.workspaceId, installationId],
+        const sources = await fenceInstallationSources(
+          client,
+          m.principal.workspaceId,
+          installationId,
         );
-        await client.query(
-          "UPDATE skill_sources SET revision=revision+1,sync_token=NULL,sync_expires_at=NULL,updated_at=now() WHERE workspace_id=$1 AND github_installation_id=$2",
-          [m.principal.workspaceId, installationId],
-        );
-        for (const source of sources.rows)
+        for (const source of sources)
           await insertPrincipalAudit(client, m.principal, {
             eventType: "skill_source.auth_failed",
             action: "workspace:update",
@@ -722,9 +809,9 @@ export class GitHubInstallationService {
             metadata: { reason: "auth_failed" },
           });
         await this.audit(client, m, installationId, "unbound", {
-          sourcesMarked: sources.rows.length,
+          sourcesMarked: sources.length,
         });
-        return { sourcesMarked: sources.rows.length };
+        return { sourcesMarked: sources.length };
       },
       { fencingEpoch: m.fencingEpoch },
     );
@@ -753,7 +840,7 @@ export class GitHubInstallationService {
   async repositories(
     principal: Principal,
     installationIdInput: unknown,
-  ): Promise<GitHubInstallationRepository[]> {
+  ): Promise<{ repositories: GitHubInstallationRepository[]; truncated: boolean }> {
     authorize(principal, "workspace:read");
     const installationId = parseInstallationId(installationIdInput);
     await this.activeInstallation(this.pool, principal.workspaceId, installationId);
@@ -783,6 +870,9 @@ export class GitHubInstallationService {
     if (typeof token !== "string" || !TOKEN.test(token))
       unavailable("GitHub returned an invalid installation token");
     const repositories: GitHubInstallationRepository[] = [];
+    // Set when GitHub has more repositories than the listing reads.
+    let truncated = false,
+      read = 0;
     for (let page = 1; page <= MAX_REPOSITORY_PAGES; page += 1) {
       const response = await this.github(
         `${app.apiBaseUrl}/installation/repositories?per_page=100&page=${String(page)}`,
@@ -794,7 +884,8 @@ export class GitHubInstallationService {
           "GitHub could not list the installation's repositories; retry later",
         );
       }
-      const list = object(await readJson(response))?.repositories;
+      const body = object(await readJson(response));
+      const list = body?.repositories;
       if (!Array.isArray(list))
         unavailable("GitHub returned an invalid repository list");
       for (const entry of list) {
@@ -814,7 +905,11 @@ export class GitHubInstallationService {
         });
       }
       if (list.length < 100) break;
+      read += list.length;
+      truncated =
+        page === MAX_REPOSITORY_PAGES &&
+        (typeof body?.total_count !== "number" || body.total_count > read);
     }
-    return repositories;
+    return { repositories, truncated };
   }
 }

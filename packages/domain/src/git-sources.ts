@@ -233,10 +233,17 @@ export class GitSourceService {
       metadata: { reason: "auth_failed" },
     });
   }
-  private async markAuthFailed(m: Mutation, sourceId: string) {
-    await this.transaction(m, (c) => this.authFailedAudit(c, m, sourceId)).catch(
-      () => undefined,
-    );
+  // A preview marks the source only at the revision it started from: once
+  // the source changed (an unbind fences it with a new revision), a stale
+  // failure must not mark a source that may have recovered since.
+  private async markAuthFailed(m: Mutation, sourceId: string, revision: number) {
+    await this.transaction(m, async (c) => {
+      const current = await c.query(
+        "SELECT 1 FROM skill_sources WHERE workspace_id=$1 AND id=$2 AND revision=$3 FOR UPDATE",
+        [m.principal.workspaceId, sourceId, revision],
+      );
+      if (current.rowCount) await this.authFailedAudit(c, m, sourceId);
+    }).catch(() => undefined);
   }
   private async row(
     p: Principal,
@@ -512,7 +519,8 @@ export class GitSourceService {
     const snapshot = await this.providerFor(source)
         .then((provider) => provider.snapshot(this.config(source)))
         .catch(async (error: unknown) => {
-          if (isGitHubAuthFailed(error)) await this.markAuthFailed(m, source.id);
+          if (isGitHubAuthFailed(error))
+            await this.markAuthFailed(m, source.id, source.revision);
           throw error;
         }),
       bindings = await this.bindings(m.principal, source.id);

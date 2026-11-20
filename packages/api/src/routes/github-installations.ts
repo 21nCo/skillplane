@@ -59,12 +59,13 @@ export function registerGitHubInstallationRoutes(app: Hono<ApiEnvironment>) {
   });
 
   app.get(`${base}/installations/:installationId/repositories`, async (c) => {
-    const repositories = await service(c).repositories(
+    // `truncated` is set when GitHub has more repositories than are listed.
+    const listing = await service(c).repositories(
       await workspaceUser(c),
       c.req.param("installationId"),
     );
     c.header("Cache-Control", "private, no-store");
-    return c.json(success(c, { repositories }));
+    return c.json(success(c, listing));
   });
 
   // GitHub returns the browser here after an install (the App's callback

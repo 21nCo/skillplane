@@ -211,13 +211,17 @@ export async function startFakeGitHubInstallations(
         const installation = id === undefined ? undefined : installations.get(id);
         if (!installation || installation.removed)
           return send(401, { message: "Bad credentials" });
+        const perPage = Number(url.searchParams.get("per_page") ?? "30");
+        const page = Number(url.searchParams.get("page") ?? "1");
         return send(200, {
           total_count: installation.repositories.length,
-          repositories: installation.repositories.map((r) => ({
-            full_name: r.fullName,
-            private: r.private,
-            default_branch: r.defaultBranch,
-          })),
+          repositories: installation.repositories
+            .slice((page - 1) * perPage, page * perPage)
+            .map((r) => ({
+              full_name: r.fullName,
+              private: r.private,
+              default_branch: r.defaultBranch,
+            })),
         });
       }
       return send(404, { message: "Not Found" });

@@ -129,26 +129,41 @@ function segment(value: string | undefined): string {
 
 const GITHUB_SETUP_PATHS = new Set(["/github/setup", "/api/v1/github/setup"]);
 
-// The install callback is a browser navigation: a routing refusal returns to
-// GitHub settings with its error code, never as a JSON body.
-async function githubSetupRefusal(response: Response): Promise<Response> {
-  if (response.status >= 300 && response.status < 400) return response;
+const SETUP_ERROR_CODE = /^[A-Z][A-Z0-9_]{0,63}$/u;
+
+// `search` is the settings query, starting with "?".
+function settingsRedirect(search: string, headers = new Headers()): Response {
+  headers.set("location", `${GITHUB_SETTINGS_PATH}${search}`);
+  headers.set("cache-control", "no-store");
+  headers.set("referrer-policy", "no-referrer");
+  return new Response(null, { status: 302, headers });
+}
+
+const settingsError = (code: string) =>
+  settingsRedirect(`?${new URLSearchParams({ github_error: code }).toString()}`);
+
+// The install callback is a browser navigation carrying GitHub's code and the
+// signed state. Whatever answers it (the setup route, a routing or membership
+// refusal, rate limiting or a failure) returns the browser to GitHub settings
+// with an error code, never as a JSON body, and is never cached or passed on
+// as a referrer.
+async function githubSetupResponse(response: Response): Promise<Response> {
+  const location = response.headers.get("location") ?? "";
+  if (response.status === 302 && location.startsWith(`${GITHUB_SETTINGS_PATH}?`))
+    return settingsRedirect(
+      location.slice(GITHUB_SETTINGS_PATH.length),
+      new Headers(response.headers),
+    );
   let code = "SERVICE_UNAVAILABLE";
+  if (response.status === 429) code = "RATE_LIMITED";
   try {
     const body = (await response.json()) as { error?: { code?: unknown } };
-    if (typeof body.error?.code === "string" && /^[A-Z_]{1,64}$/u.test(body.error.code))
+    if (typeof body.error?.code === "string" && SETUP_ERROR_CODE.test(body.error.code))
       code = body.error.code;
   } catch {
-    // Keeps the generic code.
+    // Keeps the status-derived code.
   }
-  return new Response(null, {
-    status: 302,
-    headers: {
-      location: `${GITHUB_SETTINGS_PATH}?${new URLSearchParams({ github_error: code }).toString()}`,
-      "cache-control": "no-store",
-      "referrer-policy": "no-referrer",
-    },
-  });
+  return settingsError(code);
 }
 
 export function classifyApiScope(request: Request): ApiScope {
@@ -380,7 +395,7 @@ export function createRoutedApiApplication(input: {
   readonly local: FetchApplication;
   readonly services: ApiServiceProvider;
 }): FetchApplication {
-  return {
+  const routed: FetchApplication = {
     async fetch(incoming, bindings) {
       const runtime = parseRuntimeConfig(
         bindings,
@@ -449,7 +464,6 @@ export function createRoutedApiApplication(input: {
           return await input.local.fetch(request, bindings);
         }
         const services = await input.services(bindings);
-        const setup = GITHUB_SETUP_PATHS.has(new URL(request.url).pathname);
         try {
           if (await shouldUsePublicProjection(request, scope, services)) {
             // The control-plane projection is authoritative for anonymous reads,
@@ -496,20 +510,15 @@ export function createRoutedApiApplication(input: {
             assertionTtlMs: runtime.routing.ttlMs,
             onEvent: (event) => logWorkspaceRoutingEvent("app", event),
           });
-          const response = await gateway.handle(forwardedRequest);
-          return setup ? await githubSetupRefusal(response) : response;
+          return await gateway.handle(forwardedRequest);
         } catch (error) {
-          const refusal =
-            error instanceof ApiRoutingError
-              ? error.response()
-              : error instanceof DatafnRoutingError
-                ? error.toResponse()
-                : new ApiRoutingError(
-                    503,
-                    "WORKSPACE_ROUTING_UNAVAILABLE",
-                    "Workspace routing is temporarily unavailable",
-                  ).response();
-          return setup ? await githubSetupRefusal(refusal) : refusal;
+          if (error instanceof ApiRoutingError) return error.response();
+          if (error instanceof DatafnRoutingError) return error.toResponse();
+          return new ApiRoutingError(
+            503,
+            "WORKSPACE_ROUTING_UNAVAILABLE",
+            "Workspace routing is temporarily unavailable",
+          ).response();
         } finally {
           await input.services.release?.(services);
         }
@@ -560,6 +569,17 @@ export function createRoutedApiApplication(input: {
         ).response();
       } finally {
         await input.services.release?.(services);
+      }
+    },
+  };
+  return {
+    async fetch(incoming, bindings) {
+      if (!GITHUB_SETUP_PATHS.has(new URL(incoming.url).pathname))
+        return routed.fetch(incoming, bindings);
+      try {
+        return await githubSetupResponse(await routed.fetch(incoming, bindings));
+      } catch {
+        return settingsError("SERVICE_UNAVAILABLE");
       }
     },
   };
