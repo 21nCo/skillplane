@@ -1,0 +1,21 @@
+app/src/routes/(app)/[workspaceSlug]/sources/+page.svelte
+  s_73c29d55e0427b::t_83eab658d074d9 48-56,156-160,166-167,170-171,174,176,184-189,191-192,239-258,332,408
+app/src/routes/(app)/settings/github/+page.svelte
+  s_73c29d55e0427b::t_a07cee72de3568 2,35,37-43,55,60-75,78,81-83,87,91-92,95,97-98,104,108-113,115,117-118,120-125,134,137,143,151-157,175,270,281-295,317-321,410,414-427,431-443
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ab0ab0116504beabee269b0af1bed6cef61b6f38",
+  "prompts": {},
+  "sessions": {
+    "s_73c29d55e0427b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_73c29d55e0427b",
+        "model": "unknown"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
