@@ -38,12 +38,14 @@ interface SourceRow {
   github_installation_id: string | null;
 }
 // GitHub authentication state of a source, derived from the latest of the
-// source's auth_failed, previewed and synced audit events: a revoked-access
+// source's auth_failed, previewed and synced audit events (ordered by when a
+// private source's preview asked GitHub, `observedFrom`, else when
+// recorded): a revoked-access
 // marker (from a preview or apply, or from unbinding the source's GitHub App
 // installation) holds until the next successful preview or apply. A source
 // whose installation is unbound, removed or suspended is auth_failed anyway.
 export type GitSourceAuthStatus = "ok" | "auth_failed";
-const SOURCE_COLUMNS = `s.*, (COALESCE((SELECT e.event_type='skill_source.auth_failed' FROM audit_events e WHERE e.workspace_id=s.workspace_id AND e.resource_type='skill_source' AND e.resource_id=s.id AND e.event_type IN ('skill_source.auth_failed','skill_source.previewed','skill_source.synced') ORDER BY e.occurred_at DESC,e.id DESC LIMIT 1),false) OR (s.github_installation_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM github_installations g WHERE g.workspace_id=s.workspace_id AND g.installation_id=s.github_installation_id AND g.removed_at IS NULL AND g.suspended_at IS NULL))) AS auth_failed`;
+const SOURCE_COLUMNS = `s.*, (COALESCE((SELECT e.event_type='skill_source.auth_failed' FROM audit_events e WHERE e.workspace_id=s.workspace_id AND e.resource_type='skill_source' AND e.resource_id=s.id AND e.event_type IN ('skill_source.auth_failed','skill_source.previewed','skill_source.synced') ORDER BY COALESCE((e.metadata->>'observedFrom')::timestamptz,e.occurred_at) DESC,e.occurred_at DESC,e.id DESC LIMIT 1),false) OR (s.github_installation_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM github_installations g WHERE g.workspace_id=s.workspace_id AND g.installation_id=s.github_installation_id AND g.removed_at IS NULL AND g.suspended_at IS NULL))) AS auth_failed`;
 export interface GitSource {
   id: string;
   workspaceId: string;
@@ -222,7 +224,12 @@ export class GitSourceService {
   // SOURCE_COLUMNS). A failed
   // marker write never masks the typed auth_failed error. An apply writes it
   // only while it still holds its lease (see apply).
-  private authFailedAudit(c: PoolClient, m: Mutation, sourceId: string) {
+  private authFailedAudit(
+    c: PoolClient,
+    m: Mutation,
+    sourceId: string,
+    observedFrom?: string,
+  ) {
     return insertPrincipalAudit(c, m.principal, {
       eventType: "skill_source.auth_failed",
       action: "workspace:update",
@@ -230,26 +237,35 @@ export class GitSourceService {
       requestId: m.requestId,
       resourceType: "skill_source",
       resourceId: sourceId,
-      metadata: { reason: "auth_failed" },
+      metadata: { reason: "auth_failed", ...(observedFrom ? { observedFrom } : {}) },
     });
   }
-  // A preview marks the source only at the revision it started from and only
-  // if no preview or sync succeeded since it started (`startedAt`, database
-  // time): once the source changed (an unbind fences it with a new revision)
-  // or recovered, a stale failure must not mark it again.
+  // A preview marks the source only at the revision it started from: once
+  // the source changed (an unbind fences it with a new revision), a stale
+  // failure must not mark it. A private source's marker carries when its
+  // preview asked GitHub (`observedFrom`), so it never outranks a preview
+  // that asked later, whichever commits first (see SOURCE_COLUMNS).
   private async markAuthFailed(
     m: Mutation,
     sourceId: string,
     revision: number,
-    startedAt: string,
+    observedFrom: string | undefined,
   ) {
     await this.transaction(m, async (c) => {
       const current = await c.query(
-        "SELECT 1 FROM skill_sources s WHERE s.workspace_id=$1 AND s.id=$2 AND s.revision=$3 AND NOT EXISTS (SELECT 1 FROM audit_events e WHERE e.workspace_id=s.workspace_id AND e.resource_type='skill_source' AND e.resource_id=s.id AND e.event_type IN ('skill_source.previewed','skill_source.synced') AND e.occurred_at >= $4::timestamptz) FOR UPDATE OF s",
-        [m.principal.workspaceId, sourceId, revision, startedAt],
+        "SELECT 1 FROM skill_sources WHERE workspace_id=$1 AND id=$2 AND revision=$3 FOR UPDATE",
+        [m.principal.workspaceId, sourceId, revision],
       );
-      if (current.rowCount) await this.authFailedAudit(c, m, sourceId);
+      if (current.rowCount) await this.authFailedAudit(c, m, sourceId, observedFrom);
     }).catch(() => undefined);
+  }
+  // The database time, taken right before a private source's preview asks
+  // GitHub through its installation.
+  private async observedFrom(s: GitSource): Promise<string | undefined> {
+    if (s.installationId === null) return undefined;
+    return (
+      await this.pool.query<{ now: string }>("SELECT clock_timestamp()::text AS now")
+    ).rows[0]?.now;
   }
   private async row(
     p: Principal,
@@ -519,17 +535,20 @@ export class GitSourceService {
   }
   async preview(m: Mutation & { sourceId: string }) {
     authorize(m.principal, "workspace:update");
-    const startedAt = (
-      await this.pool.query<{ now: string }>("SELECT clock_timestamp()::text AS now")
-    ).rows[0]?.now;
     const source = record(await this.row(m.principal, m.sourceId));
     if (source.archivedAt)
       throw new DomainError("CONFLICT", "Restore the source before syncing", 409);
+    // When this preview asked GitHub: before reading the installation, then
+    // right before the snapshot's requests.
+    let observedFrom = await this.observedFrom(source);
     const snapshot = await this.providerFor(source)
-        .then((provider) => provider.snapshot(this.config(source)))
+        .then(async (provider) => {
+          observedFrom = await this.observedFrom(source);
+          return provider.snapshot(this.config(source));
+        })
         .catch(async (error: unknown) => {
-          if (isGitHubAuthFailed(error) && startedAt)
-            await this.markAuthFailed(m, source.id, source.revision, startedAt);
+          if (isGitHubAuthFailed(error))
+            await this.markAuthFailed(m, source.id, source.revision, observedFrom);
           throw error;
         }),
       bindings = await this.bindings(m.principal, source.id);
@@ -723,6 +742,7 @@ export class GitSourceService {
       await this.audit(c, m, source.id, "previewed", {
         runId: id,
         commitSha: snapshot.commitSha,
+        ...(observedFrom ? { observedFrom } : {}),
       });
       const row = r.rows[0];
       if (!row) throw new DomainError("CONFLICT", "Preview could not be saved", 409);

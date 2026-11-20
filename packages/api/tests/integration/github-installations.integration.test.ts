@@ -1117,23 +1117,48 @@ it("orders a bind's observation by its App request, not by its claim", async () 
         [source.id],
       )
     ).rows[0]?.revision;
-  const { control, service } = heldInstallations(
-    (url) => url.endsWith("/login/oauth/access_token"),
-    true,
-  );
-  control.arm();
-  const binding = service.completeSetup({
+  // An App whose next JWT signing waits until released: setup pauses after
+  // its claim and OAuth, before it asks GitHub for the installation.
+  const app = services.githubApp;
+  if (!app) throw new Error("GitHub App is not configured");
+  let release: () => void = () => undefined;
+  let entered: () => void = () => undefined;
+  const reached = new Promise<void>((resolve) => (entered = resolve));
+  let gate: Promise<void> | null = new Promise<void>((resolve) => (release = resolve));
+  const slowApp = new Proxy(app, {
+    get(target, key) {
+      if (key === "appJwt")
+        return async () => {
+          const held = gate;
+          gate = null;
+          if (held) {
+            entered();
+            await held;
+          }
+          return target.appJwt();
+        };
+      const value: unknown = Reflect.get(target, key, target);
+      return typeof value === "function"
+        ? (value as (...args: unknown[]) => unknown).bind(target)
+        : value;
+    },
+  });
+  const binding = new GitHubInstallationService(services.database.pool, {
+    app: slowApp,
+    settings: services.githubInstallSettings ?? null,
+    stateSecret: services.tenancySecret,
+  }).completeSetup({
     ...m(),
     state: await installState(owner),
     installationId: id,
     code: github.issueCode("octo-owner"),
   });
-  await control.reached;
-  // A refresh after the claim records active; GitHub then suspends it.
+  await reached;
+  // A refresh while setup signs records active; GitHub then suspends it.
   expect(await status(id)).toBe("active");
   fake.suspendedAt = new Date().toISOString();
   const before = await revision();
-  control.release();
+  release();
   expect((await binding).status).toBe("suspended");
   expect(await revision()).toBe((before ?? 0) + 1);
   fake.suspendedAt = null;
@@ -1154,14 +1179,38 @@ it("never lets a failed preview supersede a newer successful one", async () => {
       installationId: id,
     },
   });
+  const authStatus = async () =>
+    (await sources.get(ownerPrincipal(), source.id)).source.authStatus;
+  const pause = () => new Promise((resolve) => setTimeout(resolve, 300));
   control.hold(true);
   const failing = sources.preview({ ...m(), sourceId: source.id });
+  failing.catch(() => undefined);
   await control.reached;
   control.held = null;
-  await sources.preview({ ...m(), sourceId: source.id });
-  control.release();
+  // The newer success saves while the stale failure records its marker: both
+  // wait on a lock the test holds, so neither commits before the other runs.
+  const lock = await services.database.pool.connect();
+  try {
+    await lock.query("BEGIN");
+    await lock.query("SELECT 1 FROM skill_sources WHERE id=$1 FOR UPDATE", [source.id]);
+    const succeeding = sources.preview({ ...m(), sourceId: source.id });
+    await pause();
+    control.release();
+    await pause();
+    await lock.query("COMMIT");
+    await succeeding;
+  } finally {
+    lock.release();
+  }
   await expect(failing).rejects.toMatchObject({ code: "GIT_SOURCE_AUTH_FAILED" });
-  expect((await sources.get(ownerPrincipal(), source.id)).source.authStatus).toBe("ok");
+  expect(await authStatus()).toBe("ok");
+  // A failure that asked GitHub after that success governs.
+  control.hold(true);
+  const later = sources.preview({ ...m(), sourceId: source.id });
+  await control.reached;
+  control.release();
+  await expect(later).rejects.toMatchObject({ code: "GIT_SOURCE_AUTH_FAILED" });
+  expect(await authStatus()).toBe("auth_failed");
 });
 
 it("refuses an unfinished private-source apply while its installation is inactive", async () => {
@@ -1238,6 +1287,13 @@ it("withholds a repository listing whose binding changed while it was read", asy
       fake.suspendedAt = new Date().toISOString();
       expect(await status(id)).toBe("suspended");
     },
+    // Suspended and resumed before the listing finishes.
+    async () => {
+      fake.suspendedAt = new Date().toISOString();
+      expect(await status(id)).toBe("suspended");
+      fake.suspendedAt = null;
+      expect(await status(id)).toBe("active");
+    },
   ];
   for (const change of changes) {
     control.arm();
@@ -1251,9 +1307,13 @@ it("withholds a repository listing whose binding changed while it was read", asy
     if ((await status(id)) === undefined) await bind(id);
     expect(await status(id)).toBe("active");
   }
-  expect((await service.repositories(ownerPrincipal(), id)).repositories).toHaveLength(
-    1,
-  );
+  // Refreshes that change nothing do not withhold a listing.
+  control.arm();
+  const steady = service.repositories(ownerPrincipal(), id);
+  await control.reached;
+  expect(await status(id)).toBe("active");
+  control.release();
+  expect((await steady).repositories).toHaveLength(1);
 });
 
 it("bounds GitHub responses and classifies refused discovery", async () => {
@@ -1276,6 +1336,28 @@ it("bounds GitHub responses and classifies refused discovery", async () => {
     },
   });
   expect((await large.repositories(ownerPrincipal(), id)).repositories).toHaveLength(1);
+  // A contradictory total_count never ends a listing after a full page.
+  const miscounted = new GitHubInstallationService(services.database.pool, {
+    app: services.githubApp ?? null,
+    settings: services.githubInstallSettings ?? null,
+    stateSecret: services.tenancySecret,
+    fetcher: async (input, init) => {
+      const response = await fetch(input, init);
+      if (!String(input).includes("/installation/repositories")) return response;
+      const body = (await response.json()) as Record<string, unknown>;
+      return Response.json({ ...body, total_count: 0 }, { status: response.status });
+    },
+  });
+  const granted = fake.repositories;
+  fake.repositories = Array.from({ length: 150 }, (_, i) => ({
+    fullName: `acme-bounds/skills-${String(i)}`,
+    private: true,
+    defaultBranch: "main",
+  }));
+  const counted = await miscounted.repositories(ownerPrincipal(), id);
+  expect(counted.repositories).toHaveLength(150);
+  expect(counted).toMatchObject({ truncated: false, nextCursor: null });
+  fake.repositories = granted;
   // An endless body is refused whether its length is missing or wrong, and
   // the listing keeps the last observation.
   fake.suspendedAt = new Date().toISOString();
@@ -1310,6 +1392,15 @@ it("bounds GitHub responses and classifies refused discovery", async () => {
       account: { login: "acme-bounds", type: "Organization" },
       repository_selection: "selected",
       suspended_at: "not-a-date",
+    },
+  });
+  expect(await status(id)).toBe("suspended");
+  github.failures.set(`GET /app/installations/${String(id)}`, {
+    status: 200,
+    body: {
+      id,
+      account: { login: "acme-bounds", type: "Organization" },
+      repository_selection: "selected",
     },
   });
   expect(await status(id)).toBe("suspended");

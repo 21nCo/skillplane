@@ -266,7 +266,7 @@ function observedInstallation(value: unknown): ObservedInstallation | null {
     login.length > 100 ||
     (type !== "User" && type !== "Organization" && type !== "Enterprise") ||
     (selection !== "all" && selection !== "selected") ||
-    (suspended !== null && suspended !== undefined && typeof suspended !== "string") ||
+    (suspended !== null && typeof suspended !== "string") ||
     // An unreadable suspension is no observation, never a resumption.
     (typeof suspended === "string" && Number.isNaN(Date.parse(suspended)))
   )
@@ -457,23 +457,35 @@ export class GitHubInstallationService {
     }
   }
 
-  private async appRequest(path: string, init: RequestInit = {}): Promise<Response> {
+  private async appRequest(
+    path: string,
+    init: RequestInit = {},
+    signed: () => Promise<unknown> = () => Promise.resolve(),
+  ): Promise<Response> {
     const { app } = this.configured(true);
     const headers = new Headers(init.headers);
     headers.set("authorization", `Bearer ${await app.appJwt()}`);
+    await signed();
     return this.github(`${app.apiBaseUrl}${path}`, { ...init, headers });
   }
 
-  /** The installation as GitHub reports it now; null when it was removed. */
+  /**
+   * The installation as GitHub reports it now (null when it was removed),
+   * with `observedFrom`: the database time taken right before the request is
+   * sent, which orders observations against each other.
+   */
   private async fetchInstallation(
     installationId: number,
-  ): Promise<ObservedInstallation | null> {
+  ): Promise<{ observed: ObservedInstallation | null; observedFrom: string }> {
+    let observedFrom = "";
     const response = await this.appRequest(
       `/app/installations/${String(installationId)}`,
+      {},
+      async () => (observedFrom = await this.databaseNow()),
     );
     if (response.status === 404) {
       await discardBody(response);
-      return null;
+      return { observed: null, observedFrom };
     }
     if (response.status !== 200) {
       if (await isGitHubRateLimited(response))
@@ -483,7 +495,7 @@ export class GitHubInstallationService {
     }
     const observed = observedInstallation(await readJson(response));
     if (!observed) unavailable("GitHub returned an invalid installation");
-    return observed;
+    return { observed, observedFrom };
   }
 
   /** Exchanges the installing user's authorization code for a user token. */
@@ -626,9 +638,7 @@ export class GitHubInstallationService {
       );
     if (claims.e <= this.now()) invalidState();
     const token = await this.userToken(settings, m.code);
-    // Taken right before the App's status request, like list's marker.
-    const observedFrom = await this.databaseNow();
-    const observed = await this.fetchInstallation(installationId);
+    const { observed, observedFrom } = await this.fetchInstallation(installationId);
     if (!observed || !(await this.administers(settings, token, observed)))
       throw new DomainError(
         "GITHUB_INSTALLATION_NOT_ACCESSIBLE",
@@ -715,9 +725,13 @@ export class GitHubInstallationService {
       await client.query<InstallationRow>(
         observed
           ? `UPDATE github_installations SET account_login=$4, account_type=$5, repository_selection=$6,
-               suspended_at=$7, removed_at=NULL, checked_at=$3::timestamptz, updated_at=now()
+               suspended_at=$7, removed_at=NULL, checked_at=$3::timestamptz,
+               updated_at=CASE WHEN removed_at IS NOT NULL OR suspended_at IS DISTINCT FROM $7::timestamptz
+                 OR account_login<>$4 OR account_type<>$5 OR repository_selection<>$6
+                 THEN clock_timestamp() ELSE updated_at END
              WHERE workspace_id=$1 AND installation_id=$2 AND checked_at < $3::timestamptz RETURNING *`
-          : `UPDATE github_installations SET removed_at=COALESCE(removed_at, now()), checked_at=$3::timestamptz, updated_at=now()
+          : `UPDATE github_installations SET removed_at=COALESCE(removed_at, now()), checked_at=$3::timestamptz,
+               updated_at=CASE WHEN removed_at IS NULL THEN clock_timestamp() ELSE updated_at END
              WHERE workspace_id=$1 AND installation_id=$2 AND checked_at < $3::timestamptz RETURNING *`,
         observed
           ? [
@@ -771,8 +785,8 @@ export class GitHubInstallationService {
   async list(m: Mutation): Promise<GitHubInstallation[]> {
     authorize(m.principal, "workspace:read");
     const select = (client: Pool | PoolClient) =>
-      client.query<InstallationRow & { created_key: string; observed_from: string }>(
-        "SELECT *, created_at::text AS created_key, clock_timestamp()::text AS observed_from FROM github_installations WHERE workspace_id=$1 ORDER BY created_at, installation_id LIMIT $2",
+      client.query<InstallationRow & { created_key: string }>(
+        "SELECT *, created_at::text AS created_key FROM github_installations WHERE workspace_id=$1 ORDER BY created_at, installation_id LIMIT $2",
         [m.principal.workspaceId, MAX_INSTALLATIONS],
       );
     const rows = (await select(this.pool)).rows;
@@ -780,8 +794,8 @@ export class GitHubInstallationService {
     const observed = await Promise.all(
       rows.map((row) =>
         this.fetchInstallation(Number(row.installation_id)).then(
-          (value) => ({ row, value, ok: true as const }),
-          () => ({ row, value: null, ok: false as const }),
+          (value) => ({ row, ...value, ok: true as const }),
+          () => ({ row, observed: null, observedFrom: "", ok: false as const }),
         ),
       ),
     );
@@ -791,7 +805,7 @@ export class GitHubInstallationService {
       this.pool,
       m.requestId,
       async ({ client }) => {
-        for (const { row, value } of checked) {
+        for (const { row, observed: value, observedFrom } of checked) {
           // Only the row that was observed: an installation unbound and bound
           // again meanwhile is a new row and keeps its own observation.
           const current = (
@@ -800,7 +814,7 @@ export class GitHubInstallationService {
               [m.principal.workspaceId, row.installation_id, row.created_key],
             )
           ).rows[0];
-          if (current) await this.observe(client, current, row.observed_from, value);
+          if (current) await this.observe(client, current, observedFrom, value);
         }
         return (await select(client)).rows.map(record);
       },
@@ -900,14 +914,16 @@ export class GitHubInstallationService {
         field: "cursor",
       });
     const first = typeof cursorInput === "string" ? Number(cursorInput) : 1;
-    // The active binding, then the same binding (by creation) still active.
+    // The active binding, then the same binding unchanged: a rebind is a new
+    // row, and any status or account change (even a suspension that resumed
+    // since) advances updated_at.
     let bound: string | null = null;
     const binding = () =>
-      this.pool.query<{ created_key: string }>(
-        "SELECT created_at::text AS created_key FROM github_installations WHERE workspace_id=$1 AND installation_id=$2 AND ($3::text IS NULL OR created_at=$3::timestamptz) AND removed_at IS NULL AND suspended_at IS NULL",
+      this.pool.query<{ generation: string }>(
+        "SELECT updated_at::text AS generation FROM github_installations WHERE workspace_id=$1 AND installation_id=$2 AND ($3::text IS NULL OR updated_at=$3::timestamptz) AND removed_at IS NULL AND suspended_at IS NULL",
         [principal.workspaceId, installationId, bound],
       );
-    bound = (await binding()).rows[0]?.created_key ?? null;
+    bound = (await binding()).rows[0]?.generation ?? null;
     if (!bound) throw new GitHubAuthFailedError();
     const { app } = this.configured(true);
     const minted = await this.appRequest(
@@ -964,9 +980,8 @@ export class GitHubInstallationService {
           url: `https://github.com/${fullName}`,
         });
       }
-      more =
-        list.length >= 100 &&
-        (typeof body?.total_count !== "number" || body.total_count > page * 100);
+      // A full page may have more after it, whatever total_count claims.
+      more = list.length >= 100;
       if (!more) break;
     }
     // An unbind, rebind or suspension while listing withholds the result.
