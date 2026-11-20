@@ -1,0 +1,33 @@
+packages/api/src/routes/github-installations.ts
+  s_84df3724323c82::t_49d8eb4771cab5 62-63,68
+packages/api/src/workspace-routing.test.ts
+  s_84df3724323c82::t_46095e09225d49 241-344
+packages/api/src/workspace-routing.ts
+  s_84df3724323c82::t_8c47bdf499bf0f 132-156,158,161,164,166,398,513,515-521,575-585
+packages/api/tests/integration/github-installations.integration.test.ts
+  s_84df3724323c82::t_90778ce7cc05ba 3,530-543,552-553,556,561-591,602,604,606-664,670-672,674-716,718-719,721-757,759-770,772-815,840-882
+packages/domain/src/errors.ts
+  s_84df3724323c82::t_bfe7eb5590e47c 16
+packages/domain/src/git-sources.ts
+  s_84df3724323c82::t_6cfeb9ff54b38d 236-246,522-523
+packages/domain/src/github-installations.ts
+  s_84df3724323c82::t_c99c8b1556de1f 24-25,256-285,549-556,558,561,565-568,573,602-623,625-652,662-709,734-736,738-739,751,756-764,766,796-799,801,812,814,843,873-875,887-888,908-911,913
+packages/testing/src/fake-github-installations.ts
+  s_84df3724323c82::t_70e5df01f228ae 214-215,218-224
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2119441c4e3bfd20c9671310b0f4aa07b0d3e0b5",
+  "prompts": {},
+  "sessions": {
+    "s_84df3724323c82": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_84df3724323c82",
+        "model": "unknown"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
