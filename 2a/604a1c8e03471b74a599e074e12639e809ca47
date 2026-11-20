@@ -1,0 +1,21 @@
+packages/domain/src/github-installations.ts
+  s_3c4430ecde5a03::t_e1b71f108c9d5a 32-36,113-117,322-323,329-336,342-343,371-378,380-382,385-386,388,390,392-402,405,671,673-677,690-695,760-764,767-772,775-777,780-784,787-789,791-793,859-870,913,1159,1161,1200-1203,1207
+packages/api/tests/integration/github-installations.integration.test.ts
+  s_3c4430ecde5a03::t_c46bab5fd789fb 1270,1272,1414-1415,1424-1428,1439-1440,1446-1447,1453-1547,1552,1839-1854,1860-1883,1895-1912,1929-1940,1955,1957-1958,1992-1997,2005-2006,2008-2010,2013-2024,2066-2075
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2a604a1c8e03471b74a599e074e12639e809ca47",
+  "prompts": {},
+  "sessions": {
+    "s_3c4430ecde5a03": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ddfd384a-a719-4989-a748-121ed9ef7546",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
