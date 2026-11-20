@@ -60,6 +60,8 @@ const regionalTables = [
   "regional_projection_sequences",
   "regional_projection_outbox",
   "background_jobs",
+  "github_installations",
+  "github_installation_states",
 ] as const;
 
 type NamespaceColumn = "workspace_id" | "__ns" | "namespace";
@@ -860,6 +862,34 @@ async function digest(bytes: Uint8Array): Promise<string> {
     .join("");
 }
 
+/**
+ * An installation is unique per regional database, so a workspace cannot move
+ * into a cell where another workspace already binds one of its installations.
+ */
+async function assertGithubInstallationsFree(
+  source: MigrationSqlQueryable,
+  target: MigrationSqlQueryable,
+  workspaceId: string,
+): Promise<void> {
+  const installations = await source.query<{ installation_id: string }>(
+    `SELECT installation_id::text AS installation_id
+       FROM github_installations
+      WHERE workspace_id = $1`,
+    [workspaceId],
+  );
+  if (installations.rows.length === 0) return;
+  const taken = await target.query(
+    `SELECT 1
+       FROM github_installations
+      WHERE installation_id = ANY($1::bigint[]) AND workspace_id <> $2
+      LIMIT 1`,
+    [installations.rows.map((row) => row.installation_id), workspaceId],
+  );
+  if (taken.rows.length > 0) {
+    throw new Error("WORKSPACE_MIGRATION_GITHUB_INSTALLATION_CONFLICT");
+  }
+}
+
 /** Concrete, retry-safe PostgreSQL and object-store implementation of a fenced move. */
 export class PostgresWorkspaceMigrationOperations implements WorkspaceMigrationOperations {
   private quiescedSource: MigrationSqlClient | null = null;
@@ -902,6 +932,8 @@ export class PostgresWorkspaceMigrationOperations implements WorkspaceMigrationO
   }
 
   async prepareSource(workspaceId: string): Promise<void> {
+    // Refuse a colliding move before the source is fenced.
+    await assertGithubInstallationsFree(this.source, this.target, workspaceId);
     await this.waitForOutboxes(workspaceId);
   }
 
@@ -995,6 +1027,10 @@ export class PostgresWorkspaceMigrationOperations implements WorkspaceMigrationO
           );
         }
       }
+      // Block target-cell binds until the copy commits, then recheck: a bind
+      // that landed after prepareSource fails the move instead of the insert.
+      await target.query("LOCK TABLE github_installations IN SHARE ROW EXCLUSIVE MODE");
+      await assertGithubInstallationsFree(source, target, context.namespace);
       for (const table of dynamic) {
         await cloneDynamicTableColumns(source, target, table.tableName);
       }

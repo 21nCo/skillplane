@@ -42,7 +42,7 @@ it("applies on a cell at 0054 and ownership verification requires the table", as
     expect(result.applied).toEqual([MIGRATION]);
     const verification = await verifyDatabase(url, { role: "regional" });
     expect(verification.tables).toContain("background_jobs");
-    expect(verification.migrations.at(-1)).toBe(MIGRATION);
+    expect(verification.migrations).toContain(MIGRATION);
 
     // Writes are fenced while the workspace migrates to another cell.
     const triggers = await pool.query<{ tgname: string }>(

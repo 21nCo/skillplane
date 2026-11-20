@@ -168,6 +168,34 @@ derived from those audit events; the source state column added with
 installation binding (SKI-57) may replace it. Because no source is read with
 an installation yet, sources report `ok` in practice until SKI-57 ships.
 
+## GitHub App installation storage
+
+Migration `0056_regional_github_installations.sql` adds the regional storage
+that installation binding (SKI-57) will use. Apply it to regional and combined
+databases; it is additive. Nothing in this release writes or reads it, so
+sources keep reading public repositories as described above.
+
+- `github_installations` holds one row per GitHub App installation bound to a
+  workspace: account login and type, repository selection, `suspended_at` and
+  `removed_at` as last observed on GitHub, and who bound it. `installation_id`
+  is the primary key, so within one regional database an installation is bound
+  to at most one workspace.
+- `github_installation_states` records consumed install-callback nonces so a
+  callback state is accepted once. Nothing purges expired rows yet.
+- `skill_sources.github_installation_id` is a nullable reference to the
+  installation a private source will read through.
+
+The binding is unique per regional database only: workspaces in different
+regional cells are not prevented from binding the same installation. A
+workspace move copies the workspace's bindings, so it cannot enter a cell where
+another workspace binds one of the same installations. The move fails with
+`WORKSPACE_MIGRATION_GITHUB_INSTALLATION_CONFLICT` before the source is fenced,
+or, if the target binding appears during the move, when the copy rechecks it,
+and the move rolls back. Either way the workspace stays active in its source
+cell with its data unchanged. To move it, remove one of the two
+`github_installations` rows (the moving workspace's row in the source cell or
+the other workspace's row in the target cell), then retry the move.
+
 ## API
 
 Under `/api/v1/workspaces/:workspaceId/sources`:
