@@ -1,0 +1,21 @@
+packages/api/tests/integration/github-installations.integration.test.ts
+  s_145bd95df3c06c::t_d522ea56af7090 1189,1191,1593,1595,1610,1850-1851,1937-1938,2022-2032,2088-2090
+packages/domain/src/github-installations.ts
+  s_145bd95df3c06c::t_e06eb22ee59f63 330-333,372,381-384,680,1206-1210
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "584cf7885711f97d93060c3680efa828157a0a9a",
+  "prompts": {},
+  "sessions": {
+    "s_145bd95df3c06c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_145bd95df3c06c",
+        "model": "unknown"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
