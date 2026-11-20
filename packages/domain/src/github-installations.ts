@@ -29,10 +29,11 @@ const STATE_RETENTION = "1 day";
 // A callback leases its nonce before OAuth. The lease is stored as
 // consumed_at = deadline + LEASE_MARK, always past expires_at, while a bind
 // consumes the nonce before expires_at; the exact value names the lease's
-// owner. LEASE outlasts setup's three GitHub requests (REQUEST_TIMEOUT_MS
+// owner. LEASE_MS outlasts setup's three GitHub requests (REQUEST_TIMEOUT_MS
 // each), and a lease a crash or cutover strands expires on its own.
-const LEASE = "interval '2 minutes' + interval '1000 years'";
+const LEASE_MS = 3 * 60 * 1000;
 const LEASE_MARK = "interval '1000 years'";
+const LEASE_AFTER = `$4::double precision * interval '1 millisecond' + ${LEASE_MARK}`;
 const NONCE = /^[A-Za-z0-9_-]{22,64}$/u;
 const INSTALLATION_ID = /^[1-9][0-9]{0,15}$/u;
 const OAUTH_CODE = /^[A-Za-z0-9_.-]{1,256}$/u;
@@ -56,6 +57,8 @@ export interface GitHubInstallationServiceOptions {
   readonly stateSecret: string;
   readonly fetcher?: typeof fetch;
   readonly now?: () => number;
+  /** How long a callback holds its install state; shortened only by tests. */
+  readonly leaseMs?: number;
 }
 
 export type GitHubInstallationStatus = "active" | "suspended" | "removed";
@@ -637,27 +640,28 @@ export class GitHubInstallationService {
       const response = await this.github(`${settings.apiBaseUrl}${path}`, {
         headers: { authorization: `Bearer ${token}` },
       });
-      if (response.status === 200) return object(await readJson(response));
-      await discardBody(response);
-      // Only "no such membership" is an answer.
-      if (response.status !== 404) throw new Error("inconclusive");
-      return null;
+      const body = response.status === 200 ? object(await readJson(response)) : null;
+      if (response.status !== 200) await discardBody(response);
+      // Only a well-formed answer or "no such membership" (404) is an answer.
+      if (response.status !== 404 && !body) throw new Error("inconclusive");
+      return body;
+    };
+    const text = (value: unknown) => {
+      if (typeof value !== "string") throw new Error("inconclusive");
+      return value.toLowerCase();
     };
     try {
-      if (observed.accountType === "User") {
-        const user = await read("/user");
-        return typeof user?.login === "string" && user.login.toLowerCase() === login;
-      }
+      if (observed.accountType === "User")
+        return text((await read("/user"))?.login) === login;
       if (observed.accountType !== "Organization") return false;
       const membership = await read(
         `/user/memberships/orgs/${encodeURIComponent(observed.accountLogin)}`,
       );
-      const org = object(membership?.organization)?.login;
+      if (!membership) return false;
       return (
-        membership?.state === "active" &&
-        membership.role === "admin" &&
-        typeof org === "string" &&
-        org.toLowerCase() === login
+        text(membership.state) === "active" &&
+        text(membership.role) === "admin" &&
+        text(object(membership.organization)?.login) === login
       );
     } catch {
       return null;
@@ -701,6 +705,7 @@ export class GitHubInstallationService {
     const { settings } = this.configured();
     const nonce = claims.n;
     const expiresAt = new Date(claims.e);
+    const leaseMs = this.#options.leaseMs ?? LEASE_MS;
     // Lease the nonce before the one-use OAuth exchange, taking over only an
     // expired lease of this workspace, never a consumed nonce.
     const lease = await withDomainTransaction(
@@ -710,32 +715,32 @@ export class GitHubInstallationService {
         (
           await client.query<{ lease: string }>(
             `INSERT INTO github_installation_states AS s(nonce,workspace_id,expires_at,consumed_at)
-             VALUES($1,$2,$3,clock_timestamp() + ${LEASE})
-             ON CONFLICT (nonce) DO UPDATE SET consumed_at=clock_timestamp() + ${LEASE}
+             VALUES($1,$2,$3,clock_timestamp() + ${LEASE_AFTER})
+             ON CONFLICT (nonce) DO UPDATE SET consumed_at=clock_timestamp() + ${LEASE_AFTER}
              WHERE s.workspace_id=EXCLUDED.workspace_id AND s.consumed_at > s.expires_at
                AND s.consumed_at <= clock_timestamp() + ${LEASE_MARK}
              RETURNING consumed_at::text AS lease`,
-            [nonce, claims.w, expiresAt],
+            [nonce, claims.w, expiresAt, leaseMs],
           )
         ).rows[0]?.lease ?? null,
       { fencingEpoch: m.fencingEpoch },
     );
     let bound = false;
     try {
-      // Freshness first, judged once the lease (and any wait on it) committed:
-      // an expired state is invalid even when another callback holds it.
-      const fresh = await this.pool.query<{ fresh: boolean }>(
-        "SELECT $1::timestamptz > clock_timestamp() AS fresh",
-        [expiresAt],
-      );
-      if (!fresh.rows[0]?.fresh) invalidState();
-      // Then ownership, right before spending the code: a callback whose
-      // lease expired and was taken over stops here.
-      const held = await this.pool.query(
-        `SELECT 1 FROM github_installation_states WHERE nonce=$1 AND consumed_at=$2::timestamptz AND consumed_at > clock_timestamp() + ${LEASE_MARK}`,
-        [nonce, lease],
-      );
-      if (!lease || !held.rowCount) replayed();
+      // Judged at one database instant once the lease (and any wait on it)
+      // committed: an expired state is invalid even when another callback
+      // holds it. The code is spent only while this callback's lease outlives
+      // the exchange: two thirds of it must remain and the answer must arrive
+      // within a sixth, leaving half (90 s) for the OAuth request.
+      const asked = performance.now();
+      const check = (
+        await this.pool.query<{ fresh: boolean; held: boolean }>(
+          `SELECT $1::timestamptz > clock_timestamp() AS fresh, EXISTS(SELECT 1 FROM github_installation_states WHERE nonce=$2 AND consumed_at=$3::timestamptz AND consumed_at > clock_timestamp() + ${LEASE_AFTER}) AS held`,
+          [expiresAt, nonce, lease, (leaseMs * 2) / 3],
+        )
+      ).rows[0];
+      if (!check?.fresh) invalidState();
+      if (!lease || !check.held || performance.now() - asked > leaseMs / 6) replayed();
       const token = await this.userToken(settings, m.code);
       const { observed, observedFrom } = await this.fetchInstallation(installationId);
       if (observed?.accountType === "Organization" && !observed.membersReadable)
@@ -765,7 +770,7 @@ export class GitHubInstallationService {
       return installation;
     } finally {
       // A refusal releases its own lease at the routed epoch; one the fence
-      // keeps after a cutover expires within LEASE.
+      // keeps after a cutover expires within its lease.
       if (!bound && lease)
         await withDomainTransaction(
           this.pool,
@@ -852,7 +857,7 @@ export class GitHubInstallationService {
           accountLogin: observed.accountLogin,
         });
         const consumed = await client.query(
-          "UPDATE github_installation_states SET consumed_at=clock_timestamp() WHERE nonce=$1 AND workspace_id=$2 AND consumed_at=$3::timestamptz AND expires_at > clock_timestamp()",
+          `UPDATE github_installation_states SET consumed_at=clock_timestamp() WHERE nonce=$1 AND workspace_id=$2 AND consumed_at=$3::timestamptz AND consumed_at > clock_timestamp() + ${LEASE_MARK} AND expires_at > clock_timestamp()`,
           [claims.n, claims.w, lease],
         );
         if (!consumed.rowCount) invalidState();
@@ -1096,7 +1101,8 @@ export class GitHubInstallationService {
     const repositories: GitHubInstallationRepository[] = [];
     const listing = `${app.apiBaseUrl}/installation/repositories`;
     // The page GitHub's next link names past the last page read.
-    let next: string | null = null;
+    let next: string | null = null,
+      listed = (first - 1) * 100;
     for (let page = first, read = 0; read < MAX_REPOSITORY_PAGES; read += 1) {
       const response = await this.github(
         `${listing}?per_page=100&page=${String(page)}`,
@@ -1135,7 +1141,7 @@ export class GitHubInstallationService {
       const linked = nextPage(response.headers.get("link"), listing, page);
       next = typeof linked === "string" ? linked : null;
       const total = body?.total_count,
-        seen = (page - 1) * 100 + list.length,
+        seen = (listed += list.length),
         full = list.length >= 100;
       if (
         linked === false ||

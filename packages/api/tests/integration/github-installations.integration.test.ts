@@ -1077,12 +1077,13 @@ it("consumes nothing for a HEAD, an ambiguous callback or another routed workspa
 });
 
 const pool = () => services.database.pool;
-const setupService = (now?: () => number, database: Pool = pool()) =>
+const setupService = (now?: () => number, database: Pool = pool(), leaseMs?: number) =>
   new GitHubInstallationService(database, {
     app: services.githubApp ?? null,
     settings: services.githubInstallSettings ?? null,
     stateSecret: services.tenancySecret,
     ...(now ? { now } : {}),
+    ...(leaseMs ? { leaseMs } : {}),
   });
 const oauthExchanges = () =>
   github.requests.filter((r) => r === "POST /login/oauth/access_token").length;
@@ -1434,6 +1435,101 @@ function pausedBefore(sql: string) {
   return { pool: paused, reached, release: () => release() };
 }
 
+/** Resolves once the state's lease deadline has passed by the database clock. */
+const leasePast = (state: string) =>
+  until(
+    "the lease's deadline",
+    async () =>
+      (
+        await pool().query<{ past: boolean }>(
+          "SELECT consumed_at - interval '1000 years' < clock_timestamp() AS past FROM github_installation_states WHERE nonce=$1",
+          [nonceOf(state)],
+        )
+      ).rows[0]?.past === true,
+    () => false,
+  );
+
+it("spends the code only within the lease and binds only while it lives", async () => {
+  const id = base + 35;
+  installation(id, "acme-lease-time", ["octo-owner"]);
+  const leaseMs = 3000;
+  // A check that answers after a sixth of the lease spends nothing...
+  const slow = pausedBefore("AS fresh");
+  const state = await installState(owner);
+  const before = oauthExchanges();
+  const late = track(
+    setupService(undefined, slow.pool, leaseMs).completeSetup({
+      ...m(),
+      state,
+      installationId: id,
+      code: github.issueCode("octo-owner"),
+    }),
+  );
+  await slow.reached;
+  await new Promise((resolve) => setTimeout(resolve, leaseMs / 6 + 200));
+  slow.release();
+  await expect(late.outcome).rejects.toMatchObject({
+    code: "GITHUB_INSTALL_STATE_REPLAYED",
+  });
+  expect(oauthExchanges()).toBe(before);
+  // ...and a lease that runs out while the bind waits for its locks, with no
+  // other callback taking it over, binds and audits nothing.
+  const mutation = m();
+  const lock = `github-installations:${owner.workspaceId}`;
+  const holder = await pool().connect();
+  let claim: ReturnType<typeof track> | undefined;
+  try {
+    await holder.query("SELECT pg_advisory_lock(hashtextextended($1,0))", [lock]);
+    claim = track(
+      setupService(undefined, pool(), leaseMs).completeSetup({
+        ...mutation,
+        state,
+        installationId: id,
+        code: github.issueCode("octo-owner"),
+      }),
+    );
+    await blockedBy(holder, claim.settled);
+    await leasePast(state);
+    await holder.query("SELECT pg_advisory_unlock(hashtextextended($1,0))", [lock]);
+    await expect(claim.outcome).rejects.toMatchObject({
+      code: "GITHUB_INSTALL_STATE_INVALID",
+    });
+  } finally {
+    await holder.query("SELECT pg_advisory_unlock_all()").catch(() => undefined);
+    holder.release();
+    await claim?.outcome.catch(() => undefined);
+  }
+  expect(await status(id)).toBeUndefined();
+  const audited = await pool().query("SELECT 1 FROM audit_events WHERE request_id=$1", [
+    mutation.requestId,
+  ]);
+  expect(audited.rowCount).toBe(0);
+}, 30_000);
+
+it("refuses a state that expires while its checks wait, before OAuth", async () => {
+  const id = base + 36;
+  installation(id, "acme-check-expiry", ["octo-owner"]);
+  const { state, expiresAt } = await expiringState(2000);
+  const pause = pausedBefore("AS fresh");
+  const before = github.requests.length;
+  const claim = track(
+    setupService(undefined, pause.pool).completeSetup({
+      ...m(),
+      state,
+      installationId: id,
+      code: github.issueCode("octo-owner"),
+    }),
+  );
+  await pause.reached;
+  await databasePast(expiresAt);
+  pause.release();
+  await expect(claim.outcome).rejects.toMatchObject({
+    code: "GITHUB_INSTALL_STATE_INVALID",
+  });
+  expect(github.requests.slice(before)).toEqual([]);
+  expect(await nonceRows(state)).toBe(0);
+}, 30_000);
+
 it("stops a callback whose lease was taken over before it spends the code", async () => {
   const id = base + 33;
   installation(id, "acme-interrupted", ["octo-owner"]);
@@ -1641,9 +1737,9 @@ it("tells a missing Members grant from a failed admin check in the redirect", as
   });
   org.memberships.set("octo-member", { state: "active", role: "member" });
   const state = await installState(owner);
-  const outcome = async (user: string) => {
+  const outcome = async (user: string, installationId = id) => {
     const params = new URLSearchParams({
-      installation_id: String(id),
+      installation_id: String(installationId),
       setup_action: "install",
       code: github.issueCode(user),
       state,
@@ -1668,9 +1764,31 @@ it("tells a missing Members grant from a failed admin check in the redirect", as
     "GITHUB_INSTALLATION_NOT_ACCESSIBLE",
     "not_admin",
   ]);
-  // A check GitHub cannot answer is refused without claiming either reason.
-  github.failures.set("GET /user/memberships/orgs/acme-reason", { status: 500 });
-  expect(await outcome("octo-owner")).toEqual([
+  // A check GitHub cannot answer, or answers without the facts it needs, is
+  // refused without claiming either reason.
+  const membership = "GET /user/memberships/orgs/acme-reason";
+  for (const failure of [
+    { status: 500 },
+    { status: 200, body: { state: "active", role: "admin" } },
+    { status: 200, body: [] },
+  ]) {
+    github.failures.set(membership, failure);
+    expect(await outcome("octo-owner"), JSON.stringify(failure)).toEqual([
+      "GITHUB_INSTALLATION_NOT_ACCESSIBLE",
+      null,
+    ]);
+  }
+  github.failures.clear();
+  const personal = base + 34;
+  github.addInstallation({
+    id: personal,
+    account: { login: "octo-owner", type: "User" },
+    repositorySelection: "all",
+    repositories: [],
+    users: ["octo-owner"],
+  });
+  github.failures.set("GET /user", { status: 200, body: {} });
+  expect(await outcome("octo-owner", personal)).toEqual([
     "GITHUB_INSTALLATION_NOT_ACCESSIBLE",
     null,
   ]);
@@ -1754,6 +1872,9 @@ it("follows GitHub's next link and refuses a list it cannot finish", async () =>
     });
     expect(asked).toEqual(["1"]);
   }
+  // A short earlier page counts for what it held, not for a full page.
+  pages = { 1: [30, at(2), 110], 2: [10, null, 110] };
+  await expect(read()).rejects.toMatchObject({ code: "SERVICE_UNAVAILABLE" });
   // A link back to an earlier page never loops the listing.
   pages = { 1: [100, at(3), 999], 3: [100, at(1), 999] };
   await expect(read()).rejects.toMatchObject({ code: "SERVICE_UNAVAILABLE" });
