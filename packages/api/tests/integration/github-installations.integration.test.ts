@@ -301,6 +301,7 @@ it("refuses forged, tampered, foreign-user and expired states before binding", a
   });
   const lagged =
     new URL(await lagging.installUrl(ownerPrincipal())).searchParams.get("state") ?? "";
+  const beforeLagged = github.requests.length;
   await expect(
     lagging.completeSetup({
       principal: ownerPrincipal(),
@@ -310,6 +311,8 @@ it("refuses forged, tampered, foreign-user and expired states before binding", a
       code: github.issueCode("octo-owner"),
     }),
   ).rejects.toMatchObject({ code: "GITHUB_INSTALL_STATE_INVALID" });
+  // Refused before OAuth.
+  expect(github.requests.slice(beforeLagged)).toEqual([]);
   expect((await list(owner)).installations.map((i) => i.installationId)).not.toContain(
     id,
   );
@@ -320,10 +323,13 @@ it("binds only with installation-admin authority on GitHub", async () => {
   const org = installation(id, "victim-org", ["victim-user"]);
   org.memberships.set("octo-member", { state: "active", role: "member" });
   org.memberships.set("octo-pending", { state: "pending", role: "admin" });
+  // Every refusal leaves the state unused, so one state serves them all and
+  // still binds once the user is an admin.
+  const shared = await installState(owner);
   const refused = async (user: string, code = github.issueCode(user)) =>
     (
       await callback(owner, {
-        state: await installState(owner),
+        state: shared,
         installationId: id,
         code,
       })
@@ -392,7 +398,7 @@ it("binds only with installation-admin authority on GitHub", async () => {
   ).toEqual({ connected: String(personal), error: null });
   expect(
     await callback(owner, {
-      state: await installState(owner),
+      state: shared,
       installationId: id,
       code: github.issueCode("octo-owner"),
     }),
@@ -1053,7 +1059,7 @@ it("consumes nothing for a HEAD, an ambiguous callback or another routed workspa
   expect((await unbind(id)).status).toBe(200);
 });
 
-it("refuses a state that expires while its claim waits, before OAuth", async () => {
+it("refuses a state that expires while its claim waits, writing nothing", async () => {
   const id = base + 16;
   installation(id, "acme-expiry", ["octo-owner"]);
   const issuer = new GitHubInstallationService(services.database.pool, {
@@ -1090,7 +1096,16 @@ it("refuses a state that expires while its claim waits, before OAuth", async () 
     await new Promise((resolve) => setTimeout(resolve, 2500));
     await blocker.query("ROLLBACK");
     await expect(claim).rejects.toMatchObject({ code: "GITHUB_INSTALL_STATE_INVALID" });
-    expect(github.requests.slice(before)).toEqual([]);
+    // Nothing is bound and the expired state is not recorded as used.
+    expect(github.requests.slice(before)).not.toContain(
+      `POST /app/installations/${String(id)}/access_tokens`,
+    );
+    expect(await status(id)).toBeUndefined();
+    const recorded = await services.database.pool.query(
+      "SELECT 1 FROM github_installation_states WHERE nonce=$1",
+      [nonce],
+    );
+    expect(recorded.rowCount).toBe(0);
   } finally {
     blocker.release();
   }
@@ -1415,6 +1430,20 @@ it("bounds GitHub responses and classifies refused discovery", async () => {
   ).toBe("SERVICE_UNAVAILABLE");
   github.failures.clear();
   expect(await status(id)).toBe("active");
+  // Nor does a timestamp only a lenient parser reads suspend it.
+  for (const suspendedAt of ["0", "2026-02-30T00:00:00Z", "2026-01-01T24:00:00Z"]) {
+    github.failures.set(`GET /app/installations/${String(id)}`, {
+      status: 200,
+      body: {
+        id,
+        account: { login: "acme-bounds", type: "Organization" },
+        repository_selection: "selected",
+        suspended_at: suspendedAt,
+      },
+    });
+    expect(await status(id), suspendedAt).toBe("active");
+  }
+  github.failures.clear();
   // Refused installation access is auth_failed; throttling and the App's own
   // credentials are retryable service failures.
   for (const [key, failure, code] of [
@@ -1439,4 +1468,68 @@ it("bounds GitHub responses and classifies refused discovery", async () => {
     ).toBe(code);
     github.failures.clear();
   }
+});
+
+it("lists the stored state when no GitHub check is usable", async () => {
+  const id = base + 22;
+  installation(id, "acme-all-failed", ["octo-owner"]);
+  await bind(id);
+  // Every installation check fails; the first one waits until released.
+  let release: () => void = () => undefined;
+  let entered: () => void = () => undefined;
+  const reached = new Promise<void>((resolve) => (entered = resolve));
+  let gate: Promise<void> | null = new Promise<void>((resolve) => (release = resolve));
+  const failing = new GitHubInstallationService(services.database.pool, {
+    app: services.githubApp ?? null,
+    settings: services.githubInstallSettings ?? null,
+    stateSecret: services.tenancySecret,
+    fetcher: async (input, init) => {
+      if (!/\/app\/installations\/[0-9]+$/u.test(String(input)))
+        return fetch(input, init);
+      const held = gate;
+      gate = null;
+      if (held) {
+        entered();
+        await held;
+      }
+      return Response.json({ message: "unavailable" }, { status: 500 });
+    },
+  });
+  const listing = failing.list(m());
+  await reached;
+  expect((await unbind(id)).status).toBe(200);
+  release();
+  expect((await listing).map((i) => i.installationId)).not.toContain(id);
+});
+
+it("ranks an apply's outcome by when it asked GitHub", async () => {
+  const id = base + 23;
+  installation(id, "acme-apply-order", ["octo-owner"]);
+  await bind(id);
+  const { control, sources } = heldSources();
+  const source = await sources.create({
+    ...m(),
+    idempotencyKey: crypto.randomUUID(),
+    config: {
+      repositoryUrl: "https://github.com/acme-apply-order/private-skills",
+      ref: "main",
+      installationId: id,
+    },
+  });
+  const run = await sources.preview({ ...m(), sourceId: source.id });
+  // The apply asks GitHub and fails; a preview asks later and succeeds, but
+  // the apply records its failure first.
+  control.hold(true);
+  const applying = sources.apply({ ...m(), sourceId: source.id, runId: run.id });
+  applying.catch(() => undefined);
+  await control.reached;
+  const releaseApply = control.release;
+  control.hold();
+  const previewing = sources.preview({ ...m(), sourceId: source.id });
+  await control.reached;
+  releaseApply();
+  await expect(applying).rejects.toMatchObject({ code: "GIT_SOURCE_AUTH_FAILED" });
+  control.release();
+  await previewing;
+  expect((await sources.get(ownerPrincipal(), source.id)).source.authStatus).toBe("ok");
 });

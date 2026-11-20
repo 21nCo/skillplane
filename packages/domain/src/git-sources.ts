@@ -39,7 +39,7 @@ interface SourceRow {
 }
 // GitHub authentication state of a source, derived from the latest of the
 // source's auth_failed, previewed and synced audit events (ordered by when a
-// private source's preview asked GitHub, `observedFrom`, else when
+// private source's preview or apply asked GitHub, `observedFrom`, else when
 // recorded): a revoked-access
 // marker (from a preview or apply, or from unbinding the source's GitHub App
 // installation) holds until the next successful preview or apply. A source
@@ -893,10 +893,13 @@ export class GitSourceService {
     };
     const adopt = (committed: GitApplyResult[]) =>
       results.splice(0, results.length, ...committed);
+    // When this apply asked GitHub, which ranks its synced or auth_failed
+    // event against previews (see SOURCE_COLUMNS).
+    let observedFrom: string | undefined;
     try {
-      const snapshot = await (
-        await this.providerFor(source)
-      ).snapshot(this.config(source), run.commit_sha);
+      const provider = await this.providerFor(source);
+      observedFrom = await this.observedFrom(source);
+      const snapshot = await provider.snapshot(this.config(source), run.commit_sha);
       if (snapshot.commitSha !== run.commit_sha)
         throw new DomainError("CONFLICT", "Preview commit changed", 409);
       for (const entry of run.plan) {
@@ -1254,6 +1257,7 @@ export class GitSourceService {
           runId: run.id,
           commitSha: run.commit_sha,
           status,
+          ...(observedFrom ? { observedFrom } : {}),
         });
         return status;
       });
@@ -1283,7 +1287,7 @@ export class GitSourceService {
       // Fenced: an apply whose lease expired or was taken over never marks a
       // source that a newer apply may have recovered.
       if (isGitHubAuthFailed(error))
-        await fenced((c) => this.authFailedAudit(c, m, source.id)).catch(
+        await fenced((c) => this.authFailedAudit(c, m, source.id, observedFrom)).catch(
           () => undefined,
         );
       throw error;

@@ -164,6 +164,14 @@ function invalidState(
   throw new DomainError("GITHUB_INSTALL_STATE_INVALID", message, 400);
 }
 
+function replayed(): never {
+  throw new DomainError(
+    "GITHUB_INSTALL_STATE_REPLAYED",
+    "The GitHub install link was already used; start again",
+    409,
+  );
+}
+
 function unavailable(message = "GitHub could not be reached; retry later"): never {
   throw new DomainError("SERVICE_UNAVAILABLE", message, 503);
 }
@@ -248,6 +256,29 @@ function object(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+const GITHUB_TIME =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?(?:Z|[+-](\d{2}):(\d{2}))$/u;
+
+// A GitHub ISO 8601 timestamp as ISO in UTC; null unless every field is real
+// (Date.parse would accept "0" or roll February 30 into March).
+function githubTime(value: string): string | null {
+  const match = GITHUB_TIME.exec(value);
+  if (!match) return null;
+  const field = (index: number) => Number(match[index] ?? "0");
+  const [year, month, day] = [field(1), field(2) - 1, field(3)];
+  const date = new Date(Date.UTC(year, month, day));
+  return date.getUTCFullYear() === year &&
+    date.getUTCMonth() === month &&
+    date.getUTCDate() === day &&
+    field(4) < 24 &&
+    field(5) < 60 &&
+    field(6) < 60 &&
+    field(7) < 24 &&
+    field(8) < 60
+    ? new Date(value).toISOString()
+    : null;
+}
+
 function observedInstallation(value: unknown): ObservedInstallation | null {
   const body = object(value);
   const account = object(body?.account);
@@ -268,11 +299,10 @@ function observedInstallation(value: unknown): ObservedInstallation | null {
     (selection !== "all" && selection !== "selected") ||
     (suspended !== null && typeof suspended !== "string") ||
     // An unreadable suspension is no observation, never a resumption.
-    (typeof suspended === "string" && Number.isNaN(Date.parse(suspended)))
+    (typeof suspended === "string" && !githubTime(suspended))
   )
     return null;
-  const suspendedAt =
-    typeof suspended === "string" ? new Date(suspended).toISOString() : null;
+  const suspendedAt = typeof suspended === "string" ? githubTime(suspended) : null;
   return {
     accountLogin: login,
     accountType: type,
@@ -605,14 +635,30 @@ export class GitHubInstallationService {
         403,
       );
     const { settings } = this.configured();
-    const claimed = await withDomainTransaction(
+    // Before OAuth, a used state, or one expired by the database clock, is
+    // refused without writing anything; it is consumed only with the binding.
+    const precheck = await this.pool.query<{ used: boolean; fresh: boolean }>(
+      "SELECT EXISTS (SELECT 1 FROM github_installation_states WHERE nonce=$1) AS used, $2::timestamptz > clock_timestamp() AS fresh",
+      [claims.n, new Date(claims.e)],
+    );
+    if (!precheck.rows[0]?.fresh || claims.e <= this.now()) invalidState();
+    if (precheck.rows[0].used) replayed();
+    const token = await this.userToken(settings, m.code);
+    const { observed, observedFrom } = await this.fetchInstallation(installationId);
+    if (!observed || !(await this.administers(settings, token, observed)))
+      throw new DomainError(
+        "GITHUB_INSTALLATION_NOT_ACCESSIBLE",
+        "Only an owner of this GitHub account or an admin of this organization can connect it",
+        403,
+      );
+    return withDomainTransaction(
       this.pool,
       m.requestId,
       async ({ client }) => {
         // A consumed nonce is pruned only long after its state expired, and a
         // claim is judged fresh after its insert (and any wait on it) by the
         // database's wall clock, so neither a stalled claim nor a retry can use
-        // a state twice or after it expired.
+        // a state twice or after it expired. A refused bind rolls it back.
         await client.query(
           `DELETE FROM github_installation_states WHERE workspace_id=$1 AND expires_at < now() - interval '${STATE_RETENTION}'`,
           [claims.w],
@@ -626,29 +672,7 @@ export class GitHubInstallationService {
           [new Date(claims.e)],
         );
         if (!fresh.rows[0]?.fresh) invalidState();
-        return Boolean(inserted.rowCount);
-      },
-      { fencingEpoch: m.fencingEpoch },
-    );
-    if (!claimed)
-      throw new DomainError(
-        "GITHUB_INSTALL_STATE_REPLAYED",
-        "The GitHub install link was already used; start again",
-        409,
-      );
-    if (claims.e <= this.now()) invalidState();
-    const token = await this.userToken(settings, m.code);
-    const { observed, observedFrom } = await this.fetchInstallation(installationId);
-    if (!observed || !(await this.administers(settings, token, observed)))
-      throw new DomainError(
-        "GITHUB_INSTALLATION_NOT_ACCESSIBLE",
-        "Only an owner of this GitHub account or an admin of this organization can connect it",
-        403,
-      );
-    return withDomainTransaction(
-      this.pool,
-      m.requestId,
-      async ({ client }) => {
+        if (!inserted.rowCount) replayed();
         const workspaceId = m.principal.workspaceId;
         // Serializes this workspace's binds so the installation cap holds.
         await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [
@@ -800,7 +824,8 @@ export class GitHubInstallationService {
       ),
     );
     const checked = observed.filter((entry) => entry.ok);
-    if (checked.length === 0) return rows.map(record);
+    // Nothing usable from GitHub: the stored state as it is now.
+    if (checked.length === 0) return (await select(this.pool)).rows.map(record);
     return withDomainTransaction(
       this.pool,
       m.requestId,
