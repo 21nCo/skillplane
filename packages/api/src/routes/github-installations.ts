@@ -1,4 +1,8 @@
-import { DomainError, GitHubInstallationService } from "@skillplane/domain";
+import {
+  DomainError,
+  GitHubInstallationService,
+  githubInstallStateWorkspace,
+} from "@skillplane/domain";
 import type { Context, Hono } from "hono";
 import type { ApiEnvironment } from "../context.js";
 import { success } from "../envelopes.js";
@@ -19,14 +23,69 @@ function service(c: Context<ApiEnvironment>) {
   });
 }
 
+/** The App's callback URL and its API alias, matched on the raw path. */
+export const GITHUB_SETUP_PATHS = new Set(["/github/setup", "/api/v1/github/setup"]);
+
+export type GitHubSetupCallback =
+  | { readonly kind: "pending" }
+  | { readonly kind: "invalid" }
+  | {
+      readonly kind: "callback";
+      readonly state: string;
+      readonly workspaceId: string;
+      readonly installationId: string | null;
+      readonly code: string | null;
+    };
+
+/**
+ * Reads an install callback the one way the gateway (to route it) and the
+ * setup route (to act on it) both use. Null when the URL is not a setup path;
+ * an encoded or otherwise ambiguous path, a repeated parameter or a state that
+ * names no routable workspace is invalid.
+ */
+export function githubSetupCallback(url: URL): GitHubSetupCallback | null {
+  let decoded = url.pathname;
+  try {
+    decoded = decodeURIComponent(url.pathname);
+  } catch {
+    // An undecodable path is not a setup path.
+  }
+  if (!GITHUB_SETUP_PATHS.has(decoded)) return null;
+  const params = url.searchParams;
+  if (
+    !GITHUB_SETUP_PATHS.has(url.pathname) ||
+    ["state", "code", "installation_id", "setup_action"].some(
+      (name) => params.getAll(name).length > 1,
+    )
+  )
+    return { kind: "invalid" };
+  if (params.get("setup_action") === "request") return { kind: "pending" };
+  const state = params.get("state");
+  const workspaceId = githubInstallStateWorkspace(state);
+  // eslint-disable-next-line no-control-regex
+  if (!state || !workspaceId || /[\u0000-\u001f]/u.test(workspaceId))
+    return { kind: "invalid" };
+  return {
+    kind: "callback",
+    state,
+    workspaceId,
+    installationId: params.get("installation_id"),
+    code: params.get("code"),
+  };
+}
+
 function settingsRedirect(c: Context<ApiEnvironment>, query: Record<string, string>) {
-  const target = `${GITHUB_SETTINGS_PATH}?${new URLSearchParams(query).toString()}`;
+  const search = new URLSearchParams(query).toString();
+  const target = search ? `${GITHUB_SETTINGS_PATH}?${search}` : GITHUB_SETTINGS_PATH;
   // The callback URL carries the state and GitHub's code: never cache it or
   // pass it on as a referrer.
   c.header("Cache-Control", "no-store");
   c.header("Referrer-Policy", "no-referrer");
   return c.redirect(target, 302);
 }
+
+const invalidCallback = (c: Context<ApiEnvironment>) =>
+  settingsRedirect(c, { github_error: "GITHUB_INSTALL_STATE_INVALID" });
 
 export function registerGitHubInstallationRoutes(app: Hono<ApiEnvironment>) {
   const base = "/api/v1/workspaces/:workspaceId/github";
@@ -59,22 +118,27 @@ export function registerGitHubInstallationRoutes(app: Hono<ApiEnvironment>) {
   });
 
   app.get(`${base}/installations/:installationId/repositories`, async (c) => {
-    // `truncated` is set when GitHub has more repositories than are listed.
+    // `nextCursor` (and `truncated`) is set when GitHub has more repositories;
+    // passing it as `cursor` reads the next ones.
     const listing = await service(c).repositories(
       await workspaceUser(c),
       c.req.param("installationId"),
+      c.req.query("cursor") ?? null,
     );
     c.header("Cache-Control", "private, no-store");
     return c.json(success(c, listing));
   });
 
   // GitHub returns the browser here after an install (the App's callback
-  // URL). The workspace comes only from the signed state; every refusal
-  // returns to settings with an error code instead of binding anything.
+  // URL). The workspace comes only from the signed state, which must name the
+  // workspace this cell was routed for; every refusal returns to settings
+  // with an error code instead of binding anything.
   const setup = async (c: Context<ApiEnvironment>) => {
-    if (c.req.query("setup_action") === "request")
+    // A HEAD (which Hono answers with this GET handler) consumes nothing.
+    if (c.req.method !== "GET") return settingsRedirect(c, {});
+    const callback = githubSetupCallback(new URL(c.req.url));
+    if (callback?.kind === "pending")
       return settingsRedirect(c, { github_error: "GITHUB_INSTALL_PENDING_APPROVAL" });
-    const state = c.req.query("state") ?? null;
     try {
       const services = c.get("services");
       if (!services)
@@ -83,8 +147,17 @@ export function registerGitHubInstallationRoutes(app: Hono<ApiEnvironment>) {
           "Authentication is required",
           401,
         );
-      // Only a state this deployment signed names the workspace to act in.
-      const { workspaceId } = await service(c).verifyInstallState(state);
+      if (callback?.kind !== "callback") return invalidCallback(c);
+      // Only a state this deployment signed names the workspace to act in,
+      // and only the cell (or single deployment) holding it binds.
+      const { workspaceId } = await service(c).verifyInstallState(callback.state);
+      const routed = c.req.header("x-skillplane-routed-workspace-id");
+      if (
+        services.deploymentRole === "gateway" ||
+        services.deploymentRole === "control" ||
+        (services.deploymentRole === "cell" && routed !== workspaceId)
+      )
+        return invalidCallback(c);
       const principal = await requireUserPrincipal(
         services.controlDatabase.pool,
         c.get("session"),
@@ -94,9 +167,9 @@ export function registerGitHubInstallationRoutes(app: Hono<ApiEnvironment>) {
         principal,
         requestId: c.get("requestId"),
         fencingEpoch: routingEpoch(c),
-        state,
-        installationId: c.req.query("installation_id"),
-        code: c.req.query("code"),
+        state: callback.state,
+        installationId: callback.installationId,
+        code: callback.code,
       });
       return settingsRedirect(c, {
         github_connected: String(installation.installationId),
@@ -107,6 +180,5 @@ export function registerGitHubInstallationRoutes(app: Hono<ApiEnvironment>) {
       });
     }
   };
-  app.get("/github/setup", setup);
-  app.get("/api/v1/github/setup", setup);
+  for (const path of GITHUB_SETUP_PATHS) app.get(path, setup);
 }

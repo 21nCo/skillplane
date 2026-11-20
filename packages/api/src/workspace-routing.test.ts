@@ -4,6 +4,7 @@ import {
   classifyDatafnAuthority,
   createRoutedApiApplication,
 } from "./workspace-routing.js";
+import { githubSetupCallback } from "./routes/github-installations.js";
 
 const objectStorage = {
   head: async () => null,
@@ -215,6 +216,38 @@ describe("API scope classification", () => {
           new Request(`https://app.skillplane.dev/github/setup?${query}`),
         ),
       ).toEqual({ kind: "global" });
+  });
+
+  it("answers ambiguous install callbacks globally and returns them to settings", async () => {
+    const state = `${Buffer.from(JSON.stringify({ v: 1, w: "workspace:one", u: "user:one", n: "n".repeat(32), e: 1 })).toString("base64url")}.signature`;
+    const ambiguous = [
+      `/github/setup?state=${state}&state=${state}`,
+      `/github/setup?state=${state}&code=a&code=b`,
+      `/github/setup?state=${state}&installation_id=1&installation_id=2`,
+      `/github/%73etup?state=${state}`,
+      `/api/v1/github/set%75p?state=${state}`,
+    ];
+    for (const path of ambiguous) {
+      const request = new Request(`https://app.skillplane.dev${path}`);
+      expect(githubSetupCallback(new URL(request.url)), path).toEqual({
+        kind: "invalid",
+      });
+      expect(classifyApiScope(request), path).toEqual({ kind: "global" });
+      const response = await createRoutedApiApplication({
+        local: {
+          fetch: async () =>
+            Response.json({ error: { code: "NOT_FOUND" } }, { status: 404 }),
+        },
+        services: async () => ({}) as never,
+      }).fetch(new Request(`http://localhost:5700${path}`), gatewayBindings);
+      expect(response.status, path).toBe(302);
+      expect(response.headers.get("location"), path).toBe(
+        "/settings/github?github_error=NOT_FOUND",
+      );
+    }
+    expect(
+      githubSetupCallback(new URL("https://app.skillplane.dev/github/setups")),
+    ).toBe(null);
   });
 
   it("returns a refused install callback to settings instead of JSON", async () => {

@@ -3,6 +3,7 @@ import {
   GitHubAuthFailedError,
   GitHubInstallationService,
   GitSourceService,
+  GITHUB_INSTALL_STATE_TTL_MS,
   type GitSnapshot,
   type Principal,
 } from "@skillplane/domain";
@@ -314,30 +315,89 @@ it("refuses forged, tampered, foreign-user and expired states before binding", a
   );
 });
 
-it("trusts only an installation the installing user can access on GitHub", async () => {
+it("binds only with installation-admin authority on GitHub", async () => {
   const id = base + 3;
-  installation(id, "victim-org", ["victim-user"]);
-  // A valid state with someone else's installation_id: GitHub does not list it
-  // for this user, so nothing is bound.
+  const org = installation(id, "victim-org", ["victim-user"]);
+  org.memberships.set("octo-member", { state: "active", role: "member" });
+  org.memberships.set("octo-pending", { state: "pending", role: "admin" });
+  const refused = async (user: string, code = github.issueCode(user)) =>
+    (
+      await callback(owner, {
+        state: await installState(owner),
+        installationId: id,
+        code,
+      })
+    ).error;
+  // A collaborator (no membership), a member, a pending admin, an unknown code
+  // and a membership check GitHub cannot answer bind nothing.
+  for (const user of ["octo-owner", "octo-member", "octo-pending"])
+    expect(await refused(user), user).toBe("GITHUB_INSTALLATION_NOT_ACCESSIBLE");
+  expect(await refused("octo-owner", "test-code-unknown")).toBe(
+    "GITHUB_INSTALLATION_NOT_ACCESSIBLE",
+  );
+  org.memberships.set("octo-owner", { state: "active", role: "admin" });
+  for (const status of [500, 403]) {
+    github.failures.set("GET /user/memberships/orgs/victim-org", { status });
+    expect(await refused("octo-owner"), String(status)).toBe(
+      "GITHUB_INSTALLATION_NOT_ACCESSIBLE",
+    );
+  }
+  github.failures.clear();
+  // A User installation binds only for that user's own account.
+  const personal = base + 14;
+  github.addInstallation({
+    id: personal,
+    account: { login: "octo-solo", type: "User" },
+    repositorySelection: "all",
+    repositories: [],
+    users: ["octo-owner"],
+  });
+  expect(
+    (
+      await callback(owner, {
+        state: await installState(owner),
+        installationId: personal,
+        code: github.issueCode("octo-owner"),
+      })
+    ).error,
+  ).toBe("GITHUB_INSTALLATION_NOT_ACCESSIBLE");
+  const listed = (await list(owner)).installations.map((i) => i.installationId);
+  expect(listed).not.toContain(id);
+  expect(listed).not.toContain(personal);
+  // Neither discovery nor a private source can use a refused binding.
+  const discovery = await app.request(
+    `${api(owner.workspaceId)}/installations/${String(id)}/repositories`,
+    { headers: auth(owner) },
+  );
+  expect(discovery.status).toBe(409);
+  const source = await app.request(`/api/v1/workspaces/${owner.workspaceId}/sources`, {
+    method: "POST",
+    headers: {
+      ...auth(owner),
+      "content-type": "application/json",
+      "idempotency-key": crypto.randomUUID(),
+    },
+    body: JSON.stringify({
+      repositoryUrl: "https://github.com/victim-org/private-skills",
+      installationId: id,
+    }),
+  });
+  expect(source.status).toBe(400);
+  expect(
+    await callback(owner, {
+      state: await installState(owner),
+      installationId: personal,
+      code: github.issueCode("octo-solo"),
+    }),
+  ).toEqual({ connected: String(personal), error: null });
   expect(
     await callback(owner, {
       state: await installState(owner),
       installationId: id,
       code: github.issueCode("octo-owner"),
     }),
-  ).toEqual({ connected: null, error: "GITHUB_INSTALLATION_NOT_ACCESSIBLE" });
-  expect(
-    (
-      await callback(owner, {
-        state: await installState(owner),
-        installationId: id,
-        code: "test-code-unknown",
-      })
-    ).error,
-  ).toBe("GITHUB_INSTALLATION_NOT_ACCESSIBLE");
-  expect((await list(owner)).installations.map((i) => i.installationId)).not.toContain(
-    id,
-  );
+  ).toEqual({ connected: String(id), error: null });
+  for (const bound of [id, personal]) expect((await unbind(bound)).status).toBe(200);
 });
 
 it("refuses an installation bound to another workspace, including concurrent binds", async () => {
@@ -790,13 +850,27 @@ it("caps a workspace's installations and flags a truncated repository list", asy
     { headers: auth(owner) },
   );
   expect(repositories.status).toBe(200);
-  const listing = (
-    (await repositories.json()) as {
-      data: { repositories: unknown[]; truncated: boolean };
-    }
-  ).data;
+  interface Listing {
+    data: { repositories: unknown[]; truncated: boolean; nextCursor: string | null };
+  }
+  const listing = ((await repositories.json()) as Listing).data;
   expect(listing.repositories).toHaveLength(500);
-  expect(listing.truncated).toBe(true);
+  expect(listing).toMatchObject({ truncated: true, nextCursor: "6" });
+  // The cursor reads on to the end.
+  const rest = await repositoriesOf(id, "?cursor=6");
+  expect(rest.status).toBe(200);
+  expect(((await rest.json()) as Listing).data).toMatchObject({
+    repositories: [expect.objectContaining({ fullName: "acme-cap/skills-500" })],
+    truncated: false,
+    nextCursor: null,
+  });
+  expect((await repositoriesOf(id, "?cursor=0")).status).toBe(400);
+  // A full page followed by a short one ends the listing.
+  fake.repositories = fake.repositories.slice(0, 150);
+  const whole = await repositoriesOf(id);
+  const all = ((await whole.json()) as Listing).data;
+  expect(all.repositories).toHaveLength(150);
+  expect(all).toMatchObject({ truncated: false, nextCursor: null });
 });
 
 it("keeps consumed install states until well past their expiry", async () => {
@@ -879,4 +953,399 @@ it("reads bound installations when only the App is configured", async () => {
   expect(((await install.json()) as { error: { code: string } }).error.code).toBe(
     "GITHUB_APP_NOT_CONFIGURED",
   );
+});
+
+// A service whose first GitHub request matching `matches` waits, once
+// answered (or, with `before`, before it is sent), until released.
+function heldInstallations(matches: (url: string) => boolean, before = false) {
+  const control = {
+    reached: Promise.resolve(),
+    release: (() => undefined) as () => void,
+    armed: null as null | { entered: () => void; gate: Promise<void> },
+    arm() {
+      let entered: () => void = () => undefined;
+      control.reached = new Promise((resolve) => (entered = resolve));
+      const gate = new Promise<void>((resolve) => (control.release = resolve));
+      control.armed = { entered, gate };
+    },
+  };
+  const wait = async (url: string) => {
+    const armed = control.armed;
+    if (!armed || !matches(url)) return;
+    control.armed = null;
+    armed.entered();
+    await armed.gate;
+  };
+  const service = new GitHubInstallationService(services.database.pool, {
+    app: services.githubApp ?? null,
+    settings: services.githubInstallSettings ?? null,
+    stateSecret: services.tenancySecret,
+    fetcher: async (input, init) => {
+      if (before) await wait(String(input));
+      const response = await fetch(input, init);
+      if (!before) await wait(String(input));
+      return response;
+    },
+  });
+  return { control, service };
+}
+
+const repositoriesOf = (id: number, query = "") =>
+  app.request(
+    `${api(owner.workspaceId)}/installations/${String(id)}/repositories${query}`,
+    { headers: auth(owner) },
+  );
+const errorCode = async (response: Response) =>
+  ((await response.json()) as { error: { code: string } }).error.code;
+
+it("consumes nothing for a HEAD, an ambiguous callback or another routed workspace", async () => {
+  const id = base + 15;
+  installation(id, "acme-setup-routing", ["octo-owner"]);
+  const state = await installState(owner);
+  const query = (extra = "") =>
+    `installation_id=${String(id)}&setup_action=install&code=${github.issueCode("octo-owner")}&state=${state}${extra}`;
+  const headers = { authorization: `Bearer ${owner.sessionToken}` };
+  const location = async (response: Promise<Response>) => {
+    const answered = await response;
+    expect(answered.status).toBe(302);
+    expect(answered.headers.get("cache-control")).toBe("no-store");
+    return answered.headers.get("location");
+  };
+  const invalid = "/settings/github?github_error=GITHUB_INSTALL_STATE_INVALID";
+  for (const path of ["/github/setup", "/api/v1/github/setup"])
+    expect(
+      await location(app.request(`${path}?${query()}`, { method: "HEAD", headers })),
+    ).toBe("/settings/github");
+  for (const target of [
+    `/github/setup?${query(`&state=${state}`)}`,
+    `/github/setup?${query("&code=test-code-other")}`,
+    `/github/%73etup?${query()}`,
+  ])
+    expect(await location(app.request(target, { headers })), target).toBe(invalid);
+  const as = (deploymentRole: ApiServices["deploymentRole"]) =>
+    createApiApp({
+      getServices: async () => ({ ...services, deploymentRole }) as ApiServices,
+    });
+  for (const [role, routed] of [
+    ["cell", other.workspaceId],
+    ["cell", null],
+    ["gateway", null],
+  ] as const)
+    expect(
+      await location(
+        as(role).request(`/github/setup?${query()}`, {
+          headers: {
+            ...headers,
+            ...(routed ? { "x-skillplane-routed-workspace-id": routed } : {}),
+          },
+        }),
+      ),
+      `${role} ${String(routed)}`,
+    ).toBe(invalid);
+  // The state is still unused: the cell routed for its workspace binds.
+  expect(
+    await location(
+      as("cell").request(`/api/v1/github/setup?${query()}`, {
+        headers: { ...headers, "x-skillplane-routed-workspace-id": owner.workspaceId },
+      }),
+    ),
+  ).toBe(`/settings/github?github_connected=${String(id)}`);
+  expect((await unbind(id)).status).toBe(200);
+});
+
+it("refuses a state that expires while its claim waits, before OAuth", async () => {
+  const id = base + 16;
+  installation(id, "acme-expiry", ["octo-owner"]);
+  const issuer = new GitHubInstallationService(services.database.pool, {
+    app: services.githubApp ?? null,
+    settings: services.githubInstallSettings ?? null,
+    stateSecret: services.tenancySecret,
+    now: () => Date.now() - GITHUB_INSTALL_STATE_TTL_MS + 1500,
+  });
+  const state =
+    new URL(await issuer.installUrl(ownerPrincipal())).searchParams.get("state") ?? "";
+  const { n: nonce } = JSON.parse(
+    Buffer.from(state.split(".")[0] ?? "", "base64url").toString("utf8"),
+  ) as { n: string };
+  const blocker = await services.database.pool.connect();
+  try {
+    await blocker.query("BEGIN");
+    await blocker.query(
+      "INSERT INTO github_installation_states(nonce,workspace_id,expires_at) VALUES($1,$2,now()+interval '1 minute')",
+      [nonce, owner.workspaceId],
+    );
+    const before = github.requests.length;
+    const claim = new GitHubInstallationService(services.database.pool, {
+      app: services.githubApp ?? null,
+      settings: services.githubInstallSettings ?? null,
+      stateSecret: services.tenancySecret,
+    }).completeSetup({
+      ...m(),
+      state,
+      installationId: id,
+      code: github.issueCode("octo-owner"),
+    });
+    claim.catch(() => undefined);
+    // The claim waits on the uncommitted nonce until the state has expired.
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+    await blocker.query("ROLLBACK");
+    await expect(claim).rejects.toMatchObject({ code: "GITHUB_INSTALL_STATE_INVALID" });
+    expect(github.requests.slice(before)).toEqual([]);
+  } finally {
+    blocker.release();
+  }
+});
+
+it("orders a bind's observation by its App request, not by its claim", async () => {
+  const id = base + 17;
+  const fake = installation(id, "acme-setup-order", ["octo-owner"]);
+  await bind(id);
+  const { sources } = heldSources();
+  const source = await sources.create({
+    ...m(),
+    idempotencyKey: crypto.randomUUID(),
+    config: {
+      repositoryUrl: "https://github.com/acme-setup-order/private-skills",
+      ref: "main",
+      installationId: id,
+    },
+  });
+  const revision = async () =>
+    (
+      await services.database.pool.query<{ revision: number }>(
+        "SELECT revision FROM skill_sources WHERE id=$1",
+        [source.id],
+      )
+    ).rows[0]?.revision;
+  const { control, service } = heldInstallations(
+    (url) => url.endsWith("/login/oauth/access_token"),
+    true,
+  );
+  control.arm();
+  const binding = service.completeSetup({
+    ...m(),
+    state: await installState(owner),
+    installationId: id,
+    code: github.issueCode("octo-owner"),
+  });
+  await control.reached;
+  // A refresh after the claim records active; GitHub then suspends it.
+  expect(await status(id)).toBe("active");
+  fake.suspendedAt = new Date().toISOString();
+  const before = await revision();
+  control.release();
+  expect((await binding).status).toBe("suspended");
+  expect(await revision()).toBe((before ?? 0) + 1);
+  fake.suspendedAt = null;
+  expect(await status(id)).toBe("active");
+});
+
+it("never lets a failed preview supersede a newer successful one", async () => {
+  const id = base + 18;
+  installation(id, "acme-stale-failure", ["octo-owner"]);
+  await bind(id);
+  const { control, sources } = heldSources();
+  const source = await sources.create({
+    ...m(),
+    idempotencyKey: crypto.randomUUID(),
+    config: {
+      repositoryUrl: "https://github.com/acme-stale-failure/private-skills",
+      ref: "main",
+      installationId: id,
+    },
+  });
+  control.hold(true);
+  const failing = sources.preview({ ...m(), sourceId: source.id });
+  await control.reached;
+  control.held = null;
+  await sources.preview({ ...m(), sourceId: source.id });
+  control.release();
+  await expect(failing).rejects.toMatchObject({ code: "GIT_SOURCE_AUTH_FAILED" });
+  expect((await sources.get(ownerPrincipal(), source.id)).source.authStatus).toBe("ok");
+});
+
+it("refuses an unfinished private-source apply while its installation is inactive", async () => {
+  const id = base + 19;
+  const fake = installation(id, "acme-inactive-apply", ["octo-owner"]);
+  await bind(id);
+  const { control, sources } = heldSources();
+  const source = await sources.create({
+    ...m(),
+    idempotencyKey: crypto.randomUUID(),
+    config: {
+      repositoryUrl: "https://github.com/acme-inactive-apply/private-skills",
+      ref: "main",
+      installationId: id,
+    },
+  });
+  const done = await sources.preview({ ...m(), sourceId: source.id });
+  await sources.apply({ ...m(), sourceId: source.id, runId: done.id });
+  let pending = await sources.preview({ ...m(), sourceId: source.id });
+  const lease = async () =>
+    (
+      await services.database.pool.query(
+        "SELECT revision,sync_token FROM skill_sources WHERE id=$1",
+        [source.id],
+      )
+    ).rows[0] as unknown;
+  const deactivations: [() => Promise<unknown>, () => Promise<unknown>][] = [
+    [() => unbind(id), () => bind(id)],
+    [
+      async () => {
+        fake.suspendedAt = new Date().toISOString();
+        expect(await status(id)).toBe("suspended");
+      },
+      async () => {
+        fake.suspendedAt = null;
+        expect(await status(id)).toBe("active");
+      },
+    ],
+  ];
+  for (const [deactivate, reconnect] of deactivations) {
+    await deactivate();
+    const [held, snapshots] = [await lease(), control.snapshots.length];
+    await expect(
+      sources.apply({ ...m(), sourceId: source.id, runId: pending.id }),
+    ).rejects.toMatchObject({ code: "GIT_SOURCE_AUTH_FAILED" });
+    expect(await lease()).toEqual(held);
+    expect(control.snapshots).toHaveLength(snapshots);
+    // A completed run still replays, and reconnecting needs a fresh preview.
+    expect(
+      await sources.apply({ ...m(), sourceId: source.id, runId: done.id }),
+    ).toMatchObject({ id: done.id, status: "complete" });
+    await reconnect();
+    await expect(
+      sources.apply({ ...m(), sourceId: source.id, runId: pending.id }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    pending = await sources.preview({ ...m(), sourceId: source.id });
+  }
+});
+
+it("withholds a repository listing whose binding changed while it was read", async () => {
+  const id = base + 20;
+  const fake = installation(id, "acme-discovery", ["octo-owner"]);
+  await bind(id);
+  const { control, service } = heldInstallations((url) =>
+    url.includes("/installation/repositories"),
+  );
+  const changes = [
+    () => unbind(id),
+    async () => {
+      expect((await unbind(id)).status).toBe(200);
+      await bind(id);
+    },
+    async () => {
+      fake.suspendedAt = new Date().toISOString();
+      expect(await status(id)).toBe("suspended");
+    },
+  ];
+  for (const change of changes) {
+    control.arm();
+    const listing = service.repositories(ownerPrincipal(), id);
+    listing.catch(() => undefined);
+    await control.reached;
+    await change();
+    control.release();
+    await expect(listing).rejects.toMatchObject({ code: "GIT_SOURCE_AUTH_FAILED" });
+    fake.suspendedAt = null;
+    if ((await status(id)) === undefined) await bind(id);
+    expect(await status(id)).toBe("active");
+  }
+  expect((await service.repositories(ownerPrincipal(), id)).repositories).toHaveLength(
+    1,
+  );
+});
+
+it("bounds GitHub responses and classifies refused discovery", async () => {
+  const id = base + 21;
+  const fake = installation(id, "acme-bounds", ["octo-owner"]);
+  await bind(id);
+  // A token response larger than the general cap still lists repositories.
+  const large = new GitHubInstallationService(services.database.pool, {
+    app: services.githubApp ?? null,
+    settings: services.githubInstallSettings ?? null,
+    stateSecret: services.tenancySecret,
+    fetcher: async (input, init) => {
+      const response = await fetch(input, init);
+      if (!String(input).endsWith("/access_tokens")) return response;
+      const body = (await response.json()) as Record<string, unknown>;
+      return Response.json(
+        { ...body, padding: "x".repeat(2 * 1024 * 1024) },
+        { status: response.status },
+      );
+    },
+  });
+  expect((await large.repositories(ownerPrincipal(), id)).repositories).toHaveLength(1);
+  // An endless body is refused whether its length is missing or wrong, and
+  // the listing keeps the last observation.
+  fake.suspendedAt = new Date().toISOString();
+  expect(await status(id)).toBe("suspended");
+  fake.suspendedAt = null;
+  for (const headers of [{}, { "content-length": "10" }]) {
+    const endless = new GitHubInstallationService(services.database.pool, {
+      app: services.githubApp ?? null,
+      settings: services.githubInstallSettings ?? null,
+      stateSecret: services.tenancySecret,
+      fetcher: async (input, init) =>
+        String(input).endsWith(`/app/installations/${String(id)}`)
+          ? new Response(
+              new ReadableStream({
+                pull: (controller) =>
+                  controller.enqueue(new Uint8Array(65536).fill(32)),
+              }),
+              { status: 200, headers },
+            )
+          : fetch(input, init),
+    });
+    expect((await endless.list(m())).find((i) => i.installationId === id)?.status).toBe(
+      "suspended",
+    );
+  }
+  // An unreadable suspension keeps the last state and binds nothing; an
+  // explicit null is a resumption.
+  github.failures.set(`GET /app/installations/${String(id)}`, {
+    status: 200,
+    body: {
+      id,
+      account: { login: "acme-bounds", type: "Organization" },
+      repository_selection: "selected",
+      suspended_at: "not-a-date",
+    },
+  });
+  expect(await status(id)).toBe("suspended");
+  expect(
+    (
+      await callback(owner, {
+        state: await installState(owner),
+        installationId: id,
+        code: github.issueCode("octo-owner"),
+      })
+    ).error,
+  ).toBe("SERVICE_UNAVAILABLE");
+  github.failures.clear();
+  expect(await status(id)).toBe("active");
+  // Refused installation access is auth_failed; throttling and the App's own
+  // credentials are retryable service failures.
+  for (const [key, failure, code] of [
+    ["GET /installation/repositories", { status: 401 }, "GIT_SOURCE_AUTH_FAILED"],
+    ["GET /installation/repositories", { status: 403 }, "GIT_SOURCE_AUTH_FAILED"],
+    ["GET /installation/repositories", { status: 404 }, "GIT_SOURCE_AUTH_FAILED"],
+    [
+      "GET /installation/repositories",
+      { status: 403, headers: { "x-ratelimit-remaining": "0" } },
+      "SERVICE_UNAVAILABLE",
+    ],
+    [
+      `POST /app/installations/${String(id)}/access_tokens`,
+      { status: 401 },
+      "SERVICE_UNAVAILABLE",
+    ],
+  ] as const) {
+    github.failures.set(key, failure);
+    expect(
+      await errorCode(await repositoriesOf(id)),
+      `${key} ${String(failure.status)}`,
+    ).toBe(code);
+    github.failures.clear();
+  }
 });

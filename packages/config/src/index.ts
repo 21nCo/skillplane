@@ -257,6 +257,25 @@ function validateCloudflareEmailProvider(
   }
 }
 
+const MAX_EMAIL_SENDER_LENGTH = 512;
+const EMAIL_ADDRESS = /^[^\s<>@]+@[^\s<>@]+$/u;
+
+// The address of a trimmed `address` or `Display Name <address>` sender, read
+// in linear time with a bounded input; anything else has none.
+export function emailSenderAddress(value: string): string | undefined {
+  if (value.length > MAX_EMAIL_SENDER_LENGTH) return undefined;
+  if (!value.endsWith(">")) return EMAIL_ADDRESS.test(value) ? value : undefined;
+  const open = value.indexOf("<");
+  const name = value.slice(0, open);
+  const address = value.slice(open + 1, -1);
+  return open > 0 &&
+    name.trim() &&
+    !/[<>\r\n]/u.test(name) &&
+    EMAIL_ADDRESS.test(address)
+    ? address
+    : undefined;
+}
+
 function parseEmailSender(
   value: string | undefined,
   environment: RuntimeEnvironment,
@@ -269,10 +288,7 @@ function parseEmailSender(
         ? "no-reply@skillplane-auth.21n.dev"
         : "no-reply@auth-dev.skillplane.dev";
   const normalized = value?.trim();
-  const address = normalized
-    ? (/^[^<>\r\n]+\s*<([^\s<>@]+@[^\s<>@]+)>$/.exec(normalized)?.[1] ??
-      /^([^\s<>@]+@[^\s<>@]+)$/.exec(normalized)?.[1])
-    : undefined;
+  const address = normalized ? emailSenderAddress(normalized) : undefined;
   if (!normalized || address?.toLowerCase() !== expectedAddress) {
     missing.push("SKILLPLANE_OTP_FROM");
     return null;

@@ -10,13 +10,13 @@ import {
   logWorkspaceRoutingEvent,
   type RoutableResourceType,
 } from "@skillplane/control-plane";
-import {
-  githubInstallStateWorkspace,
-  InvalidAuthenticationError,
-} from "@skillplane/domain";
+import { InvalidAuthenticationError } from "@skillplane/domain";
 import { collectDatafnStructuralResources } from "@skillplane/datafn";
 import { authenticateServicePrincipalRequest } from "./service-principal-auth.js";
-import { GITHUB_SETTINGS_PATH } from "./routes/github-installations.js";
+import {
+  GITHUB_SETTINGS_PATH,
+  githubSetupCallback,
+} from "./routes/github-installations.js";
 import type { ApiServiceProvider, ApiServices } from "./context.js";
 import {
   recommendedWorkspaceRegionFromEdge,
@@ -127,8 +127,6 @@ function segment(value: string | undefined): string {
   return decoded;
 }
 
-const GITHUB_SETUP_PATHS = new Set(["/github/setup", "/api/v1/github/setup"]);
-
 const SETUP_ERROR_CODE = /^[A-Z][A-Z0-9_]{0,63}$/u;
 
 // `search` is the settings query, starting with "?".
@@ -149,7 +147,11 @@ const settingsError = (code: string) =>
 // as a referrer.
 async function githubSetupResponse(response: Response): Promise<Response> {
   const location = response.headers.get("location") ?? "";
-  if (response.status === 302 && location.startsWith(`${GITHUB_SETTINGS_PATH}?`))
+  if (
+    response.status === 302 &&
+    (location === GITHUB_SETTINGS_PATH ||
+      location.startsWith(`${GITHUB_SETTINGS_PATH}?`))
+  )
     return settingsRedirect(
       location.slice(GITHUB_SETTINGS_PATH.length),
       new Headers(response.headers),
@@ -181,25 +183,18 @@ export function classifyApiScope(request: Request): ApiScope {
       path,
     );
   if (match) return { kind: "workspace", workspaceId: segment(match[1]) };
-  if (GITHUB_SETUP_PATHS.has(path)) {
+  const callback = githubSetupCallback(url);
+  if (callback) {
     // The install callback is routed by the workspace its state names; the
-    // cell verifies the state before acting on it. A pending-approval return
-    // and an unreadable or unroutable state are answered globally, which
-    // redirects them to settings.
-    const workspaceId =
-      url.searchParams.get("setup_action") === "request"
-        ? null
-        : githubInstallStateWorkspace(url.searchParams.get("state"));
-    try {
-      if (workspaceId)
-        return {
+    // cell verifies the state before acting on it. Anything else (a pending
+    // approval, an ambiguous callback or an unroutable state) is answered
+    // globally, which returns it to settings without binding.
+    return callback.kind === "callback"
+      ? {
           kind: "workspace",
-          workspaceId: segment(encodeURIComponent(workspaceId)),
-        };
-    } catch {
-      // Falls through to the global refusal.
-    }
-    return { kind: "global" };
+          workspaceId: segment(encodeURIComponent(callback.workspaceId)),
+        }
+      : { kind: "global" };
   }
   match = /^\/api\/v1\/(?:audit|analytics)\/workspaces\/([^/]+)(?:\/|$)/u.exec(path);
   if (match) return { kind: "workspace", workspaceId: segment(match[1]) };
@@ -574,7 +569,7 @@ export function createRoutedApiApplication(input: {
   };
   return {
     async fetch(incoming, bindings) {
-      if (!GITHUB_SETUP_PATHS.has(new URL(incoming.url).pathname))
+      if (!githubSetupCallback(new URL(incoming.url)))
         return routed.fetch(incoming, bindings);
       try {
         return await githubSetupResponse(await routed.fetch(incoming, bindings));

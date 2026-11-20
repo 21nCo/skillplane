@@ -17,9 +17,12 @@ export const GITHUB_INSTALL_STATE_TTL_MS = 10 * 60 * 1000;
 const USER_AGENT = "Skillplane-github-app";
 const REQUEST_TIMEOUT_MS = 10000;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
+// An installation token response can list every repository of a large grant.
+const MAX_TOKEN_RESPONSE_BYTES = 16 * 1024 * 1024;
 const MAX_INSTALLATIONS = 20;
+// Repository pages read per listing call; `nextCursor` continues past them.
 const MAX_REPOSITORY_PAGES = 5;
-const MAX_USER_INSTALLATION_PAGES = 10;
+const REPOSITORY_CURSOR = /^[1-9][0-9]{0,3}$/u;
 const STATE_PURPOSE = "github-install-state";
 // Consumed nonces are kept this long past their state's expiry.
 const STATE_RETENTION = "1 day";
@@ -193,22 +196,47 @@ function parseInstallationId(value: unknown): number {
   return id;
 }
 
-async function readJson(response: Response): Promise<unknown> {
+// Reads a JSON body, counting bytes as they stream so an oversized body is
+// refused without buffering it, whatever its length header says.
+async function readJson(
+  response: Response,
+  limit = MAX_RESPONSE_BYTES,
+): Promise<unknown> {
   const length = Number(response.headers.get("content-length") ?? "0");
-  if (length > MAX_RESPONSE_BYTES) {
+  if (length > limit) {
     await discardBody(response);
     unavailable("GitHub returned an oversized response");
   }
-  let text: string;
+  const chunks: Uint8Array[] = [];
+  let size = 0,
+    oversized = false;
   try {
-    text = await response.text();
+    const reader = response.body?.getReader();
+    for (
+      let next = await reader?.read();
+      next && !next.done;
+      next = await reader?.read()
+    ) {
+      size += next.value.byteLength;
+      if (size > limit) {
+        oversized = true;
+        await reader?.cancel().catch(() => undefined);
+        break;
+      }
+      chunks.push(next.value);
+    }
   } catch {
     unavailable();
   }
-  if (text.length > MAX_RESPONSE_BYTES)
-    unavailable("GitHub returned an oversized response");
+  if (oversized) unavailable("GitHub returned an oversized response");
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
   try {
-    return JSON.parse(text) as unknown;
+    return JSON.parse(new TextDecoder().decode(bytes)) as unknown;
   } catch {
     unavailable("GitHub returned an invalid response");
   }
@@ -238,19 +266,29 @@ function observedInstallation(value: unknown): ObservedInstallation | null {
     login.length > 100 ||
     (type !== "User" && type !== "Organization" && type !== "Enterprise") ||
     (selection !== "all" && selection !== "selected") ||
-    (suspended !== null && suspended !== undefined && typeof suspended !== "string")
+    (suspended !== null && suspended !== undefined && typeof suspended !== "string") ||
+    // An unreadable suspension is no observation, never a resumption.
+    (typeof suspended === "string" && Number.isNaN(Date.parse(suspended)))
   )
     return null;
   const suspendedAt =
-    typeof suspended === "string" && !Number.isNaN(Date.parse(suspended))
-      ? new Date(suspended).toISOString()
-      : null;
+    typeof suspended === "string" ? new Date(suspended).toISOString() : null;
   return {
     accountLogin: login,
     accountType: type,
     repositorySelection: selection,
     suspendedAt,
   };
+}
+
+// GitHub refused the installation's access; a rate limit is only a retry.
+async function revoked(response: Response): Promise<never> {
+  if (await isGitHubRateLimited(response))
+    unavailable("GitHub rate limit reached; retry later");
+  await discardBody(response);
+  throw new GitHubAuthFailedError(
+    "GitHub App installation access was revoked; reconnect the installation and retry",
+  );
 }
 
 function boundElsewhere(): never {
@@ -479,49 +517,62 @@ export class GitHubInstallationService {
     return token;
   }
 
-  /** The account login of the installation as the user sees it, if they can. */
-  private async userInstallationAccount(
+  /**
+   * Whether the OAuth user may delegate the installation's whole grant: a
+   * User installation must be their own account, and an Organization
+   * installation needs their active admin membership. Any other answer,
+   * including a failed or inconclusive check, is no.
+   */
+  private async administers(
     settings: GitHubInstallSettings,
     token: string,
-    installationId: number,
-  ): Promise<string | null> {
-    for (let page = 1; page <= MAX_USER_INSTALLATION_PAGES; page += 1) {
-      const response = await this.github(
-        `${settings.apiBaseUrl}/user/installations?per_page=100&page=${String(page)}`,
-        { headers: { authorization: `Bearer ${token}` } },
+    observed: ObservedInstallation,
+  ): Promise<boolean> {
+    const login = observed.accountLogin.toLowerCase();
+    const read = async (path: string) => {
+      const response = await this.github(`${settings.apiBaseUrl}${path}`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      if (response.status === 200) return object(await readJson(response));
+      await discardBody(response);
+      return null;
+    };
+    try {
+      if (observed.accountType === "User") {
+        const user = await read("/user");
+        return typeof user?.login === "string" && user.login.toLowerCase() === login;
+      }
+      if (observed.accountType !== "Organization") return false;
+      const membership = await read(
+        `/user/memberships/orgs/${encodeURIComponent(observed.accountLogin)}`,
       );
-      if (response.status === 401 || response.status === 403) {
-        if (await isGitHubRateLimited(response))
-          unavailable("GitHub rate limit reached; retry later");
-        await discardBody(response);
-        return null;
-      }
-      if (response.status !== 200) {
-        await discardBody(response);
-        unavailable("GitHub could not list the user's installations; retry later");
-      }
-      const list = object(await readJson(response))?.installations;
-      if (!Array.isArray(list))
-        unavailable("GitHub returned an invalid installation list");
-      for (const entry of list) {
-        const item = object(entry);
-        if (item?.id === installationId) {
-          const account = object(item.account);
-          const login = account?.login ?? account?.slug;
-          return typeof login === "string" ? login : null;
-        }
-      }
-      if (list.length < 100) return null;
+      const org = object(membership?.organization)?.login;
+      return (
+        membership?.state === "active" &&
+        membership.role === "admin" &&
+        typeof org === "string" &&
+        org.toLowerCase() === login
+      );
+    } catch {
+      return false;
     }
-    return null;
+  }
+
+  /** The database's current time, which orders installation observations. */
+  private async databaseNow(): Promise<string> {
+    const now = (
+      await this.pool.query<{ now: string }>("SELECT clock_timestamp()::text AS now")
+    ).rows[0]?.now;
+    if (!now) unavailable();
+    return now;
   }
 
   /**
    * Completes the GitHub install redirect. The state must be valid, unexpired,
    * unused and issued to this user for this workspace; the user must still be
-   * an owner or admin and must be able to access the installation on GitHub,
-   * and the installation's account must match what the App sees. An
-   * installation bound to another workspace is refused.
+   * an owner or admin here and must administer the installation's account on
+   * GitHub (see administers). An installation bound to another workspace is
+   * refused.
    */
   async completeSetup(
     m: Mutation & { state: unknown; installationId: unknown; code: unknown },
@@ -542,18 +593,14 @@ export class GitHubInstallationService {
         403,
       );
     const { settings } = this.configured();
-    const consumed = await withDomainTransaction(
+    const claimed = await withDomainTransaction(
       this.pool,
       m.requestId,
       async ({ client }) => {
-        // Expiry is judged by the database clock. A consumed nonce is pruned
-        // only long after its state expired, so no claim that saw the state
-        // fresh can still be running and insert the nonce a second time.
-        const fresh = await client.query<{ observed_from: string }>(
-          "SELECT clock_timestamp()::text AS observed_from WHERE $1::timestamptz > now()",
-          [new Date(claims.e)],
-        );
-        if (!fresh.rows[0]) return null;
+        // A consumed nonce is pruned only long after its state expired, and a
+        // claim is judged fresh after its insert (and any wait on it) by the
+        // database's wall clock, so neither a stalled claim nor a retry can use
+        // a state twice or after it expired.
         await client.query(
           `DELETE FROM github_installation_states WHERE workspace_id=$1 AND expires_at < now() - interval '${STATE_RETENTION}'`,
           [claims.w],
@@ -562,37 +609,30 @@ export class GitHubInstallationService {
           "INSERT INTO github_installation_states(nonce,workspace_id,expires_at) VALUES($1,$2,$3) ON CONFLICT (nonce) DO NOTHING",
           [claims.n, claims.w, new Date(claims.e)],
         );
-        return {
-          claimed: Boolean(inserted.rowCount),
-          observedFrom: fresh.rows[0].observed_from,
-        };
+        const fresh = await client.query<{ fresh: boolean }>(
+          "SELECT $1::timestamptz > clock_timestamp() AS fresh",
+          [new Date(claims.e)],
+        );
+        if (!fresh.rows[0]?.fresh) invalidState();
+        return Boolean(inserted.rowCount);
       },
       { fencingEpoch: m.fencingEpoch },
     );
-    if (!consumed) invalidState();
-    if (!consumed.claimed)
+    if (!claimed)
       throw new DomainError(
         "GITHUB_INSTALL_STATE_REPLAYED",
         "The GitHub install link was already used; start again",
         409,
       );
+    if (claims.e <= this.now()) invalidState();
     const token = await this.userToken(settings, m.code);
-    const userAccount = await this.userInstallationAccount(
-      settings,
-      token,
-      installationId,
-    );
-    if (!userAccount)
-      throw new DomainError(
-        "GITHUB_INSTALLATION_NOT_ACCESSIBLE",
-        "You cannot access this GitHub App installation on GitHub",
-        403,
-      );
+    // Taken right before the App's status request, like list's marker.
+    const observedFrom = await this.databaseNow();
     const observed = await this.fetchInstallation(installationId);
-    if (observed?.accountLogin.toLowerCase() !== userAccount.toLowerCase())
+    if (!observed || !(await this.administers(settings, token, observed)))
       throw new DomainError(
         "GITHUB_INSTALLATION_NOT_ACCESSIBLE",
-        "GitHub did not confirm this installation; install the App again from settings",
+        "Only an owner of this GitHub account or an admin of this organization can connect it",
         403,
       );
     return withDomainTransaction(
@@ -615,8 +655,7 @@ export class GitHubInstallationService {
           if (existing.workspace_id !== workspaceId) boundElsewhere();
           // Binding again records this observation unless a newer one landed.
           row =
-            (await this.observe(client, existing, consumed.observedFrom, observed)) ??
-            existing;
+            (await this.observe(client, existing, observedFrom, observed)) ?? existing;
         } else {
           const count = await client.query<{ count: string }>(
             "SELECT count(*) AS count FROM github_installations WHERE workspace_id=$1",
@@ -643,7 +682,7 @@ export class GitHubInstallationService {
                 observed.repositorySelection,
                 observed.suspendedAt,
                 m.principal.actorId,
-                consumed.observedFrom,
+                observedFrom,
               ],
             )
           ).rows[0];
@@ -836,14 +875,40 @@ export class GitHubInstallationService {
     return record(row);
   }
 
-  /** Repositories an active bound installation grants, for source creation. */
+  /**
+   * Repositories an active bound installation grants, for source creation,
+   * up to MAX_REPOSITORY_PAGES pages from `cursor`; `nextCursor` reads on.
+   * Nothing is returned unless the same binding is still active afterwards.
+   */
   async repositories(
     principal: Principal,
     installationIdInput: unknown,
-  ): Promise<{ repositories: GitHubInstallationRepository[]; truncated: boolean }> {
+    cursorInput: unknown = null,
+  ): Promise<{
+    repositories: GitHubInstallationRepository[];
+    truncated: boolean;
+    nextCursor: string | null;
+  }> {
     authorize(principal, "workspace:read");
     const installationId = parseInstallationId(installationIdInput);
-    await this.activeInstallation(this.pool, principal.workspaceId, installationId);
+    if (
+      cursorInput !== null &&
+      cursorInput !== undefined &&
+      (typeof cursorInput !== "string" || !REPOSITORY_CURSOR.test(cursorInput))
+    )
+      throw new DomainError("VALIDATION_FAILED", "Invalid repository cursor", 400, {
+        field: "cursor",
+      });
+    const first = typeof cursorInput === "string" ? Number(cursorInput) : 1;
+    // The active binding, then the same binding (by creation) still active.
+    let bound: string | null = null;
+    const binding = () =>
+      this.pool.query<{ created_key: string }>(
+        "SELECT created_at::text AS created_key FROM github_installations WHERE workspace_id=$1 AND installation_id=$2 AND ($3::text IS NULL OR created_at=$3::timestamptz) AND removed_at IS NULL AND suspended_at IS NULL",
+        [principal.workspaceId, installationId, bound],
+      );
+    bound = (await binding()).rows[0]?.created_key ?? null;
+    if (!bound) throw new GitHubAuthFailedError();
     const { app } = this.configured(true);
     const minted = await this.appRequest(
       `/app/installations/${String(installationId)}/access_tokens`,
@@ -854,30 +919,25 @@ export class GitHubInstallationService {
       },
     );
     // 401 is the App's own credential failing, not the installation.
-    if (minted.status === 403 || minted.status === 404) {
-      if (await isGitHubRateLimited(minted))
-        unavailable("GitHub rate limit reached; retry later");
-      await discardBody(minted);
-      throw new GitHubAuthFailedError(
-        "GitHub App installation access was revoked; reconnect the installation and retry",
-      );
-    }
+    if (minted.status === 403 || minted.status === 404) await revoked(minted);
     if (minted.status !== 201) {
       await discardBody(minted);
       unavailable("GitHub could not issue an installation token; retry later");
     }
-    const token = object(await readJson(minted))?.token;
+    const token = object(await readJson(minted, MAX_TOKEN_RESPONSE_BYTES))?.token;
     if (typeof token !== "string" || !TOKEN.test(token))
       unavailable("GitHub returned an invalid installation token");
     const repositories: GitHubInstallationRepository[] = [];
-    // Set when GitHub has more repositories than the listing reads.
-    let truncated = false,
-      read = 0;
-    for (let page = 1; page <= MAX_REPOSITORY_PAGES; page += 1) {
+    // Whether GitHub has repositories past the last page read.
+    let more = false,
+      page = first;
+    for (; page < first + MAX_REPOSITORY_PAGES; page += 1) {
       const response = await this.github(
         `${app.apiBaseUrl}/installation/repositories?per_page=100&page=${String(page)}`,
         { headers: { authorization: `Bearer ${token}` } },
       );
+      // The installation token refused: access was revoked or narrowed.
+      if ([401, 403, 404].includes(response.status)) await revoked(response);
       if (response.status !== 200) {
         await discardBody(response);
         unavailable(
@@ -904,12 +964,18 @@ export class GitHubInstallationService {
           url: `https://github.com/${fullName}`,
         });
       }
-      if (list.length < 100) break;
-      read += list.length;
-      truncated =
-        page === MAX_REPOSITORY_PAGES &&
-        (typeof body?.total_count !== "number" || body.total_count > read);
+      more =
+        list.length >= 100 &&
+        (typeof body?.total_count !== "number" || body.total_count > page * 100);
+      if (!more) break;
     }
-    return { repositories, truncated };
+    // An unbind, rebind or suspension while listing withholds the result.
+    if (!(await binding()).rowCount) throw new GitHubAuthFailedError();
+    const next = String(page);
+    return {
+      repositories,
+      truncated: more,
+      nextCursor: more && REPOSITORY_CURSOR.test(next) ? next : null,
+    };
   }
 }

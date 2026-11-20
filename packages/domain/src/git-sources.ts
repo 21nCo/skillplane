@@ -233,14 +233,20 @@ export class GitSourceService {
       metadata: { reason: "auth_failed" },
     });
   }
-  // A preview marks the source only at the revision it started from: once
-  // the source changed (an unbind fences it with a new revision), a stale
-  // failure must not mark a source that may have recovered since.
-  private async markAuthFailed(m: Mutation, sourceId: string, revision: number) {
+  // A preview marks the source only at the revision it started from and only
+  // if no preview or sync succeeded since it started (`startedAt`, database
+  // time): once the source changed (an unbind fences it with a new revision)
+  // or recovered, a stale failure must not mark it again.
+  private async markAuthFailed(
+    m: Mutation,
+    sourceId: string,
+    revision: number,
+    startedAt: string,
+  ) {
     await this.transaction(m, async (c) => {
       const current = await c.query(
-        "SELECT 1 FROM skill_sources WHERE workspace_id=$1 AND id=$2 AND revision=$3 FOR UPDATE",
-        [m.principal.workspaceId, sourceId, revision],
+        "SELECT 1 FROM skill_sources s WHERE s.workspace_id=$1 AND s.id=$2 AND s.revision=$3 AND NOT EXISTS (SELECT 1 FROM audit_events e WHERE e.workspace_id=s.workspace_id AND e.resource_type='skill_source' AND e.resource_id=s.id AND e.event_type IN ('skill_source.previewed','skill_source.synced') AND e.occurred_at >= $4::timestamptz) FOR UPDATE OF s",
+        [m.principal.workspaceId, sourceId, revision, startedAt],
       );
       if (current.rowCount) await this.authFailedAudit(c, m, sourceId);
     }).catch(() => undefined);
@@ -513,14 +519,17 @@ export class GitSourceService {
   }
   async preview(m: Mutation & { sourceId: string }) {
     authorize(m.principal, "workspace:update");
+    const startedAt = (
+      await this.pool.query<{ now: string }>("SELECT clock_timestamp()::text AS now")
+    ).rows[0]?.now;
     const source = record(await this.row(m.principal, m.sourceId));
     if (source.archivedAt)
       throw new DomainError("CONFLICT", "Restore the source before syncing", 409);
     const snapshot = await this.providerFor(source)
         .then((provider) => provider.snapshot(this.config(source)))
         .catch(async (error: unknown) => {
-          if (isGitHubAuthFailed(error))
-            await this.markAuthFailed(m, source.id, source.revision);
+          if (isGitHubAuthFailed(error) && startedAt)
+            await this.markAuthFailed(m, source.id, source.revision, startedAt);
           throw error;
         }),
       bindings = await this.bindings(m.principal, source.id);
@@ -783,6 +792,18 @@ export class GitSourceService {
       if (!run) throw new DomainError("NOT_FOUND", "Preview was not found", 404);
       if (run.status === "complete")
         return { source: record(source), run, replay: true, revision: 0 };
+      // An unbound, removed or suspended installation refuses the apply before
+      // it claims a lease or reaches GitHub; a fresh preview follows reconnect.
+      if (
+        source.github_installation_id !== null &&
+        !(
+          await c.query(
+            "SELECT 1 FROM github_installations WHERE workspace_id=$1 AND installation_id=$2 AND removed_at IS NULL AND suspended_at IS NULL",
+            [m.principal.workspaceId, source.github_installation_id],
+          )
+        ).rowCount
+      )
+        throw new GitHubAuthFailedError();
       // A run applies at the revision it previewed, or resumes only if nothing
       // changed since its own last claim. Every claim advances the revision, so
       // sibling previews cannot apply plans computed before this run's writes.

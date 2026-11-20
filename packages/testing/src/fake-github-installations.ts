@@ -4,8 +4,9 @@ import type { AddressInfo } from "node:net";
 
 // A fake of the GitHub pieces the App install flow uses: the install page
 // (which redirects back to the App's callback URL), the OAuth code exchange,
-// `GET /user/installations`, App-JWT `GET /app/installations/:id`, a
-// metadata-only installation token and `GET /installation/repositories`.
+// `GET /user`, `GET /user/memberships/orgs/:org`, App-JWT
+// `GET /app/installations/:id`, a metadata-only installation token and
+// `GET /installation/repositories`.
 // The App key pair is generated per run; no credential is committed.
 
 export interface FakeGitHubInstallation {
@@ -15,8 +16,19 @@ export interface FakeGitHubInstallation {
   repositories: { fullName: string; private: boolean; defaultBranch: string }[];
   suspendedAt: string | null;
   removed: boolean;
-  /** GitHub users who can access the installation. */
-  readonly users: Set<string>;
+  /** Organization memberships by GitHub user; unused for a User account. */
+  readonly memberships: Map<string, FakeGitHubMembership>;
+}
+
+export interface FakeGitHubMembership {
+  state: "active" | "pending";
+  role: "admin" | "member";
+}
+
+export interface FakeGitHubFailure {
+  readonly status: number;
+  readonly headers?: Record<string, string>;
+  readonly body?: unknown;
 }
 
 export interface FakeGitHubInstallations {
@@ -31,11 +43,17 @@ export interface FakeGitHubInstallations {
   callbackUrl: string;
   /** What the next install page visit installs, and as which GitHub user. */
   nextInstall: { installationId: number; user: string } | null;
+  /** `users` become the organization's active admins. */
   addInstallation(
-    installation: Omit<FakeGitHubInstallation, "users" | "suspendedAt" | "removed"> & {
+    installation: Omit<
+      FakeGitHubInstallation,
+      "memberships" | "suspendedAt" | "removed"
+    > & {
       users: string[];
     },
   ): FakeGitHubInstallation;
+  /** Answers to give instead, keyed by `METHOD path` (API path, no prefix). */
+  readonly failures: Map<string, FakeGitHubFailure>;
   /** An authorization code for a GitHub user, as GitHub's redirect carries. */
   issueCode(user: string): string;
   /** Every request as `METHOD path`. */
@@ -106,10 +124,13 @@ export async function startFakeGitHubInstallations(
     callbackUrl: "",
     nextInstall: null,
     requests,
-    addInstallation(input) {
+    failures: new Map(),
+    addInstallation({ users, ...input }) {
       const installation: FakeGitHubInstallation = {
         ...input,
-        users: new Set(input.users),
+        memberships: new Map(
+          users.map((user) => [user, { state: "active", role: "admin" } as const]),
+        ),
         suspendedAt: null,
         removed: false,
       };
@@ -175,15 +196,33 @@ export async function startFakeGitHubInstallations(
       if (!url.pathname.startsWith(`${api}/`))
         return send(404, { message: "Not Found" });
       const path = url.pathname.slice(api.length);
-      if (path === "/user/installations" && request.method === "GET") {
+      const failure = fake.failures.get(`${request.method ?? ""} ${path}`);
+      if (failure) {
+        response.writeHead(failure.status, {
+          "content-type": "application/json",
+          ...failure.headers,
+        });
+        response.end(JSON.stringify(failure.body ?? { message: "Injected failure" }));
+        return;
+      }
+      if (path === "/user" && request.method === "GET") {
+        const user = userTokens.get(bearer(request));
+        return user
+          ? send(200, { login: user })
+          : send(401, { message: "Bad credentials" });
+      }
+      const org = /^\/user\/memberships\/orgs\/([^/]+)$/u.exec(path);
+      if (org && request.method === "GET") {
         const user = userTokens.get(bearer(request));
         if (!user) return send(401, { message: "Bad credentials" });
-        return send(200, {
-          total_count: 0,
-          installations: [...installations.values()]
-            .filter((i) => !i.removed && i.users.has(user))
-            .map(view),
-        });
+        const login = decodeURIComponent(org[1] ?? "");
+        const membership = [...installations.values()]
+          .filter((i) => i.account.type === "Organization" && i.account.login === login)
+          .map((i) => i.memberships.get(user))
+          .find(Boolean);
+        return membership
+          ? send(200, { ...membership, organization: { login } })
+          : send(404, { message: "Not Found" });
       }
       const app = /^\/app\/installations\/([0-9]+)(\/access_tokens)?$/u.exec(path);
       if (app) {

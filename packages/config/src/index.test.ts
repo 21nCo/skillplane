@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   ConfigError,
+  emailSenderAddress,
   GITHUB_APP_SECRET_NAMES,
   parseGitHubAppConfig,
   parseGitHubAppInstallConfig,
@@ -708,5 +709,43 @@ describe("GitHub App installation settings", () => {
     expect(fields({ ...app, ...install, ...hosts, RUNTIME_ENV: "production" })).toEqual(
       ["GITHUB_API_URL", "GITHUB_WEB_URL"],
     );
+  });
+});
+
+describe("emailSenderAddress", () => {
+  it("reads a bare address or a display name with an angle-bracketed address", () => {
+    expect(emailSenderAddress("no-reply@auth.skillplane.dev")).toBe(
+      "no-reply@auth.skillplane.dev",
+    );
+    expect(emailSenderAddress("Skillplane <no-reply@auth.skillplane.dev>")).toBe(
+      "no-reply@auth.skillplane.dev",
+    );
+    expect(emailSenderAddress("Skillplane<no-reply@auth.skillplane.dev>")).toBe(
+      "no-reply@auth.skillplane.dev",
+    );
+    for (const refused of [
+      "<no-reply@auth.skillplane.dev>",
+      " <no-reply@auth.skillplane.dev>",
+      "Skill<plane <no-reply@auth.skillplane.dev>",
+      "Skillplane <no reply@auth.skillplane.dev>",
+      "Skillplane <no-reply@auth.skillplane.dev",
+      "no-reply@@auth.skillplane.dev",
+      "Skillplane\n <no-reply@auth.skillplane.dev>",
+    ])
+      expect(emailSenderAddress(refused)).toBeUndefined();
+  });
+
+  it("refuses long adversarial senders quickly", () => {
+    const started = performance.now();
+    for (const value of [
+      `${" ".repeat(50_000)}>`,
+      `a${" ".repeat(50_000)}<`,
+      `${"a ".repeat(50_000)}<x@y`,
+    ])
+      expect(emailSenderAddress(value)).toBeUndefined();
+    expect(
+      emailSenderAddress(`${"a".repeat(600)} <no-reply@auth.skillplane.dev>`),
+    ).toBe(undefined);
+    expect(performance.now() - started).toBeLessThan(250);
   });
 });
