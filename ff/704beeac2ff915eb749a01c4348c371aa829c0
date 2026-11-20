@@ -1,0 +1,19 @@
+packages/api/tests/integration/github-installations.integration.test.ts
+  s_607a0ba7d262ba::t_394bc033f1f9d1 538,542
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ff704beeac2ff915eb749a01c4348c371aa829c0",
+  "prompts": {},
+  "sessions": {
+    "s_607a0ba7d262ba": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_607a0ba7d262ba",
+        "model": "unknown"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
