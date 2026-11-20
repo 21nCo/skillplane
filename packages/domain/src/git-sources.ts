@@ -40,9 +40,10 @@ interface SourceRow {
 // GitHub authentication state of a source, derived from the latest of the
 // source's auth_failed, previewed and synced audit events: a revoked-access
 // marker (from a preview or apply, or from unbinding the source's GitHub App
-// installation) holds until the next successful preview or apply.
+// installation) holds until the next successful preview or apply. A source
+// whose installation is unbound, removed or suspended is auth_failed anyway.
 export type GitSourceAuthStatus = "ok" | "auth_failed";
-const SOURCE_COLUMNS = `s.*, COALESCE((SELECT e.event_type='skill_source.auth_failed' FROM audit_events e WHERE e.workspace_id=s.workspace_id AND e.resource_type='skill_source' AND e.resource_id=s.id AND e.event_type IN ('skill_source.auth_failed','skill_source.previewed','skill_source.synced') ORDER BY e.occurred_at DESC,e.id DESC LIMIT 1),false) AS auth_failed`;
+const SOURCE_COLUMNS = `s.*, (COALESCE((SELECT e.event_type='skill_source.auth_failed' FROM audit_events e WHERE e.workspace_id=s.workspace_id AND e.resource_type='skill_source' AND e.resource_id=s.id AND e.event_type IN ('skill_source.auth_failed','skill_source.previewed','skill_source.synced') ORDER BY e.occurred_at DESC,e.id DESC LIMIT 1),false) OR (s.github_installation_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM github_installations g WHERE g.workspace_id=s.workspace_id AND g.installation_id=s.github_installation_id AND g.removed_at IS NULL AND g.suspended_at IS NULL))) AS auth_failed`;
 export interface GitSource {
   id: string;
   workspaceId: string;
@@ -301,7 +302,12 @@ export class GitSourceService {
       ),
       id = `source:${await hashIdempotentRequest({ workspace: m.principal.workspaceId, actor: m.principal.actorId, key })}`;
     return this.transaction(m, async (c) => {
-      if (installationId !== null) {
+      // A replay returns the stored source even if the installation is gone.
+      const replay = await c.query(
+        "SELECT 1 FROM skill_sources WHERE workspace_id=$1 AND id=$2",
+        [m.principal.workspaceId, id],
+      );
+      if (installationId !== null && !replay.rowCount) {
         const installation = await c.query<{ account_login: string }>(
           "SELECT account_login FROM github_installations WHERE workspace_id=$1 AND installation_id=$2 AND removed_at IS NULL AND suspended_at IS NULL FOR SHARE",
           [m.principal.workspaceId, installationId],

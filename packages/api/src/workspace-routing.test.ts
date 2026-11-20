@@ -203,6 +203,41 @@ describe("API scope classification", () => {
     }
   });
 
+  it("answers pending approvals and unroutable install states globally", () => {
+    const state = (w: string) =>
+      `${Buffer.from(JSON.stringify({ v: 1, w, u: "user:one", n: "n".repeat(32), e: 1 })).toString("base64url")}.signature`;
+    for (const query of [
+      `setup_action=request&state=${state("workspace:one")}`,
+      `state=${state("workspace\u0001one")}`,
+    ])
+      expect(
+        classifyApiScope(
+          new Request(`https://app.skillplane.dev/github/setup?${query}`),
+        ),
+      ).toEqual({ kind: "global" });
+  });
+
+  it("returns a refused install callback to settings instead of JSON", async () => {
+    const routed = createRoutedApiApplication({
+      local: { fetch: async () => new Response("unexpected local response") },
+      services: async () =>
+        ({ auth: { provider: { authenticate: async () => null } } }) as never,
+    });
+    const state = `${Buffer.from(JSON.stringify({ v: 1, w: "workspace:one", u: "user:one", n: "n".repeat(32), e: 1 })).toString("base64url")}.signature`;
+
+    const response = await routed.fetch(
+      new Request(`http://localhost:5700/api/v1/github/setup?state=${state}`),
+      gatewayBindings,
+    );
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get("location")).toBe(
+      "/settings/github?github_error=AUTHENTICATION_REQUIRED",
+    );
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+  });
+
   it("routes header-scoped skill searches to the workspace cell", () => {
     expect(
       classifyApiScope(

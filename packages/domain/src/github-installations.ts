@@ -277,9 +277,13 @@ export class GitHubInstallationService {
     return this.#options.app !== null && this.#options.settings !== null;
   }
 
-  private configured(): { app: GitHubApp; settings: GitHubInstallSettings } {
+  // Reading bound installations needs only the App; installing also needs
+  // the install settings.
+  private configured(): { app: GitHubApp; settings: GitHubInstallSettings };
+  private configured(appOnly: true): { app: GitHubApp };
+  private configured(appOnly = false) {
     const { app, settings } = this.#options;
-    if (!app || !settings)
+    if (!app || (!settings && !appOnly))
       throw new DomainError(
         "GITHUB_APP_NOT_CONFIGURED",
         "The GitHub App is not configured for this deployment",
@@ -366,7 +370,9 @@ export class GitHubInstallationService {
 
   private async github(url: string, init: RequestInit = {}): Promise<Response> {
     const headers = new Headers(init.headers);
-    headers.set("accept", "application/vnd.github+json");
+    // The OAuth code exchange asks for JSON; GitHub answers it form-encoded
+    // under any other Accept.
+    if (!headers.has("accept")) headers.set("accept", "application/vnd.github+json");
     headers.set("x-github-api-version", GITHUB_API_VERSION);
     headers.set("user-agent", USER_AGENT);
     try {
@@ -382,7 +388,7 @@ export class GitHubInstallationService {
   }
 
   private async appRequest(path: string, init: RequestInit = {}): Promise<Response> {
-    const { app } = this.configured();
+    const { app } = this.configured(true);
     const headers = new Headers(init.headers);
     headers.set("authorization", `Bearer ${await app.appJwt()}`);
     return this.github(`${app.apiBaseUrl}${path}`, { ...init, headers });
@@ -508,8 +514,14 @@ export class GitHubInstallationService {
       this.pool,
       m.requestId,
       async ({ client }) => {
+        // Expiry is judged by the same clock that prunes consumed nonces, so a
+        // pruned nonce is always an expired state and never claimable again.
+        const fresh = await client.query("SELECT 1 WHERE $1::timestamptz > now()", [
+          new Date(claims.e),
+        ]);
+        if (!fresh.rowCount) return null;
         await client.query(
-          "DELETE FROM github_installation_states WHERE workspace_id=$1 AND expires_at < now()",
+          "DELETE FROM github_installation_states WHERE workspace_id=$1 AND expires_at <= now()",
           [claims.w],
         );
         return client.query(
@@ -519,6 +531,7 @@ export class GitHubInstallationService {
       },
       { fencingEpoch: m.fencingEpoch },
     );
+    if (!consumed) invalidState();
     if (!consumed.rowCount)
       throw new DomainError(
         "GITHUB_INSTALL_STATE_REPLAYED",
@@ -687,8 +700,15 @@ export class GitHubInstallationService {
             "GitHub App installation was not found",
             404,
           );
+        // Fence in-flight previews and applies of the affected sources: a new
+        // revision voids their previews and clearing the lease voids their
+        // applies, so none of them records a sync after the unbind.
         const sources = await client.query<{ id: string }>(
-          "SELECT id FROM skill_sources WHERE workspace_id=$1 AND github_installation_id=$2 ORDER BY id",
+          "SELECT id FROM skill_sources WHERE workspace_id=$1 AND github_installation_id=$2 ORDER BY id FOR UPDATE",
+          [m.principal.workspaceId, installationId],
+        );
+        await client.query(
+          "UPDATE skill_sources SET revision=revision+1,sync_token=NULL,sync_expires_at=NULL,updated_at=now() WHERE workspace_id=$1 AND github_installation_id=$2",
           [m.principal.workspaceId, installationId],
         );
         for (const source of sources.rows)
@@ -737,7 +757,7 @@ export class GitHubInstallationService {
     authorize(principal, "workspace:read");
     const installationId = parseInstallationId(installationIdInput);
     await this.activeInstallation(this.pool, principal.workspaceId, installationId);
-    const { app } = this.configured();
+    const { app } = this.configured(true);
     const minted = await this.appRequest(
       `/app/installations/${String(installationId)}/access_tokens`,
       {
@@ -746,7 +766,8 @@ export class GitHubInstallationService {
         body: JSON.stringify({ permissions: { metadata: "read" } }),
       },
     );
-    if (minted.status === 401 || minted.status === 403 || minted.status === 404) {
+    // 401 is the App's own credential failing, not the installation.
+    if (minted.status === 403 || minted.status === 404) {
       if (await isGitHubRateLimited(minted))
         unavailable("GitHub rate limit reached; retry later");
       await discardBody(minted);

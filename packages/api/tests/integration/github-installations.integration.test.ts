@@ -1,4 +1,10 @@
-import { GitHubApp, GitHubInstallationService } from "@skillplane/domain";
+import {
+  GitHubApp,
+  GitHubInstallationService,
+  GitSourceService,
+  type GitSnapshot,
+  type Principal,
+} from "@skillplane/domain";
 import { migrateDatabase, resolveTestDatabaseUrl } from "@skillplane/db";
 import {
   fakeGitHubAppBindings,
@@ -93,17 +99,27 @@ async function installState(who: TenantFixture, workspaceId = who.workspaceId) {
   return location.searchParams.get("state") ?? "";
 }
 
+const ownerPrincipal = (): Principal => ({
+  kind: "user",
+  actorId: owner.userId,
+  userId: owner.userId,
+  sessionId: "session:test",
+  workspaceId: owner.workspaceId,
+  role: "owner",
+});
+
 async function callback(
   who: TenantFixture,
-  query: { state: string; installationId: number; code: string },
+  query: { state: string; installationId: number; code: string; setupAction?: string },
+  path = "/github/setup",
 ) {
   const params = new URLSearchParams({
     installation_id: String(query.installationId),
-    setup_action: "install",
+    setup_action: query.setupAction ?? "install",
     code: query.code,
     state: query.state,
   });
-  const response = await app.request(`/github/setup?${params.toString()}`, {
+  const response = await app.request(`${path}?${params.toString()}`, {
     headers: { authorization: `Bearer ${who.sessionToken}` },
   });
   expect(response.status).toBe(302);
@@ -139,12 +155,22 @@ it("binds an installation the installing owner can access and lists its reposito
   const id = base + 1;
   installation(id, "acme-happy", ["octo-owner"]);
   const state = await installState(owner);
+  // A pending approval binds nothing and keeps the state usable.
   expect(
     await callback(owner, {
       state,
       installationId: id,
       code: github.issueCode("octo-owner"),
+      setupAction: "request",
     }),
+  ).toEqual({ connected: null, error: "GITHUB_INSTALL_PENDING_APPROVAL" });
+  // The API alias is the callback URL the app forwards.
+  expect(
+    await callback(
+      owner,
+      { state, installationId: id, code: github.issueCode("octo-owner") },
+      "/api/v1/github/setup",
+    ),
   ).toEqual({ connected: String(id), error: null });
   const listed = await list(owner);
   expect(listed.installable).toBe(true);
@@ -263,6 +289,25 @@ it("refuses forged, tampered, foreign-user and expired states before binding", a
       })
     ).error,
   ).toBe("GITHUB_INSTALL_STATE_INVALID");
+  // An API clock eleven minutes behind accepts its own state, but the claim
+  // judges expiry by the database clock that prunes consumed nonces.
+  const lagging = new GitHubInstallationService(services.database.pool, {
+    app: services.githubApp ?? null,
+    settings: services.githubInstallSettings ?? null,
+    stateSecret: services.tenancySecret,
+    now: () => Date.now() - 11 * 60 * 1000,
+  });
+  const lagged =
+    new URL(await lagging.installUrl(ownerPrincipal())).searchParams.get("state") ?? "";
+  await expect(
+    lagging.completeSetup({
+      principal: ownerPrincipal(),
+      requestId: crypto.randomUUID(),
+      state: lagged,
+      installationId: id,
+      code: github.issueCode("octo-owner"),
+    }),
+  ).rejects.toMatchObject({ code: "GITHUB_INSTALL_STATE_INVALID" });
   expect((await list(owner)).installations.map((i) => i.installationId)).not.toContain(
     id,
   );
@@ -479,4 +524,113 @@ it("unbinding keeps private sources and marks them auth_failed", async () => {
     },
   );
   expect(again.status).toBe(404);
+});
+
+it("unbinding fences a private source's in-flight preview and apply", async () => {
+  const id = base + 8;
+  installation(id, "acme-fence", ["octo-owner"]);
+  await callback(owner, {
+    state: await installState(owner),
+    installationId: id,
+    code: github.issueCode("octo-owner"),
+  });
+  // A snapshot that waits until released, read through the bound installation.
+  let release = () => {};
+  let reached = Promise.resolve();
+  const snapshots: number[] = [];
+  const hold = () => {
+    let entered = () => {};
+    reached = new Promise((resolve) => (entered = resolve));
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    return { entered, gate };
+  };
+  let held: ReturnType<typeof hold> | null = null;
+  const sources = new GitSourceService(
+    services.database.pool,
+    services.skillService,
+    services.skillVersionService,
+    { snapshot: () => Promise.reject(new Error("public provider used")) },
+    (installationId) => ({
+      snapshot: async (): Promise<GitSnapshot> => {
+        snapshots.push(installationId);
+        held?.entered();
+        await held?.gate;
+        return { commitSha: "a".repeat(40), skills: [] };
+      },
+    }),
+  );
+  const m = () => ({ principal: ownerPrincipal(), requestId: crypto.randomUUID() });
+  const creation = {
+    idempotencyKey: crypto.randomUUID(),
+    config: {
+      repositoryUrl: "https://github.com/acme-fence/private-skills",
+      ref: "main",
+      installationId: id,
+    },
+  };
+  const source = await sources.create({ ...m(), ...creation });
+  const run = await sources.preview({ ...m(), sourceId: source.id });
+  expect(snapshots).toEqual([id]);
+  const unbind = () =>
+    app.request(`${api(owner.workspaceId)}/installations/${String(id)}`, {
+      method: "DELETE",
+      headers: auth(owner),
+    });
+  const rebind = async () =>
+    expect(
+      await callback(owner, {
+        state: await installState(owner),
+        installationId: id,
+        code: github.issueCode("octo-owner"),
+      }),
+    ).toEqual({ connected: String(id), error: null });
+
+  held = hold();
+  const applying = sources.apply({ ...m(), sourceId: source.id, runId: run.id });
+  await reached;
+  expect((await unbind()).status).toBe(200);
+  release();
+  await expect(applying).rejects.toMatchObject({ code: "GIT_SOURCE_LEASE_LOST" });
+  expect((await sources.get(ownerPrincipal(), source.id)).source.authStatus).toBe(
+    "auth_failed",
+  );
+
+  await rebind();
+  held = hold();
+  const previewing = sources.preview({ ...m(), sourceId: source.id });
+  await reached;
+  expect((await unbind()).status).toBe(200);
+  release();
+  await expect(previewing).rejects.toMatchObject({ code: "CONFLICT" });
+  expect((await sources.get(ownerPrincipal(), source.id)).source.authStatus).toBe(
+    "auth_failed",
+  );
+  // A replay of the creation returns the stored source while unbound.
+  expect(await sources.create({ ...m(), ...creation })).toMatchObject({
+    id: source.id,
+    authStatus: "auth_failed",
+  });
+});
+
+it("reports an unconfigured GitHub App without reaching GitHub", async () => {
+  const bare = createApiApp({
+    getServices: async () =>
+      ({ ...services, githubApp: null, githubInstallSettings: null }) as ApiServices,
+  });
+  const before = github.requests.length;
+  const listed = await bare.request(`${api(owner.workspaceId)}/installations`, {
+    headers: auth(owner),
+  });
+  expect(listed.status).toBe(200);
+  expect(
+    ((await listed.json()) as { data: { installable: boolean } }).data.installable,
+  ).toBe(false);
+  const install = await bare.request(`${api(owner.workspaceId)}/install`, {
+    headers: auth(owner),
+  });
+  expect(install.status).toBe(503);
+  expect(((await install.json()) as { error: { code: string } }).error.code).toBe(
+    "GITHUB_APP_NOT_CONFIGURED",
+  );
+  expect(github.requests.slice(before)).toEqual([]);
 });

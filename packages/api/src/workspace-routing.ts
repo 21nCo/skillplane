@@ -16,6 +16,7 @@ import {
 } from "@skillplane/domain";
 import { collectDatafnStructuralResources } from "@skillplane/datafn";
 import { authenticateServicePrincipalRequest } from "./service-principal-auth.js";
+import { GITHUB_SETTINGS_PATH } from "./routes/github-installations.js";
 import type { ApiServiceProvider, ApiServices } from "./context.js";
 import {
   recommendedWorkspaceRegionFromEdge,
@@ -126,6 +127,30 @@ function segment(value: string | undefined): string {
   return decoded;
 }
 
+const GITHUB_SETUP_PATHS = new Set(["/github/setup", "/api/v1/github/setup"]);
+
+// The install callback is a browser navigation: a routing refusal returns to
+// GitHub settings with its error code, never as a JSON body.
+async function githubSetupRefusal(response: Response): Promise<Response> {
+  if (response.status >= 300 && response.status < 400) return response;
+  let code = "SERVICE_UNAVAILABLE";
+  try {
+    const body = (await response.json()) as { error?: { code?: unknown } };
+    if (typeof body.error?.code === "string" && /^[A-Z_]{1,64}$/u.test(body.error.code))
+      code = body.error.code;
+  } catch {
+    // Keeps the generic code.
+  }
+  return new Response(null, {
+    status: 302,
+    headers: {
+      location: `${GITHUB_SETTINGS_PATH}?${new URLSearchParams({ github_error: code }).toString()}`,
+      "cache-control": "no-store",
+      "referrer-policy": "no-referrer",
+    },
+  });
+}
+
 export function classifyApiScope(request: Request): ApiScope {
   const url = new URL(request.url);
   const path = url.pathname;
@@ -141,14 +166,25 @@ export function classifyApiScope(request: Request): ApiScope {
       path,
     );
   if (match) return { kind: "workspace", workspaceId: segment(match[1]) };
-  if (path === "/github/setup" || path === "/api/v1/github/setup") {
+  if (GITHUB_SETUP_PATHS.has(path)) {
     // The install callback is routed by the workspace its state names; the
-    // cell verifies the state before acting on it. An unreadable state is
-    // answered globally, which refuses it.
-    const workspaceId = githubInstallStateWorkspace(url.searchParams.get("state"));
-    return workspaceId
-      ? { kind: "workspace", workspaceId: segment(encodeURIComponent(workspaceId)) }
-      : { kind: "global" };
+    // cell verifies the state before acting on it. A pending-approval return
+    // and an unreadable or unroutable state are answered globally, which
+    // redirects them to settings.
+    const workspaceId =
+      url.searchParams.get("setup_action") === "request"
+        ? null
+        : githubInstallStateWorkspace(url.searchParams.get("state"));
+    try {
+      if (workspaceId)
+        return {
+          kind: "workspace",
+          workspaceId: segment(encodeURIComponent(workspaceId)),
+        };
+    } catch {
+      // Falls through to the global refusal.
+    }
+    return { kind: "global" };
   }
   match = /^\/api\/v1\/(?:audit|analytics)\/workspaces\/([^/]+)(?:\/|$)/u.exec(path);
   if (match) return { kind: "workspace", workspaceId: segment(match[1]) };
@@ -413,6 +449,7 @@ export function createRoutedApiApplication(input: {
           return await input.local.fetch(request, bindings);
         }
         const services = await input.services(bindings);
+        const setup = GITHUB_SETUP_PATHS.has(new URL(request.url).pathname);
         try {
           if (await shouldUsePublicProjection(request, scope, services)) {
             // The control-plane projection is authoritative for anonymous reads,
@@ -459,15 +496,20 @@ export function createRoutedApiApplication(input: {
             assertionTtlMs: runtime.routing.ttlMs,
             onEvent: (event) => logWorkspaceRoutingEvent("app", event),
           });
-          return await gateway.handle(forwardedRequest);
+          const response = await gateway.handle(forwardedRequest);
+          return setup ? await githubSetupRefusal(response) : response;
         } catch (error) {
-          if (error instanceof ApiRoutingError) return error.response();
-          if (error instanceof DatafnRoutingError) return error.toResponse();
-          return new ApiRoutingError(
-            503,
-            "WORKSPACE_ROUTING_UNAVAILABLE",
-            "Workspace routing is temporarily unavailable",
-          ).response();
+          const refusal =
+            error instanceof ApiRoutingError
+              ? error.response()
+              : error instanceof DatafnRoutingError
+                ? error.toResponse()
+                : new ApiRoutingError(
+                    503,
+                    "WORKSPACE_ROUTING_UNAVAILABLE",
+                    "Workspace routing is temporarily unavailable",
+                  ).response();
+          return setup ? await githubSetupRefusal(refusal) : refusal;
         } finally {
           await input.services.release?.(services);
         }

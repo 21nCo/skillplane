@@ -151,15 +151,25 @@ export async function startFakeGitHubInstallations(
         return;
       }
       if (url.pathname === "/login/oauth/access_token" && request.method === "POST") {
+        // Like GitHub, the exchange answers JSON only to `Accept:
+        // application/json` and form-encoded otherwise.
+        const oauth = (data: Record<string, string>) => {
+          if (request.headers.accept?.includes("application/json"))
+            return send(200, data);
+          response.writeHead(200, {
+            "content-type": "application/x-www-form-urlencoded",
+          });
+          response.end(new URLSearchParams(data).toString());
+        };
         const body = (await readBody(request)) as Record<string, unknown> | null;
         const user = typeof body?.code === "string" ? codes.get(body.code) : undefined;
         if (!user || body?.client_secret !== "test-client-secret-value")
-          return send(200, { error: "bad_verification_code" });
+          return oauth({ error: "bad_verification_code" });
         codes.delete(body.code as string);
         serial += 1;
         const token = `test-user-access-token-${String(serial)}`;
         userTokens.set(token, user);
-        return send(200, { access_token: token, token_type: "bearer" });
+        return oauth({ access_token: token, token_type: "bearer" });
       }
       const api = "/api";
       if (!url.pathname.startsWith(`${api}/`))
