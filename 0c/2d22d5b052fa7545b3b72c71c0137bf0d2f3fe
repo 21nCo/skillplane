@@ -1,0 +1,46 @@
+packages/api/tests/integration/github-installations.integration.test.ts
+  s_168078b9d6d0b1::t_2f2e7bfe14b3f8 1622-1623
+packages/domain/src/github-installations.ts
+  h_a39f9495f9ec1d 209,263,319-337,339,342,345-346,348-349,351,353,375-376,541-542,600-601,676,691-696,818-820,914,1020-1021
+  s_168078b9d6d0b1::t_2290dae234c6b6 997
+  s_168078b9d6d0b1::t_e633bf8b3b36ab 998
+  s_4d9e93b202ac79::t_87aacf45fe0a45 420,512
+  s_b15184ae60b291::t_b62923304a82d6 721
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0c2d22d5b052fa7545b3b72c71c0137bf0d2f3fe",
+  "prompts": {},
+  "humans": {
+    "h_a39f9495f9ec1d": {
+      "author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_168078b9d6d0b1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "91280e83-63b8-4d95-926a-491c2db9001f",
+        "model": "unknown"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    },
+    "s_4d9e93b202ac79": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5932d101-622c-4360-bb02-2f1878271f38",
+        "model": "unknown"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    },
+    "s_b15184ae60b291": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dd21c743-8ca1-4896-ad7b-a3b81c2516fb",
+        "model": "unknown"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
