@@ -1,0 +1,23 @@
+packages/api/tests/integration/github-installations.integration.test.ts
+  s_b15184ae60b291::t_6461a3d517af7c 1120-1150,1156-1157,1161,1182-1184,1187,1190-1204,1206-1213,1290-1296,1310-1316,1339-1360,1398-1406
+packages/domain/src/git-sources.ts
+  s_b15184ae60b291::t_571070456c5acc 41-43,48,227-232,240,243-247,252,256-257,259,262-269,541-543,545-548,550-551,745
+packages/domain/src/github-installations.ts
+  s_b15184ae60b291::t_4aa55e80efc2ba 269,460-464,468,472-476,479-480,483-484,488,498,641,728-731,733-734,788-789,797-798,808,817,917-919,922-923,926,983-984
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "bff4050580dd5d74eca56eedf223395d45b67801",
+  "prompts": {},
+  "sessions": {
+    "s_b15184ae60b291": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dd21c743-8ca1-4896-ad7b-a3b81c2516fb",
+        "model": "unknown"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
