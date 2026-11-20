@@ -17,7 +17,7 @@ import {
   type FakeGitHubInstallations,
   type TenantFixture,
 } from "@skillplane/testing";
-import type { PoolClient } from "pg";
+import type { Pool, PoolClient } from "pg";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { buildApiServices, createApiApp, type ApiServices } from "../../src/index.js";
 
@@ -1077,8 +1077,8 @@ it("consumes nothing for a HEAD, an ambiguous callback or another routed workspa
 });
 
 const pool = () => services.database.pool;
-const setupService = (now?: () => number) =>
-  new GitHubInstallationService(pool(), {
+const setupService = (now?: () => number, database: Pool = pool()) =>
+  new GitHubInstallationService(database, {
     app: services.githubApp ?? null,
     settings: services.githubInstallSettings ?? null,
     stateSecret: services.tenancySecret,
@@ -1355,6 +1355,7 @@ const setupAs = (
   id: number,
   fencingEpoch?: number,
   requestId = crypto.randomUUID(),
+  code = github.issueCode("octo-owner"),
 ) =>
   setupService()
     .completeSetup({
@@ -1363,7 +1364,7 @@ const setupAs = (
       ...(fencingEpoch ? { fencingEpoch } : {}),
       state,
       installationId: id,
-      code: github.issueCode("octo-owner"),
+      code,
     })
     .then(
       () => "bound",
@@ -1408,6 +1409,64 @@ it("lets a stranded lease expire, and never a lease's former owner bind", async 
   expect((await unbind(id)).status).toBe(200);
 }, 30_000);
 
+/** The pool, with queries containing `sql` held until released. */
+function pausedBefore(sql: string) {
+  let entered: () => void = () => undefined;
+  let release: () => void = () => undefined;
+  const reached = new Promise<void>((resolve) => (entered = resolve));
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  const paused = new Proxy(pool(), {
+    get(target, key) {
+      if (key === "query")
+        return async (text: string, values?: unknown[]) => {
+          if (text.includes(sql)) {
+            entered();
+            await gate;
+          }
+          return target.query(text, values);
+        };
+      const value: unknown = Reflect.get(target, key);
+      return typeof value === "function"
+        ? (value as (...args: unknown[]) => unknown).bind(target)
+        : value;
+    },
+  });
+  return { pool: paused, reached, release: () => release() };
+}
+
+it("stops a callback whose lease was taken over before it spends the code", async () => {
+  const id = base + 33;
+  installation(id, "acme-interrupted", ["octo-owner"]);
+  const state = await installState(owner);
+  const code = github.issueCode("octo-owner");
+  // The callback stalls after its lease committed, before its checks.
+  const pause = pausedBefore("AS fresh");
+  const original = track(
+    setupService(undefined, pause.pool).completeSetup({
+      ...m(),
+      state,
+      installationId: id,
+      code,
+    }),
+  );
+  try {
+    await pause.reached;
+    expect(await leased(state)).toBe(true);
+    await expireLease(state);
+    const before = oauthExchanges();
+    expect(await setupAs(state, id, undefined, undefined, code)).toBe("bound");
+    pause.release();
+    await expect(original.outcome).rejects.toMatchObject({
+      code: "GITHUB_INSTALL_STATE_REPLAYED",
+    });
+    expect(oauthExchanges() - before).toBe(1);
+  } finally {
+    pause.release();
+    await original.outcome.catch(() => undefined);
+  }
+  expect((await unbind(id)).status).toBe(200);
+}, 30_000);
+
 it("lets exactly one of two callbacks take over an expired lease", async () => {
   const id = base + 28;
   installation(id, "acme-takeover", ["octo-owner"]);
@@ -1424,9 +1483,11 @@ it("lets exactly one of two callbacks take over an expired lease", async () => {
     );
     const before = oauthExchanges();
     const requests = [crypto.randomUUID(), crypto.randomUUID()];
+    // Both carry GitHub's one-use code; only the lease's owner spends it.
+    const code = github.issueCode("octo-owner");
     outcomes = track(
       Promise.all(
-        requests.map((requestId) => setupAs(state, id, undefined, requestId)),
+        requests.map((requestId) => setupAs(state, id, undefined, requestId, code)),
       ),
     );
     // Both wait on the row lock: one behind the holder, one queued behind it.
@@ -1607,6 +1668,13 @@ it("tells a missing Members grant from a failed admin check in the redirect", as
     "GITHUB_INSTALLATION_NOT_ACCESSIBLE",
     "not_admin",
   ]);
+  // A check GitHub cannot answer is refused without claiming either reason.
+  github.failures.set("GET /user/memberships/orgs/acme-reason", { status: 500 });
+  expect(await outcome("octo-owner")).toEqual([
+    "GITHUB_INSTALLATION_NOT_ACCESSIBLE",
+    null,
+  ]);
+  github.failures.clear();
   // Neither refusal used the state; an admin binds with it.
   expect(await nonceRows(state)).toBe(0);
   expect(await outcome("octo-owner")).toEqual([null, null]);
@@ -1667,19 +1735,29 @@ it("follows GitHub's next link and refuses a list it cannot finish", async () =>
   // Exactly five full pages end the list when GitHub's count agrees.
   pages[5] = [100, null, 500];
   expect(await read()).toMatchObject({ truncated: false, nextCursor: null });
-  // More said to remain with no usable next link is a retry, never a short list.
-  for (const next of [
-    null,
-    at(2, "http://example.invalid/api"),
-    `${at(2)}&page=3`,
-    at(2).replace("page=2", "page=x"),
-  ]) {
-    pages = { 1: [100, next, 250] };
+  // More said to remain with no next link is a retry, never a short list, and
+  // so is a next link this listing cannot follow, even on a short last page.
+  const unusable: [string | null, number, number][] = [
+    [null, 100, 250],
+    [at(2, "http://example.invalid/api"), 40, 40],
+    [`${at(2)}&page=3`, 40, 40],
+    [at(2).replace("page=2", "page=x"), 40, 40],
+    [at(10000), 40, 40],
+    [at(2).replace("per_page=100", "per_page=50"), 40, 40],
+    [`${at(2)}&q=x`, 40, 40],
+    [at(1), 40, 40],
+  ];
+  for (const [next, count, total] of unusable) {
+    pages = { 1: [count, next, total] };
     await expect(read(), String(next)).rejects.toMatchObject({
       code: "SERVICE_UNAVAILABLE",
     });
     expect(asked).toEqual(["1"]);
   }
+  // A link back to an earlier page never loops the listing.
+  pages = { 1: [100, at(3), 999], 3: [100, at(1), 999] };
+  await expect(read()).rejects.toMatchObject({ code: "SERVICE_UNAVAILABLE" });
+  expect(asked).toEqual(["1", "3"]);
   pages = { 1: [100, null, undefined] };
   await expect(read()).rejects.toMatchObject({ code: "SERVICE_UNAVAILABLE" });
   expect((await unbind(id)).status).toBe(200);
@@ -1955,7 +2033,7 @@ it("bounds GitHub responses and classifies refused discovery", async () => {
     [(link: string) => link.replace('rel="next"', 'rel="next last"'), 150],
     [(link: string) => link.replace(/<[^>]*\/(repositories\?[^>]*)>/u, "<$1>"), 150],
     [(link: string) => link.replace("; rel", '; title="more, see; this"; rel'), 150],
-    [(link: string) => link.replace(">;", "&x=a;b>;"), 150],
+    [(link: string) => link.replace(">;", "#a;b>;"), 150],
   ] as const) {
     relink = form;
     const counted = await miscounted.repositories(ownerPrincipal(), id);

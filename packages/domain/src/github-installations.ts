@@ -320,8 +320,15 @@ function observedInstallation(value: unknown): ObservedInstallation | null {
   };
 }
 
-/** The page a Link header's next link names of `listing` on its API host. */
-function nextPage(link: string | null, listing: string): string | null {
+/**
+ * The page past `after` a Link header's next link names of `listing` (100 per
+ * page) on its API host; false for a next link that is not one, null for none.
+ */
+function nextPage(
+  link: string | null,
+  listing: string,
+  after: number,
+): string | false | null {
   const expected = new URL(listing);
   // Split links on "," and parameters on ";" outside <targets> and "quotes".
   const links: string[][] = [[""]];
@@ -341,6 +348,7 @@ function nextPage(link: string | null, listing: string): string | null {
     else if (!quoted) target = c === "<" ? true : c === ">" ? false : target;
     parts.push(`${parts.pop() ?? ""}${c}`);
   }
+  let found: false | null = null;
   for (const [uri = "", ...params] of links) {
     const next = params.some((p) => {
       const [key = "", rel = ""] = p.split("=", 2).map((v) => v.trim());
@@ -349,23 +357,27 @@ function nextPage(link: string | null, listing: string): string | null {
         rel.replaceAll('"', "").toLowerCase().split(" ").includes("next")
       );
     });
+    if (!next) continue;
+    found = false;
     const value = uri.trim();
-    if (!next || !value.startsWith("<") || !value.endsWith(">")) continue;
+    if (!value.startsWith("<") || !value.endsWith(">")) continue;
     try {
       const url = new URL(value.slice(1, -1), expected);
-      const [page = "", ...more] = url.searchParams.getAll("page");
+      const page = url.searchParams.get("page") ?? "";
       if (
         url.origin === expected.origin &&
         url.pathname === expected.pathname &&
-        !more.length &&
-        REPOSITORY_CURSOR.test(page)
+        [...url.searchParams.keys()].sort().join() === "page,per_page" &&
+        url.searchParams.get("per_page") === "100" &&
+        REPOSITORY_CURSOR.test(page) &&
+        Number(page) > after
       )
         return page;
     } catch {
       continue;
     }
   }
-  return null;
+  return found;
 }
 
 // GitHub refused the installation's access; a rate limit is only a retry.
@@ -613,13 +625,13 @@ export class GitHubInstallationService {
 
   /**
    * Whether the OAuth user owns the User installation's account or is an active
-   * admin of its Organization; any other or inconclusive answer is no.
+   * admin of its Organization; null when GitHub could not say.
    */
   private async administers(
     settings: GitHubInstallSettings,
     token: string,
     observed: ObservedInstallation,
-  ): Promise<boolean> {
+  ): Promise<boolean | null> {
     const login = observed.accountLogin.toLowerCase();
     const read = async (path: string) => {
       const response = await this.github(`${settings.apiBaseUrl}${path}`, {
@@ -627,6 +639,8 @@ export class GitHubInstallationService {
       });
       if (response.status === 200) return object(await readJson(response));
       await discardBody(response);
+      // Only "no such membership" is an answer.
+      if (response.status !== 404) throw new Error("inconclusive");
       return null;
     };
     try {
@@ -646,7 +660,7 @@ export class GitHubInstallationService {
         org.toLowerCase() === login
       );
     } catch {
-      return false;
+      return null;
     }
   }
 
@@ -715,7 +729,13 @@ export class GitHubInstallationService {
         [expiresAt],
       );
       if (!fresh.rows[0]?.fresh) invalidState();
-      if (!lease) replayed();
+      // Then ownership, right before spending the code: a callback whose
+      // lease expired and was taken over stops here.
+      const held = await this.pool.query(
+        `SELECT 1 FROM github_installation_states WHERE nonce=$1 AND consumed_at=$2::timestamptz AND consumed_at > clock_timestamp() + ${LEASE_MARK}`,
+        [nonce, lease],
+      );
+      if (!lease || !held.rowCount) replayed();
       const token = await this.userToken(settings, m.code);
       const { observed, observedFrom } = await this.fetchInstallation(installationId);
       if (observed?.accountType === "Organization" && !observed.membersReadable)
@@ -725,12 +745,13 @@ export class GitHubInstallationService {
           403,
           { reason: "members_permission_required" },
         );
-      if (!observed || !(await this.administers(settings, token, observed)))
+      const admin = observed && (await this.administers(settings, token, observed));
+      if (!observed || !admin)
         throw new DomainError(
           "GITHUB_INSTALLATION_NOT_ACCESSIBLE",
           "Only an owner of this GitHub account or an admin of this organization can connect it",
           403,
-          { reason: "not_admin" },
+          admin === false ? { reason: "not_admin" } : undefined,
         );
       const installation = await this.bind(
         m,
@@ -1109,15 +1130,17 @@ export class GitHubInstallationService {
           url: `https://github.com/${fullName}`,
         });
       }
-      // GitHub's next link is followed; without one, its count and a short
-      // page must agree that the list ended.
-      next = nextPage(response.headers.get("link"), listing);
+      // GitHub's next link is followed when it advances; without one, its
+      // count and a short page must agree that the list ended.
+      const linked = nextPage(response.headers.get("link"), listing, page);
+      next = typeof linked === "string" ? linked : null;
       const total = body?.total_count,
         seen = (page - 1) * 100 + list.length,
         full = list.length >= 100;
       if (
-        !next &&
-        (typeof total === "number" ? total > seen || (full && total !== seen) : full)
+        linked === false ||
+        (!next &&
+          (typeof total === "number" ? total > seen || (full && total !== seen) : full))
       )
         unavailable(
           "GitHub did not say where the repository list continues; retry later",
