@@ -1267,8 +1267,9 @@ it("rolls back a bind whose state expires while it waits for the bind locks", as
   let claim: ReturnType<typeof track> | undefined;
   try {
     await holder.query("SELECT pg_advisory_lock(hashtextextended($1,0))", [lock]);
+    // A 4 s lease leaves a 1 s request budget, inside the state's 3 s.
     claim = track(
-      setupService().completeSetup({
+      setupService(undefined, pool(), 4000).completeSetup({
         ...mutation,
         state,
         installationId: id,
@@ -1410,8 +1411,8 @@ it("lets a stranded lease expire, and never a lease's former owner bind", async 
   expect((await unbind(id)).status).toBe(200);
 }, 30_000);
 
-/** The pool, with queries containing `sql` held until released. */
-function pausedBefore(sql: string) {
+/** The pool, with queries containing `sql` (or their replies) held until released. */
+function pausedBefore(sql: string, reply = false) {
   let entered: () => void = () => undefined;
   let release: () => void = () => undefined;
   const reached = new Promise<void>((resolve) => (entered = resolve));
@@ -1420,11 +1421,11 @@ function pausedBefore(sql: string) {
     get(target, key) {
       if (key === "query")
         return async (text: string, values?: unknown[]) => {
-          if (text.includes(sql)) {
-            entered();
-            await gate;
-          }
-          return target.query(text, values);
+          if (!text.includes(sql)) return target.query(text, values);
+          const result = reply ? await target.query(text, values) : undefined;
+          entered();
+          await gate;
+          return result ?? target.query(text, values);
         };
       const value: unknown = Reflect.get(target, key);
       return typeof value === "function"
@@ -1435,44 +1436,120 @@ function pausedBefore(sql: string) {
   return { pool: paused, reached, release: () => release() };
 }
 
-/** Resolves once the state's lease deadline has passed by the database clock. */
-const leasePast = (state: string) =>
+/** Resolves once the database clock is within `ms` of the state's lease deadline. */
+const leasePast = (state: string, ms = 0) =>
   until(
     "the lease's deadline",
     async () =>
       (
         await pool().query<{ past: boolean }>(
-          "SELECT consumed_at - interval '8760000 hours' < clock_timestamp() AS past FROM github_installation_states WHERE nonce=$1",
-          [nonceOf(state)],
+          "SELECT consumed_at - interval '8760000 hours' - $2::double precision * interval '1 millisecond' < clock_timestamp() AS past FROM github_installation_states WHERE nonce=$1",
+          [nonceOf(state), ms],
         )
       ).rows[0]?.past === true,
     () => false,
   );
 
-it("spends the code only within the lease and binds only while it lives", async () => {
+it("spends the code only while the state and its lease outlive the request budget", async () => {
+  const id = base + 38;
+  installation(id, "acme-budget", ["octo-owner"]);
+  // Less than the default 45 s budget left on the state spends nothing.
+  const near = await expiringState(30_000);
+  const before = github.requests.length;
+  expect(await setupAs(near.state, id)).toBe("GITHUB_INSTALL_STATE_INVALID");
+  expect(github.requests.slice(before)).toEqual([]);
+  expect(await nonceRows(near.state)).toBe(0);
+  // A reply that arrives with less than the budget (1 s of a 4 s lease) left
+  // on the state, or on the lease, spends nothing either.
+  const leaseMs = 4000;
+  const { state, expiresAt } = await expiringState(3000);
+  for (const [claimed, late, refused] of [
+    [state, () => databasePast(expiresAt - 900), "GITHUB_INSTALL_STATE_INVALID"],
+    [near.state, () => leasePast(near.state, 900), "GITHUB_INSTALL_STATE_REPLAYED"],
+  ] as const) {
+    const slow = pausedBefore("AS fresh", true);
+    const claim = track(
+      setupService(undefined, slow.pool, leaseMs).completeSetup({
+        ...m(),
+        state: claimed,
+        installationId: id,
+        code: github.issueCode("octo-owner"),
+      }),
+    );
+    await slow.reached;
+    await late();
+    slow.release();
+    await expect(claim.outcome).rejects.toMatchObject({ code: refused });
+  }
+  expect(github.requests.slice(before)).toEqual([]);
+}, 30_000);
+
+it.each(["state", "lease"])(
+  "rolls back a bind whose %s expires while it waits for the nonce row",
+  async (deadline) => {
+    const id = base + (deadline === "state" ? 39 : 40);
+    installation(id, `acme-nonce-${deadline}`, ["octo-owner"]);
+    const expiring = deadline === "state" ? await expiringState(3000) : null;
+    const state = expiring?.state ?? (await installState(owner));
+    const mutation = m();
+    const lock = `github-installations:${owner.workspaceId}`;
+    const gate = await pool().connect();
+    const holder = await pool().connect();
+    let claim: ReturnType<typeof track> | undefined;
+    try {
+      // The bind waits for the workspace lock while a lock-only transaction
+      // takes the nonce row, then waits on that row across the deadline.
+      await gate.query("SELECT pg_advisory_lock(hashtextextended($1,0))", [lock]);
+      claim = track(
+        setupService(
+          undefined,
+          pool(),
+          deadline === "state" ? 4000 : 3000,
+        ).completeSetup({
+          ...mutation,
+          state,
+          installationId: id,
+          code: github.issueCode("octo-owner"),
+        }),
+      );
+      await blockedBy(gate, claim.settled);
+      await holder.query("BEGIN");
+      await holder.query(
+        "SELECT 1 FROM github_installation_states WHERE nonce=$1 FOR UPDATE",
+        [nonceOf(state)],
+      );
+      await gate.query("SELECT pg_advisory_unlock(hashtextextended($1,0))", [lock]);
+      await blockedBy(holder, claim.settled);
+      if (expiring) await databasePast(expiring.expiresAt);
+      else await leasePast(state);
+      await holder.query("COMMIT");
+      await expect(claim.outcome).rejects.toMatchObject({
+        code: "GITHUB_INSTALL_STATE_INVALID",
+      });
+    } finally {
+      await holder.query("ROLLBACK").catch(() => undefined);
+      await gate.query("SELECT pg_advisory_unlock_all()").catch(() => undefined);
+      holder.release();
+      gate.release();
+      await claim?.outcome.catch(() => undefined);
+    }
+    expect(await status(id)).toBeUndefined();
+    expect(await nonceRows(state)).toBe(0);
+    const audited = await pool().query(
+      "SELECT 1 FROM audit_events WHERE request_id=$1",
+      [mutation.requestId],
+    );
+    expect(audited.rowCount).toBe(0);
+  },
+  30_000,
+);
+
+it("binds only while its lease lives", async () => {
   const id = base + 35;
   installation(id, "acme-lease-time", ["octo-owner"]);
   const leaseMs = 3000;
-  // A check that answers after a sixth of the lease spends nothing...
-  const slow = pausedBefore("AS fresh");
   const state = await installState(owner);
-  const before = oauthExchanges();
-  const late = track(
-    setupService(undefined, slow.pool, leaseMs).completeSetup({
-      ...m(),
-      state,
-      installationId: id,
-      code: github.issueCode("octo-owner"),
-    }),
-  );
-  await slow.reached;
-  await new Promise((resolve) => setTimeout(resolve, leaseMs / 6 + 200));
-  slow.release();
-  await expect(late.outcome).rejects.toMatchObject({
-    code: "GITHUB_INSTALL_STATE_REPLAYED",
-  });
-  expect(oauthExchanges()).toBe(before);
-  // ...and a lease that runs out while the bind waits for its locks, with no
+  // A lease that runs out while the bind waits for its locks, with no
   // other callback taking it over, binds and audits nothing.
   const mutation = m();
   const lock = `github-installations:${owner.workspaceId}`;
@@ -1759,11 +1836,51 @@ it("tells a missing Members grant from a failed admin check in the redirect", as
     "GITHUB_INSTALLATION_NOT_ACCESSIBLE",
     "members_permission_required",
   ]);
+  // A grant is missing only when well-formed permissions omit or deny it;
+  // missing or malformed permissions establish nothing.
+  for (const [permissions, reason] of [
+    [{ metadata: "read", members: "none" }, "members_permission_required"],
+    [undefined, null],
+    ["read", null],
+    [{ metadata: "read", members: 7 }, null],
+    [{ metadata: 1, members: "read" }, null],
+    [{ metadata: "read", members: "maybe" }, null],
+  ] as const) {
+    org.permissions = permissions as never;
+    expect(await outcome("octo-owner"), JSON.stringify(permissions)).toEqual([
+      "GITHUB_INSTALLATION_NOT_ACCESSIBLE",
+      reason,
+    ]);
+  }
   org.permissions = { metadata: "read", members: "read" };
   expect(await outcome("octo-member")).toEqual([
     "GITHUB_INSTALLATION_NOT_ACCESSIBLE",
     "not_admin",
   ]);
+  // A definitive membership answer that is not an active admin.
+  const membershipOf = "GET /user/memberships/orgs/acme-reason";
+  for (const answer of [
+    { status: 404 },
+    {
+      status: 200,
+      body: { state: "pending", role: "admin", organization: { login: "acme-reason" } },
+    },
+    {
+      status: 200,
+      body: {
+        state: "active",
+        role: "billing_manager",
+        organization: { login: "ACME-reason" },
+      },
+    },
+  ]) {
+    github.failures.set(membershipOf, answer);
+    expect(await outcome("octo-owner"), JSON.stringify(answer)).toEqual([
+      "GITHUB_INSTALLATION_NOT_ACCESSIBLE",
+      "not_admin",
+    ]);
+  }
+  github.failures.clear();
   // A check GitHub cannot answer, or answers without the facts it needs, is
   // refused without claiming either reason.
   const membership = "GET /user/memberships/orgs/acme-reason";
@@ -1775,6 +1892,24 @@ it("tells a missing Members grant from a failed admin check in the redirect", as
       body: { state: "ACTIVE", role: "ADMIN", organization: { login: "acme-reason" } },
     },
     { status: 200, body: [] },
+    // Unknown role, missing or foreign organization, each beside a decisive fact.
+    {
+      status: 200,
+      body: {
+        state: "pending",
+        role: "unknown",
+        organization: { login: "acme-reason" },
+      },
+    },
+    { status: 200, body: { state: "active", role: "member" } },
+    {
+      status: 200,
+      body: { state: "active", role: "member", organization: { login: "acme-other" } },
+    },
+    {
+      status: 200,
+      body: { state: "active", role: "admin", organization: { login: "" } },
+    },
   ]) {
     github.failures.set(membership, failure);
     expect(await outcome("octo-owner"), JSON.stringify(failure)).toEqual([
@@ -1791,11 +1926,18 @@ it("tells a missing Members grant from a failed admin check in the redirect", as
     repositories: [],
     users: ["octo-owner"],
   });
-  github.failures.set("GET /user", { status: 200, body: {} });
-  expect(await outcome("octo-owner", personal)).toEqual([
-    "GITHUB_INSTALLATION_NOT_ACCESSIBLE",
-    null,
-  ]);
+  for (const [body, reason] of [
+    [{}, null],
+    [{ login: "" }, null],
+    [{ login: 7 }, null],
+    [{ login: "octo-other" }, "not_admin"],
+  ] as const) {
+    github.failures.set("GET /user", { status: 200, body });
+    expect(await outcome("octo-owner", personal), JSON.stringify(body)).toEqual([
+      "GITHUB_INSTALLATION_NOT_ACCESSIBLE",
+      reason,
+    ]);
+  }
   github.failures.clear();
   // An account type that cannot be bound is no answer about the user either.
   const enterprise = base + 37;
@@ -1810,8 +1952,10 @@ it("tells a missing Members grant from a failed admin check in the redirect", as
     "GITHUB_INSTALLATION_NOT_ACCESSIBLE",
     null,
   ]);
-  // Neither refusal used the state; an admin binds with it.
+  // No refusal used the state or bound anything; an admin binds with it.
   expect(await nonceRows(state)).toBe(0);
+  expect(await status(id)).toBeUndefined();
+  expect(await status(personal)).toBeUndefined();
   expect(await outcome("octo-owner")).toEqual([null, null]);
   expect((await unbind(id)).status).toBe(200);
 });
@@ -1845,7 +1989,12 @@ it("follows GitHub's next link and refuses a list it cannot finish", async () =>
             default_branch: "main",
           })),
         },
-        { headers: next ? { link: `<${next}>; rel="next"` } : {} },
+        // A target becomes a rel="next" link; a value starting "<" is the header.
+        {
+          headers: next
+            ? { link: next.startsWith("<") ? next : `<${next}>; rel="next"` }
+            : {},
+        },
       );
     },
   });
@@ -1853,10 +2002,26 @@ it("follows GitHub's next link and refuses a list it cannot finish", async () =>
     asked.length = 0;
     return listing.repositories(ownerPrincipal(), id, cursor);
   };
-  // GitHub's target is read, even past an empty page.
+  // GitHub's target is read, even past an empty page, and the latest count
+  // holds until a newer one supersedes it: 999 left unmet is a retry.
   pages = { 1: [100, at(3), 999], 3: [0, at(7), 999], 7: [40, null, undefined] };
+  await expect(read()).rejects.toMatchObject({ code: "SERVICE_UNAVAILABLE" });
+  expect(asked).toEqual(["1", "3", "7"]);
+  pages = { 1: [100, at(3), 140], 3: [0, at(7), undefined], 7: [40, null, undefined] };
   expect(await read()).toMatchObject({ truncated: false, nextCursor: null });
   expect(asked).toEqual(["1", "3", "7"]);
+  pages = { 1: [100, at(2), 999], 2: [40, null, 140] };
+  expect(await read()).toMatchObject({ truncated: false, nextCursor: null });
+  // A token or quoted relation list, and next links that agree, are followed.
+  for (const link of [
+    `<${at(2)}>; rel=next`,
+    `<${at(2)}>; REL="prev next"`,
+    `<${at(2)}>; rel="next", <${at(2)}>; rel=next`,
+  ]) {
+    pages = { 1: [100, link, 140], 2: [40, null, undefined] };
+    expect(await read(), link).toMatchObject({ truncated: false, nextCursor: null });
+    expect(asked).toEqual(["1", "2"]);
+  }
   // The cursor past a batch is the page GitHub's link names.
   pages = Object.fromEntries([1, 2, 3, 4, 5].map((p) => [p, [100, at(p + 1), 501]]));
   pages[6] = [1, null, 501];
@@ -1898,6 +2063,16 @@ it("follows GitHub's next link and refuses a list it cannot finish", async () =>
     [at(1), 40, 40],
     // Two next links that disagree.
     [`${at(3)}>; rel="next", <${at(2)}`, 40, 40],
+    // A malformed relation, or an unusable target beside a valid one.
+    [`<${at(2)}>; rel=next=x`, 40, 40],
+    [`<${at(2)}>; rel="next"x`, 40, 40],
+    [`<${at(2)}>; rel`, 40, 40],
+    [
+      `<${at(2)}>; rel="next", <${at(2, "http://example.invalid/api")}>; rel="next"`,
+      40,
+      40,
+    ],
+    [`<${at(2)}>; rel="next", ${at(2)}; rel="next"`, 40, 40],
   ];
   for (const [next, count, total] of unusable) {
     pages = { 1: [count, next, total] };

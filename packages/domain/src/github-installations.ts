@@ -29,9 +29,11 @@ const STATE_RETENTION = "1 day";
 // A callback leases its nonce before OAuth. The lease is stored as
 // consumed_at = deadline + LEASE_MARK, always past expires_at, while a bind
 // consumes the nonce before expires_at; the exact value names the lease's
-// owner. LEASE_MS outlasts setup's three GitHub requests (REQUEST_TIMEOUT_MS
-// each), and a lease a crash or cutover strands expires on its own.
-const LEASE_MS = 3 * 60 * 1000;
+// owner. A lease a crash or cutover strands expires on its own.
+// The one-use code is spent only while the state and the lease both outlive a
+// request budget, a quarter of the lease: 45 s by default, setup's three
+// GitHub requests (REQUEST_TIMEOUT_MS each) plus 15 s for the bind.
+const LEASE_MS = 4 * (3 * REQUEST_TIMEOUT_MS + 15_000);
 // Hours, not years: calendar arithmetic would follow the session's time zone.
 const LEASE_MARK = "interval '8760000 hours'";
 const LEASE_AFTER = `$4::double precision * interval '1 millisecond' + ${LEASE_MARK}`;
@@ -108,8 +110,11 @@ interface ObservedInstallation {
   readonly accountType: string;
   readonly repositorySelection: "all" | "selected";
   readonly suspendedAt: string | null;
-  /** Organization Members: read, which membership reads need, is granted. */
-  readonly membersReadable: boolean;
+  /**
+   * Organization Members access, which membership reads need: granted, absent
+   * from a well-formed permissions object, or unknown (missing or malformed).
+   */
+  readonly membersGrant: "readable" | "absent" | "unknown";
 }
 
 interface Mutation {
@@ -314,19 +319,28 @@ function observedInstallation(value: unknown): ObservedInstallation | null {
   )
     return null;
   const suspendedAt = typeof suspended === "string" ? githubTime(suspended) : null;
-  const members = object(body?.permissions)?.members;
+  const permissions = object(body?.permissions);
+  const members = permissions?.members;
   return {
     accountLogin: login,
     accountType: type,
     repositorySelection: selection,
     suspendedAt,
-    membersReadable: members === "read" || members === "write",
+    membersGrant:
+      !permissions || !Object.values(permissions).every((v) => typeof v === "string")
+        ? "unknown"
+        : members === "read" || members === "write"
+          ? "readable"
+          : members === undefined || members === "none"
+            ? "absent"
+            : "unknown",
   };
 }
 
 /**
  * The page past `after` a Link header's next link names of `listing` (100 per
- * page) on its API host; false for a next link that is not one, null for none.
+ * page) on its API host; null for no next link, false when any next link, or
+ * any rel parameter, is unusable or the next links disagree.
  */
 function nextPage(
   link: string | null,
@@ -352,38 +366,43 @@ function nextPage(
     else if (!quoted) target = c === "<" ? true : c === ">" ? false : target;
     parts.push(`${parts.pop() ?? ""}${c}`);
   }
-  let found: false | null = null;
   const pages = new Set<string>();
   for (const [uri = "", ...params] of links) {
-    const next = params.some((p) => {
-      const [key = "", rel = ""] = p.split("=", 2).map((v) => v.trim());
-      return (
-        key.toLowerCase() === "rel" &&
-        rel.replaceAll('"', "").toLowerCase().split(" ").includes("next")
+    let next = false;
+    for (const param of params) {
+      const at = param.indexOf("=");
+      if ((at < 0 ? param : param.slice(0, at)).trim().toLowerCase() !== "rel")
+        continue;
+      // A relation token, or a quoted list of them; anything else is malformed.
+      const rel = /^(?:([!#$%&'*+.^_`|~0-9A-Za-z-]+)|"([^"\\]*)")$/u.exec(
+        at < 0 ? "" : param.slice(at + 1).trim(),
       );
-    });
-    if (!next) continue;
-    found = false;
-    const value = uri.trim();
-    if (!value.startsWith("<") || !value.endsWith(">")) continue;
-    try {
-      const url = new URL(value.slice(1, -1), expected);
-      const page = url.searchParams.get("page") ?? "";
-      if (
-        url.origin === expected.origin &&
-        url.pathname === expected.pathname &&
-        [...url.searchParams.keys()].sort().join() === "page,per_page" &&
-        url.searchParams.get("per_page") === "100" &&
-        REPOSITORY_CURSOR.test(page) &&
-        Number(page) > after
-      )
-        pages.add(page);
-    } catch {
-      continue;
+      if (!rel) return false;
+      next ||= (rel[1] ?? rel[2] ?? "").toLowerCase().split(/\s+/u).includes("next");
     }
+    if (!next) continue;
+    const value = uri.trim();
+    if (!value.startsWith("<") || !value.endsWith(">")) return false;
+    let url: URL;
+    try {
+      url = new URL(value.slice(1, -1), expected);
+    } catch {
+      return false;
+    }
+    const page = url.searchParams.get("page") ?? "";
+    if (
+      url.origin !== expected.origin ||
+      url.pathname !== expected.pathname ||
+      [...url.searchParams.keys()].sort().join() !== "page,per_page" ||
+      url.searchParams.get("per_page") !== "100" ||
+      !REPOSITORY_CURSOR.test(page) ||
+      Number(page) <= after
+    )
+      return false;
+    pages.add(page);
   }
   // Next links that disagree leave no single target to follow.
-  return pages.size === 1 ? ([...pages][0] ?? null) : pages.size ? false : found;
+  return pages.size > 1 ? false : ([...pages][0] ?? null);
 }
 
 // GitHub refused the installation's access; a rate limit is only a retry.
@@ -649,8 +668,13 @@ export class GitHubInstallationService {
       if (response.status !== 404 && !body) throw new Error("inconclusive");
       return body;
     };
+    // Every fact is validated before any of them decides the answer.
     const text = (value: unknown, ...known: string[]) => {
-      if (typeof value !== "string" || (known.length && !known.includes(value)))
+      if (
+        typeof value !== "string" ||
+        !value ||
+        (known.length && !known.includes(value))
+      )
         throw new Error("inconclusive");
       return value;
     };
@@ -663,11 +687,12 @@ export class GitHubInstallationService {
         `/user/memberships/orgs/${encodeURIComponent(observed.accountLogin)}`,
       );
       if (!membership) return false;
-      return (
-        text(membership.state, "active", "pending") === "active" &&
-        text(membership.role, "admin", "member", "billing_manager") === "admin" &&
-        text(object(membership.organization)?.login).toLowerCase() === login
-      );
+      const state = text(membership.state, "active", "pending");
+      const role = text(membership.role, "admin", "member", "billing_manager");
+      // An answer about another organization says nothing about this one.
+      if (text(object(membership.organization)?.login).toLowerCase() !== login)
+        return null;
+      return state === "active" && role === "admin";
     } catch {
       return null;
     }
@@ -732,28 +757,40 @@ export class GitHubInstallationService {
     );
     let bound = false;
     try {
-      // Judged at one database instant once the lease (and any wait on it)
-      // committed: an expired state is invalid even when another callback
-      // holds it. The code is spent only while this callback's lease outlives
-      // the exchange: two thirds of it must remain and the answer must arrive
-      // within a sixth, leaving half (90 s) for the OAuth request.
+      // The milliseconds the state and this callback's own lease have left, at
+      // one database instant after the lease (and any wait on it) committed.
+      // Both must outlive the request budget after the time the reply took, so
+      // an expired state is invalid even when another callback holds it.
+      const budget = leaseMs / 4;
       const asked = performance.now();
       const check = (
-        await this.pool.query<{ fresh: boolean; held: boolean }>(
-          `SELECT $1::timestamptz > clock_timestamp() AS fresh, EXISTS(SELECT 1 FROM github_installation_states WHERE nonce=$2 AND consumed_at=$3::timestamptz AND consumed_at > clock_timestamp() + ${LEASE_AFTER}) AS held`,
-          [expiresAt, nonce, lease, (leaseMs * 2) / 3],
+        await this.pool.query<{ fresh: number; held: number | null }>(
+          `SELECT (extract(epoch FROM $1::timestamptz - clock_timestamp()) * 1000)::float8 AS fresh,
+             (SELECT (extract(epoch FROM consumed_at - ${LEASE_MARK} - clock_timestamp()) * 1000)::float8
+                FROM github_installation_states
+               WHERE nonce=$2 AND consumed_at=$3::timestamptz AND consumed_at > expires_at) AS held`,
+          [expiresAt, nonce, lease],
         )
       ).rows[0];
-      if (!check?.fresh) invalidState();
-      if (!lease || !check.held || performance.now() - asked > leaseMs / 6) replayed();
+      const elapsed = performance.now() - asked;
+      if (!check || !(check.fresh - elapsed > budget)) invalidState();
+      if (!lease || !((check.held ?? -Infinity) - elapsed > budget)) replayed();
       const token = await this.userToken(settings, m.code);
       const { observed, observedFrom } = await this.fetchInstallation(installationId);
-      if (observed?.accountType === "Organization" && !observed.membersReadable)
+      // Only a well-formed grant without Members is a definitive missing grant.
+      if (
+        observed?.accountType === "Organization" &&
+        observed.membersGrant !== "readable"
+      )
         throw new DomainError(
           "GITHUB_INSTALLATION_NOT_ACCESSIBLE",
-          "The GitHub App needs the organization permission Members: read to confirm an organization admin; accept it for this installation on GitHub, then connect again",
+          observed.membersGrant === "absent"
+            ? "The GitHub App needs the organization permission Members: read to confirm an organization admin; accept it for this installation on GitHub, then connect again"
+            : "GitHub did not report the installation's permissions; retry later",
           403,
-          { reason: "members_permission_required" },
+          observed.membersGrant === "absent"
+            ? { reason: "members_permission_required" }
+            : undefined,
         );
       const admin = observed && (await this.administers(settings, token, observed));
       if (!observed || !admin)
@@ -819,6 +856,18 @@ export class GitHubInstallationService {
             [installationId],
           )
         ).rows[0];
+        // The nonce row is locked last. Its deadlines are judged only once the
+        // lock is held, in a separate statement: a statement that waits on an
+        // unchanged row keeps the clock it read before the wait.
+        await client.query(
+          "SELECT 1 FROM github_installation_states WHERE nonce=$1 AND workspace_id=$2 FOR UPDATE",
+          [claims.n, claims.w],
+        );
+        const live = await client.query(
+          `SELECT 1 FROM github_installation_states WHERE nonce=$1 AND workspace_id=$2 AND consumed_at=$3::timestamptz AND consumed_at > clock_timestamp() + ${LEASE_MARK} AND expires_at > clock_timestamp()`,
+          [claims.n, claims.w, lease],
+        );
+        if (!live.rowCount) invalidState();
         let row: InstallationRow | undefined;
         if (existing) {
           if (existing.workspace_id !== workspaceId) boundElsewhere();
@@ -861,6 +910,7 @@ export class GitHubInstallationService {
         await this.audit(client, m, installationId, "bound", {
           accountLogin: observed.accountLogin,
         });
+        // Rechecked live: this transaction already holds the nonce row.
         const consumed = await client.query(
           `UPDATE github_installation_states SET consumed_at=clock_timestamp() WHERE nonce=$1 AND workspace_id=$2 AND consumed_at=$3::timestamptz AND consumed_at > clock_timestamp() + ${LEASE_MARK} AND expires_at > clock_timestamp()`,
           [claims.n, claims.w, lease],
@@ -1106,7 +1156,9 @@ export class GitHubInstallationService {
     const repositories: GitHubInstallationRepository[] = [];
     const listing = `${app.apiBaseUrl}/installation/repositories`;
     // The page GitHub's next link names past the last page read.
+    // The latest valid total_count is kept until a newer one supersedes it.
     let next: string | null = null,
+      total: number | null = null,
       listed = (first - 1) * 100;
     for (let page = first, read = 0; read < MAX_REPOSITORY_PAGES; read += 1) {
       const response = await this.github(
@@ -1145,13 +1197,14 @@ export class GitHubInstallationService {
       // count and a short page must agree that the list ended.
       const linked = nextPage(response.headers.get("link"), listing, page);
       next = typeof linked === "string" ? linked : null;
-      const total = body?.total_count,
-        seen = (listed += list.length),
+      const count = body?.total_count;
+      if (Number.isSafeInteger(count) && (count as number) >= 0)
+        total = count as number;
+      const seen = (listed += list.length),
         full = list.length >= 100;
       if (
         linked === false ||
-        (!next &&
-          (typeof total === "number" ? total > seen || (full && total !== seen) : full))
+        (!next && (total !== null ? total > seen || (full && total !== seen) : full))
       )
         unavailable(
           "GitHub did not say where the repository list continues; retry later",
