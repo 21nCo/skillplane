@@ -327,7 +327,10 @@ function observedInstallation(value: unknown): ObservedInstallation | null {
     repositorySelection: selection,
     suspendedAt,
     membersGrant:
-      !permissions || !Object.values(permissions).every((v) => typeof v === "string")
+      !permissions ||
+      !Object.values(permissions).every(
+        (v) => typeof v === "string" && /^[a-z_]+$/u.test(v),
+      )
         ? "unknown"
         : members === "read" || members === "write"
           ? "readable"
@@ -366,6 +369,7 @@ function nextPage(
     else if (!quoted) target = c === "<" ? true : c === ">" ? false : target;
     parts.push(`${parts.pop() ?? ""}${c}`);
   }
+  if (quoted || target) return false;
   const pages = new Set<string>();
   for (const [uri = "", ...params] of links) {
     let next = false;
@@ -374,9 +378,10 @@ function nextPage(
       if ((at < 0 ? param : param.slice(0, at)).trim().toLowerCase() !== "rel")
         continue;
       // A relation token, or a quoted list of them; anything else is malformed.
-      const rel = /^(?:([!#$%&'*+.^_`|~0-9A-Za-z-]+)|"([^"\\]*)")$/u.exec(
-        at < 0 ? "" : param.slice(at + 1).trim(),
-      );
+      const rel =
+        /^(?:([\w!#$%&'*+.^`|~-]+)|"\s*([\w!#$%&'*+.^`|~:/-]+(?:\s+[\w!#$%&'*+.^`|~:/-]+)*)\s*")$/u.exec(
+          at < 0 ? "" : param.slice(at + 1).trim(),
+        );
       if (!rel) return false;
       next ||= (rel[1] ?? rel[2] ?? "").toLowerCase().split(/\s+/u).includes("next");
     }
@@ -672,7 +677,7 @@ export class GitHubInstallationService {
     const text = (value: unknown, ...known: string[]) => {
       if (
         typeof value !== "string" ||
-        !value ||
+        !/^\S+$/u.test(value) ||
         (known.length && !known.includes(value))
       )
         throw new Error("inconclusive");
@@ -1198,8 +1203,11 @@ export class GitHubInstallationService {
       const linked = nextPage(response.headers.get("link"), listing, page);
       next = typeof linked === "string" ? linked : null;
       const count = body?.total_count;
-      if (Number.isSafeInteger(count) && (count as number) >= 0)
-        total = count as number;
+      if (count !== undefined)
+        total =
+          Number.isSafeInteger(count) && (count as number) >= 0
+            ? (count as number)
+            : unavailable("GitHub returned an invalid repository count");
       const seen = (listed += list.length),
         full = list.length >= 100;
       if (

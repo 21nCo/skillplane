@@ -1186,8 +1186,9 @@ it.each(["ROLLBACK", "COMMIT"])(
         [nonceOf(state), owner.workspaceId],
       );
       const before = github.requests.length;
+      // A 1 s budget (4 s lease): the 3 s state fails only because of the wait.
       claim = track(
-        setupService().completeSetup({
+        setupService(undefined, pool(), 4000).completeSetup({
           ...m(),
           state,
           installationId: id,
@@ -1589,8 +1590,9 @@ it("refuses a state that expires while its checks wait, before OAuth", async () 
   const { state, expiresAt } = await expiringState(2000);
   const pause = pausedBefore("AS fresh");
   const before = github.requests.length;
+  // A 1 s budget (4 s lease): the 2 s state fails only because of the wait.
   const claim = track(
-    setupService(undefined, pause.pool).completeSetup({
+    setupService(undefined, pause.pool, 4000).completeSetup({
       ...m(),
       state,
       installationId: id,
@@ -1605,6 +1607,7 @@ it("refuses a state that expires while its checks wait, before OAuth", async () 
   });
   expect(github.requests.slice(before)).toEqual([]);
   expect(await nonceRows(state)).toBe(0);
+  expect(await status(id)).toBeUndefined();
 }, 30_000);
 
 it("stops a callback whose lease was taken over before it spends the code", async () => {
@@ -1844,6 +1847,8 @@ it("tells a missing Members grant from a failed admin check in the redirect", as
     ["read", null],
     [{ metadata: "read", members: 7 }, null],
     [{ metadata: 1, members: "read" }, null],
+    [{ metadata: "" }, null],
+    [{ metadata: " ", members: "none" }, null],
     [{ metadata: "read", members: "maybe" }, null],
   ] as const) {
     org.permissions = permissions as never;
@@ -1929,6 +1934,8 @@ it("tells a missing Members grant from a failed admin check in the redirect", as
   for (const [body, reason] of [
     [{}, null],
     [{ login: "" }, null],
+    [{ login: " " }, null],
+    [{ login: "octo owner" }, null],
     [{ login: 7 }, null],
     [{ login: "octo-other" }, "not_admin"],
   ] as const) {
@@ -2012,6 +2019,17 @@ it("follows GitHub's next link and refuses a list it cannot finish", async () =>
   expect(asked).toEqual(["1", "3", "7"]);
   pages = { 1: [100, at(2), 999], 2: [40, null, 140] };
   expect(await read()).toMatchObject({ truncated: false, nextCursor: null });
+  // A count that is supplied but malformed establishes nothing: a retry.
+  for (const total of [140.5, "40", null, -1])
+    for (const first of [
+      [40, null, total],
+      [100, at(2), total],
+    ] as const) {
+      pages = { 1: first as never, 2: [40, null, 140] };
+      await expect(read(), JSON.stringify(first)).rejects.toMatchObject({
+        code: "SERVICE_UNAVAILABLE",
+      });
+    }
   // A token or quoted relation list, and next links that agree, are followed.
   for (const link of [
     `<${at(2)}>; rel=next`,
@@ -2067,6 +2085,9 @@ it("follows GitHub's next link and refuses a list it cannot finish", async () =>
     [`<${at(2)}>; rel=next=x`, 40, 40],
     [`<${at(2)}>; rel="next"x`, 40, 40],
     [`<${at(2)}>; rel`, 40, 40],
+    [`<${at(2)}>; rel="next = junk"`, 40, 40],
+    [`<${at(2)}>; rel=next, <${at(2, "http://example.invalid/api")}; rel=next`, 40, 40],
+    [`<${at(2)}>; rel="next, <${at(2)}>; rel=next`, 40, 40],
     [
       `<${at(2)}>; rel="next", <${at(2, "http://example.invalid/api")}>; rel="next"`,
       40,
