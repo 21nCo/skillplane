@@ -1619,6 +1619,8 @@ it("bounds GitHub responses and classifies refused discovery", async () => {
     [(link: string) => link.replace('rel="next"', "rel=next"), 150],
     [(link: string) => link.replace('rel="next"', 'rel="next last"'), 150],
     [(link: string) => link.replace(/<[^>]*\/(repositories\?[^>]*)>/u, "<$1>"), 150],
+    [(link: string) => link.replace("; rel", '; title="more, see; this"; rel'), 150],
+    [(link: string) => link.replace(">;", "&x=a;b>;"), 150],
     [(link: string) => link.replace("127.0.0.1", "localhost"), 100],
   ] as const) {
     relink = form;

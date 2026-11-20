@@ -206,8 +206,7 @@ function parseInstallationId(value: unknown): number {
   return id;
 }
 
-// Reads a JSON body, counting bytes as they stream so an oversized body is
-// refused without buffering it, whatever its length header says.
+// Reads a JSON body, refusing an oversized one as it streams, whatever its length.
 async function readJson(
   response: Response,
   limit = MAX_RESPONSE_BYTES,
@@ -261,8 +260,7 @@ function object(value: unknown): Record<string, unknown> | null {
 const GITHUB_TIME =
   /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?(?:Z|[+-](\d{2}):(\d{2}))$/u;
 
-// A GitHub ISO 8601 timestamp as ISO in UTC; null unless every field is real
-// (Date.parse would accept "0" or roll February 30 into March).
+// A GitHub timestamp in UTC ISO; null unless every field is real (not Date.parse).
 function githubTime(value: string): string | null {
   const match = GITHUB_TIME.exec(value);
   if (!match) return null;
@@ -318,26 +316,41 @@ function observedInstallation(value: unknown): ObservedInstallation | null {
 /** Whether a Link header names a next page of `listing` on its API host. */
 function nextPageLinked(link: string | null, listing: string): boolean {
   const expected = new URL(listing);
-  for (const part of (link ?? "").split(",")) {
-    const [target = "", ...params] = part.split(";").map((p) => p.trim());
-    if (!target.startsWith("<") || !target.endsWith(">")) continue;
+  // Split links on "," and parameters on ";" outside <targets> and "quotes".
+  const links: string[][] = [[""]];
+  let quoted = false,
+    target = false,
+    escaped = false;
+  for (const c of link ?? "") {
+    const parts = links[links.length - 1] ?? [];
+    if (!quoted && !target && (c === "," || c === ";")) {
+      if (c === ",") links.push([""]);
+      else parts.push("");
+      continue;
+    }
+    if (escaped) escaped = false;
+    else if (quoted && c === "\\") escaped = true;
+    else if (c === '"' && !target) quoted = !quoted;
+    else if (!quoted) target = c === "<" ? true : c === ">" ? false : target;
+    parts.push(`${parts.pop() ?? ""}${c}`);
+  }
+  return links.some(([uri = "", ...params]) => {
     const next = params.some((p) => {
-      const [key = "", value = ""] = p.split("=", 2).map((v) => v.trim());
+      const [key = "", rel = ""] = p.split("=", 2).map((v) => v.trim());
       return (
         key.toLowerCase() === "rel" &&
-        value.replaceAll('"', "").toLowerCase().split(" ").includes("next")
+        rel.replaceAll('"', "").toLowerCase().split(" ").includes("next")
       );
     });
-    if (!next) continue;
+    const value = uri.trim();
+    if (!next || !value.startsWith("<") || !value.endsWith(">")) return false;
     try {
-      const url = new URL(target.slice(1, -1), expected);
-      if (url.origin === expected.origin && url.pathname === expected.pathname)
-        return true;
+      const url = new URL(value.slice(1, -1), expected);
+      return url.origin === expected.origin && url.pathname === expected.pathname;
     } catch {
-      // Not a URL: no next page.
+      return false;
     }
-  }
-  return false;
+  });
 }
 
 // GitHub refused the installation's access; a rate limit is only a retry.
@@ -359,10 +372,8 @@ function boundElsewhere(): never {
 }
 
 /**
- * Fences in-flight previews and applies of the sources reading through an
- * installation that stops being usable (unbound, suspended or removed): a new
- * revision voids their previews and clearing the lease voids their applies,
- * so none of them records a sync afterwards. Sources are locked in id order.
+ * Fences sources reading through an installation that stops being usable: a
+ * new revision voids previews, a cleared lease voids applies (locked by id).
  */
 async function fenceInstallationSources(
   client: PoolClient,
@@ -406,8 +417,7 @@ export class GitHubInstallationService {
     return this.#options.app !== null && this.#options.settings !== null;
   }
 
-  // Reading bound installations needs only the App; installing also needs
-  // the install settings.
+  // Reading bound installations needs only the App; installing, its settings.
   private configured(): { app: GitHubApp; settings: GitHubInstallSettings };
   private configured(appOnly: true): { app: GitHubApp };
   private configured(appOnly = false) {
@@ -499,8 +509,7 @@ export class GitHubInstallationService {
 
   private async github(url: string, init: RequestInit = {}): Promise<Response> {
     const headers = new Headers(init.headers);
-    // The OAuth code exchange asks for JSON; GitHub answers it form-encoded
-    // under any other Accept.
+    // The OAuth exchange asks for JSON; it is form-encoded under any other Accept.
     if (!headers.has("accept")) headers.set("accept", "application/vnd.github+json");
     headers.set("x-github-api-version", GITHUB_API_VERSION);
     headers.set("user-agent", USER_AGENT);
@@ -529,9 +538,8 @@ export class GitHubInstallationService {
   }
 
   /**
-   * The installation as GitHub reports it now (null when it was removed),
-   * with `observedFrom`: the database time taken right before the request is
-   * sent, which orders observations against each other.
+   * The installation as GitHub reports it now (null when removed), with
+   * `observedFrom`, the database time right before the request, for ordering.
    */
   private async fetchInstallation(
     installationId: number,
@@ -589,10 +597,8 @@ export class GitHubInstallationService {
   }
 
   /**
-   * Whether the OAuth user may delegate the installation's whole grant: a
-   * User installation must be their own account, and an Organization
-   * installation needs their active admin membership. Any other answer,
-   * including a failed or inconclusive check, is no.
+   * Whether the OAuth user owns the User installation's account or is an active
+   * admin of its Organization; any other or inconclusive answer is no.
    */
   private async administers(
     settings: GitHubInstallSettings,
@@ -667,8 +673,7 @@ export class GitHubInstallationService {
     const nonce = claims.n;
     const expiresAt = new Date(claims.e);
     // Reserve the nonce (consumed_at 'infinity') before the one-use OAuth
-    // exchange: a duplicate, or a state the database clock finds expired after
-    // the insert and any wait on it, is refused without asking GitHub.
+    // exchange: a duplicate or expired state is refused without asking GitHub.
     await withDomainTransaction(
       this.pool,
       m.requestId,
@@ -678,16 +683,17 @@ export class GitHubInstallationService {
           [nonce, claims.w, expiresAt],
         );
         if (!inserted.rowCount) replayed();
-        const fresh = await client.query<{ fresh: boolean }>(
-          "SELECT $1::timestamptz > clock_timestamp() AS fresh",
-          [expiresAt],
-        );
-        if (!fresh.rows[0]?.fresh) invalidState();
       },
       { fencingEpoch: m.fencingEpoch },
     );
     let bound = false;
     try {
+      // Judged once the reservation (and any wait on it) committed.
+      const fresh = await this.pool.query<{ fresh: boolean }>(
+        "SELECT $1::timestamptz > clock_timestamp() AS fresh",
+        [expiresAt],
+      );
+      if (!fresh.rows[0]?.fresh) invalidState();
       const token = await this.userToken(settings, m.code);
       const { observed, observedFrom } = await this.fetchInstallation(installationId);
       if (observed?.accountType === "Organization" && !observed.membersReadable)
@@ -712,8 +718,7 @@ export class GitHubInstallationService {
       bound = true;
       return installation;
     } finally {
-      // A refused bind releases it at the routed epoch so the state can still
-      // bind; a failed release only uses up a state that expires soon anyway.
+      // Refusals release it at the routed epoch; a crash strands a short-lived state.
       if (!bound)
         await withDomainTransaction(
           this.pool,
@@ -810,11 +815,9 @@ export class GitHubInstallationService {
   }
 
   /**
-   * Records what GitHub reported about a locked installation row (null when
-   * it was removed) if no newer observation was recorded since
-   * `observedFrom`, the database time the observation started. An active
-   * installation becoming suspended or removed fences its sources. Returns
-   * the updated row, or null when the observation is stale.
+   * Records an observation of a locked row (null: removed) unless a newer one
+   * landed since `observedFrom`; an active installation becoming suspended or
+   * removed fences its sources. Returns the updated row, null when stale.
    */
   private async observe(
     client: PoolClient,
@@ -908,8 +911,7 @@ export class GitHubInstallationService {
       m.requestId,
       async ({ client }) => {
         for (const { row, observed: value, observedFrom } of checked) {
-          // Only the row that was observed: an installation unbound and bound
-          // again meanwhile is a new row and keeps its own observation.
+          // Only the observed row: one unbound and bound again is a new row.
           const current = (
             await client.query<InstallationRow>(
               "SELECT * FROM github_installations WHERE workspace_id=$1 AND installation_id=$2 AND created_at=$3::timestamptz FOR UPDATE",
@@ -992,9 +994,8 @@ export class GitHubInstallationService {
   }
 
   /**
-   * Repositories an active bound installation grants, for source creation,
-   * up to MAX_REPOSITORY_PAGES pages from `cursor`; `nextCursor` reads on.
-   * Nothing is returned unless the same binding is still active afterwards.
+   * An active binding's repositories, MAX_REPOSITORY_PAGES pages from `cursor`
+   * (`nextCursor` reads on), returned only if the binding is unchanged after.
    */
   async repositories(
     principal: Principal,
@@ -1016,9 +1017,8 @@ export class GitHubInstallationService {
         field: "cursor",
       });
     const first = typeof cursorInput === "string" ? Number(cursorInput) : 1;
-    // The active binding, then the same binding unchanged: a rebind is a new
-    // row, and any status or account change (even a suspension that resumed
-    // since) advances updated_at.
+    // The active binding, then the same one unchanged: a rebind is a new row,
+    // and any status or account change (even one undone since) advances it.
     let bound: string | null = null;
     const binding = () =>
       this.pool.query<{ generation: string }>(
