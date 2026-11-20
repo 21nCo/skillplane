@@ -97,6 +97,8 @@ interface ObservedInstallation {
   readonly accountType: string;
   readonly repositorySelection: "all" | "selected";
   readonly suspendedAt: string | null;
+  /** Organization Members: read, which membership reads need, is granted. */
+  readonly membersReadable: boolean;
 }
 
 interface Mutation {
@@ -303,12 +305,32 @@ function observedInstallation(value: unknown): ObservedInstallation | null {
   )
     return null;
   const suspendedAt = typeof suspended === "string" ? githubTime(suspended) : null;
+  const members = object(body?.permissions)?.members;
   return {
     accountLogin: login,
     accountType: type,
     repositorySelection: selection,
     suspendedAt,
+    membersReadable: members === "read" || members === "write",
   };
+}
+
+/** Whether a Link header names a next page of `listing` on its API host. */
+function nextPageLinked(link: string | null, listing: string): boolean {
+  const expected = new URL(listing);
+  for (const part of (link ?? "").split(",")) {
+    const [target = "", ...params] = part.split(";").map((p) => p.trim());
+    if (!target.startsWith("<") || !target.endsWith(">")) continue;
+    if (!params.some((p) => p.toLowerCase() === 'rel="next"')) continue;
+    try {
+      const url = new URL(target.slice(1, -1));
+      if (url.origin === expected.origin && url.pathname === expected.pathname)
+        return true;
+    } catch {
+      // Not a URL: no next page.
+    }
+  }
+  return false;
 }
 
 // GitHub refused the installation's access; a rate limit is only a retry.
@@ -635,44 +657,86 @@ export class GitHubInstallationService {
         403,
       );
     const { settings } = this.configured();
-    // Before OAuth, a used state, or one expired by the database clock, is
-    // refused without writing anything; it is consumed only with the binding.
-    const precheck = await this.pool.query<{ used: boolean; fresh: boolean }>(
-      "SELECT EXISTS (SELECT 1 FROM github_installation_states WHERE nonce=$1) AS used, $2::timestamptz > clock_timestamp() AS fresh",
-      [claims.n, new Date(claims.e)],
-    );
-    if (!precheck.rows[0]?.fresh || claims.e <= this.now()) invalidState();
-    if (precheck.rows[0].used) replayed();
-    const token = await this.userToken(settings, m.code);
-    const { observed, observedFrom } = await this.fetchInstallation(installationId);
-    if (!observed || !(await this.administers(settings, token, observed)))
-      throw new DomainError(
-        "GITHUB_INSTALLATION_NOT_ACCESSIBLE",
-        "Only an owner of this GitHub account or an admin of this organization can connect it",
-        403,
-      );
-    return withDomainTransaction(
+    const nonce = claims.n;
+    const expiresAt = new Date(claims.e);
+    // Reserve the nonce (consumed_at 'infinity') before the one-use OAuth
+    // exchange: a duplicate, or a state the database clock finds expired after
+    // the insert and any wait on it, is refused without asking GitHub.
+    await withDomainTransaction(
       this.pool,
       m.requestId,
       async ({ client }) => {
-        // A consumed nonce is pruned only long after its state expired, and a
-        // claim is judged fresh after its insert (and any wait on it) by the
-        // database's wall clock, so neither a stalled claim nor a retry can use
-        // a state twice or after it expired. A refused bind rolls it back.
+        // A used nonce is pruned only long after its state expired.
         await client.query(
           `DELETE FROM github_installation_states WHERE workspace_id=$1 AND expires_at < now() - interval '${STATE_RETENTION}'`,
           [claims.w],
         );
         const inserted = await client.query(
-          "INSERT INTO github_installation_states(nonce,workspace_id,expires_at) VALUES($1,$2,$3) ON CONFLICT (nonce) DO NOTHING",
-          [claims.n, claims.w, new Date(claims.e)],
+          "INSERT INTO github_installation_states(nonce,workspace_id,expires_at,consumed_at) VALUES($1,$2,$3,'infinity') ON CONFLICT (nonce) DO NOTHING",
+          [nonce, claims.w, expiresAt],
         );
+        if (!inserted.rowCount) replayed();
         const fresh = await client.query<{ fresh: boolean }>(
           "SELECT $1::timestamptz > clock_timestamp() AS fresh",
-          [new Date(claims.e)],
+          [expiresAt],
         );
         if (!fresh.rows[0]?.fresh) invalidState();
-        if (!inserted.rowCount) replayed();
+      },
+      { fencingEpoch: m.fencingEpoch },
+    );
+    let bound = false;
+    try {
+      const token = await this.userToken(settings, m.code);
+      const { observed, observedFrom } = await this.fetchInstallation(installationId);
+      if (observed?.accountType === "Organization" && !observed.membersReadable)
+        throw new DomainError(
+          "GITHUB_INSTALLATION_NOT_ACCESSIBLE",
+          "The GitHub App needs the organization permission Members: read to confirm an organization admin; accept it for this installation on GitHub, then connect again",
+          403,
+        );
+      if (!observed || !(await this.administers(settings, token, observed)))
+        throw new DomainError(
+          "GITHUB_INSTALLATION_NOT_ACCESSIBLE",
+          "Only an owner of this GitHub account or an admin of this organization can connect it",
+          403,
+        );
+      const installation = await this.bind(
+        m,
+        claims,
+        installationId,
+        observed,
+        observedFrom,
+      );
+      bound = true;
+      return installation;
+    } finally {
+      // A refused bind releases the reservation so the state can still bind;
+      // a crash before this only uses up a state that expires soon anyway.
+      if (!bound)
+        await this.pool
+          .query(
+            "DELETE FROM github_installation_states WHERE nonce=$1 AND consumed_at='infinity'",
+            [nonce],
+          )
+          .catch(() => undefined);
+    }
+  }
+
+  /**
+   * Binds under a reserved nonce, consumed last (after every lock) and only
+   * while fresh by the database clock, else every write rolls back.
+   */
+  private bind(
+    m: Mutation,
+    claims: StateClaims,
+    installationId: number,
+    observed: ObservedInstallation,
+    observedFrom: string,
+  ): Promise<GitHubInstallation> {
+    return withDomainTransaction(
+      this.pool,
+      m.requestId,
+      async ({ client }) => {
         const workspaceId = m.principal.workspaceId;
         // Serializes this workspace's binds so the installation cap holds.
         await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [
@@ -726,6 +790,11 @@ export class GitHubInstallationService {
         await this.audit(client, m, installationId, "bound", {
           accountLogin: observed.accountLogin,
         });
+        const consumed = await client.query(
+          "UPDATE github_installation_states SET consumed_at=clock_timestamp() WHERE nonce=$1 AND workspace_id=$2 AND consumed_at='infinity' AND expires_at > clock_timestamp()",
+          [claims.n, claims.w],
+        );
+        if (!consumed.rowCount) invalidState();
         return record(row);
       },
       { fencingEpoch: m.fencingEpoch },
@@ -969,12 +1038,13 @@ export class GitHubInstallationService {
     if (typeof token !== "string" || !TOKEN.test(token))
       unavailable("GitHub returned an invalid installation token");
     const repositories: GitHubInstallationRepository[] = [];
+    const listing = `${app.apiBaseUrl}/installation/repositories`;
     // Whether GitHub has repositories past the last page read.
     let more = false,
       page = first;
     for (; page < first + MAX_REPOSITORY_PAGES; page += 1) {
       const response = await this.github(
-        `${app.apiBaseUrl}/installation/repositories?per_page=100&page=${String(page)}`,
+        `${listing}?per_page=100&page=${String(page)}`,
         { headers: { authorization: `Bearer ${token}` } },
       );
       // The installation token refused: access was revoked or narrowed.
@@ -1005,8 +1075,8 @@ export class GitHubInstallationService {
           url: `https://github.com/${fullName}`,
         });
       }
-      // A full page may have more after it, whatever total_count claims.
-      more = list.length >= 100;
+      // GitHub's next link, not total_count or a full page, says more follow.
+      more = nextPageLinked(response.headers.get("link"), listing);
       if (!more) break;
     }
     // An unbind, rebind or suspension while listing withholds the result.

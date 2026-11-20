@@ -16,6 +16,10 @@ export interface FakeGitHubInstallation {
   repositories: { fullName: string; private: boolean; defaultBranch: string }[];
   suspendedAt: string | null;
   removed: boolean;
+  /** The installation's granted permissions; `members` gates membership reads. */
+  permissions: Record<string, string>;
+  /** A `total_count` to report instead of the real one. */
+  totalCount?: number;
   /** Organization memberships by GitHub user; unused for a User account. */
   readonly memberships: Map<string, FakeGitHubMembership>;
 }
@@ -47,9 +51,10 @@ export interface FakeGitHubInstallations {
   addInstallation(
     installation: Omit<
       FakeGitHubInstallation,
-      "memberships" | "suspendedAt" | "removed"
+      "memberships" | "suspendedAt" | "removed" | "permissions"
     > & {
       users: string[];
+      permissions?: Record<string, string>;
     },
   ): FakeGitHubInstallation;
   /** Answers to give instead, keyed by `METHOD path` (API path, no prefix). */
@@ -113,6 +118,7 @@ export async function startFakeGitHubInstallations(
     account: installation.account,
     repository_selection: installation.repositorySelection,
     suspended_at: installation.suspendedAt,
+    permissions: installation.permissions,
   });
 
   const fake: FakeGitHubInstallations = {
@@ -125,9 +131,10 @@ export async function startFakeGitHubInstallations(
     nextInstall: null,
     requests,
     failures: new Map(),
-    addInstallation({ users, ...input }) {
+    addInstallation({ users, permissions, ...input }) {
       const installation: FakeGitHubInstallation = {
         ...input,
+        permissions: permissions ?? { metadata: "read", members: "read" },
         memberships: new Map(
           users.map((user) => [user, { state: "active", role: "admin" } as const]),
         ),
@@ -216,10 +223,13 @@ export async function startFakeGitHubInstallations(
         const user = userTokens.get(bearer(request));
         if (!user) return send(401, { message: "Bad credentials" });
         const login = decodeURIComponent(org[1] ?? "");
-        const membership = [...installations.values()]
-          .filter((i) => i.account.type === "Organization" && i.account.login === login)
-          .map((i) => i.memberships.get(user))
-          .find(Boolean);
+        const granted = [...installations.values()].find(
+          (i) => i.account.type === "Organization" && i.account.login === login,
+        );
+        // Like GitHub: membership reads need the Members permission.
+        if (granted && !granted.permissions.members)
+          return send(403, { message: "Resource not accessible by integration" });
+        const membership = granted?.memberships.get(user);
         return membership
           ? send(200, { ...membership, organization: { login } })
           : send(404, { message: "Not Found" });
@@ -252,8 +262,13 @@ export async function startFakeGitHubInstallations(
           return send(401, { message: "Bad credentials" });
         const perPage = Number(url.searchParams.get("per_page") ?? "30");
         const page = Number(url.searchParams.get("page") ?? "1");
+        if (page * perPage < installation.repositories.length)
+          response.setHeader(
+            "link",
+            `<${fake.apiBaseUrl}${path}?per_page=${String(perPage)}&page=${String(page + 1)}>; rel="next"`,
+          );
         return send(200, {
-          total_count: installation.repositories.length,
+          total_count: installation.totalCount ?? installation.repositories.length,
           repositories: installation.repositories
             .slice((page - 1) * perPage, page * perPage)
             .map((r) => ({

@@ -709,6 +709,18 @@ describe("GitHub App installation settings", () => {
     expect(fields({ ...app, ...install, ...hosts, RUNTIME_ENV: "production" })).toEqual(
       ["GITHUB_API_URL", "GITHUB_WEB_URL"],
     );
+    // A query or fragment delimiter, even an empty one, would swallow paths.
+    for (const suffix of ["?", "#", "?x=1", "#x"])
+      expect(
+        fields({
+          ...app,
+          ...install,
+          GITHUB_API_URL: `http://127.0.0.1:9/api${suffix}`,
+          GITHUB_WEB_URL: `http://127.0.0.1:9/${suffix}`,
+          RUNTIME_ENV: "local",
+        }),
+        suffix,
+      ).toEqual(["GITHUB_API_URL", "GITHUB_WEB_URL"]);
   });
 });
 

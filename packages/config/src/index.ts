@@ -1070,7 +1070,8 @@ export function parseGitHubAppConfig(
  * Names of the settings that let a workspace install the GitHub App. The slug
  * and client ID are public App identifiers; the client secret is a Worker
  * secret. `GITHUB_API_URL` and `GITHUB_WEB_URL` point at a fake GitHub and
- * are accepted only when `RUNTIME_ENV` is `local`.
+ * are accepted only when `RUNTIME_ENV` is `local`. Organization binds need the
+ * App's organization permission Members: read to confirm an active admin.
  */
 export const GITHUB_APP_INSTALL_NAMES = {
   slug: "GITHUB_APP_SLUG",
@@ -1110,7 +1111,8 @@ function githubBaseUrl(
   }
   try {
     const url = new URL(value);
-    if (!["http:", "https:"].includes(url.protocol) || url.search || url.hash)
+    // An empty "?" or "#" is kept in the URL but not in search or hash.
+    if (!["http:", "https:"].includes(url.protocol) || /[?#]/u.test(value))
       throw new Error("invalid");
     return url.toString().replace(/\/+$/u, "");
   } catch {
