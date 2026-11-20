@@ -1,0 +1,14 @@
+packages/domain/src/github-installations.ts
+  h_a39f9495f9ec1d 209,263,319-338,340,343,346-347,349-350,352,354,376-377,544-545,603-604,679,694-699,822-824,918,1025-1026
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a2b15aec14c8044957d95af415a1fd655ba90fb2",
+  "prompts": {},
+  "humans": {
+    "h_a39f9495f9ec1d": {
+      "author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
