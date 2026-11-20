@@ -32,7 +32,8 @@ const STATE_RETENTION = "1 day";
 // owner. LEASE_MS outlasts setup's three GitHub requests (REQUEST_TIMEOUT_MS
 // each), and a lease a crash or cutover strands expires on its own.
 const LEASE_MS = 3 * 60 * 1000;
-const LEASE_MARK = "interval '1000 years'";
+// Hours, not years: calendar arithmetic would follow the session's time zone.
+const LEASE_MARK = "interval '8760000 hours'";
 const LEASE_AFTER = `$4::double precision * interval '1 millisecond' + ${LEASE_MARK}`;
 const NONCE = /^[A-Za-z0-9_-]{22,64}$/u;
 const INSTALLATION_ID = /^[1-9][0-9]{0,15}$/u;
@@ -352,6 +353,7 @@ function nextPage(
     parts.push(`${parts.pop() ?? ""}${c}`);
   }
   let found: false | null = null;
+  const pages = new Set<string>();
   for (const [uri = "", ...params] of links) {
     const next = params.some((p) => {
       const [key = "", rel = ""] = p.split("=", 2).map((v) => v.trim());
@@ -375,12 +377,13 @@ function nextPage(
         REPOSITORY_CURSOR.test(page) &&
         Number(page) > after
       )
-        return page;
+        pages.add(page);
     } catch {
       continue;
     }
   }
-  return found;
+  // Next links that disagree leave no single target to follow.
+  return pages.size === 1 ? ([...pages][0] ?? null) : pages.size ? false : found;
 }
 
 // GitHub refused the installation's access; a rate limit is only a retry.
@@ -646,22 +649,24 @@ export class GitHubInstallationService {
       if (response.status !== 404 && !body) throw new Error("inconclusive");
       return body;
     };
-    const text = (value: unknown) => {
-      if (typeof value !== "string") throw new Error("inconclusive");
-      return value.toLowerCase();
+    const text = (value: unknown, ...known: string[]) => {
+      if (typeof value !== "string" || (known.length && !known.includes(value)))
+        throw new Error("inconclusive");
+      return value;
     };
     try {
       if (observed.accountType === "User")
-        return text((await read("/user"))?.login) === login;
-      if (observed.accountType !== "Organization") return false;
+        return text((await read("/user"))?.login).toLowerCase() === login;
+      // No other account type can be bound; that is not an authority answer.
+      if (observed.accountType !== "Organization") return null;
       const membership = await read(
         `/user/memberships/orgs/${encodeURIComponent(observed.accountLogin)}`,
       );
       if (!membership) return false;
       return (
-        text(membership.state) === "active" &&
-        text(membership.role) === "admin" &&
-        text(object(membership.organization)?.login) === login
+        text(membership.state, "active", "pending") === "active" &&
+        text(membership.role, "admin", "member", "billing_manager") === "admin" &&
+        text(object(membership.organization)?.login).toLowerCase() === login
       );
     } catch {
       return null;
@@ -1156,6 +1161,11 @@ export class GitHubInstallationService {
     }
     // An unbind, rebind or suspension while listing withholds the result.
     if (!(await binding()).rowCount) throw new GitHubAuthFailedError();
+    // A cursor carries only a page, so the pages read must account for it.
+    if (next && listed !== (Number(next) - 1) * 100)
+      unavailable(
+        "GitHub did not say where the repository list continues; retry later",
+      );
     return { repositories, truncated: next !== null, nextCursor: next };
   }
 }

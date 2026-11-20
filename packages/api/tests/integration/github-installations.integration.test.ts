@@ -1442,7 +1442,7 @@ const leasePast = (state: string) =>
     async () =>
       (
         await pool().query<{ past: boolean }>(
-          "SELECT consumed_at - interval '1000 years' < clock_timestamp() AS past FROM github_installation_states WHERE nonce=$1",
+          "SELECT consumed_at - interval '8760000 hours' < clock_timestamp() AS past FROM github_installation_states WHERE nonce=$1",
           [nonceOf(state)],
         )
       ).rows[0]?.past === true,
@@ -1770,6 +1770,10 @@ it("tells a missing Members grant from a failed admin check in the redirect", as
   for (const failure of [
     { status: 500 },
     { status: 200, body: { state: "active", role: "admin" } },
+    {
+      status: 200,
+      body: { state: "ACTIVE", role: "ADMIN", organization: { login: "acme-reason" } },
+    },
     { status: 200, body: [] },
   ]) {
     github.failures.set(membership, failure);
@@ -1793,6 +1797,19 @@ it("tells a missing Members grant from a failed admin check in the redirect", as
     null,
   ]);
   github.failures.clear();
+  // An account type that cannot be bound is no answer about the user either.
+  const enterprise = base + 37;
+  github.addInstallation({
+    id: enterprise,
+    account: { login: "acme-enterprise", type: "Enterprise" as "Organization" },
+    repositorySelection: "all",
+    repositories: [],
+    users: ["octo-owner"],
+  });
+  expect(await outcome("octo-owner", enterprise)).toEqual([
+    "GITHUB_INSTALLATION_NOT_ACCESSIBLE",
+    null,
+  ]);
   // Neither refusal used the state; an admin binds with it.
   expect(await nonceRows(state)).toBe(0);
   expect(await outcome("octo-owner")).toEqual([null, null]);
@@ -1841,15 +1858,30 @@ it("follows GitHub's next link and refuses a list it cannot finish", async () =>
   expect(await read()).toMatchObject({ truncated: false, nextCursor: null });
   expect(asked).toEqual(["1", "3", "7"]);
   // The cursor past a batch is the page GitHub's link names.
-  pages = Object.fromEntries(
-    [1, 2, 3, 4, 5].map((p) => [p, [100, at(p === 5 ? 9 : p + 1), 1000]]),
-  );
-  pages[9] = [1, null, 801];
+  pages = Object.fromEntries([1, 2, 3, 4, 5].map((p) => [p, [100, at(p + 1), 501]]));
+  pages[6] = [1, null, 501];
   const batch = await read();
   expect(batch.repositories).toHaveLength(500);
-  expect(batch).toMatchObject({ truncated: true, nextCursor: "9" });
-  expect(await read("9")).toMatchObject({ truncated: false, nextCursor: null });
-  expect(asked).toEqual(["9"]);
+  expect(batch).toMatchObject({ truncated: true, nextCursor: "6" });
+  expect(await read("6")).toMatchObject({ truncated: false, nextCursor: null });
+  expect(asked).toEqual(["6"]);
+  // A cursor carries only a page: one the pages read cannot account for, after
+  // a short page or a jump, is a retry rather than a gap in the list.
+  for (const [short, last] of [
+    [30, 6],
+    [100, 9],
+  ]) {
+    pages = Object.fromEntries(
+      [1, 2, 3, 4, 5].map((p) => [
+        p,
+        [p === 1 ? short : 100, at(p === 5 ? last : p + 1), 530],
+      ]),
+    );
+    await expect(read(), `${String(short)} to ${String(last)}`).rejects.toMatchObject({
+      code: "SERVICE_UNAVAILABLE",
+    });
+  }
+  pages = Object.fromEntries([1, 2, 3, 4, 5].map((p) => [p, [100, at(p + 1), 501]]));
   // Exactly five full pages end the list when GitHub's count agrees.
   pages[5] = [100, null, 500];
   expect(await read()).toMatchObject({ truncated: false, nextCursor: null });
@@ -1864,6 +1896,8 @@ it("follows GitHub's next link and refuses a list it cannot finish", async () =>
     [at(2).replace("per_page=100", "per_page=50"), 40, 40],
     [`${at(2)}&q=x`, 40, 40],
     [at(1), 40, 40],
+    // Two next links that disagree.
+    [`${at(3)}>; rel="next", <${at(2)}`, 40, 40],
   ];
   for (const [next, count, total] of unusable) {
     pages = { 1: [count, next, total] };
