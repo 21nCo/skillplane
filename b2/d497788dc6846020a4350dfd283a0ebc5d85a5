@@ -1,0 +1,30 @@
+packages/domain/src/github-installations.ts
+  s_b15184ae60b291::t_b62923304a82d6 324-331,333,715-716,718-727,744-748
+  s_ff860d4478ede4::t_7aed38af06f7ea 731
+packages/api/tests/integration/github-installations.integration.test.ts
+  s_b15184ae60b291::t_139aa8f2e7898e 1113-1125,1127,1130-1142,1146-1170,1176,1178,1186-1193,1195,1198-1200,1206,1208,1210,1217,1227-1236,1239,1241-1244,1247,1249,1252,1257,1261,1264-1272,1275-1277,1281,1289,1302-1310,1313,1317-1328,1330-1349,1593-1595,1607,1617-1628
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b2d497788dc6846020a4350dfd283a0ebc5d85a5",
+  "prompts": {},
+  "sessions": {
+    "s_b15184ae60b291": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dd21c743-8ca1-4896-ad7b-a3b81c2516fb",
+        "model": "unknown"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    },
+    "s_ff860d4478ede4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "be49d950-8ce6-430f-bf21-e84424c339ec",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
