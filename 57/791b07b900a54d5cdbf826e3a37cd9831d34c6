@@ -1,0 +1,51 @@
+packages/api/src/app.ts
+  s_a6d813d32a2dad::t_b67927e9a24cdf 3,142
+packages/api/src/context.ts
+  s_a6d813d32a2dad::t_4f2c93d50faf31 5,45-48
+packages/api/src/routes/git-sources.ts
+  s_a6d813d32a2dad::t_d954a69c7c02e6 2-7,21-28
+packages/api/src/routes/github-installations.ts
+  s_a6d813d32a2dad::t_9bc4f833427c95 1-111
+packages/api/src/services.ts
+  s_a6d813d32a2dad::t_a94a2224b0af08 8-13,49,73-74,411-418
+packages/api/src/workspace-routing.test.ts
+  s_a6d813d32a2dad::t_94499d8566b32d 159-161,179-205
+packages/api/src/workspace-routing.ts
+  s_a6d813d32a2dad::t_52b2b5035bb536 13-16,140-142,144-152
+packages/api/tests/integration/github-installations.integration.test.ts
+  s_a6d813d32a2dad::t_606b8a9344a160 1-482
+packages/config/src/index.test.ts
+  s_a6d813d32a2dad::t_cdaede94a14074 8,646-712
+packages/config/src/index.ts
+  s_a6d813d32a2dad::t_4724fd9c80ff42 65-69,1052-1156
+packages/domain/src/errors.ts
+  s_a6d813d32a2dad::t_7efcbe1c0047a2 11-15
+packages/domain/src/git-sources.ts
+  s_a6d813d32a2dad::t_c09bf6590de128 17,38,40-43,57-58,77-85,98-99,175-178,180-196,221,296,298-301,304-324,326,335,506-507,842-844
+packages/domain/src/github-installations.ts
+  s_a6d813d32a2dad::t_5dc3e08442205c 1-799
+packages/domain/src/index.ts
+  s_a6d813d32a2dad::t_7cc9493aec76ef 37
+packages/testing/src/fake-github-installations.ts
+  s_a6d813d32a2dad::t_c84a996959cc49 1-237
+packages/testing/src/fixtures.ts
+  s_a6d813d32a2dad::t_28a2c4d4e5e110 170-171
+packages/testing/src/index.ts
+  s_a6d813d32a2dad::t_2a96db26524daf 7
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "57791b07b900a54d5cdbf826e3a37cd9831d34c6",
+  "prompts": {},
+  "sessions": {
+    "s_a6d813d32a2dad": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_a6d813d32a2dad",
+        "model": "unknown"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
