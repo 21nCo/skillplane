@@ -535,11 +535,11 @@ it("unbinding fences a private source's in-flight preview and apply", async () =
     code: github.issueCode("octo-owner"),
   });
   // A snapshot that waits until released, read through the bound installation.
-  let release = () => {};
+  let release: () => void = () => undefined;
   let reached = Promise.resolve();
   const snapshots: number[] = [];
   const hold = () => {
-    let entered = () => {};
+    let entered: () => void = () => undefined;
     reached = new Promise((resolve) => (entered = resolve));
     const gate = new Promise<void>((resolve) => (release = resolve));
     return { entered, gate };
