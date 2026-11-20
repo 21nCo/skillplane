@@ -1,0 +1,23 @@
+packages/config/src/index.ts
+  s_ad7677e64d90fe::t_ee9661699b960a 1073-1074,1114
+packages/domain/src/github-installations.ts
+  s_ad7677e64d90fe::t_faf8487df604b1 100,318,662-664,713-714,726-727
+packages/testing/src/fake-github-installations.ts
+  s_ad7677e64d90fe::t_e6bc98e1ddf115 229
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6b145f38c455609fc39ea72154d1b02980713c89",
+  "prompts": {},
+  "sessions": {
+    "s_ad7677e64d90fe": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_ad7677e64d90fe",
+        "model": "unknown"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
