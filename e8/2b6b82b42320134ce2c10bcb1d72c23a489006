@@ -1,0 +1,31 @@
+app/src/hooks.server.ts
+  s_b15184ae60b291::t_68ec1cf67b960d 10-11
+app/src/lib/github/api.ts
+  s_b15184ae60b291::t_deadfbc90fb89f 1-78
+app/src/lib/layout/Sidebar.svelte
+  s_b15184ae60b291::t_b4333181a4ba27 5,40
+app/src/lib/sources/api.ts
+  s_b15184ae60b291::t_9f6e8ebd7a6ccd 12-13
+app/src/routes/(app)/[workspaceSlug]/sources/+page.svelte
+  s_b15184ae60b291::t_bdbb060be07b79 14-19,41-47,128-169,286-290,293,308-310,324,351-374,420,422-425
+app/src/routes/(app)/settings/github/+page.svelte
+  s_b15184ae60b291::t_c988e4323d0ed3 1-377
+app/tests/unit/github-api.test.ts
+  s_b15184ae60b291::t_24cd99dd822d58 1-74
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e82b6b82b42320134ce2c10bcb1d72c23a489006",
+  "prompts": {},
+  "sessions": {
+    "s_b15184ae60b291": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dd21c743-8ca1-4896-ad7b-a3b81c2516fb",
+        "model": "unknown"
+      },
+      "human_author": "thyaravind <samalaaravind02@gmail.com>"
+    }
+  }
+}
