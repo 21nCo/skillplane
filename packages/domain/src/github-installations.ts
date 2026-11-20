@@ -321,9 +321,16 @@ function nextPageLinked(link: string | null, listing: string): boolean {
   for (const part of (link ?? "").split(",")) {
     const [target = "", ...params] = part.split(";").map((p) => p.trim());
     if (!target.startsWith("<") || !target.endsWith(">")) continue;
-    if (!params.some((p) => p.toLowerCase() === 'rel="next"')) continue;
+    const next = params.some((p) => {
+      const [key = "", value = ""] = p.split("=", 2).map((v) => v.trim());
+      return (
+        key.toLowerCase() === "rel" &&
+        value.replaceAll('"', "").toLowerCase().split(" ").includes("next")
+      );
+    });
+    if (!next) continue;
     try {
-      const url = new URL(target.slice(1, -1));
+      const url = new URL(target.slice(1, -1), expected);
       if (url.origin === expected.origin && url.pathname === expected.pathname)
         return true;
     } catch {
@@ -666,11 +673,6 @@ export class GitHubInstallationService {
       this.pool,
       m.requestId,
       async ({ client }) => {
-        // A used nonce is pruned only long after its state expired.
-        await client.query(
-          `DELETE FROM github_installation_states WHERE workspace_id=$1 AND expires_at < now() - interval '${STATE_RETENTION}'`,
-          [claims.w],
-        );
         const inserted = await client.query(
           "INSERT INTO github_installation_states(nonce,workspace_id,expires_at,consumed_at) VALUES($1,$2,$3,'infinity') ON CONFLICT (nonce) DO NOTHING",
           [nonce, claims.w, expiresAt],
@@ -710,22 +712,23 @@ export class GitHubInstallationService {
       bound = true;
       return installation;
     } finally {
-      // A refused bind releases the reservation so the state can still bind;
-      // a crash before this only uses up a state that expires soon anyway.
+      // A refused bind releases it at the routed epoch so the state can still
+      // bind; a failed release only uses up a state that expires soon anyway.
       if (!bound)
-        await this.pool
-          .query(
-            "DELETE FROM github_installation_states WHERE nonce=$1 AND consumed_at='infinity'",
-            [nonce],
-          )
-          .catch(() => undefined);
+        await withDomainTransaction(
+          this.pool,
+          m.requestId,
+          ({ client }) =>
+            client.query(
+              "DELETE FROM github_installation_states WHERE nonce=$1 AND consumed_at='infinity'",
+              [nonce],
+            ),
+          { fencingEpoch: m.fencingEpoch },
+        ).catch(() => undefined);
     }
   }
 
-  /**
-   * Binds under a reserved nonce, consumed last (after every lock) and only
-   * while fresh by the database clock, else every write rolls back.
-   */
+  /** Binds under the reserved nonce, consumed last and only while fresh. */
   private bind(
     m: Mutation,
     claims: StateClaims,
@@ -738,6 +741,11 @@ export class GitHubInstallationService {
       m.requestId,
       async ({ client }) => {
         const workspaceId = m.principal.workspaceId;
+        // A used nonce is pruned, with a binding, long after its state expired.
+        await client.query(
+          `DELETE FROM github_installation_states WHERE workspace_id=$1 AND expires_at < now() - interval '${STATE_RETENTION}'`,
+          [workspaceId],
+        );
         // Serializes this workspace's binds so the installation cap holds.
         await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [
           `github-installations:${workspaceId}`,

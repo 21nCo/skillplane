@@ -1110,37 +1110,72 @@ async function expiringState(ms: number) {
   return { state, expiresAt };
 }
 
-/** Resolves once PostgreSQL shows `count` sessions waiting on `holder`. */
-async function blockedBy(holder: PoolClient, count = 1) {
-  const pid = (await holder.query<{ pid: number }>("SELECT pg_backend_pid() AS pid"))
-    .rows[0]?.pid;
-  for (;;) {
-    const waiting = await pool().query<{ n: string }>(
-      "SELECT count(*) AS n FROM pg_stat_activity WHERE $1::int = ANY(pg_blocking_pids(pid))",
-      [pid],
-    );
-    if (Number(waiting.rows[0]?.n) >= count) return;
-    await new Promise((resolve) => setTimeout(resolve, 20));
+/** Polls `check` for up to 15 s, failing early once `settled` says the callback ended. */
+async function until(
+  what: string,
+  check: () => Promise<boolean>,
+  settled: () => boolean,
+) {
+  for (const deadline = Date.now() + 15_000; !(await check());) {
+    if (settled()) throw new Error(`The callback ended before ${what}`);
+    if (Date.now() > deadline) throw new Error(`Timed out waiting for ${what}`);
+    await new Promise((resolve) => setTimeout(resolve, 25));
   }
 }
 
+/** Resolves once PostgreSQL shows `count` sessions waiting on `holder`. */
+async function blockedBy(holder: PoolClient, settled: () => boolean, count = 1) {
+  const pid = (await holder.query<{ pid: number }>("SELECT pg_backend_pid() AS pid"))
+    .rows[0]?.pid;
+  await until(
+    `${String(count)} waiters`,
+    async () =>
+      Number(
+        (
+          await pool().query<{ n: string }>(
+            "SELECT count(*) AS n FROM pg_stat_activity WHERE $1::int = ANY(pg_blocking_pids(pid))",
+            [pid],
+          )
+        ).rows[0]?.n,
+      ) >= count,
+    settled,
+  );
+}
+
 /** Resolves once the database clock is past `at`. */
-async function databasePast(at: number) {
-  for (;;) {
-    const past = await pool().query<{ past: boolean }>(
-      "SELECT clock_timestamp() > $1::timestamptz AS past",
-      [new Date(at)],
-    );
-    if (past.rows[0]?.past) return;
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
+const databasePast = (at: number) =>
+  until(
+    "the state's expiry",
+    async () =>
+      (
+        await pool().query<{ past: boolean }>(
+          "SELECT clock_timestamp() > $1::timestamptz AS past",
+          [new Date(at)],
+        )
+      ).rows[0]?.past === true,
+    () => false,
+  );
+
+/** A pending outcome and whether it has settled. */
+function track<T>(promise: Promise<T>) {
+  let settled = false;
+  const outcome = promise.then(
+    (value) => ((settled = true), value),
+    (error: unknown) => {
+      settled = true;
+      throw error;
+    },
+  );
+  outcome.catch(() => undefined);
+  return { outcome, settled: () => settled };
 }
 
 it("refuses a state that expires while its claim waits, writing nothing", async () => {
   const id = base + 16;
   installation(id, "acme-expiry", ["octo-owner"]);
-  const { state, expiresAt } = await expiringState(1500);
+  const { state, expiresAt } = await expiringState(3000);
   const blocker = await pool().connect();
+  let claim: ReturnType<typeof track> | undefined;
   try {
     await blocker.query("BEGIN");
     await blocker.query(
@@ -1148,32 +1183,38 @@ it("refuses a state that expires while its claim waits, writing nothing", async 
       [nonceOf(state), owner.workspaceId],
     );
     const before = github.requests.length;
-    const claim = setupService().completeSetup({
-      ...m(),
-      state,
-      installationId: id,
-      code: github.issueCode("octo-owner"),
-    });
-    claim.catch(() => undefined);
+    claim = track(
+      setupService().completeSetup({
+        ...m(),
+        state,
+        installationId: id,
+        code: github.issueCode("octo-owner"),
+      }),
+    );
     // The claim waits on the uncommitted nonce until the state has expired.
-    await blockedBy(blocker);
+    await blockedBy(blocker, claim.settled);
     await databasePast(expiresAt);
     await blocker.query("ROLLBACK");
-    await expect(claim).rejects.toMatchObject({ code: "GITHUB_INSTALL_STATE_INVALID" });
+    await expect(claim.outcome).rejects.toMatchObject({
+      code: "GITHUB_INSTALL_STATE_INVALID",
+    });
     // GitHub was never asked, nothing is bound and the state is not recorded.
     expect(github.requests.slice(before)).toEqual([]);
     expect(await status(id)).toBeUndefined();
     expect(await nonceRows(state)).toBe(0);
   } finally {
+    await blocker.query("ROLLBACK").catch(() => undefined);
     blocker.release();
+    await claim?.outcome.catch(() => undefined);
   }
-});
+}, 30_000);
 
 it("lets only one of two duplicate callbacks exchange the code and bind", async () => {
   const id = base + 24;
   installation(id, "acme-duplicate", ["octo-owner"]);
   const state = await installState(owner);
   const blocker = await pool().connect();
+  let outcomes: ReturnType<typeof track> | undefined;
   try {
     // Both callbacks reach the nonce while another claim holds it uncommitted.
     await blocker.query("BEGIN");
@@ -1183,49 +1224,61 @@ it("lets only one of two duplicate callbacks exchange the code and bind", async 
     );
     const before = oauthExchanges();
     const code = github.issueCode("octo-owner");
-    const outcomes = Promise.all(
-      [0, 1].map(() =>
-        setupService()
-          .completeSetup({ ...m(), state, installationId: id, code })
-          .then(
-            () => "bound",
-            (error: { code?: string }) => error.code,
-          ),
+    outcomes = track(
+      Promise.all(
+        [0, 1].map(() =>
+          setupService()
+            .completeSetup({ ...m(), state, installationId: id, code })
+            .then(
+              () => "bound",
+              (error: { code?: string }) => error.code,
+            ),
+        ),
       ),
     );
-    await blockedBy(blocker, 2);
+    await blockedBy(blocker, outcomes.settled, 2);
     await blocker.query("ROLLBACK");
-    expect((await outcomes).sort()).toEqual(["GITHUB_INSTALL_STATE_REPLAYED", "bound"]);
+    expect(((await outcomes.outcome) as string[]).sort()).toEqual([
+      "GITHUB_INSTALL_STATE_REPLAYED",
+      "bound",
+    ]);
     expect(oauthExchanges() - before).toBe(1);
   } finally {
+    await blocker.query("ROLLBACK").catch(() => undefined);
     blocker.release();
+    await outcomes?.outcome.catch(() => undefined);
   }
   expect((await unbind(id)).status).toBe(200);
-});
+}, 30_000);
 
 it("rolls back a bind whose state expires while it waits for the bind locks", async () => {
   const id = base + 25;
   installation(id, "acme-lock-expiry", ["octo-owner"]);
-  const { state, expiresAt } = await expiringState(2000);
+  const { state, expiresAt } = await expiringState(3000);
   const mutation = m();
   const lock = `github-installations:${owner.workspaceId}`;
   const holder = await pool().connect();
+  let claim: ReturnType<typeof track> | undefined;
   try {
     await holder.query("SELECT pg_advisory_lock(hashtextextended($1,0))", [lock]);
-    const claim = setupService().completeSetup({
-      ...mutation,
-      state,
-      installationId: id,
-      code: github.issueCode("octo-owner"),
-    });
-    claim.catch(() => undefined);
-    await blockedBy(holder);
+    claim = track(
+      setupService().completeSetup({
+        ...mutation,
+        state,
+        installationId: id,
+        code: github.issueCode("octo-owner"),
+      }),
+    );
+    await blockedBy(holder, claim.settled);
     await databasePast(expiresAt);
     await holder.query("SELECT pg_advisory_unlock(hashtextextended($1,0))", [lock]);
-    await expect(claim).rejects.toMatchObject({ code: "GITHUB_INSTALL_STATE_INVALID" });
+    await expect(claim.outcome).rejects.toMatchObject({
+      code: "GITHUB_INSTALL_STATE_INVALID",
+    });
   } finally {
     await holder.query("SELECT pg_advisory_unlock_all()").catch(() => undefined);
     holder.release();
+    await claim?.outcome.catch(() => undefined);
   }
   expect(await status(id)).toBeUndefined();
   expect(await nonceRows(state)).toBe(0);
@@ -1233,7 +1286,7 @@ it("rolls back a bind whose state expires while it waits for the bind locks", as
     mutation.requestId,
   ]);
   expect(audited.rowCount).toBe(0);
-});
+}, 30_000);
 
 it("needs the organization Members permission to confirm an organization admin", async () => {
   const id = base + 26;
@@ -1246,32 +1299,54 @@ it("needs the organization Members permission to confirm an organization admin",
     permissions: { metadata: "read" },
   });
   const state = await installState(owner);
-  const before = github.requests.length;
-  await expect(
+  // In a workspace migrated into this cell, a refusal releases its
+  // reservation at the routed epoch, so the same state binds later.
+  const epoch = (activeEpoch: number) =>
+    pool().query(
+      `INSERT INTO regional_workspace_migration_fences(workspace_id,source_epoch,active_epoch)
+       VALUES($1,0,$2) ON CONFLICT (workspace_id) DO UPDATE SET active_epoch=$2`,
+      [owner.workspaceId, activeEpoch],
+    );
+  const setup = () =>
     setupService().completeSetup({
       ...m(),
+      fencingEpoch: 2,
       state,
       installationId: id,
       code: github.issueCode("octo-owner"),
-    }),
-  ).rejects.toMatchObject({
-    code: "GITHUB_INSTALLATION_NOT_ACCESSIBLE",
-    message: expect.stringContaining("Members: read") as unknown,
-  });
-  expect(github.requests.slice(before)).not.toContain(
-    "GET /api/user/memberships/orgs/acme-no-members",
+    });
+  // Only a bind prunes old used nonces; a refusal changes nothing.
+  const old = `test-pruned-nonce-${String(base)}`;
+  const kept = async () =>
+    (
+      await pool().query("SELECT 1 FROM github_installation_states WHERE nonce=$1", [
+        old,
+      ])
+    ).rowCount;
+  await pool().query(
+    "INSERT INTO github_installation_states(nonce,workspace_id,expires_at) VALUES($1,$2,now()-interval '2 days')",
+    [old, owner.workspaceId],
   );
-  expect(await status(id)).toBeUndefined();
-  expect(await nonceRows(state)).toBe(0);
-  // Once the organization grants it, the same state binds.
-  org.permissions = { metadata: "read", members: "read" };
-  expect(
-    await callback(owner, {
-      state,
-      installationId: id,
-      code: github.issueCode("octo-owner"),
-    }),
-  ).toEqual({ connected: String(id), error: null });
+  await epoch(2);
+  try {
+    const before = github.requests.length;
+    await expect(setup()).rejects.toMatchObject({
+      code: "GITHUB_INSTALLATION_NOT_ACCESSIBLE",
+      message: expect.stringContaining("Members: read") as unknown,
+    });
+    expect(github.requests.slice(before)).not.toContain(
+      "GET /api/user/memberships/orgs/acme-no-members",
+    );
+    expect(await nonceRows(state)).toBe(0);
+    expect(await kept()).toBe(1);
+    // Once the organization grants it, the same state binds.
+    org.permissions = { metadata: "read", members: "read" };
+    expect(await setup()).toMatchObject({ installationId: id });
+    expect(await kept()).toBe(0);
+  } finally {
+    await epoch(1);
+  }
+  expect(await status(id)).toBe("active");
   expect((await unbind(id)).status).toBe(200);
 });
 
@@ -1515,7 +1590,9 @@ it("bounds GitHub responses and classifies refused discovery", async () => {
     },
   });
   expect((await large.repositories(ownerPrincipal(), id)).repositories).toHaveLength(1);
-  // A contradictory total_count never ends a listing after a full page.
+  // A contradictory total_count never ends a listing after a full page; any
+  // valid form of GitHub's next link on the API host continues it.
+  let relink = (link: string) => link;
   const miscounted = new GitHubInstallationService(services.database.pool, {
     app: services.githubApp ?? null,
     settings: services.githubInstallSettings ?? null,
@@ -1527,7 +1604,7 @@ it("bounds GitHub responses and classifies refused discovery", async () => {
       const link = response.headers.get("link");
       return Response.json(
         { ...body, total_count: 0 },
-        { status: response.status, headers: link ? { link } : {} },
+        { status: response.status, headers: link ? { link: relink(link) } : {} },
       );
     },
   });
@@ -1537,9 +1614,18 @@ it("bounds GitHub responses and classifies refused discovery", async () => {
     private: true,
     defaultBranch: "main",
   }));
-  const counted = await miscounted.repositories(ownerPrincipal(), id);
-  expect(counted.repositories).toHaveLength(150);
-  expect(counted).toMatchObject({ truncated: false, nextCursor: null });
+  for (const [form, length] of [
+    [(link: string) => link, 150],
+    [(link: string) => link.replace('rel="next"', "rel=next"), 150],
+    [(link: string) => link.replace('rel="next"', 'rel="next last"'), 150],
+    [(link: string) => link.replace(/<[^>]*\/(repositories\?[^>]*)>/u, "<$1>"), 150],
+    [(link: string) => link.replace("127.0.0.1", "localhost"), 100],
+  ] as const) {
+    relink = form;
+    const counted = await miscounted.repositories(ownerPrincipal(), id);
+    expect(counted.repositories).toHaveLength(length);
+    expect(counted).toMatchObject({ truncated: false, nextCursor: null });
+  }
   fake.repositories = granted;
   // An endless body is refused whether its length is missing or wrong, and
   // the listing keeps the last observation.
