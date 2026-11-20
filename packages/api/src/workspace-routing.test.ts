@@ -156,6 +156,9 @@ describe("API scope classification", () => {
       "sources",
       "sources/source%3Aone/apply",
       "sources/source%3Aone/bindings",
+      "github/install",
+      "github/installations",
+      "github/installations/42/repositories",
     ])
       expect(
         classifyApiScope(
@@ -171,6 +174,33 @@ describe("API scope classification", () => {
         new Request("https://app.skillplane.dev/api/v1/skills/skill%3Aone"),
       ),
     ).toEqual({ kind: "resource", resourceType: "skill", resourceId: "skill:one" });
+  });
+
+  it("routes the GitHub install callback by the workspace its state names", () => {
+    const claims = Buffer.from(
+      JSON.stringify({
+        v: 1,
+        w: "workspace:one",
+        u: "user:one",
+        n: "n".repeat(32),
+        e: 1,
+      }),
+    ).toString("base64url");
+    for (const path of ["/github/setup", "/api/v1/github/setup"]) {
+      expect(
+        classifyApiScope(
+          new Request(
+            `https://app.skillplane.dev${path}?installation_id=1&state=${claims}.signature`,
+          ),
+        ),
+      ).toEqual({ kind: "workspace", workspaceId: "workspace:one" });
+      for (const state of ["", "not-json.signature", `${"x".repeat(3000)}.s`])
+        expect(
+          classifyApiScope(
+            new Request(`https://app.skillplane.dev${path}?state=${state}`),
+          ),
+        ).toEqual({ kind: "global" });
+    }
   });
 
   it("routes header-scoped skill searches to the workspace cell", () => {

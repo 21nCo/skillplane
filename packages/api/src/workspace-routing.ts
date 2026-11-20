@@ -10,7 +10,10 @@ import {
   logWorkspaceRoutingEvent,
   type RoutableResourceType,
 } from "@skillplane/control-plane";
-import { InvalidAuthenticationError } from "@skillplane/domain";
+import {
+  githubInstallStateWorkspace,
+  InvalidAuthenticationError,
+} from "@skillplane/domain";
 import { collectDatafnStructuralResources } from "@skillplane/datafn";
 import { authenticateServicePrincipalRequest } from "./service-principal-auth.js";
 import type { ApiServiceProvider, ApiServices } from "./context.js";
@@ -134,8 +137,19 @@ export function classifyApiScope(request: Request): ApiScope {
     };
   }
   let match =
-    /^\/api\/v1\/workspaces\/([^/]+)\/(?:skills|groups|sources)(?:\/|$)/u.exec(path);
+    /^\/api\/v1\/workspaces\/([^/]+)\/(?:skills|groups|sources|github)(?:\/|$)/u.exec(
+      path,
+    );
   if (match) return { kind: "workspace", workspaceId: segment(match[1]) };
+  if (path === "/github/setup" || path === "/api/v1/github/setup") {
+    // The install callback is routed by the workspace its state names; the
+    // cell verifies the state before acting on it. An unreadable state is
+    // answered globally, which refuses it.
+    const workspaceId = githubInstallStateWorkspace(url.searchParams.get("state"));
+    return workspaceId
+      ? { kind: "workspace", workspaceId: segment(encodeURIComponent(workspaceId)) }
+      : { kind: "global" };
+  }
   match = /^\/api\/v1\/(?:audit|analytics)\/workspaces\/([^/]+)(?:\/|$)/u.exec(path);
   if (match) return { kind: "workspace", workspaceId: segment(match[1]) };
   if (path === "/api/v1/skills/search") {
