@@ -1170,44 +1170,49 @@ function track<T>(promise: Promise<T>) {
   return { outcome, settled: () => settled };
 }
 
-it("refuses a state that expires while its claim waits, writing nothing", async () => {
-  const id = base + 16;
-  installation(id, "acme-expiry", ["octo-owner"]);
-  const { state, expiresAt } = await expiringState(3000);
-  const blocker = await pool().connect();
-  let claim: ReturnType<typeof track> | undefined;
-  try {
-    await blocker.query("BEGIN");
-    await blocker.query(
-      "INSERT INTO github_installation_states(nonce,workspace_id,expires_at) VALUES($1,$2,now()+interval '1 minute')",
-      [nonceOf(state), owner.workspaceId],
-    );
-    const before = github.requests.length;
-    claim = track(
-      setupService().completeSetup({
-        ...m(),
-        state,
-        installationId: id,
-        code: github.issueCode("octo-owner"),
-      }),
-    );
-    // The claim waits on the uncommitted nonce until the state has expired.
-    await blockedBy(blocker, claim.settled);
-    await databasePast(expiresAt);
-    await blocker.query("ROLLBACK");
-    await expect(claim.outcome).rejects.toMatchObject({
-      code: "GITHUB_INSTALL_STATE_INVALID",
-    });
-    // GitHub was never asked, nothing is bound and the state is not recorded.
-    expect(github.requests.slice(before)).toEqual([]);
-    expect(await status(id)).toBeUndefined();
-    expect(await nonceRows(state)).toBe(0);
-  } finally {
-    await blocker.query("ROLLBACK").catch(() => undefined);
-    blocker.release();
-    await claim?.outcome.catch(() => undefined);
-  }
-}, 30_000);
+it.each(["ROLLBACK", "COMMIT"])(
+  "refuses a state that expires while its claim waits, then %s",
+  async (ending) => {
+    const id = base + (ending === "COMMIT" ? 30 : 16);
+    installation(id, `acme-expiry-${ending.toLowerCase()}`, ["octo-owner"]);
+    const { state, expiresAt } = await expiringState(3000);
+    const blocker = await pool().connect();
+    let claim: ReturnType<typeof track> | undefined;
+    try {
+      await blocker.query("BEGIN");
+      await blocker.query(
+        "INSERT INTO github_installation_states(nonce,workspace_id,expires_at) VALUES($1,$2,now()+interval '1 minute')",
+        [nonceOf(state), owner.workspaceId],
+      );
+      const before = github.requests.length;
+      claim = track(
+        setupService().completeSetup({
+          ...m(),
+          state,
+          installationId: id,
+          code: github.issueCode("octo-owner"),
+        }),
+      );
+      // The claim waits on the uncommitted nonce until the state has expired;
+      // expired is reported even when the other claim keeps the nonce.
+      await blockedBy(blocker, claim.settled);
+      await databasePast(expiresAt);
+      await blocker.query(ending);
+      await expect(claim.outcome).rejects.toMatchObject({
+        code: "GITHUB_INSTALL_STATE_INVALID",
+      });
+      // GitHub was never asked, nothing is bound and this claim recorded nothing.
+      expect(github.requests.slice(before)).toEqual([]);
+      expect(await status(id)).toBeUndefined();
+      expect(await nonceRows(state)).toBe(ending === "COMMIT" ? 1 : 0);
+    } finally {
+      await blocker.query("ROLLBACK").catch(() => undefined);
+      blocker.release();
+      await claim?.outcome.catch(() => undefined);
+    }
+  },
+  30_000,
+);
 
 it("lets only one of two duplicate callbacks exchange the code and bind", async () => {
   const id = base + 24;
@@ -1288,6 +1293,225 @@ it("rolls back a bind whose state expires while it waits for the bind locks", as
   expect(audited.rowCount).toBe(0);
 }, 30_000);
 
+/** Moves the owner's workspace to `activeEpoch`, as a regional cutover does. */
+const epoch = (activeEpoch: number) =>
+  pool().query(
+    `INSERT INTO regional_workspace_migration_fences(workspace_id,source_epoch,active_epoch)
+     VALUES($1,0,$2) ON CONFLICT (workspace_id) DO UPDATE SET active_epoch=$2`,
+    [owner.workspaceId, activeEpoch],
+  );
+/** Whether a callback holds the state's nonce on a lease (not consumed). */
+const leased = async (state: string) =>
+  (
+    await pool().query(
+      "SELECT 1 FROM github_installation_states WHERE nonce=$1 AND consumed_at > expires_at",
+      [nonceOf(state)],
+    )
+  ).rowCount === 1;
+/** Moves a live lease past its deadline, as time would, in the active cell. */
+async function expireLease(state: string) {
+  const client = await pool().connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(
+      "SELECT set_config('skillplane.workspace_routing_epoch','2',true)",
+    );
+    await client.query(
+      "UPDATE github_installation_states SET consumed_at=consumed_at - interval '1 hour' WHERE nonce=$1 AND consumed_at > expires_at",
+      [nonceOf(state)],
+    );
+    await client.query("COMMIT");
+  } finally {
+    client.release();
+  }
+}
+/** A callback held right before its OAuth exchange, as if it had crashed. */
+async function stalledSetup(state: string, id: number) {
+  const { control, service } = heldInstallations(
+    (url) => url.endsWith("/login/oauth/access_token"),
+    true,
+  );
+  control.arm();
+  const mutation = m();
+  const setup = track(
+    service.completeSetup({
+      ...mutation,
+      state,
+      installationId: id,
+      code: github.issueCode("octo-owner"),
+    }),
+  );
+  await control.reached;
+  const audited = async () =>
+    (
+      await pool().query("SELECT 1 FROM audit_events WHERE request_id=$1", [
+        mutation.requestId,
+      ])
+    ).rowCount;
+  return { setup, release: () => control.release(), audited };
+}
+const setupAs = (
+  state: string,
+  id: number,
+  fencingEpoch?: number,
+  requestId = crypto.randomUUID(),
+) =>
+  setupService()
+    .completeSetup({
+      ...m(),
+      requestId,
+      ...(fencingEpoch ? { fencingEpoch } : {}),
+      state,
+      installationId: id,
+      code: github.issueCode("octo-owner"),
+    })
+    .then(
+      () => "bound",
+      (error: { code?: string }) => error.code,
+    );
+
+it("lets a stranded lease expire, and never a lease's former owner bind", async () => {
+  const id = base + 27;
+  installation(id, "acme-stranded", ["octo-owner"]);
+  const state = await installState(owner);
+  const stranded = await stalledSetup(state, id);
+  try {
+    // A live lease refuses another callback without asking GitHub.
+    expect(await leased(state)).toBe(true);
+    const before = github.requests.length;
+    expect(await setupAs(state, id)).toBe("GITHUB_INSTALL_STATE_REPLAYED");
+    expect(github.requests.slice(before)).toEqual([]);
+    // Once it expires, a new callback takes the lease over and binds...
+    await expireLease(state);
+    const next = await stalledSetup(state, id);
+    // ...while the stranded original, resuming, binds and audits nothing.
+    stranded.release();
+    await expect(stranded.setup.outcome).rejects.toMatchObject({
+      code: "GITHUB_INSTALL_STATE_INVALID",
+    });
+    expect(await stranded.audited()).toBe(0);
+    expect(await status(id)).toBeUndefined();
+    next.release();
+    expect(await next.setup.outcome).toMatchObject({ installationId: id });
+    // A consumed nonce is never taken over, however long ago it was used.
+    await pool().query(
+      "UPDATE github_installation_states SET consumed_at=consumed_at - interval '1 hour' WHERE nonce=$1",
+      [nonceOf(state)],
+    );
+    const after = github.requests.length;
+    expect(await setupAs(state, id)).toBe("GITHUB_INSTALL_STATE_REPLAYED");
+    expect(github.requests.slice(after)).toEqual([]);
+  } finally {
+    stranded.release();
+    await stranded.setup.outcome.catch(() => undefined);
+  }
+  expect((await unbind(id)).status).toBe(200);
+}, 30_000);
+
+it("lets exactly one of two callbacks take over an expired lease", async () => {
+  const id = base + 28;
+  installation(id, "acme-takeover", ["octo-owner"]);
+  const state = await installState(owner);
+  const stranded = await stalledSetup(state, id);
+  await expireLease(state);
+  const blocker = await pool().connect();
+  let outcomes: ReturnType<typeof track> | undefined;
+  try {
+    await blocker.query("BEGIN");
+    await blocker.query(
+      "SELECT 1 FROM github_installation_states WHERE nonce=$1 FOR UPDATE",
+      [nonceOf(state)],
+    );
+    const before = oauthExchanges();
+    const requests = [crypto.randomUUID(), crypto.randomUUID()];
+    outcomes = track(
+      Promise.all(
+        requests.map((requestId) => setupAs(state, id, undefined, requestId)),
+      ),
+    );
+    // Both wait on the row lock: one behind the holder, one queued behind it.
+    await until(
+      "both takeovers to wait",
+      async () =>
+        Number(
+          (
+            await pool().query<{ n: string }>(
+              "SELECT count(*) AS n FROM pg_stat_activity WHERE wait_event_type='Lock' AND application_name = ANY($1)",
+              [requests.map((r) => `skillplane request=${r}`)],
+            )
+          ).rows[0]?.n,
+        ) === 2,
+      outcomes.settled,
+    );
+    await blocker.query("COMMIT");
+    expect(((await outcomes.outcome) as string[]).sort()).toEqual([
+      "GITHUB_INSTALL_STATE_REPLAYED",
+      "bound",
+    ]);
+    expect(oauthExchanges() - before).toBe(1);
+  } finally {
+    await blocker.query("ROLLBACK").catch(() => undefined);
+    blocker.release();
+    await outcomes?.outcome.catch(() => undefined);
+    stranded.release();
+    await stranded.setup.outcome.catch(() => undefined);
+  }
+  await expect(stranded.setup.outcome).rejects.toMatchObject({
+    code: "GITHUB_INSTALL_STATE_INVALID",
+  });
+  expect((await unbind(id)).status).toBe(200);
+}, 30_000);
+
+it("keeps the fence when a cutover strands a lease, which then expires", async () => {
+  const id = base + 29;
+  const org = installation(id, "acme-cutover", ["octo-owner"]);
+  org.memberships.set("octo-member", { state: "active", role: "member" });
+  const state = await installState(owner);
+  const { control, service } = heldInstallations(
+    (url) => url.endsWith(`/app/installations/${String(id)}`),
+    true,
+  );
+  let refused: ReturnType<typeof track> | undefined;
+  await epoch(1);
+  try {
+    control.arm();
+    refused = track(
+      service.completeSetup({
+        ...m(),
+        fencingEpoch: 1,
+        state,
+        installationId: id,
+        code: github.issueCode("octo-member"),
+      }),
+    );
+    await control.reached;
+    // The workspace moves on (the lease copied to the new active cell) before
+    // the callback is refused: the old epoch cannot release it.
+    await epoch(2);
+    control.release();
+    await expect(refused.outcome).rejects.toMatchObject({
+      code: "GITHUB_INSTALLATION_NOT_ACCESSIBLE",
+    });
+    expect(await leased(state)).toBe(true);
+    const fence = await pool().query<{ active_epoch: string }>(
+      "SELECT active_epoch FROM regional_workspace_migration_fences WHERE workspace_id=$1",
+      [owner.workspaceId],
+    );
+    expect(Number(fence.rows[0]?.active_epoch)).toBe(2);
+    // The active cell holds the state while the lease lives, then binds it.
+    const before = github.requests.length;
+    expect(await setupAs(state, id, 2)).toBe("GITHUB_INSTALL_STATE_REPLAYED");
+    expect(github.requests.slice(before)).toEqual([]);
+    await expireLease(state);
+    expect(await setupAs(state, id, 2)).toBe("bound");
+  } finally {
+    control.release();
+    await refused?.outcome.catch(() => undefined);
+    await epoch(1);
+  }
+  expect((await unbind(id)).status).toBe(200);
+}, 30_000);
+
 it("needs the organization Members permission to confirm an organization admin", async () => {
   const id = base + 26;
   const org = github.addInstallation({
@@ -1300,13 +1524,7 @@ it("needs the organization Members permission to confirm an organization admin",
   });
   const state = await installState(owner);
   // In a workspace migrated into this cell, a refusal releases its
-  // reservation at the routed epoch, so the same state binds later.
-  const epoch = (activeEpoch: number) =>
-    pool().query(
-      `INSERT INTO regional_workspace_migration_fences(workspace_id,source_epoch,active_epoch)
-       VALUES($1,0,$2) ON CONFLICT (workspace_id) DO UPDATE SET active_epoch=$2`,
-      [owner.workspaceId, activeEpoch],
-    );
+  // lease at the routed epoch, so the same state binds later.
   const setup = () =>
     setupService().completeSetup({
       ...m(),
@@ -1347,6 +1565,123 @@ it("needs the organization Members permission to confirm an organization admin",
     await epoch(1);
   }
   expect(await status(id)).toBe("active");
+  expect((await unbind(id)).status).toBe(200);
+});
+
+it("tells a missing Members grant from a failed admin check in the redirect", async () => {
+  const id = base + 31;
+  const org = github.addInstallation({
+    id,
+    account: { login: "acme-reason", type: "Organization" },
+    repositorySelection: "all",
+    repositories: [],
+    users: ["octo-owner"],
+    permissions: { metadata: "read" },
+  });
+  org.memberships.set("octo-member", { state: "active", role: "member" });
+  const state = await installState(owner);
+  const outcome = async (user: string) => {
+    const params = new URLSearchParams({
+      installation_id: String(id),
+      setup_action: "install",
+      code: github.issueCode(user),
+      state,
+    });
+    const response = await app.request(`/github/setup?${params.toString()}`, {
+      headers: { authorization: `Bearer ${owner.sessionToken}` },
+    });
+    const location = new URL(
+      response.headers.get("location") ?? "",
+      "http://localhost",
+    );
+    return ["github_error", "github_error_reason"].map((key) =>
+      location.searchParams.get(key),
+    );
+  };
+  expect(await outcome("octo-owner")).toEqual([
+    "GITHUB_INSTALLATION_NOT_ACCESSIBLE",
+    "members_permission_required",
+  ]);
+  org.permissions = { metadata: "read", members: "read" };
+  expect(await outcome("octo-member")).toEqual([
+    "GITHUB_INSTALLATION_NOT_ACCESSIBLE",
+    "not_admin",
+  ]);
+  // Neither refusal used the state; an admin binds with it.
+  expect(await nonceRows(state)).toBe(0);
+  expect(await outcome("octo-owner")).toEqual([null, null]);
+  expect((await unbind(id)).status).toBe(200);
+});
+
+it("follows GitHub's next link and refuses a list it cannot finish", async () => {
+  const id = base + 32;
+  installation(id, "acme-links", ["octo-owner"]);
+  await bind(id);
+  // Each page read: [repositories, next link target, total_count].
+  let pages: Record<string, [number, string | null, number | undefined]> = {};
+  const asked: string[] = [];
+  const at = (page: number, host = github.apiBaseUrl) =>
+    `${host}/installation/repositories?per_page=100&page=${String(page)}`;
+  const listing = new GitHubInstallationService(pool(), {
+    app: services.githubApp ?? null,
+    settings: services.githubInstallSettings ?? null,
+    stateSecret: services.tenancySecret,
+    fetcher: async (input, init) => {
+      const url = new URL(String(input));
+      if (!url.pathname.endsWith("/installation/repositories"))
+        return fetch(input, init);
+      const page = url.searchParams.get("page") ?? "";
+      asked.push(page);
+      const [count, next, total] = pages[page] ?? [0, null, 0];
+      return Response.json(
+        {
+          total_count: total,
+          repositories: Array.from({ length: count }, (_, i) => ({
+            full_name: `acme-links/p${page}-${String(i)}`,
+            private: true,
+            default_branch: "main",
+          })),
+        },
+        { headers: next ? { link: `<${next}>; rel="next"` } : {} },
+      );
+    },
+  });
+  const read = async (cursor: string | null = null) => {
+    asked.length = 0;
+    return listing.repositories(ownerPrincipal(), id, cursor);
+  };
+  // GitHub's target is read, even past an empty page.
+  pages = { 1: [100, at(3), 999], 3: [0, at(7), 999], 7: [40, null, undefined] };
+  expect(await read()).toMatchObject({ truncated: false, nextCursor: null });
+  expect(asked).toEqual(["1", "3", "7"]);
+  // The cursor past a batch is the page GitHub's link names.
+  pages = Object.fromEntries(
+    [1, 2, 3, 4, 5].map((p) => [p, [100, at(p === 5 ? 9 : p + 1), 1000]]),
+  );
+  pages[9] = [1, null, 801];
+  const batch = await read();
+  expect(batch.repositories).toHaveLength(500);
+  expect(batch).toMatchObject({ truncated: true, nextCursor: "9" });
+  expect(await read("9")).toMatchObject({ truncated: false, nextCursor: null });
+  expect(asked).toEqual(["9"]);
+  // Exactly five full pages end the list when GitHub's count agrees.
+  pages[5] = [100, null, 500];
+  expect(await read()).toMatchObject({ truncated: false, nextCursor: null });
+  // More said to remain with no usable next link is a retry, never a short list.
+  for (const next of [
+    null,
+    at(2, "http://example.invalid/api"),
+    `${at(2)}&page=3`,
+    at(2).replace("page=2", "page=x"),
+  ]) {
+    pages = { 1: [100, next, 250] };
+    await expect(read(), String(next)).rejects.toMatchObject({
+      code: "SERVICE_UNAVAILABLE",
+    });
+    expect(asked).toEqual(["1"]);
+  }
+  pages = { 1: [100, null, undefined] };
+  await expect(read()).rejects.toMatchObject({ code: "SERVICE_UNAVAILABLE" });
   expect((await unbind(id)).status).toBe(200);
 });
 
@@ -1621,13 +1956,17 @@ it("bounds GitHub responses and classifies refused discovery", async () => {
     [(link: string) => link.replace(/<[^>]*\/(repositories\?[^>]*)>/u, "<$1>"), 150],
     [(link: string) => link.replace("; rel", '; title="more, see; this"; rel'), 150],
     [(link: string) => link.replace(">;", "&x=a;b>;"), 150],
-    [(link: string) => link.replace("127.0.0.1", "localhost"), 100],
   ] as const) {
     relink = form;
     const counted = await miscounted.repositories(ownerPrincipal(), id);
     expect(counted.repositories).toHaveLength(length);
     expect(counted).toMatchObject({ truncated: false, nextCursor: null });
   }
+  // A next link to another host is not followed, so the full page is no end.
+  relink = (link: string) => link.replace("127.0.0.1", "localhost");
+  await expect(miscounted.repositories(ownerPrincipal(), id)).rejects.toMatchObject({
+    code: "SERVICE_UNAVAILABLE",
+  });
   fake.repositories = granted;
   // An endless body is refused whether its length is missing or wrong, and
   // the listing keeps the last observation.

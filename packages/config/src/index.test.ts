@@ -721,6 +721,22 @@ describe("GitHub App installation settings", () => {
         }),
         suffix,
       ).toEqual(["GITHUB_API_URL", "GITHUB_WEB_URL"]);
+    // Credentials in either URL are refused (built here, never committed).
+    for (const userinfo of [
+      "test-user",
+      ["test-user", "test-password"].join(":"),
+      ":x",
+    ])
+      expect(
+        fields({
+          ...app,
+          ...install,
+          GITHUB_API_URL: `http://${userinfo}@127.0.0.1:9/api`,
+          GITHUB_WEB_URL: `http://${userinfo}@127.0.0.1:9`,
+          RUNTIME_ENV: "local",
+        }),
+        userinfo,
+      ).toEqual(["GITHUB_API_URL", "GITHUB_WEB_URL"]);
   });
 });
 

@@ -1111,8 +1111,14 @@ function githubBaseUrl(
   }
   try {
     const url = new URL(value);
-    // An empty "?" or "#" is kept in the URL but not in search or hash.
-    if (!["http:", "https:"].includes(url.protocol) || /[?#]/u.test(value))
+    // An empty "?" or "#" is kept in the URL but not in search or hash, and
+    // fetch refuses a URL that carries credentials.
+    if (
+      !["http:", "https:"].includes(url.protocol) ||
+      /[?#]/u.test(value) ||
+      url.username ||
+      url.password
+    )
       throw new Error("invalid");
     return url.toString().replace(/\/+$/u, "");
   } catch {

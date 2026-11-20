@@ -175,8 +175,14 @@ export function registerGitHubInstallationRoutes(app: Hono<ApiEnvironment>) {
         github_connected: String(installation.installationId),
       });
     } catch (error) {
+      const known = error instanceof DomainError ? error : null;
+      // A fixed remediation hint, such as members_permission_required.
+      const reason = known?.details?.reason;
       return settingsRedirect(c, {
-        github_error: error instanceof DomainError ? error.code : "SERVICE_UNAVAILABLE",
+        github_error: known?.code ?? "SERVICE_UNAVAILABLE",
+        ...(typeof reason === "string" && /^[a-z_]{1,64}$/u.test(reason)
+          ? { github_error_reason: reason }
+          : {}),
       });
     }
   };

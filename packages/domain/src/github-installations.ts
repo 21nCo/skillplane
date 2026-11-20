@@ -26,6 +26,13 @@ const REPOSITORY_CURSOR = /^[1-9][0-9]{0,3}$/u;
 const STATE_PURPOSE = "github-install-state";
 // Consumed nonces are kept this long past their state's expiry.
 const STATE_RETENTION = "1 day";
+// A callback leases its nonce before OAuth. The lease is stored as
+// consumed_at = deadline + LEASE_MARK, always past expires_at, while a bind
+// consumes the nonce before expires_at; the exact value names the lease's
+// owner. LEASE outlasts setup's three GitHub requests (REQUEST_TIMEOUT_MS
+// each), and a lease a crash or cutover strands expires on its own.
+const LEASE = "interval '2 minutes' + interval '1000 years'";
+const LEASE_MARK = "interval '1000 years'";
 const NONCE = /^[A-Za-z0-9_-]{22,64}$/u;
 const INSTALLATION_ID = /^[1-9][0-9]{0,15}$/u;
 const OAUTH_CODE = /^[A-Za-z0-9_.-]{1,256}$/u;
@@ -313,8 +320,8 @@ function observedInstallation(value: unknown): ObservedInstallation | null {
   };
 }
 
-/** Whether a Link header names a next page of `listing` on its API host. */
-function nextPageLinked(link: string | null, listing: string): boolean {
+/** The page a Link header's next link names of `listing` on its API host. */
+function nextPage(link: string | null, listing: string): string | null {
   const expected = new URL(listing);
   // Split links on "," and parameters on ";" outside <targets> and "quotes".
   const links: string[][] = [[""]];
@@ -334,7 +341,7 @@ function nextPageLinked(link: string | null, listing: string): boolean {
     else if (!quoted) target = c === "<" ? true : c === ">" ? false : target;
     parts.push(`${parts.pop() ?? ""}${c}`);
   }
-  return links.some(([uri = "", ...params]) => {
+  for (const [uri = "", ...params] of links) {
     const next = params.some((p) => {
       const [key = "", rel = ""] = p.split("=", 2).map((v) => v.trim());
       return (
@@ -343,14 +350,22 @@ function nextPageLinked(link: string | null, listing: string): boolean {
       );
     });
     const value = uri.trim();
-    if (!next || !value.startsWith("<") || !value.endsWith(">")) return false;
+    if (!next || !value.startsWith("<") || !value.endsWith(">")) continue;
     try {
       const url = new URL(value.slice(1, -1), expected);
-      return url.origin === expected.origin && url.pathname === expected.pathname;
+      const [page = "", ...more] = url.searchParams.getAll("page");
+      if (
+        url.origin === expected.origin &&
+        url.pathname === expected.pathname &&
+        !more.length &&
+        REPOSITORY_CURSOR.test(page)
+      )
+        return page;
     } catch {
-      return false;
+      continue;
     }
-  });
+  }
+  return null;
 }
 
 // GitHub refused the installation's access; a rate limit is only a retry.
@@ -672,28 +687,35 @@ export class GitHubInstallationService {
     const { settings } = this.configured();
     const nonce = claims.n;
     const expiresAt = new Date(claims.e);
-    // Reserve the nonce (consumed_at 'infinity') before the one-use OAuth
-    // exchange: a duplicate or expired state is refused without asking GitHub.
-    await withDomainTransaction(
+    // Lease the nonce before the one-use OAuth exchange, taking over only an
+    // expired lease of this workspace, never a consumed nonce.
+    const lease = await withDomainTransaction(
       this.pool,
       m.requestId,
-      async ({ client }) => {
-        const inserted = await client.query(
-          "INSERT INTO github_installation_states(nonce,workspace_id,expires_at,consumed_at) VALUES($1,$2,$3,'infinity') ON CONFLICT (nonce) DO NOTHING",
-          [nonce, claims.w, expiresAt],
-        );
-        if (!inserted.rowCount) replayed();
-      },
+      async ({ client }) =>
+        (
+          await client.query<{ lease: string }>(
+            `INSERT INTO github_installation_states AS s(nonce,workspace_id,expires_at,consumed_at)
+             VALUES($1,$2,$3,clock_timestamp() + ${LEASE})
+             ON CONFLICT (nonce) DO UPDATE SET consumed_at=clock_timestamp() + ${LEASE}
+             WHERE s.workspace_id=EXCLUDED.workspace_id AND s.consumed_at > s.expires_at
+               AND s.consumed_at <= clock_timestamp() + ${LEASE_MARK}
+             RETURNING consumed_at::text AS lease`,
+            [nonce, claims.w, expiresAt],
+          )
+        ).rows[0]?.lease ?? null,
       { fencingEpoch: m.fencingEpoch },
     );
     let bound = false;
     try {
-      // Judged once the reservation (and any wait on it) committed.
+      // Freshness first, judged once the lease (and any wait on it) committed:
+      // an expired state is invalid even when another callback holds it.
       const fresh = await this.pool.query<{ fresh: boolean }>(
         "SELECT $1::timestamptz > clock_timestamp() AS fresh",
         [expiresAt],
       );
       if (!fresh.rows[0]?.fresh) invalidState();
+      if (!lease) replayed();
       const token = await this.userToken(settings, m.code);
       const { observed, observedFrom } = await this.fetchInstallation(installationId);
       if (observed?.accountType === "Organization" && !observed.membersReadable)
@@ -701,16 +723,19 @@ export class GitHubInstallationService {
           "GITHUB_INSTALLATION_NOT_ACCESSIBLE",
           "The GitHub App needs the organization permission Members: read to confirm an organization admin; accept it for this installation on GitHub, then connect again",
           403,
+          { reason: "members_permission_required" },
         );
       if (!observed || !(await this.administers(settings, token, observed)))
         throw new DomainError(
           "GITHUB_INSTALLATION_NOT_ACCESSIBLE",
           "Only an owner of this GitHub account or an admin of this organization can connect it",
           403,
+          { reason: "not_admin" },
         );
       const installation = await this.bind(
         m,
         claims,
+        lease,
         installationId,
         observed,
         observedFrom,
@@ -718,25 +743,27 @@ export class GitHubInstallationService {
       bound = true;
       return installation;
     } finally {
-      // Refusals release it at the routed epoch; a crash strands a short-lived state.
-      if (!bound)
+      // A refusal releases its own lease at the routed epoch; one the fence
+      // keeps after a cutover expires within LEASE.
+      if (!bound && lease)
         await withDomainTransaction(
           this.pool,
           m.requestId,
           ({ client }) =>
             client.query(
-              "DELETE FROM github_installation_states WHERE nonce=$1 AND consumed_at='infinity'",
-              [nonce],
+              "DELETE FROM github_installation_states WHERE nonce=$1 AND consumed_at=$2::timestamptz",
+              [nonce, lease],
             ),
           { fencingEpoch: m.fencingEpoch },
         ).catch(() => undefined);
     }
   }
 
-  /** Binds under the reserved nonce, consumed last and only while fresh. */
+  /** Binds under this call's lease, consumed last and only while fresh. */
   private bind(
     m: Mutation,
     claims: StateClaims,
+    lease: string,
     installationId: number,
     observed: ObservedInstallation,
     observedFrom: string,
@@ -804,8 +831,8 @@ export class GitHubInstallationService {
           accountLogin: observed.accountLogin,
         });
         const consumed = await client.query(
-          "UPDATE github_installation_states SET consumed_at=clock_timestamp() WHERE nonce=$1 AND workspace_id=$2 AND consumed_at='infinity' AND expires_at > clock_timestamp()",
-          [claims.n, claims.w],
+          "UPDATE github_installation_states SET consumed_at=clock_timestamp() WHERE nonce=$1 AND workspace_id=$2 AND consumed_at=$3::timestamptz AND expires_at > clock_timestamp()",
+          [claims.n, claims.w, lease],
         );
         if (!consumed.rowCount) invalidState();
         return record(row);
@@ -1047,10 +1074,9 @@ export class GitHubInstallationService {
       unavailable("GitHub returned an invalid installation token");
     const repositories: GitHubInstallationRepository[] = [];
     const listing = `${app.apiBaseUrl}/installation/repositories`;
-    // Whether GitHub has repositories past the last page read.
-    let more = false,
-      page = first;
-    for (; page < first + MAX_REPOSITORY_PAGES; page += 1) {
+    // The page GitHub's next link names past the last page read.
+    let next: string | null = null;
+    for (let page = first, read = 0; read < MAX_REPOSITORY_PAGES; read += 1) {
       const response = await this.github(
         `${listing}?per_page=100&page=${String(page)}`,
         { headers: { authorization: `Bearer ${token}` } },
@@ -1083,17 +1109,24 @@ export class GitHubInstallationService {
           url: `https://github.com/${fullName}`,
         });
       }
-      // GitHub's next link, not total_count or a full page, says more follow.
-      more = nextPageLinked(response.headers.get("link"), listing);
-      if (!more) break;
+      // GitHub's next link is followed; without one, its count and a short
+      // page must agree that the list ended.
+      next = nextPage(response.headers.get("link"), listing);
+      const total = body?.total_count,
+        seen = (page - 1) * 100 + list.length,
+        full = list.length >= 100;
+      if (
+        !next &&
+        (typeof total === "number" ? total > seen || (full && total !== seen) : full)
+      )
+        unavailable(
+          "GitHub did not say where the repository list continues; retry later",
+        );
+      if (!next) break;
+      page = Number(next);
     }
     // An unbind, rebind or suspension while listing withholds the result.
     if (!(await binding()).rowCount) throw new GitHubAuthFailedError();
-    const next = String(page);
-    return {
-      repositories,
-      truncated: more,
-      nextCursor: more && REPOSITORY_CURSOR.test(next) ? next : null,
-    };
+    return { repositories, truncated: next !== null, nextCursor: next };
   }
 }
