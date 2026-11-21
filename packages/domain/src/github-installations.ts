@@ -329,7 +329,7 @@ function observedInstallation(value: unknown): ObservedInstallation | null {
     membersGrant:
       !permissions ||
       !Object.values(permissions).every(
-        (v) => typeof v === "string" && /^[a-z_]+$/u.test(v),
+        (v) => typeof v === "string" && /^(?:read|write|admin|none)$/u.test(v),
       )
         ? "unknown"
         : members === "read" || members === "write"
@@ -379,7 +379,7 @@ function nextPage(
         continue;
       // A relation token, or a quoted list of them; anything else is malformed.
       const rel =
-        /^(?:([\w!#$%&'*+.^`|~-]+)|"\s*([\w!#$%&'*+.^`|~:/-]+(?:\s+[\w!#$%&'*+.^`|~:/-]+)*)\s*")$/u.exec(
+        /^(?:([\w!#$%&'*+.^`|~-]+)|"\s*([A-Za-z][\w.-]*(?::[^\s"\\]+)?(?:\s+[A-Za-z][\w.-]*(?::[^\s"\\]+)?)*)\s*")$/u.exec(
           at < 0 ? "" : param.slice(at + 1).trim(),
         );
       if (!rel) return false;
@@ -677,7 +677,7 @@ export class GitHubInstallationService {
     const text = (value: unknown, ...known: string[]) => {
       if (
         typeof value !== "string" ||
-        !/^\S+$/u.test(value) ||
+        !/^[\w-]+$/u.test(value) ||
         (known.length && !known.includes(value))
       )
         throw new Error("inconclusive");
@@ -1212,7 +1212,7 @@ export class GitHubInstallationService {
         full = list.length >= 100;
       if (
         linked === false ||
-        (!next && (total !== null ? total > seen || (full && total !== seen) : full))
+        (!next && (total === null || total > seen || (full && total !== seen)))
       )
         unavailable(
           "GitHub did not say where the repository list continues; retry later",

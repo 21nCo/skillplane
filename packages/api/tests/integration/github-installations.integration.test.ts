@@ -1848,6 +1848,7 @@ it("tells a missing Members grant from a failed admin check in the redirect", as
     [{ metadata: "read", members: 7 }, null],
     [{ metadata: 1, members: "read" }, null],
     [{ metadata: "" }, null],
+    [{ metadata: "unrecognized" }, null],
     [{ metadata: " ", members: "none" }, null],
     [{ metadata: "read", members: "maybe" }, null],
   ] as const) {
@@ -1936,6 +1937,7 @@ it("tells a missing Members grant from a failed admin check in the redirect", as
     [{ login: "" }, null],
     [{ login: " " }, null],
     [{ login: "octo owner" }, null],
+    [{ login: "octo/owner" }, null],
     [{ login: 7 }, null],
     [{ login: "octo-other" }, "not_admin"],
   ] as const) {
@@ -2035,6 +2037,7 @@ it("follows GitHub's next link and refuses a list it cannot finish", async () =>
     `<${at(2)}>; rel=next`,
     `<${at(2)}>; REL="prev next"`,
     `<${at(2)}>; rel="next", <${at(2)}>; rel=next`,
+    `<${at(2)}>; rel="next https://relations.example.invalid/page?version=1"`,
   ]) {
     pages = { 1: [100, link, 140], 2: [40, null, undefined] };
     expect(await read(), link).toMatchObject({ truncated: false, nextCursor: null });
@@ -2048,6 +2051,9 @@ it("follows GitHub's next link and refuses a list it cannot finish", async () =>
   expect(batch).toMatchObject({ truncated: true, nextCursor: "6" });
   expect(await read("6")).toMatchObject({ truncated: false, nextCursor: null });
   expect(asked).toEqual(["6"]);
+  // A continuation must itself establish the end: no count and no link is a retry.
+  pages[6] = [40, null, undefined];
+  await expect(read("6")).rejects.toMatchObject({ code: "SERVICE_UNAVAILABLE" });
   // A cursor carries only a page: one the pages read cannot account for, after
   // a short page or a jump, is a retry rather than a gap in the list.
   for (const [short, last] of [
@@ -2086,6 +2092,7 @@ it("follows GitHub's next link and refuses a list it cannot finish", async () =>
     [`<${at(2)}>; rel="next"x`, 40, 40],
     [`<${at(2)}>; rel`, 40, 40],
     [`<${at(2)}>; rel="next = junk"`, 40, 40],
+    [`<${at(2)}>; rel="next=x"`, 40, 40],
     [`<${at(2)}>; rel=next, <${at(2, "http://example.invalid/api")}; rel=next`, 40, 40],
     [`<${at(2)}>; rel="next, <${at(2)}>; rel=next`, 40, 40],
     [
