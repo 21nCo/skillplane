@@ -13,6 +13,10 @@ import {
 import { InvalidAuthenticationError } from "@skillplane/domain";
 import { collectDatafnStructuralResources } from "@skillplane/datafn";
 import { authenticateServicePrincipalRequest } from "./service-principal-auth.js";
+import {
+  GITHUB_SETTINGS_PATH,
+  githubSetupCallback,
+} from "./routes/github-installations.js";
 import type { ApiServiceProvider, ApiServices } from "./context.js";
 import {
   recommendedWorkspaceRegionFromEdge,
@@ -123,6 +127,47 @@ function segment(value: string | undefined): string {
   return decoded;
 }
 
+const SETUP_ERROR_CODE = /^[A-Z][A-Z0-9_]{0,63}$/u;
+
+// `search` is the settings query, starting with "?".
+function settingsRedirect(search: string, headers = new Headers()): Response {
+  headers.set("location", `${GITHUB_SETTINGS_PATH}${search}`);
+  headers.set("cache-control", "no-store");
+  headers.set("referrer-policy", "no-referrer");
+  return new Response(null, { status: 302, headers });
+}
+
+const settingsError = (code: string) =>
+  settingsRedirect(`?${new URLSearchParams({ github_error: code }).toString()}`);
+
+// The install callback is a browser navigation carrying GitHub's code and the
+// signed state. Whatever answers it (the setup route, a routing or membership
+// refusal, rate limiting or a failure) returns the browser to GitHub settings
+// with an error code, never as a JSON body, and is never cached or passed on
+// as a referrer.
+async function githubSetupResponse(response: Response): Promise<Response> {
+  const location = response.headers.get("location") ?? "";
+  if (
+    response.status === 302 &&
+    (location === GITHUB_SETTINGS_PATH ||
+      location.startsWith(`${GITHUB_SETTINGS_PATH}?`))
+  )
+    return settingsRedirect(
+      location.slice(GITHUB_SETTINGS_PATH.length),
+      new Headers(response.headers),
+    );
+  let code = "SERVICE_UNAVAILABLE";
+  if (response.status === 429) code = "RATE_LIMITED";
+  try {
+    const body = (await response.json()) as { error?: { code?: unknown } };
+    if (typeof body.error?.code === "string" && SETUP_ERROR_CODE.test(body.error.code))
+      code = body.error.code;
+  } catch {
+    // Keeps the status-derived code.
+  }
+  return settingsError(code);
+}
+
 export function classifyApiScope(request: Request): ApiScope {
   const url = new URL(request.url);
   const path = url.pathname;
@@ -134,8 +179,23 @@ export function classifyApiScope(request: Request): ApiScope {
     };
   }
   let match =
-    /^\/api\/v1\/workspaces\/([^/]+)\/(?:skills|groups|sources)(?:\/|$)/u.exec(path);
+    /^\/api\/v1\/workspaces\/([^/]+)\/(?:skills|groups|sources|github)(?:\/|$)/u.exec(
+      path,
+    );
   if (match) return { kind: "workspace", workspaceId: segment(match[1]) };
+  const callback = githubSetupCallback(url);
+  if (callback) {
+    // The install callback is routed by the workspace its state names; the
+    // cell verifies the state before acting on it. Anything else (a pending
+    // approval, an ambiguous callback or an unroutable state) is answered
+    // globally, which returns it to settings without binding.
+    return callback.kind === "callback"
+      ? {
+          kind: "workspace",
+          workspaceId: segment(encodeURIComponent(callback.workspaceId)),
+        }
+      : { kind: "global" };
+  }
   match = /^\/api\/v1\/(?:audit|analytics)\/workspaces\/([^/]+)(?:\/|$)/u.exec(path);
   if (match) return { kind: "workspace", workspaceId: segment(match[1]) };
   if (path === "/api/v1/skills/search") {
@@ -330,7 +390,7 @@ export function createRoutedApiApplication(input: {
   readonly local: FetchApplication;
   readonly services: ApiServiceProvider;
 }): FetchApplication {
-  return {
+  const routed: FetchApplication = {
     async fetch(incoming, bindings) {
       const runtime = parseRuntimeConfig(
         bindings,
@@ -504,6 +564,17 @@ export function createRoutedApiApplication(input: {
         ).response();
       } finally {
         await input.services.release?.(services);
+      }
+    },
+  };
+  return {
+    async fetch(incoming, bindings) {
+      if (!githubSetupCallback(new URL(incoming.url)))
+        return routed.fetch(incoming, bindings);
+      try {
+        return await githubSetupResponse(await routed.fetch(incoming, bindings));
+      } catch {
+        return settingsError("SERVICE_UNAVAILABLE");
       }
     },
   };

@@ -4,6 +4,7 @@ import {
   classifyDatafnAuthority,
   createRoutedApiApplication,
 } from "./workspace-routing.js";
+import { githubSetupCallback } from "./routes/github-installations.js";
 
 const objectStorage = {
   head: async () => null,
@@ -156,6 +157,9 @@ describe("API scope classification", () => {
       "sources",
       "sources/source%3Aone/apply",
       "sources/source%3Aone/bindings",
+      "github/install",
+      "github/installations",
+      "github/installations/42/repositories",
     ])
       expect(
         classifyApiScope(
@@ -171,6 +175,204 @@ describe("API scope classification", () => {
         new Request("https://app.skillplane.dev/api/v1/skills/skill%3Aone"),
       ),
     ).toEqual({ kind: "resource", resourceType: "skill", resourceId: "skill:one" });
+  });
+
+  it("routes the GitHub install callback by the workspace its state names", () => {
+    const claims = Buffer.from(
+      JSON.stringify({
+        v: 1,
+        w: "workspace:one",
+        u: "user:one",
+        n: "n".repeat(32),
+        e: 1,
+      }),
+    ).toString("base64url");
+    for (const path of ["/github/setup", "/api/v1/github/setup"]) {
+      expect(
+        classifyApiScope(
+          new Request(
+            `https://app.skillplane.dev${path}?installation_id=1&state=${claims}.signature`,
+          ),
+        ),
+      ).toEqual({ kind: "workspace", workspaceId: "workspace:one" });
+      for (const state of ["", "not-json.signature", `${"x".repeat(3000)}.s`])
+        expect(
+          classifyApiScope(
+            new Request(`https://app.skillplane.dev${path}?state=${state}`),
+          ),
+        ).toEqual({ kind: "global" });
+    }
+  });
+
+  it("answers pending approvals and unroutable install states globally", () => {
+    const state = (w: string) =>
+      `${Buffer.from(JSON.stringify({ v: 1, w, u: "user:one", n: "n".repeat(32), e: 1 })).toString("base64url")}.signature`;
+    for (const query of [
+      `setup_action=request&state=${state("workspace:one")}`,
+      `state=${state("workspace\u0001one")}`,
+    ])
+      expect(
+        classifyApiScope(
+          new Request(`https://app.skillplane.dev/github/setup?${query}`),
+        ),
+      ).toEqual({ kind: "global" });
+  });
+
+  it("answers ambiguous install callbacks globally and returns them to settings", async () => {
+    const state = `${Buffer.from(JSON.stringify({ v: 1, w: "workspace:one", u: "user:one", n: "n".repeat(32), e: 1 })).toString("base64url")}.signature`;
+    const ambiguous = [
+      `/github/setup?state=${state}&state=${state}`,
+      `/github/setup?state=${state}&code=a&code=b`,
+      `/github/setup?state=${state}&installation_id=1&installation_id=2`,
+      `/github/%73etup?state=${state}`,
+      `/api/v1/github/set%75p?state=${state}`,
+    ];
+    for (const path of ambiguous) {
+      const request = new Request(`https://app.skillplane.dev${path}`);
+      expect(githubSetupCallback(new URL(request.url)), path).toEqual({
+        kind: "invalid",
+      });
+      expect(classifyApiScope(request), path).toEqual({ kind: "global" });
+      const response = await createRoutedApiApplication({
+        local: {
+          fetch: async () =>
+            Response.json({ error: { code: "NOT_FOUND" } }, { status: 404 }),
+        },
+        services: async () => ({}) as never,
+      }).fetch(new Request(`http://localhost:5700${path}`), gatewayBindings);
+      expect(response.status, path).toBe(302);
+      expect(response.headers.get("location"), path).toBe(
+        "/settings/github?github_error=NOT_FOUND",
+      );
+    }
+    expect(
+      githubSetupCallback(new URL("https://app.skillplane.dev/github/setups")),
+    ).toBe(null);
+  });
+
+  it("returns a refused install callback to settings instead of JSON", async () => {
+    const routed = createRoutedApiApplication({
+      local: { fetch: async () => new Response("unexpected local response") },
+      services: async () =>
+        ({ auth: { provider: { authenticate: async () => null } } }) as never,
+    });
+    const state = `${Buffer.from(JSON.stringify({ v: 1, w: "workspace:one", u: "user:one", n: "n".repeat(32), e: 1 })).toString("base64url")}.signature`;
+
+    const response = await routed.fetch(
+      new Request(`http://localhost:5700/api/v1/github/setup?state=${state}`),
+      gatewayBindings,
+    );
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get("location")).toBe(
+      "/settings/github?github_error=AUTHENTICATION_REQUIRED",
+    );
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+  });
+
+  it("answers every install callback with a settings redirect in every role", async () => {
+    const singleBindings = {
+      RUNTIME_ENV: "local",
+      DATABASE_ADAPTER: "postgres",
+      AUTH_MODE: "disabled",
+      OAUTH_ISSUER: "http://localhost:5700",
+      OAUTH_RESOURCE: "http://127.0.0.1:5701/mcp",
+      DATABASE_URL: gatewayBindings.CONTROL_DATABASE,
+      SKILL_BUNDLES: objectStorage,
+    };
+    const state = `${Buffer.from(JSON.stringify({ v: 1, w: "workspace:one", u: "user:one", n: "n".repeat(32), e: 1 })).toString("base64url")}.signature`;
+    const rateLimited = async () =>
+      Response.json({ error: { code: "RATE_LIMITED" } }, { status: 429 });
+    const outsider = {
+      auth: { provider: { authenticate: async () => ({ actorId: "user:outsider" }) } },
+      controlDatabase: {
+        pool: {
+          query: async (text: string) => {
+            if (text.includes("FROM workspace_memberships")) return { rows: [] };
+            throw new Error(`Unexpected SQL in routing test: ${text}`);
+          },
+        },
+      },
+    };
+    const cases: [
+      string,
+      Parameters<typeof createRoutedApiApplication>[0],
+      string,
+      Record<string, string>,
+    ][] = [
+      // A pending approval is answered globally, where rate limiting may refuse it.
+      [
+        "setup_action=request&state=x",
+        { local: { fetch: rateLimited }, services: async () => ({}) as never },
+        "RATE_LIMITED",
+        gatewayBindings,
+      ],
+      [
+        `state=${state}`,
+        {
+          local: { fetch: rateLimited },
+          services: async () => {
+            throw new Error("services unavailable");
+          },
+        },
+        "SERVICE_UNAVAILABLE",
+        gatewayBindings,
+      ],
+      [
+        `state=${state}`,
+        { local: { fetch: rateLimited }, services: async () => outsider as never },
+        "WORKSPACE_ACCESS_DENIED",
+        gatewayBindings,
+      ],
+      [
+        `state=${state}`,
+        {
+          local: {
+            fetch: async () => {
+              throw new Error("local failure");
+            },
+          },
+          services: async () => ({}) as never,
+        },
+        "SERVICE_UNAVAILABLE",
+        singleBindings,
+      ],
+      [
+        `state=${state}`,
+        { local: { fetch: rateLimited }, services: async () => ({}) as never },
+        "RATE_LIMITED",
+        singleBindings,
+      ],
+    ];
+    for (const [query, input, code, bindings] of cases) {
+      const response = await createRoutedApiApplication(input).fetch(
+        new Request(`http://localhost:5700/github/setup?${query}`),
+        bindings,
+      );
+      expect(response.status).toBe(302);
+      expect(response.headers.get("location"), query).toBe(
+        `/settings/github?github_error=${code}`,
+      );
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+    }
+    // The setup route's own redirect keeps its outcome.
+    const connected = await createRoutedApiApplication({
+      local: {
+        fetch: async () =>
+          new Response(null, {
+            status: 302,
+            headers: { location: "/settings/github?github_connected=42" },
+          }),
+      },
+      services: async () => ({}) as never,
+    }).fetch(new Request("http://localhost:5700/github/setup?state=x"), singleBindings);
+    expect(connected.headers.get("location")).toBe(
+      "/settings/github?github_connected=42",
+    );
+    expect(connected.headers.get("cache-control")).toBe("no-store");
+    expect(connected.headers.get("referrer-policy")).toBe("no-referrer");
   });
 
   it("routes header-scoped skill searches to the workspace cell", () => {

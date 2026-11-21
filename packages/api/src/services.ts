@@ -5,7 +5,12 @@ import {
   createPostgresAuthFnPlacementDirectory,
   createSkillplaneAuthServer,
 } from "@skillplane/auth";
-import { parseRuntimeConfig, type RuntimeBindings } from "@skillplane/config";
+import {
+  parseGitHubAppConfig,
+  parseGitHubAppInstallConfig,
+  parseRuntimeConfig,
+  type RuntimeBindings,
+} from "@skillplane/config";
 import {
   createPostgresPermissionDirectory,
   createPostgresRoutingReplayStore,
@@ -41,6 +46,7 @@ import {
   SkillSearchService,
   SkillService,
   SkillVersionService,
+  GitHubApp,
 } from "@skillplane/domain";
 import {
   R2BundleRepository,
@@ -64,6 +70,8 @@ export async function buildApiServices(
   options: BuildApiServicesOptions = {},
 ): Promise<ApiServices> {
   const runtime = parseRuntimeConfig(bindings, options);
+  const githubAppConfig = parseGitHubAppConfig(bindings);
+  const githubInstallSettings = parseGitHubAppInstallConfig(bindings);
   const gatewayTickets =
     runtime.deployment.role === "gateway" && runtime.directDatafn.enabled
       ? {
@@ -400,6 +408,14 @@ export async function buildApiServices(
       datafnBootstrap,
       email,
       tenancySecret,
+      githubApp: githubAppConfig
+        ? new GitHubApp(githubAppConfig, {
+            ...(githubInstallSettings
+              ? { apiBaseUrl: githubInstallSettings.apiBaseUrl }
+              : {}),
+          })
+        : null,
+      githubInstallSettings,
       bundleStorage,
       publicProjectionService:
         runtime.deployment.role === "gateway" || runtime.deployment.role === "control"

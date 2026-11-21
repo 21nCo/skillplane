@@ -62,6 +62,11 @@ export interface RuntimeBindings {
   readonly GITHUB_APP_ID?: string;
   readonly GITHUB_APP_PRIVATE_KEY?: string;
   readonly GITHUB_APP_WEBHOOK_SECRET?: string;
+  readonly GITHUB_APP_SLUG?: string;
+  readonly GITHUB_APP_CLIENT_ID?: string;
+  readonly GITHUB_APP_CLIENT_SECRET?: string;
+  readonly GITHUB_API_URL?: string;
+  readonly GITHUB_WEB_URL?: string;
   readonly TURNSTILE_ALLOWED_HOSTNAMES?: string;
   readonly PUBLIC_TURNSTILE_SITE_KEY?: string;
   readonly SKILLPLANE_OTP_FROM?: string;
@@ -252,6 +257,25 @@ function validateCloudflareEmailProvider(
   }
 }
 
+const MAX_EMAIL_SENDER_LENGTH = 512;
+const EMAIL_ADDRESS = /^[^\s<>@]+@[^\s<>@]+$/u;
+
+// The address of a trimmed `address` or `Display Name <address>` sender, read
+// in linear time with a bounded input; anything else has none.
+export function emailSenderAddress(value: string): string | undefined {
+  if (value.length > MAX_EMAIL_SENDER_LENGTH) return undefined;
+  if (!value.endsWith(">")) return EMAIL_ADDRESS.test(value) ? value : undefined;
+  const open = value.indexOf("<");
+  const name = value.slice(0, open);
+  const address = value.slice(open + 1, -1);
+  return open > 0 &&
+    name.trim() &&
+    !/[<>\r\n]/u.test(name) &&
+    EMAIL_ADDRESS.test(address)
+    ? address
+    : undefined;
+}
+
 function parseEmailSender(
   value: string | undefined,
   environment: RuntimeEnvironment,
@@ -264,10 +288,7 @@ function parseEmailSender(
         ? "no-reply@skillplane-auth.21n.dev"
         : "no-reply@auth-dev.skillplane.dev";
   const normalized = value?.trim();
-  const address = normalized
-    ? (/^[^<>\r\n]+\s*<([^\s<>@]+@[^\s<>@]+)>$/.exec(normalized)?.[1] ??
-      /^([^\s<>@]+@[^\s<>@]+)$/.exec(normalized)?.[1])
-    : undefined;
+  const address = normalized ? emailSenderAddress(normalized) : undefined;
   if (!normalized || address?.toLowerCase() !== expectedAddress) {
     missing.push("SKILLPLANE_OTP_FROM");
     return null;
@@ -1043,4 +1064,117 @@ export function parseGitHubAppConfig(
       invalid,
     );
   return { appId: appId.trim(), privateKeyPem, webhookSecret };
+}
+
+/**
+ * Names of the settings that let a workspace install the GitHub App. The slug
+ * and client ID are public App identifiers; the client secret is a Worker
+ * secret. `GITHUB_API_URL` and `GITHUB_WEB_URL` point at a fake GitHub and
+ * are accepted only when `RUNTIME_ENV` is `local`. Organization binds need the
+ * App's organization permission Members: read to confirm an active admin.
+ */
+export const GITHUB_APP_INSTALL_NAMES = {
+  slug: "GITHUB_APP_SLUG",
+  clientId: "GITHUB_APP_CLIENT_ID",
+  clientSecret: "GITHUB_APP_CLIENT_SECRET",
+  apiUrl: "GITHUB_API_URL",
+  webUrl: "GITHUB_WEB_URL",
+} as const;
+
+export interface GitHubAppInstallConfig {
+  /** The App's URL name, as in `https://github.com/apps/<slug>`. */
+  readonly slug: string;
+  /** The App's OAuth client ID, used to verify the installing user. */
+  readonly clientId: string;
+  readonly clientSecret: string;
+  /** REST API base, `https://api.github.com` outside local runs. */
+  readonly apiBaseUrl: string;
+  /** Web base for install and OAuth pages, `https://github.com` outside local runs. */
+  readonly webBaseUrl: string;
+}
+
+const GITHUB_APP_SLUG = /^[a-z0-9](?:[a-z0-9-]{0,98}[a-z0-9])?$/u;
+const GITHUB_APP_CLIENT_ID = /^(?:Iv|Ov)[0-9A-Za-z._-]{2,64}$/u;
+const GITHUB_APP_CLIENT_SECRET = /^[0-9A-Za-z._-]{20,255}$/u;
+
+function githubBaseUrl(
+  bindings: RuntimeBindings,
+  name: string,
+  fallback: string,
+  invalid: string[],
+): string {
+  const value = bindings[name];
+  if (value === undefined || value === "") return fallback;
+  if (typeof value !== "string" || bindings.RUNTIME_ENV !== "local") {
+    invalid.push(name);
+    return fallback;
+  }
+  try {
+    const url = new URL(value);
+    // An empty "?" or "#" is kept in the URL but not in search or hash, and
+    // fetch refuses a URL that carries credentials.
+    if (
+      !["http:", "https:"].includes(url.protocol) ||
+      /[?#]/u.test(value) ||
+      url.username ||
+      url.password
+    )
+      throw new Error("invalid");
+    return url.toString().replace(/\/+$/u, "");
+  } catch {
+    invalid.push(name);
+    return fallback;
+  }
+}
+
+/**
+ * The settings for installing the GitHub App from workspace settings, or null
+ * when none is set. Installing also needs the App secrets of
+ * {@link parseGitHubAppConfig}; a partial or malformed set is a
+ * configuration error that names only the offending setting names.
+ */
+export function parseGitHubAppInstallConfig(
+  bindings: RuntimeBindings,
+): GitHubAppInstallConfig | null {
+  const names = [
+    GITHUB_APP_INSTALL_NAMES.slug,
+    GITHUB_APP_INSTALL_NAMES.clientId,
+    GITHUB_APP_INSTALL_NAMES.clientSecret,
+  ];
+  if (names.every((name) => bindings[name] === undefined || bindings[name] === ""))
+    return null;
+  const invalid: string[] = [];
+  const read = (name: string, pattern: RegExp) => {
+    const value = bindings[name];
+    if (typeof value === "string" && pattern.test(value.trim())) return value.trim();
+    invalid.push(name);
+    return "";
+  };
+  const slug = read(GITHUB_APP_INSTALL_NAMES.slug, GITHUB_APP_SLUG);
+  const clientId = read(GITHUB_APP_INSTALL_NAMES.clientId, GITHUB_APP_CLIENT_ID);
+  const clientSecret = read(
+    GITHUB_APP_INSTALL_NAMES.clientSecret,
+    GITHUB_APP_CLIENT_SECRET,
+  );
+  const apiBaseUrl = githubBaseUrl(
+    bindings,
+    GITHUB_APP_INSTALL_NAMES.apiUrl,
+    "https://api.github.com",
+    invalid,
+  );
+  const webBaseUrl = githubBaseUrl(
+    bindings,
+    GITHUB_APP_INSTALL_NAMES.webUrl,
+    "https://github.com",
+    invalid,
+  );
+  if (parseGitHubAppConfig(bindings) === null)
+    invalid.push(GITHUB_APP_SECRET_NAMES.appId, GITHUB_APP_SECRET_NAMES.privateKey);
+  if (invalid.length > 0)
+    throw new ConfigError(
+      "CONFIG_INVALID",
+      "GitHub App installation settings are incomplete or invalid",
+      invalid,
+    );
+  return { slug, clientId, clientSecret, apiBaseUrl, webBaseUrl };
 }

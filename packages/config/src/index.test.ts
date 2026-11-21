@@ -3,8 +3,10 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   ConfigError,
+  emailSenderAddress,
   GITHUB_APP_SECRET_NAMES,
   parseGitHubAppConfig,
+  parseGitHubAppInstallConfig,
   parseRuntimeConfig,
   safeConfigDiagnostic,
   type RuntimeBindings,
@@ -640,5 +642,138 @@ describe("GitHub App secrets", () => {
       for (const name of Object.values(GITHUB_APP_SECRET_NAMES))
         expect(text, `${file} declares ${name}`).not.toContain(name);
     }
+  });
+});
+
+describe("GitHub App installation settings", () => {
+  const armor = (edge: "BEGIN" | "END") => `-----${edge} RSA ` + "PRIVATE KEY-----";
+  const app = {
+    GITHUB_APP_ID: "123456",
+    GITHUB_APP_PRIVATE_KEY: [armor("BEGIN"), "testkeybody", armor("END"), ""].join(
+      "\n",
+    ),
+    GITHUB_APP_WEBHOOK_SECRET: "w".repeat(40),
+  };
+  const install = {
+    GITHUB_APP_SLUG: "skillplane-test",
+    GITHUB_APP_CLIENT_ID: "Iv1.test-client-id",
+    GITHUB_APP_CLIENT_SECRET: "test-client-secret-value",
+  };
+  const fields = (bindings: RuntimeBindings) => {
+    try {
+      parseGitHubAppInstallConfig(bindings);
+    } catch (error) {
+      return error instanceof ConfigError ? [...error.fields] : ["unexpected"];
+    }
+    return [];
+  };
+
+  it("is optional and defaults to GitHub's public hosts", () => {
+    expect(parseGitHubAppInstallConfig(app)).toBeNull();
+    expect(parseGitHubAppInstallConfig({ ...app, ...install })).toEqual({
+      slug: "skillplane-test",
+      clientId: "Iv1.test-client-id",
+      clientSecret: "test-client-secret-value",
+      apiBaseUrl: "https://api.github.com",
+      webBaseUrl: "https://github.com",
+    });
+  });
+
+  it("names partial, malformed or App-less settings", () => {
+    expect(fields({ ...app, GITHUB_APP_SLUG: "skillplane-test" })).toEqual([
+      "GITHUB_APP_CLIENT_ID",
+      "GITHUB_APP_CLIENT_SECRET",
+    ]);
+    expect(fields({ ...app, ...install, GITHUB_APP_SLUG: "Not A Slug" })).toEqual([
+      "GITHUB_APP_SLUG",
+    ]);
+    expect(fields(install)).toEqual(["GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY"]);
+  });
+
+  it("accepts fake GitHub hosts only in local runs", () => {
+    const hosts = {
+      GITHUB_API_URL: "http://127.0.0.1:9/api/",
+      GITHUB_WEB_URL: "http://127.0.0.1:9",
+    };
+    expect(
+      parseGitHubAppInstallConfig({
+        ...app,
+        ...install,
+        ...hosts,
+        RUNTIME_ENV: "local",
+      }),
+    ).toMatchObject({
+      apiBaseUrl: "http://127.0.0.1:9/api",
+      webBaseUrl: "http://127.0.0.1:9",
+    });
+    expect(fields({ ...app, ...install, ...hosts, RUNTIME_ENV: "production" })).toEqual(
+      ["GITHUB_API_URL", "GITHUB_WEB_URL"],
+    );
+    // A query or fragment delimiter, even an empty one, would swallow paths.
+    for (const suffix of ["?", "#", "?x=1", "#x"])
+      expect(
+        fields({
+          ...app,
+          ...install,
+          GITHUB_API_URL: `http://127.0.0.1:9/api${suffix}`,
+          GITHUB_WEB_URL: `http://127.0.0.1:9/${suffix}`,
+          RUNTIME_ENV: "local",
+        }),
+        suffix,
+      ).toEqual(["GITHUB_API_URL", "GITHUB_WEB_URL"]);
+    // Credentials in either URL are refused (built here, never committed).
+    for (const userinfo of [
+      "test-user",
+      ["test-user", "test-password"].join(":"),
+      ":x",
+    ])
+      expect(
+        fields({
+          ...app,
+          ...install,
+          GITHUB_API_URL: `http://${userinfo}@127.0.0.1:9/api`,
+          GITHUB_WEB_URL: `http://${userinfo}@127.0.0.1:9`,
+          RUNTIME_ENV: "local",
+        }),
+        userinfo,
+      ).toEqual(["GITHUB_API_URL", "GITHUB_WEB_URL"]);
+  });
+});
+
+describe("emailSenderAddress", () => {
+  it("reads a bare address or a display name with an angle-bracketed address", () => {
+    expect(emailSenderAddress("no-reply@auth.skillplane.dev")).toBe(
+      "no-reply@auth.skillplane.dev",
+    );
+    expect(emailSenderAddress("Skillplane <no-reply@auth.skillplane.dev>")).toBe(
+      "no-reply@auth.skillplane.dev",
+    );
+    expect(emailSenderAddress("Skillplane<no-reply@auth.skillplane.dev>")).toBe(
+      "no-reply@auth.skillplane.dev",
+    );
+    for (const refused of [
+      "<no-reply@auth.skillplane.dev>",
+      " <no-reply@auth.skillplane.dev>",
+      "Skill<plane <no-reply@auth.skillplane.dev>",
+      "Skillplane <no reply@auth.skillplane.dev>",
+      "Skillplane <no-reply@auth.skillplane.dev",
+      "no-reply@@auth.skillplane.dev",
+      "Skillplane\n <no-reply@auth.skillplane.dev>",
+    ])
+      expect(emailSenderAddress(refused)).toBeUndefined();
+  });
+
+  it("refuses long adversarial senders quickly", () => {
+    const started = performance.now();
+    for (const value of [
+      `${" ".repeat(50_000)}>`,
+      `a${" ".repeat(50_000)}<`,
+      `${"a ".repeat(50_000)}<x@y`,
+    ])
+      expect(emailSenderAddress(value)).toBeUndefined();
+    expect(
+      emailSenderAddress(`${"a".repeat(600)} <no-reply@auth.skillplane.dev>`),
+    ).toBe(undefined);
+    expect(performance.now() - started).toBeLessThan(250);
   });
 });
